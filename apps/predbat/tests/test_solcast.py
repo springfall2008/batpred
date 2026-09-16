@@ -1444,6 +1444,77 @@ def test_publish_pv_stats(my_predbat):
     return failed
 
 
+def test_publish_pv_stats_ignores_stale_shared_midnight(my_predbat):
+    """publish_pv_stats must not bucket forecast entries against self.midnight_utc (GH#4804).
+
+    calculate_yesterday() (output.py) rewinds the shared self.midnight_utc by one day for the
+    duration of the savings calculation, then restores it ~350 lines later. Components run on
+    their own OS threads (hass.py's create_task uses threading.Thread), and SolarAPI's publish
+    cycle runs on an independent schedule from calculate_yesterday()'s hourly one - so the two
+    can genuinely overlap. If that happens while self.midnight_utc is rewound,
+    publish_pv_stats()'s day-bucketing (day = (this_point - midnight_today).days) used to bucket
+    every entry one day late, emptying "today" and shifting the rest down, until
+    calculate_yesterday() finished and restored the real value.
+
+    Confirmed against a real incident log: at the moment of collision, every "PV Forecast for
+    day dN" value was identical to the previous cycle's dN-1 value, with day 0 always empty -
+    exactly the signature this test reproduces by making midnight_utc desync from now_utc.
+
+    The fix derives midnight_today from now_utc instead of midnight_utc. now_utc is never
+    touched by calculate_yesterday() (only midnight_utc/minutes_now/forecast_minutes and the
+    rate/car fields are faked), the same pattern already used for the equivalent race on the
+    manual-override decode path (userinterface.py's manual_time_origin(), #4900). Deliberately
+    not now_utc_exact: that property is datetime.now(self.local_tz) on the real ComponentBase -
+    the live wall clock, not the fixture's frozen mock_base value - so using it here would make
+    every OTHER publish_pv_stats test (which sets mock_base.now_utc but not now_utc_exact)
+    silently read the real clock instead of the fixture's controlled date.
+    """
+    print("  - test_publish_pv_stats_ignores_stale_shared_midnight")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Simulate the collision: now_utc says it is still 2025-06-15, but midnight_utc - the
+        # field calculate_yesterday() rewinds - has been shifted back a full day, as if a
+        # concurrent calculate_yesterday() call were mid-flight on another thread.
+        test_api.mock_base.now_utc = datetime(2025, 6, 15, 12, 0, 0, tzinfo=pytz.utc)
+        test_api.mock_base.midnight_utc = datetime(2025, 6, 14, 0, 0, 0, tzinfo=pytz.utc)
+
+        pv_forecast_data = [
+            {"period_start": "2025-06-15T06:00:00+0000", "pv_estimate": 0.5, "pv_estimate10": 0.3, "pv_estimate90": 0.7},
+            {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 2.0, "pv_estimate10": 1.5, "pv_estimate90": 2.5},
+            {"period_start": "2025-06-15T18:00:00+0000", "pv_estimate": 0.5, "pv_estimate10": 0.3, "pv_estimate90": 0.7},
+            {"period_start": "2025-06-16T12:00:00+0000", "pv_estimate": 2.5, "pv_estimate10": 2.0, "pv_estimate90": 3.0},
+        ]
+
+        with test_api.patch_now_utc_exact():
+            test_api.solar.publish_pv_stats(pv_forecast_data, divide_by=1.0, period=30)
+
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print(f"ERROR: Expected {today_entity} to be published")
+            failed = True
+        else:
+            total = test_api.dashboard_items[today_entity]["attributes"].get("total", 0)
+            expected_total = 3.0  # 0.5 + 2.0 + 0.5, the same as the clean-midnight case
+            if abs(total - expected_total) > 0.1:
+                print(f"ERROR: today's total was bucketed against the stale rewound midnight_utc instead of now_utc - expected ~{expected_total} (GH#4804), got {total}")
+                failed = True
+
+        tomorrow_entity = f"sensor.{test_api.mock_base.prefix}_pv_tomorrow"
+        if tomorrow_entity in test_api.dashboard_items:
+            total_tomorrow = test_api.dashboard_items[tomorrow_entity]["attributes"].get("total", 0)
+            expected_tomorrow = 2.5
+            if abs(total_tomorrow - expected_tomorrow) > 0.1:
+                print(f"ERROR: tomorrow's total was shifted, expected ~{expected_tomorrow}, got {total_tomorrow}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_publish_pv_stats_remaining_calculation(my_predbat):
     """
     Test publish_pv_stats correctly calculates remaining PV for today.
@@ -5057,6 +5128,7 @@ def run_solcast_tests(my_predbat):
 
     # Publish stats tests
     failed |= test_publish_pv_stats(my_predbat)
+    failed |= test_publish_pv_stats_ignores_stale_shared_midnight(my_predbat)
     failed |= test_publish_pv_stats_remaining_calculation(my_predbat)
     failed |= test_publish_pv_stats_missing_day_zero(my_predbat)
 

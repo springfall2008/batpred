@@ -23,7 +23,21 @@ import os
 from datetime import datetime, timedelta, timezone, time
 from io import StringIO
 from functools import lru_cache
-from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import (
+    MINUTE_WATT,
+    PREDICT_STEP,
+    TIME_FORMAT,
+    TIME_FORMAT_SECONDS,
+    TIME_FORMAT_OCTOPUS,
+    MAX_INCREMENT,
+    TIME_FORMAT_DAILY,
+    EXPORT_LIMIT_FREEZE,
+    EXPORT_LIMIT_IDLE,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+    FULL_EXPORT_POWER,
+)
 import copy
 import json
 
@@ -31,7 +45,94 @@ DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "
 
 # The live log and the one rotated out from under it - both read whole when serving logs.
 PREDBAT_LOG_FILE = "predbat.log"
-PREDBAT_LOG_FILE_PREV = "predbat.1.log"
+
+# Rotated logs are numbered predbat.01.log .. predbat.99.log. Two digits so a directory listing
+# sorts in rotation order; before this they were single-digit, which is still read (see
+# predbat_log_file_prev()) so an upgrade does not lose the previous log.
+PREDBAT_LOG_COUNT_DEFAULT = 10
+PREDBAT_LOG_COUNT_MIN = 2
+PREDBAT_LOG_COUNT_MAX = 100
+
+
+def predbat_log_name(number):
+    """
+    Return the rotated log filename for a rotation slot, zero-padded to two digits.
+    """
+    return "predbat.{:02d}.log".format(number)
+
+
+def predbat_log_name_legacy(number):
+    """
+    Return the pre-#5076 un-padded rotated log filename for a rotation slot.
+
+    Only for finding files written by an older version; nothing writes this form any more.
+    """
+    return "predbat.{}.log".format(number)
+
+
+def predbat_log_file_prev():
+    """
+    Return the path of the most recently rotated log, or None when there is not one.
+
+    Prefers the two-digit name and falls back to the single-digit one an older Predbat wrote, so
+    the first run after an upgrade still shows the previous log rather than silently dropping it.
+    """
+    for candidate in (predbat_log_name(1), predbat_log_name_legacy(1)):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def rotate_predbat_logs(max_logs):
+    """
+    Shift rotated log slots up by one and drop anything past max_logs, against the current
+    working directory. Does not touch the live predbat.log - the caller closes/reopens that.
+
+    Walk downwards so each slot is free before anything moves into it. Both the two-digit name
+    and the single-digit one an older Predbat wrote are considered at every slot, which is what
+    migrates an existing set to the padded form: whichever name is found is renamed to the
+    two-digit name of the next slot up.
+
+    The shift runs through max_logs itself, not max_logs - 1: a legacy single-digit file sitting
+    in the oldest kept slot is a different filename from that slot's two-digit target, so it is
+    never reached by a rename landing *on* that slot from below - it has to be the *source* of a
+    rename once, onto the slot that is about to be dropped, or it is orphaned on disk under the
+    old name forever (Copilot review on #5076).
+    """
+    for num_logs in range(max_logs, 0, -1):
+        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+            if os.path.isfile(filename):
+                os.rename(filename, predbat_log_name(num_logs + 1))
+                break
+
+    # Drop anything that has aged out past the configured count - both spellings, and every slot
+    # up to the maximum rather than just the one above max_logs, so lowering the setting clears
+    # the now-surplus files instead of stranding them forever.
+    for num_logs in range(max_logs + 1, PREDBAT_LOG_COUNT_MAX + 1):
+        for filename in (predbat_log_name(num_logs), predbat_log_name_legacy(num_logs)):
+            if os.path.isfile(filename):
+                os.remove(filename)
+
+
+def predbat_log_count(args):
+    """
+    Return the configured number of log files to keep, including the live one.
+
+    Clamped to [PREDBAT_LOG_COUNT_MIN, PREDBAT_LOG_COUNT_MAX]: below 2 there is no rotation to
+    speak of, and above 100 the numbering would need a third digit. A non-numeric value falls
+    back to the default rather than stopping the log working.
+    """
+    value = (args or {}).get("log_count", PREDBAT_LOG_COUNT_DEFAULT)
+    try:
+        value = int(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: YAML accepts non-finite numeric scalars (.inf, -.inf), which parse as a
+        # float int() cannot convert - falling back rather than raising out of every log() call
+        # is the same "don't stop the log working" contract as the other invalid shapes here
+        # (Copilot review on #5076).
+        return PREDBAT_LOG_COUNT_DEFAULT
+    return max(PREDBAT_LOG_COUNT_MIN, min(PREDBAT_LOG_COUNT_MAX, value))
+
 
 # Key-name substrings that mark an apps.yaml value as a credential, for mask_secret_args().
 # "_key" and "password" were the original pair; "secret" and "token" were added for #4768,
@@ -211,6 +312,82 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
+def load_secrets(log=None):
+    """
+    Load secrets from secrets.yaml file
+    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    """
+    import yaml
+
+    log = log or (lambda message, **kwargs: print(message))
+    secrets = {}
+    secrets_file = None
+
+    # Try loading from different locations in priority order
+    possible_locations = [
+        os.getenv("PREDBAT_SECRETS_FILE"),
+        "secrets.yaml",
+        "/homeassistant/secrets.yaml",
+        "/conf/secrets.yaml",
+        "/config/secrets.yaml",
+    ]
+
+    for location in possible_locations:
+        if location and os.path.isfile(location):
+            secrets_file = location
+            break
+
+    if secrets_file:
+        log(f"Loading secrets from {secrets_file}", quiet=False)
+        try:
+            with open(secrets_file, "r") as stream:
+                secrets = yaml.safe_load(stream) or {}
+                # Check for debug logging option
+                if secrets.get("logger") == "debug":
+                    log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
+        except yaml.YAMLError as exc:
+            log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
+        except Exception as exc:
+            log(f"Error: Failed to open secrets file {secrets_file}: {exc}", quiet=False)
+    else:
+        log("Info: No secrets.yaml file found", quiet=False)
+
+    return secrets
+
+
+def load_apps_yaml(apps_file=None, log=None):
+    """
+    Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
+
+    Shared so anything reading Predbat's configuration reads it the same way - Predbat's own
+    startup below, and fox.py's --config option for a standalone CLI run. Raises yaml.YAMLError
+    for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
+    decide whether that is fatal.
+
+    Returns (args, secrets).
+    """
+    import yaml
+
+    log = log or (lambda message, **kwargs: print(message))
+    secrets = load_secrets(log=log)
+
+    def secret_constructor(loader, node):
+        """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
+        secret_key = loader.construct_scalar(node)
+        if secret_key in secrets:
+            return secrets[secret_key]
+        log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
+        return None
+
+    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+    log(f"Loading {apps_file}", quiet=False)
+    with open(apps_file, "r") as stream:
+        config = yaml.safe_load(stream)
+    return config["pred_bat"], secrets
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
@@ -304,10 +481,15 @@ def mask_secret_yaml_text(text):
     return buf.getvalue()
 
 
-def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
+def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=None):
     """
     Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
+
+    logfile_prev defaults to whichever previous log is actually present - the two-digit name, or
+    the single-digit one an older Predbat wrote. Pass it explicitly only to read a specific file.
     """
+    if logfile_prev is None:
+        logfile_prev = predbat_log_file_prev()
     # Decoded explicitly rather than with the platform default: a single non-UTF-8 byte anywhere
     # in the log - an inverter API error message carrying one, say - would otherwise raise
     # UnicodeDecodeError and take out both /api/log and the get_log MCP tool.
@@ -315,7 +497,7 @@ def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PRE
     if os.path.exists(logfile):
         with open(logfile, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read()
-    if os.path.exists(logfile_prev):
+    if logfile_prev and os.path.exists(logfile_prev):
         with open(logfile_prev, "r", encoding="utf-8", errors="replace") as f:
             logdata = f.read() + "\n" + logdata
     return logdata
@@ -1429,12 +1611,25 @@ def window2minutes(start, end, minutes_now):
     return compute_window_minutes(start, end, minutes_now)
 
 
+def minutes_since_midnight(now, midnight):
+    """
+    Compute minutes from midnight to now, floored to a PREDICT_STEP boundary
+
+    Both arguments come from the same clock - predbat's now_utc and the midnight derived from it -
+    so they carry the same tzinfo and this stays a wall-clock difference across a DST change.
+    """
+    return int((now - midnight).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
     """
     yesterday = now - timedelta(days=1)
-    yesterday_at_2359 = datetime.combine(yesterday, datetime.max.time())
+    # replace() rather than datetime.combine(): combine drops the tzinfo, and now is timezone
+    # aware. Keeping the same tzinfo also keeps this a wall-clock difference, as it was when
+    # both sides were naive.
+    yesterday_at_2359 = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
     difference = now - yesterday_at_2359
     difference_minutes = int((difference.seconds + 59) / 60)
     return difference_minutes
@@ -1533,6 +1728,257 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
+# ---------------------------------------------------------------------------
+# Export limit encoding
+#
+# An export window's instruction is a 3-tuple: (mode, target SoC percentage, export power). A
+# plain tuple rather than a class because a plan builds, hashes and compares millions of them -
+# a tuple is built at C speed, indexes as fast as an attribute reads, and hashes without a
+# Python-level call. The fields are named by the accessors below and by these indices, so the
+# layout is written down once.
+#
+# Three orthogonal signals as three fields, rather than the single double they used to be packed
+# into. That encoding put the target in the integer part, the power in the fraction and the mode
+# in two reserved whole values (EXPORT_LIMIT_FREEZE 99.0, EXPORT_LIMIT_IDLE 100.0), so one value
+# answered three questions and no consumer could ask a clean one of it. It was also lossy: the
+# power was recovered by subtracting the integer part, so 0.7 came back as 0.69999999999999929
+# or 0.70000000000000284 depending on which target it was packed against, and two windows both at
+# 70% did not compare equal.
+#
+# Every accessor also takes a bare number: plans and debug dumps written before the split arrive
+# indefinitely (a bug report carries whatever version the user was running), so decoding the old
+# packed value is a permanent compatibility path, not a migration.
+# ---------------------------------------------------------------------------
+
+EXPORT_FIELD_MODE = 0
+EXPORT_FIELD_TARGET = 1
+EXPORT_FIELD_POWER = 2
+
+
+def export_mode_of(export_limit):
+    """Which of the three export modes an export limit represents.
+
+    Returns EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE or EXPORT_MODE_IDLE.
+
+    For a bare number (the legacy packed value) the freeze sentinel is matched exactly, not by
+    range: most sites tested `== EXPORT_LIMIT_FREEZE`, so a value in (99.0, 100.0) - which the
+    packed encoding could not itself produce - reads as a normal export.
+    """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_MODE]
+    if export_limit >= EXPORT_LIMIT_IDLE:
+        return EXPORT_MODE_IDLE
+    if export_limit == EXPORT_LIMIT_FREEZE:
+        return EXPORT_MODE_FREEZE
+    return EXPORT_MODE_TARGET
+
+
+def export_target_of(export_limit):
+    """The target SoC percentage an export limit exports down to.
+
+    Only meaningful for EXPORT_MODE_TARGET; the other modes carry no target and return None so a
+    caller cannot silently use 99 or 100 as if it were one.
+    """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_TARGET]
+    if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
+        return None
+    return int(export_limit)
+
+
+def export_power_of(export_limit):
+    """The export power fraction of an export limit, 1.0 being full rate.
+
+    For a bare number this mirrors the decode in Prediction.run_prediction and
+    prediction_kernel.cpp: the stored fraction counts down from full power, so 47.3 means 70%
+    rate. The other modes carry no power level and return full rate.
+    """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_POWER]
+    if export_mode_of(export_limit) != EXPORT_MODE_TARGET:
+        return FULL_EXPORT_POWER
+    return 1 - (export_limit - int(export_limit))
+
+
+def export_limit_exports_no_battery(export_limit):
+    """Whether this export limit discharges no battery - it is idle, or a freeze.
+
+    Wraps what plan.py's trim pass expressed as `limit >= EXPORT_LIMIT_FREEZE`, which worked only
+    because both reserved values sorted above every real target. As a mode field that is a
+    membership test; the bare-number path keeps the >= behaviour for legacy values, including a
+    value in the unreachable [99.0, 100.0) interval where it and export_mode_of disagree.
+    """
+    if isinstance(export_limit, tuple):
+        return export_limit[EXPORT_FIELD_MODE] in (EXPORT_MODE_IDLE, EXPORT_MODE_FREEZE)
+    return export_limit >= EXPORT_LIMIT_FREEZE
+
+
+def export_limit_is_full_discharge(export_limit):
+    """Whether this instruction exports the battery all the way down, at full power.
+
+    Wraps what the planner's passes express as `limit == 0`, which only worked while a limit was a
+    bare number whose zero value meant "target 0% at full rate".
+    """
+    return export_mode_of(export_limit) == EXPORT_MODE_TARGET and export_target_of(export_limit) == 0 and export_power_of(export_limit) == FULL_EXPORT_POWER
+
+
+def export_limit_sort_key(export_limit):
+    """The packed value an export limit represents, for ordering and for the display paths.
+
+    The planner's passes compare limits to decide whether one is a shallower discharge than
+    another (see the trim pass in optimise_plan_pass), and the modes must sort above every real
+    target as the reserved values did. Tuples order lexicographically, which is not that order, so
+    anything comparing two limits by depth - or formatting one as a number for a chart - goes
+    through this rather than the raw value.
+
+    Deliberately lossy at the top of the range: a 99% target at full power and a freeze both come
+    back as 99.0, and a 100% target and an idle window both as 100.0, because this has to stay the
+    number the display paths already print (window["target"], the plan_debug limit, the export limit
+    chart series) and those are the numbers they print. The tie is benign - the two sides of it are
+    a discharge that moves almost nothing and one that moves nothing - and nothing decides *what* a
+    window does from this value: every mode test goes through export_mode_of, which reads the field
+    and never confuses the two. Use this to order or to display; never to identify.
+    """
+    if not isinstance(export_limit, tuple):
+        return export_limit
+    mode = export_limit[EXPORT_FIELD_MODE]
+    if mode == EXPORT_MODE_IDLE:
+        return EXPORT_LIMIT_IDLE
+    if mode == EXPORT_MODE_FREEZE:
+        return EXPORT_LIMIT_FREEZE
+    return export_limit[EXPORT_FIELD_TARGET] + (FULL_EXPORT_POWER - export_limit[EXPORT_FIELD_POWER])
+
+
+def pack_export_limit(mode, target=None, power=FULL_EXPORT_POWER):
+    """Build an export limit from the three signals it carries.
+
+    The inverse of export_mode_of / export_target_of / export_power_of, kept beside them so the
+    layout is written down in exactly one place instead of being re-derived at each call site
+    (see plan.py's ladder, which builds the same values by hand).
+
+    The two modes carry neither a target nor a power, so they normalise to None and full rate - a
+    caller cannot then read 99 or 100 back out as if it were a target.
+    """
+    if mode != EXPORT_MODE_TARGET:
+        return (mode, None, FULL_EXPORT_POWER)
+    return (mode, int(target or 0), power)
+
+
+def unpack_export_limit(packed):
+    """Rebuild an export limit tuple from the packed float the encoding used to be.
+
+    The reserved whole values are the two modes; anything else is a target in the integer part
+    with the export power in the fraction. Used for plans and debug dumps written before the
+    fields were split, which arrive indefinitely, so this is a permanent compatibility path.
+    """
+    if isinstance(packed, tuple):
+        return packed
+    if packed >= EXPORT_LIMIT_IDLE:
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    if packed == EXPORT_LIMIT_FREEZE:
+        return pack_export_limit(EXPORT_MODE_FREEZE)
+    target = int(packed)
+    # The packed fraction is 1 - power, and the subtraction is inexact in binary floating point:
+    # 99.3 - 99 gives 0.30000000000000284, so the power comes back as 0.7000000000000028 rather
+    # than 0.7. The encoding only ever carried one decimal place of power, so round to that - both
+    # to recover the value that was packed and because an inexact power would otherwise be handed
+    # to the C kernel.
+    return pack_export_limit(EXPORT_MODE_TARGET, target, round(FULL_EXPORT_POWER - (packed - target), 1))
+
+
+EXPORT_MODE_NAMES = {EXPORT_MODE_TARGET: "target", EXPORT_MODE_FREEZE: "freeze", EXPORT_MODE_IDLE: "idle"}
+EXPORT_MODE_BY_NAME = {name: mode for mode, name in EXPORT_MODE_NAMES.items()}
+
+
+def export_limit_to_stored(export_limit):
+    """Serialise one export limit as a self-describing mapping.
+
+    The packed float is an internal encoding, not a format worth persisting: 99.0 does not say
+    "freeze" to anything that has not read const.py, and the fraction silently carries the export
+    power. A plain mapping says what it means, survives yaml.safe_dump, and leaves room for fields
+    the packed double has nowhere to put.
+
+    Only the fields that apply to the mode are written, so a freeze does not claim a meaningless
+    target or power.
+    """
+    mode = export_mode_of(export_limit)
+    if mode != EXPORT_MODE_TARGET:
+        return {"mode": EXPORT_MODE_NAMES[mode]}
+    # Round the power so the stored file reads cleanly - the packed float form carried binary noise
+    # (0.7 as 0.7000000000000028); the tuple is exact but a legacy value decoded here may not be.
+    return {"mode": EXPORT_MODE_NAMES[mode], "target": export_target_of(export_limit), "power": round(export_power_of(export_limit), 6)}
+
+
+def _export_limit_from_fields(mode, target, power):
+    """Validate and build a target-mode export limit from raw mode/target/power fields.
+
+    Shared by both branches of export_limit_from_stored() that carry real field values (the mapping
+    form and the 3-element sequence form) so a malformed value is rejected the same way regardless
+    of which shape it arrived in. GitHub Copilot review on PR #5047 found the sequence branch
+    skipped this entirely - export_limit_from_stored(stored) returned tuple(stored) unvalidated, so
+    a malformed 3-element sequence such as [EXPORT_MODE_TARGET, None, 0.7] reached the kernel
+    marshaller's struct.pack and crashed there instead of falling back to idle as the docstring
+    promises. A non-target mode (freeze/idle) carries no target or power to validate, so those go
+    straight to pack_export_limit without calling this.
+    """
+    if mode not in (EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    if mode != EXPORT_MODE_TARGET:
+        return pack_export_limit(mode)
+    try:
+        target = int(target)
+        power = float(power)
+    except (TypeError, ValueError, OverflowError):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    # A target is any whole SoC percentage, 0 to 100 inclusive. The bound used to be the freeze
+    # sentinel, which is where the packed encoding ran out of room - but the fields have no reserved
+    # range, and the planner genuinely produces the top of it: clip_export_slots narrows a target
+    # towards the SoC the simulation says is reachable, so a near-full battery with a derated
+    # discharge rate clips to 99 or 100. Rejecting those made the write side and the read side
+    # disagree - export_limit_to_stored wrote the target out faithfully and this read it back as an
+    # idle window, silently dropping the export from a restored plan or a replayed debug dump.
+    if target < 0 or target > 100 or power < 0 or power > FULL_EXPORT_POWER:
+        return pack_export_limit(EXPORT_MODE_IDLE)
+    return pack_export_limit(mode, target, power)
+
+
+def export_limit_from_stored(stored):
+    """Read one export limit from the mapping form, a bare packed float, or a 3-element sequence.
+
+    The float branch is the translation layer for plans and debug dumps written before the mapping
+    existed. Those arrive indefinitely - a bug report carries whatever version the user was running
+    - so it is a permanent compatibility path, not a migration. A YAML or JSON round trip turns a
+    tuple into a list, so a three-element sequence is an already-split limit that lost its type.
+
+    Anything unrecognised becomes an idle window rather than raising: a debug dump is a diagnostic
+    artefact and a malformed limit must not stop a replay.
+    """
+    if isinstance(stored, (list, tuple)) and len(stored) == 3 and not isinstance(stored[0], str):
+        mode, target, power = stored
+        return _export_limit_from_fields(mode, target, power)
+    if isinstance(stored, dict):
+        mode = EXPORT_MODE_BY_NAME.get(stored.get("mode"))
+        if mode is None:
+            return pack_export_limit(EXPORT_MODE_IDLE)
+        if mode != EXPORT_MODE_TARGET:
+            return pack_export_limit(mode)
+        return _export_limit_from_fields(mode, stored.get("target", 0), stored.get("power", FULL_EXPORT_POWER))
+    try:
+        return unpack_export_limit(float(stored))
+    except (TypeError, ValueError):
+        return pack_export_limit(EXPORT_MODE_IDLE)
+
+
+def export_limits_to_stored(export_limits):
+    """Serialise a list of export limits for the persisted plan or a debug dump."""
+    return [export_limit_to_stored(limit) for limit in export_limits or []]
+
+
+def export_limits_from_stored(stored):
+    """Read a list of export limits written in any of the accepted forms."""
+    return [export_limit_from_stored(limit) for limit in stored or []]
+
+
 def clone_windows(windows):
     """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
 
@@ -1565,7 +2011,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     the result against a naive reference implementation over randomised window layouts.
     """
     # Enabled export windows only - the sole candidates for clipping anything
-    export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_limit_best[n] < 100.0)
+    export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_mode_of(export_limit_best[n]) != EXPORT_MODE_IDLE)
     if not export_active:
         # Rebuild the windows rather than passing the caller's dicts back, so the returned windows
         # carry exactly the same keys (and are as freshly owned) as on the clipping path below
@@ -1714,13 +2160,25 @@ def find_charge_rate(
     battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
+    low_power_pv_threshold_w=0.0,
+    solar_full_rate=True,
 ):
     """
     Find the lowest charge rate that fits the charge slow
 
-    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window
-    overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
-    window and would push the PV out of the battery, raising the cost above the planned full rate charge
+    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window's
+    own average power over that remainder exceeds low_power_pv_threshold_w, low power charging is
+    abandoned - the throttled rate applies for the whole window and would push that PV out of the
+    battery, raising the cost above the planned full rate charge. Comparing an average rather than
+    pv_window_kwh directly against a fixed energy figure keeps the decision independent of how long the
+    remaining window happens to be - a long window at a low constant trickle should not accumulate its
+    way past a threshold sized for "is this bright enough to matter" (#4699 follow-up).
+
+    solar_full_rate turns that abandon off (#4975). Whether spilling PV to hold a throttled rate is
+    worth it depends on what import costs in this particular window, which is not something the PV
+    forecast can answer - a user charging in a free or very cheap daytime window loses nothing by
+    throttling, while on a normal tariff the exported surplus has to be bought back later. Defaults to
+    True, the behaviour of #4373.
     """
     if battery_temperature_curve is None:
         battery_temperature_curve = {}
@@ -1739,15 +2197,19 @@ def find_charge_rate(
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
-        # If the charge window overlaps with PV production then charge at max rate, a throttled rate would
-        # cap the PV going into the battery, exporting the surplus and importing to make the target up later
-        if pv_window_kwh > LOW_POWER_PV_THRESHOLD:
-            if log_to:
-                log_to("Low power mode: PV forecast in window {}kWh > {}kWh, default to max rate".format(dp2(pv_window_kwh), LOW_POWER_PV_THRESHOLD))
-            return max_rate, max_rate_real
-
         minutes_left = window["end"] - minutes_now - margin
         abs_minutes_left = window["end"] - minutes_now
+
+        # If the charge window's own average PV power over its remainder is above the threshold, charge
+        # at max rate instead - a throttled rate would cap the PV going into the battery, exporting the
+        # surplus and importing to make the target up later. Turned off by
+        # set_charge_low_power_solar_full_rate for a window where that trade does not apply, e.g. a
+        # free import period, where the throttled rate is wanted even though PV will spill (#4975)
+        low_power_pv_threshold_kwh = (low_power_pv_threshold_w / MINUTE_WATT) * max(abs_minutes_left, 0)
+        if solar_full_rate and pv_window_kwh > 0 and pv_window_kwh >= low_power_pv_threshold_kwh:
+            if log_to:
+                log_to("Low power mode: PV forecast in window {}kWh > {}kWh ({}W over {} minutes), default to max rate".format(dp2(pv_window_kwh), dp2(low_power_pv_threshold_kwh), low_power_pv_threshold_w, abs_minutes_left))
+            return max_rate, max_rate_real
 
         # If we don't have enough minutes left go to max
         if abs_minutes_left < 0:

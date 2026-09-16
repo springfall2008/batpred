@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.0.1"
+THIS_VERSION = "v9.0.3"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -76,7 +76,21 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
+from utils import (
+    minutes_since_yesterday,
+    minutes_since_midnight,
+    dp1,
+    dp2,
+    dp3,
+    find_unmasked_secret_paths,
+    is_entity_id,
+    mask_secret_args,
+    malloc_trim,
+    limit_malloc_arenas,
+    MALLOC_ARENA_LIMIT,
+    export_limits_to_stored,
+    export_limits_from_stored,
+)
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -288,13 +302,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         Return time now as human string
         """
-        return (self.midnight + timedelta(minutes=self.minutes_now)).strftime("%H:%M:%S")
+        return (self.midnight_utc + timedelta(minutes=self.minutes_now)).strftime("%H:%M:%S")
 
     def time_abs_str(self, minute):
         """
         Return time absolute as human string
         """
-        return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
+        return (self.midnight_utc + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
     def reset(self):
         """
@@ -519,6 +533,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
+        self.dispatch_timeline_pending = []
+        self.dispatch_unconfirmed_last = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
@@ -586,6 +602,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}
+        self.pv_light_dark = {}
         # (p50, p90) content signatures from the previous plan run, used to spot a p90 that has been
         # left behind by a p50 reassigned underneath it - see Plan.refresh_pv_forecast_minute90()
         self.pv_forecast_minute90_signatures = None
@@ -630,7 +647,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}
+        self.manual_soc_max_keep = {}
         self.all_active_keep = {}
+        self.all_active_keep_max = {}
         self.set_charge_low_power = False
         self.set_export_low_power = False
         self.config_root = "./"
@@ -673,17 +692,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Warn: Clock skew is set to {} minutes".format(skew))
         self.now_utc_real = datetime.now(self.local_tz)
         now_utc = self.now_utc_real + timedelta(minutes=skew)
-        now = datetime.now() + timedelta(minutes=skew)
-        now = now.replace(second=0, microsecond=0, minute=(now.minute - (now.minute % PREDICT_STEP)))
         now_utc = now_utc.replace(second=0, microsecond=0, minute=(now_utc.minute - (now_utc.minute % PREDICT_STEP)))
 
         self.now_utc = now_utc
-        self.now = now
-        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        self.difference_minutes = minutes_since_yesterday(now)
-        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
+        # Everything below is measured against now_utc, the configured timezone's clock. This used
+        # to run off a second, naive clock (datetime.now(), the host's), which agreed with now_utc
+        # only while the container's timezone matched the timezone: setting - and silently offset
+        # minutes_now and every rendered timestamp from the midnight_utc-keyed data they describe
+        # when it did not. now_utc and the midnight derived from it share a tzinfo, so these stay
+        # wall-clock differences, exactly as the naive arithmetic was.
+        self.difference_minutes = minutes_since_yesterday(now_utc)
+        self.minutes_now = minutes_since_midnight(now_utc, self.midnight_utc)
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 
@@ -748,13 +769,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "charge_window_best": self.charge_window_best,
             "charge_limit_best": self.charge_limit_best,
             "export_window_best": self.export_window_best,
-            "export_limits_best": self.export_limits_best,
+            "export_limits_best": export_limits_to_stored(self.export_limits_best),
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
         }
         try:
-            expiry = self.now_utc + timedelta(hours=8)
+            # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
+            # the same convention every other expiry-bearing storage.save() call in the codebase
+            # uses (github.py, octopus.py, enphase.py, fox.py, kraken.py, solax.py, etc.) - self.now_utc
+            # is Predbat's own simulated/plan clock, which is deliberately not real time during a
+            # debug-file replay or a test, and can drift from it. Using it here made a freshly-saved
+            # plan look already-expired the instant it was written whenever that drift exceeded 8
+            # hours (#5079).
+            expiry = datetime.now(timezone.utc) + timedelta(hours=8)
             run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
             self.log("Saved plan to storage")
         except Exception as e:
@@ -800,11 +828,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = plan_data.get("charge_window_best", [])
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
-        self.export_limits_best = plan_data.get("export_limits_best", [])
+        # Accepts the self-describing mapping form, the 3-element sequences a JSON round trip makes
+        # of the tuples, and the bare packed floats written by versions before the split.
+        self.export_limits_best = export_limits_from_stored(plan_data.get("export_limits_best", []))
         # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
         # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
         preclip = plan_data.get("plan_preclip")
-        self.plan_preclip = tuple(preclip) if isinstance(preclip, (list, tuple)) and len(preclip) == 4 else None
+        if isinstance(preclip, (list, tuple)) and len(preclip) == 4:
+            preclip_parts = list(preclip)
+            preclip_parts[3] = export_limits_from_stored(preclip_parts[3])
+            self.plan_preclip = tuple(preclip_parts)
+        else:
+            self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
@@ -941,7 +976,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     error_count += 1
                     component = self.components.get_component(component_name)
                     if not component.is_calculating():
-                        failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                        # hasattr rather than a plain call: a component registered outside
+                        # ComponentBase (tests register fakes directly) doesn't have the method
+                        name = COMPONENT_LIST.get(component_name, {}).get("name", component_name)
+                        message = component.health_message() if hasattr(component, "health_message") else None
+                        failed_components.append("{} ({})".format(name, message) if message else name)
                 elif self.components.load_error(component_name):
                     # Configured but could not be imported or constructed - an error, not merely disabled
                     component_status[component_name] = "error"
@@ -1530,6 +1569,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                             matches = True
                             if required_entries is not None and len(value) > required_entries:
                                 value = value[:required_entries]
+                            # min/max are declared on some APPS_SCHEMA entries (log_count, #5076)
+                            # but were never actually enforced here - the schema promised a range
+                            # check that validate_config() silently skipped (Copilot review on
+                            # #5076).
+                            schema_min = spec.get("min", None)
+                            schema_max = spec.get("max", None)
                             for item in value:
                                 if not self.validate_is_int(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
@@ -1539,6 +1584,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if not spec.get("zero", True) and int(item) == 0:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is zero".format(name))
                                     self.arg_errors[name] = "Invalid value, expected non-zero integer item {}".format(item)
+                                    errors += 1
+                                    break
+                                if (schema_min is not None and int(item) < schema_min) or (schema_max is not None and int(item) > schema_max):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is outside the allowed range [{}, {}]".format(name, item, schema_min, schema_max))
+                                    self.arg_errors[name] = "Invalid value, expected between {} and {}".format(schema_min, schema_max)
                                     errors += 1
                                     break
                     elif expected_type == "float" or expected_type == "float_list":
@@ -1920,7 +1970,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.update_time(print=False)
         self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
-        now = self.now
+        # The host's naive clock, deliberately not now_utc: the run times below are handed to
+        # run_every(), and hass.py's timer_tick compares them against datetime.now(). This is the
+        # only place that needs it, so it stays local rather than living on the instance.
+        host_now = datetime.now()
+        host_midnight = host_now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         try:
             self.reset()
@@ -1993,12 +2047,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.publish_last_started()
 
         # Run every N minutes aligned to the minute
-        seconds_now = (now - self.midnight).seconds
+        seconds_now = (host_now - host_midnight).seconds
 
         # Calculate next run time to exactly align with the run_every time
         seconds_offset = seconds_now % run_every
         seconds_next = seconds_now + (run_every - seconds_offset)
-        next_time = self.midnight + timedelta(seconds=seconds_next)
+        next_time = host_midnight + timedelta(seconds=seconds_next)
         self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
         # First run is now
@@ -2017,7 +2071,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
             seconds_offset_balance = seconds_now % run_every_balance
             seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
-            next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
+            next_time_balance = host_midnight + timedelta(seconds=seconds_next_balance)
             self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
         # Predheat

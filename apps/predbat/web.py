@@ -70,7 +70,23 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, mask_secret_yaml_text, read_predbat_log, classify_log_line, log_line_included
+from utils import (
+    calc_percent_limit,
+    str2time,
+    dp0,
+    dp2,
+    dp4,
+    format_time_ago,
+    get_override_time_from_string,
+    history_attribute,
+    prune_today,
+    mask_secret_args,
+    mask_secret_yaml_text,
+    read_predbat_log,
+    classify_log_line,
+    log_line_included,
+    predbat_log_file_prev,
+)
 from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
@@ -2549,12 +2565,14 @@ chart.render();
         manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
         manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
         manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2567,6 +2585,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2645,12 +2664,14 @@ chart.render();
         manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
         manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
         manual_soc_keep = self.base.manual_rates("manual_soc", update=False)
+        manual_soc_max_keep = self.base.manual_rates("manual_soc_max", update=False)
 
         # Convert manual rates dicts to list format for JavaScript
         manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
         manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
+        manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2663,6 +2684,7 @@ chart.render();
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
+            "manual_soc_max": manual_soc_max_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -3036,7 +3058,7 @@ chart.render();
         Load a file and serve it up
         """
         data = None
-        if os.path.exists(filename):
+        if filename and os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
         if also_file and os.path.exists(also_file):
@@ -3049,7 +3071,10 @@ chart.render();
         return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
+        # The previous log is whichever name is present - two-digit, or the single-digit one an
+        # older Predbat wrote (#5076). Hard-coding predbat.1.log here served nothing once
+        # rotation moved to the padded form.
+        return await self.html_file_load(predbat_log_file_prev(), also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
         """
@@ -4773,6 +4798,15 @@ chart.render();
                 actual_rate = manual_soc.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
+            elif action == "Set SOC Max":
+                item = self.base.config_index.get("manual_soc_max_value", {})
+                await self.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_soc_max", selection_option)
+            elif action == "Clear SOC Max":
+                manual_soc_max = self.base.manual_rates("manual_soc_max", update=False)
+                actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
+                await self.base.async_manual_select("manual_soc_max", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)

@@ -24,6 +24,10 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
+  # Number of log files to keep, including the live predbat.log (2-100, default 10)
+  # Rotated logs are predbat.01.log .. predbat.99.log
+  #log_count: 10
+
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: !secret ha_key

@@ -18,11 +18,28 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
-from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
+from utils import (
+    remove_intersecting_windows,
+    get_charge_rate_curve_cached,
+    get_discharge_rate_curve_cached,
+    find_charge_rate,
+    calc_percent_limit,
+    in_iboost_slot,
+    in_car_slot,
+    charge_curve_to_tuple,
+    export_mode_of,
+    export_power_of,
+    export_target_of,
+    pack_export_limit,
+)
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
+
+# The limit an inactive export window reads as. Built once at import rather than per minute:
+# run_prediction consults it on every step of the horizon for every simulation.
+IDLE_EXPORT_LIMIT = pack_export_limit(EXPORT_MODE_IDLE)
 
 
 def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp):
@@ -105,6 +122,8 @@ class Prediction(PredictionBatch):
             self.set_export_window = base.set_export_window
             self.calculate_export_on_pv = base.calculate_export_on_pv
             self.charge_low_power_margin = base.charge_low_power_margin
+            self.low_power_pv_threshold_w = base.low_power_pv_threshold_w
+            self.set_charge_low_power_solar_full_rate = base.set_charge_low_power_solar_full_rate
             self.car_charging_slots = base.car_charging_slots
             # Model-facing car charge limit (#4967): fetch raises this above the real limit for cars
             # following an Octopus Intelligent dispatch plan with consider_full off, making the fill
@@ -169,6 +188,7 @@ class Prediction(PredictionBatch):
             self.load_minutes_step90 = load_minutes_step90 if load_minutes_step90 is not None else load_minutes_step
             self.carbon_intensity = base.carbon_intensity
             self.all_active_keep = base.all_active_keep
+            self.all_active_keep_max = base.all_active_keep_max
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
@@ -452,11 +472,16 @@ class Prediction(PredictionBatch):
         """
         charge_window_optimised = {}
         for window_n in range(len(charge_windows)):
+            # Hoisted out of the per-minute loop below: whether a window is active cannot change
+            # within it, and this runs for every minute of every window on the hot path.
+            if is_export:
+                active = export_mode_of(charge_limit[window_n]) != EXPORT_MODE_IDLE
+            else:
+                active = charge_limit[window_n] > 0.0
+            if not active:
+                continue
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
-                if is_export and charge_limit[window_n] < EXPORT_LIMIT_IDLE:
-                    charge_window_optimised[minute] = window_n
-                elif not is_export and charge_limit[window_n] > 0.0:
-                    charge_window_optimised[minute] = window_n
+                charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False):
@@ -628,6 +653,7 @@ class Prediction(PredictionBatch):
         battery_loss_discharge = self.battery_loss_discharge
         battery_temperature_prediction = self.battery_temperature_prediction
         all_active_keep = self.all_active_keep
+        all_active_keep_max = self.all_active_keep_max
         best_soc_keep_weight = self.best_soc_keep_weight
         best_soc_keep_orig = self.best_soc_keep
         debug_enable = self.debug_enable
@@ -697,6 +723,7 @@ class Prediction(PredictionBatch):
 
             # Alert?
             alert_keep = all_active_keep.get(minute_absolute, 0)
+            alert_keep_max = all_active_keep_max.get(minute_absolute, -1)
 
             # Project battery temperature
             battery_temperature = battery_temperature_prediction.get(minute, self.battery_temperature)
@@ -715,12 +742,31 @@ class Prediction(PredictionBatch):
                 keep_minute_scaling = max(keep_minute_scaling, 10.0)
                 best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * soc_max, soc_max))
 
+            # Soc max keep is a ceiling rather than a floor (e.g. manual_soc_max). A ceiling of 0% is a
+            # legitimate request (empty the battery for a BMS calibration), so absence is a negative
+            # sentinel rather than 0 - see all_active_keep_max in fetch.py.
+            best_soc_max = -1
+            if alert_keep_max >= 0:
+                keep_minute_scaling = max(keep_minute_scaling, 10.0)
+                best_soc_max = min(alert_keep_max / 100.0 * soc_max, soc_max)
+
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
             export_window_n = export_window_optimised.get(minute_absolute, -1)
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
-            export_limit_now = export_limits[export_window_n] if export_window_active else EXPORT_LIMIT_IDLE
+            export_limit_now = export_limits[export_window_n] if export_window_active else IDLE_EXPORT_LIMIT
+            export_mode_now = export_mode_of(export_limit_now)
+            # The SoC floor this window exports down to. A target exports to its target field - not
+            # to the packed value, which also carries 1 - power in its fraction and so raised the
+            # floor by up to 0.7% of the battery for a slow export, stopping it slightly early for
+            # no reason connected to where the user asked it to stop. The two modes carry no target
+            # of their own and keep the floor their packed sentinels produced: 99% for a freeze
+            # (hold SoC) and 100% for an idle window, where the floor never binds.
+            if export_mode_now == EXPORT_MODE_TARGET:
+                export_limit_percent = export_target_of(export_limit_now)
+            else:
+                export_limit_percent = EXPORT_LIMIT_FREEZE if export_mode_now == EXPORT_MODE_FREEZE else EXPORT_LIMIT_IDLE
 
             # Find charge limit
             charge_limit_n = 0
@@ -900,12 +946,12 @@ class Prediction(PredictionBatch):
 
             discharge_min = reserve
             if export_window_active:
-                discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
+                discharge_min = max(soc_max * export_limit_percent / 100.0, reserve, self.best_soc_min)
 
-            if not set_export_freeze_only and export_window_active and export_limit_now < EXPORT_LIMIT_FREEZE and (soc > discharge_min):
+            if not set_export_freeze_only and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
                 # Discharge enable, capped at export limit
                 if self.set_export_low_power:
-                    export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
+                    export_rate_adjust = export_power_of(export_limit_now)
                 else:
                     export_rate_adjust = 1.0
                 discharge_rate_now = battery_rate_max_export * export_rate_adjust
@@ -1043,6 +1089,8 @@ class Prediction(PredictionBatch):
                     battery_temperature,
                     self.battery_temperature_charge_curve,
                     pv_window_kwh=pv_window_kwh,
+                    low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+                    solar_full_rate=self.set_charge_low_power_solar_full_rate,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
@@ -1076,7 +1124,7 @@ class Prediction(PredictionBatch):
                 # parallel branch that has to re-derive the same AC balance. The old duplicate
                 # branch had drifted and pinned battery_draw at 0, wrongly modelling Freeze Export
                 # as Freeze Charge whenever load exceeded PV - see #4676.
-                freeze_export = set_export_freeze and export_window_active and export_limit_now < EXPORT_LIMIT_IDLE and (export_limit_now == EXPORT_LIMIT_FREEZE or set_export_freeze_only)
+                freeze_export = set_export_freeze and export_window_active and export_mode_now != EXPORT_MODE_IDLE and (export_mode_now == EXPORT_MODE_FREEZE or set_export_freeze_only)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
@@ -1274,6 +1322,10 @@ class Prediction(PredictionBatch):
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
                 metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
+
+            # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
+            if best_soc_max >= 0 and soc >= best_soc_max:
+                metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
 
             if diff > 0:
                 # Import
