@@ -768,7 +768,12 @@ class Execute:
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
 
             # Charging/Discharging off via service
-            if not isCharging and self.set_charge_window:
+            # Skipped while exporting: adjust_export_immediate() above already issues its own
+            # charge_stop as part of starting the export, so this unconditional charge-off call adds
+            # nothing but a second, later charge_stop_service write - on service-template inverters
+            # (e.g. Tesla) that write a shared mode-select entity, this trailing call clobbered the
+            # mode discharge_start_service had just set (GH#4165, GH#4641).
+            if not isCharging and not isExporting and self.set_charge_window:
                 if carHolding or boostHolding:
                     inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                 else:
