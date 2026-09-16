@@ -257,7 +257,7 @@ def run_iboost_smart_test_cases(my_predbat):
     # first sub-slot to 12:15 but booking stays keyed on the interval grid, so the next window
     # cannot emit a slot overlapping it (the invariant check verifies no overlaps)
     set_rate_profile(my_predbat, [(720, 750, 4.0), (750, 780, 8.0)], default_rate=20.0)
-    failed |= run_iboost_smart_test("iboost_offgrid_overlap", my_predbat, today=0, max_energy=1, max_power=1, min_length=60, minutes_now=735, expect_cost=1.5 + 3.0 + 5.0 + 10.0 + 10.0, expect_kwh=2.0, expect_time=125)
+    failed |= run_iboost_smart_test("iboost_off_grid_overlap", my_predbat, today=0, max_energy=1, max_power=1, min_length=60, minutes_now=735, expect_cost=1.5 + 3.0 + 5.0 + 10.0 + 10.0, expect_kwh=2.0, expect_time=125)
 
     return failed
 
