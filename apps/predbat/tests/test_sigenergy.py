@@ -19,6 +19,7 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_CHARGE,
     SIGENERGY_ACTIVE_MODE_DISCHARGE,
     SIGENERGY_ACTIVE_MODE_SELF,
+    SIGENERGY_ACTIVE_MODE_SELF_GRID,
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_LOG_REDACT_KEYS,
@@ -1285,6 +1286,69 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     assert len(bat_cmds) >= 1, "send_battery_command called for export"
     assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_DISCHARGE, "discharge mode sent for export"
     assert bat_cmds[0][4] == 3.0, "configured export rate (3000W) sent as charging_power_kw, got {}".format(bat_cmds[0][4])
+
+    return failed
+
+
+def test_sigenergy_apply_controls_freeze_export_no_window(my_predbat):
+    """Test apply_controls sends Self-Consumption Grid for a freeze export left by execute.py."""
+    failed = False
+
+    def run_case(charge_rate, export_rate):
+        """Apply controls with the given rates and no active window, returning the battery commands."""
+        api = MockSigenergyAPI()
+        system_id = "SIG001"
+        api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+        api.devices[system_id] = [{"deviceType": "Battery", "attrMap": {"ratedChargePower": 3.0}}]
+        api.energy_flow[system_id] = {"batterySoc": 80.0}
+        # This is the control state execute.py actually leaves behind for a Freeze Export on
+        # SIGCLOUD: adjust_force_export(False) has already cleared the export window, so the
+        # only remaining signal is adjust_charge_rate(0) against a reset export rate.
+        api.controls[system_id] = {
+            "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": charge_rate},
+            "export": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 0, "rate": export_rate},
+            "reserve": 10,
+        }
+
+        commands_sent = []
+
+        async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
+            commands_sent.append(("battery_cmd", sid, active_mode, duration_min, charging_power_kw))
+            return True
+
+        api.send_battery_command = mock_send_battery_command
+
+        ok = run_async(api.apply_controls(system_id))
+        assert ok is True, "apply_controls freeze export returned True"
+        return [c for c in commands_sent if c[0] == "battery_cmd"]
+
+    # Charge rate pinned to zero with the export rate still live — a freeze export
+    bat_cmds = run_case(0, 3000)
+    assert len(bat_cmds) >= 1, "send_battery_command called for freeze export"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF_GRID, "selfConsumption-grid sent for freeze export, got {}".format(bat_cmds[0][2])
+    # chargingPower is bidirectional on this API, so a freeze export must not cap it — that
+    # would also stop the battery serving the house, which is a freeze charge not a freeze export
+    assert bat_cmds[0][4] is None, "no charging power cap sent for freeze export, got {}".format(bat_cmds[0][4])
+
+    # Both rates zero — a freeze export with a car-charging or iBoost discharge hold on top.
+    # selfConsumption-grid would let the battery discharge to serve the house, which the hold
+    # forbids, so this is plain self-consumption with the bidirectional power pinned to zero
+    bat_cmds = run_case(0, 0)
+    assert len(bat_cmds) >= 1, "send_battery_command called for freeze export with a discharge hold"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for freeze export with a discharge hold, got {}".format(bat_cmds[0][2])
+    assert bat_cmds[0][4] == 0, "charging power pinned to 0 for freeze export with a discharge hold, got {}".format(bat_cmds[0][4])
+
+    # A discharge hold on its own, with charging still allowed, is not a freeze and must not be
+    # capped — the bidirectional power cannot express "charge allowed, discharge blocked"
+    bat_cmds = run_case(3000, 0)
+    assert len(bat_cmds) >= 1, "send_battery_command called for a discharge hold alone"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for a discharge hold alone, got {}".format(bat_cmds[0][2])
+    assert bat_cmds[0][4] is None, "no charging power cap sent for a discharge hold alone, got {}".format(bat_cmds[0][4])
+
+    # A normal demand period with both rates live stays in demand
+    bat_cmds = run_case(3000, 3000)
+    assert len(bat_cmds) >= 1, "send_battery_command called for demand"
+    assert bat_cmds[0][2] == SIGENERGY_ACTIVE_MODE_SELF, "selfConsumption sent for demand, got {}".format(bat_cmds[0][2])
 
     return failed
 
@@ -3154,6 +3218,7 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
         ("apply_controls_export_mode", test_sigenergy_apply_controls_export_mode),
+        ("apply_controls_freeze_export_no_window", test_sigenergy_apply_controls_freeze_export_no_window),
         ("publish_mqtt_success", test_sigenergy_publish_mqtt_success),
         ("redact", test_sigenergy_redact),
         ("publish_mqtt_redacts_token", test_sigenergy_publish_mqtt_redacts_token),

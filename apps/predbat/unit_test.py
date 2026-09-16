@@ -18,6 +18,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import glob
 import argparse
+import random
 from datetime import timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -55,6 +56,7 @@ from tests.test_new_install_detection import test_new_install_detection
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
+from tests.test_clock import run_clock_tests
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
@@ -150,9 +152,11 @@ from tests.test_web_annual import (
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
+from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
+from tests.test_manual_soc_max import run_test_manual_soc_max
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
 from tests.test_minute_array import test_minute_array
@@ -233,6 +237,7 @@ from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
 from tests.test_dispatch_timeline import run_dispatch_timeline_tests
+from tests.test_log_rotation import run_log_rotation_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
@@ -251,6 +256,7 @@ from tests.test_validate_config import test_validate_config, test_validate_confi
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_plan_why_reason import run_test_plan_why_reason
+from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests
@@ -423,6 +429,7 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("plot", run_plot_tests, "Failure plot display is opt-in (--plot) tests", False),
@@ -440,6 +447,7 @@ def main():
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
+        ("clock", run_clock_tests, "update_time clock tests", False),
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
@@ -507,6 +515,7 @@ def main():
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
+        ("manual_soc_max", run_test_manual_soc_max, "Manual SOC maximum (ceiling) target tests (issue #1578)", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
@@ -551,6 +560,7 @@ def main():
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
         ("dispatch_timeline", run_dispatch_timeline_tests, "Dispatch timeline diagnostic tests (#4516 Stage 1)", False),
+        ("log_rotation", run_log_rotation_tests, "Configurable log rotation and two-digit naming (#5076)", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
@@ -644,6 +654,7 @@ def main():
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
+        ("plan_scenario_summary", run_test_plan_scenario_summary, "Plan scenario_summary_state export-limit tuple regression test", False),
         # Download tests
         ("download", test_download, "Predbat download/update comprehensive tests (GitHub API, SHA1, install check, file ops)", False),
         # Axle Energy VPP unit tests
@@ -777,6 +788,8 @@ def main():
     # name three tests that are not marked slow at all, while the four that are went unmentioned.
     slow_test_names = ", ".join(name for name, _func, _desc, slow in TEST_REGISTRY if slow) or "none currently marked slow"
     parser.add_argument("--quick", "-q", action="store_true", help=f"Skip slow tests ({slow_test_names})")
+    parser.add_argument("--shuffle", action="store_true", help="Run the selected tests in a random order, to look for shared-fixture state leaks between tests (see #5079)")
+    parser.add_argument("--shuffle-seed", type=int, default=None, metavar="N", help="Seed for --shuffle (default: a random seed, printed at the start of the run)")
     parser.add_argument("--plot", action="store_true", help="Display failure plots on screen (blocks until closed); the PNG is written either way")
     parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
     parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
@@ -822,6 +835,8 @@ def main():
         sys.exit(0)
 
     print("**** Starting Predbat tests ****")
+    # Used by the debug-file, random-scenario and profiling paths below. The registry test
+    # loop does not share this one - it builds a fresh instance per test (see GH#5079).
     my_predbat = create_predbat()
     print("**** Testing Predbat ****")
     failed = False
@@ -884,6 +899,11 @@ def main():
         # Run all tests from the registry
         tests_to_run = TEST_REGISTRY
 
+    if args.shuffle:
+        shuffle_seed = args.shuffle_seed if args.shuffle_seed is not None else random.randrange(2**32)
+        random.Random(shuffle_seed).shuffle(tests_to_run)
+        print(f"**** Shuffled test order with seed {shuffle_seed} ****")
+
     print(f"**** Running {len(tests_to_run)} test(s) ****")
     # Single loop to run all collected tests
     total_time = 0
@@ -899,6 +919,13 @@ def main():
         # from the log: the elapsed figure below only appears once a test returns, so a test
         # still running (or one that hung) is identified by its unmatched start stamp.
         print(f"**** Running: {name} - {desc} (start {time.strftime('%H:%M:%S')}) ****")
+
+        # Each test gets a PredBat of its own, so state an earlier test left behind cannot
+        # reach it. Sharing one instance across the whole run made a test that mutated it
+        # without restoring break whichever unrelated test happened to follow, depending on
+        # the order they ran in (GH#5079). create_predbat() costs about 22ms, which is lost
+        # in the noise of the suite as a whole.
+        my_predbat = create_predbat()
 
         start_time = time.time()
         test_failed = func(my_predbat)

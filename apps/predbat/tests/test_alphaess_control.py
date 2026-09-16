@@ -379,7 +379,7 @@ def test_alphaess_disabled_planned_hold_recovers_the_charge_window():
     """
     failed = False
     client = _client()
-    client.base.minutes_now = 2 * 60
+    client.set_mock_clock(2 * 60)
     schedule = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)
@@ -404,10 +404,10 @@ def test_alphaess_planned_hold_releases_when_its_window_ends():
     """
     failed = False
     client = _client()
-    client.base.minutes_now = 2 * 60
+    client.set_mock_clock(2 * 60)
     schedule = _schedule(reserve=41, charge={"enable": False, "soc": 40, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
     first = client.build_charge_payload("AL70", schedule)
-    client.base.minutes_now = 6 * 60
+    client.set_mock_clock(6 * 60)
     second = client.build_charge_payload("AL70", schedule)
     if first.get("gridCharge") != 1:
         print(f"ERROR: test setup did not enter the recovered hold: {first}")
@@ -441,7 +441,7 @@ def test_alphaess_real_charge_survives_a_simultaneous_discharge_hold():
     """An EV/iBoost hold during real grid charging must not lower the charge target."""
     failed = False
     client = _client()
-    client.base.minutes_now = 2 * 60
+    client.set_mock_clock(2 * 60)
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"}, export_power=0)
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)
@@ -463,7 +463,7 @@ def test_alphaess_future_charge_does_not_satisfy_a_current_discharge_hold():
     """
     failed = False
     client = _client()
-    client.base.minutes_now = 22 * 60
+    client.set_mock_clock(22 * 60)
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000, "start": "23:00:00", "end": "23:45:00"}, export_power=0)
     charge = client.build_charge_payload("AL70", schedule)
     discharge = client.build_discharge_payload("AL70", schedule)

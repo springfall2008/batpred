@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_rates, update_rates_import, update_rates_export, reset_inverter
+from const import EXPORT_MODE_TARGET, EXPORT_MODE_IDLE
+from utils import pack_export_limit
 from prediction import Prediction
 
 
@@ -89,7 +91,7 @@ def run_optimise_levels(
     my_predbat.debug_enable = True
 
     charge_limit_best = [0 for n in range(len(charge_window_best))]
-    export_limits_best = [100 for n in range(len(export_window_best))]
+    export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE) for n in range(len(export_window_best))]
 
     record_charge_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, charge_window_best), 1)
     record_export_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, export_window_best), 1)
@@ -272,7 +274,7 @@ def run_optimise_levels_tests(my_predbat):
         charge_window_best=charge_window_best,
         export_window_best=export_window_best,
         expect_charge_limit=[0, 100],
-        expect_export_limit=[0],
+        expect_export_limit=[pack_export_limit(EXPORT_MODE_TARGET, 0)],
         load_amount=0,
         pv_amount=0,
         expect_best_price=6.0,
@@ -290,7 +292,7 @@ def run_optimise_levels_tests(my_predbat):
         charge_window_best=charge_window_best,
         export_window_best=export_window_best,
         expect_charge_limit=[0, 0],
-        expect_export_limit=[100],
+        expect_export_limit=[pack_export_limit(EXPORT_MODE_IDLE)],
         load_amount=0,
         pv_amount=0,
         expect_best_price=6.0,

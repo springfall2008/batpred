@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.test_infra import reset_inverter
+from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE
+from utils import pack_export_limit
 from utils import calc_percent_limit
 
 
@@ -557,6 +559,13 @@ def test_export_target_soc_percent(my_predbat):
         (20, False, 20),  # above the reserve, left alone
         (0, True, 0),  # Predbat owns the reserve, so the target is not its job
         (20, True, 20),
+        # The same as tuples: export_target_soc_percent must read the target field, not int() the
+        # instruction, which raised a TypeError once a limit was a tuple rather than a bare number.
+        (pack_export_limit(EXPORT_MODE_TARGET, 0), False, 10),
+        (pack_export_limit(EXPORT_MODE_TARGET, 20), True, 20),
+        # A freeze carries no target - `export_target_of(...) or 0` falls back to 0, which the
+        # reserve floor then raises when Predbat owns no register
+        (pack_export_limit(EXPORT_MODE_FREEZE), False, 10),
     ]
     for limit, reserve_enable, expect in cases:
         my_predbat.export_limits_best = [limit]
@@ -568,7 +577,7 @@ def test_export_target_soc_percent(my_predbat):
 
     # best_soc_min above the reserve wins, matching how discharge_soc resolves the floor
     my_predbat.best_soc_min = 3.0  # 30%
-    my_predbat.export_limits_best = [0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
     my_predbat.set_reserve_enable = False
     if my_predbat.export_target_soc_percent() != 30:
         print("ERROR: export target should follow best_soc_min of 30%, got {}".format(my_predbat.export_target_soc_percent()))
@@ -618,7 +627,7 @@ def run_execute_tests(my_predbat):
     export_window_best5 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     export_window_best6 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
     export_window_best7 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
-    export_limits_best = [0]
+    export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
     export_limits_best2 = [50]
     export_limits_best3 = [50.5]
     export_limits_best_frz = [99]

@@ -129,6 +129,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
 def _rate_base(import_p, export_p):
     """A minimal base double exposing flat import/export rate dicts and a local clock for build_tariff.
 
+    now_utc, not now: Predbat keeps one clock, in the configured timezone, and _local_today_weekday
+    reads it. A double that carries the wrong name still "works" - the helper falls back to the live
+    wall clock - so the name matters here.
+
     get_arg's keyword-only "d" never matches the "default=" keyword ComponentBase.get_arg forwards
     with, so it always falls through to its own None default (never the caller's default) - which
     reads as not read-only since bool(None) is False. This matches how
@@ -140,7 +144,7 @@ def _rate_base(import_p, export_p):
 
     rate_import = {m: import_p for m in range(0, 2880)}
     rate_export = {m: export_p for m in range(0, 2880)}
-    return SimpleNamespace(rate_import=rate_import, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
+    return SimpleNamespace(rate_import=rate_import, rate_export=rate_export, minutes_now=0, now_utc=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
 
 
 LIVE_STATUS = {
@@ -632,7 +636,7 @@ def test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow():
     # Absolute, independent expectation (GH#4610): Tesla's fromDayOfWeek uses Monday=0, the same
     # convention as plain datetime.weekday() - deliberately NOT routed through _tesla_dow, the
     # function under test, so a wrong mapping there cannot make this assertion trivially pass.
-    today_dow = api.base.now.weekday()
+    today_dow = api.base.now_utc.weekday()
     assert set(p["fromDayOfWeek"] for p in sell_periods["ON_PEAK"]["periods"]) == {today_dow}
     boost = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
     real = [v for t, v in tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"].items() if t != "ON_PEAK"]
@@ -684,7 +688,7 @@ def test_teslemetry_build_tariff_export_window_ending_at_midnight_spares_tomorro
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     tariff = api.build_tariff((1380, 0), now_min=600)  # 23:00 -> 00:00, now 10:00
-    today_dow = api.base.now.weekday()
+    today_dow = api.base.now_utc.weekday()
     tomorrow_dow = (today_dow + 1) % 7
     for tou_periods in (tariff["seasons"]["AllYear"]["tou_periods"], tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]):
         boost_days = {day for day in range(7) for p in tou_periods.get("ON_PEAK", {"periods": []})["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]}
@@ -740,7 +744,7 @@ def test_teslemetry_saving_session_spike_keeps_daily_shape():
         rate_export[minute] = 175.0
 
     api = MockTeslemetryAPI()
-    api.base = SimpleNamespace(rate_import={m: 15.0 for m in range(2880)}, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
+    api.base = SimpleNamespace(rate_import={m: 15.0 for m in range(2880)}, rate_export=rate_export, minutes_now=0, now_utc=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
     # Predbat scheduled an export over the session, so build_tariff is called with that window.
     tariff = api.build_tariff((17 * 60, 18 * 60 + 30), now_min=12 * 60)
     sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
@@ -782,7 +786,7 @@ def test_teslemetry_quantise_in_range_excluded_price_no_keyerror():
         rate_export[minute] = 15.0
 
     api = MockTeslemetryAPI()
-    api.base = SimpleNamespace(rate_import={m: 15.0 for m in range(2880)}, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
+    api.base = SimpleNamespace(rate_import={m: 15.0 for m in range(2880)}, rate_export=rate_export, minutes_now=0, now_utc=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
     tariff = api.build_tariff((17 * 60, 17 * 60 + 30), now_min=12 * 60)  # must not raise
     sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
     periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
@@ -896,7 +900,7 @@ def test_teslemetry_signal_tariff_is_independent_of_the_clock_and_rates():
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     first = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
-    api.base.now = datetime(2026, 7, 23, 3, 30)  # different weekday and time of day
+    api.base.now_utc = datetime(2026, 7, 23, 3, 30)  # different weekday and time of day
     api.base.rate_import = {minute: 9.0 for minute in range(0, 2880)}  # and different real rates
     second = json.dumps(api.build_signal_tariff((120, 300), (1020, 1140)), sort_keys=True)
     assert first == second
@@ -2348,6 +2352,28 @@ def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
     assert len(today) == 48 and len(tomorrow) == 48
 
 
+def test_teslemetry_local_weekday_follows_the_base_clock():
+    """The tariff weekday comes from Predbat's clock, not the machine's.
+
+    _local_today_weekday() falls back to the live wall clock when the base has no clock, which is
+    what makes this worth pinning: it read base.now until Predbat's second, host-timezone clock was
+    removed, and the fallback meant the rename showed up as a silently different weekday - ignoring
+    clock_skew and any pinned clock - rather than an error. The pinned date below is a Thursday, so
+    a fallback to the real clock fails this on six days out of seven.
+    """
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.now_utc = datetime(2026, 7, 23, 3, 30)  # a Thursday
+
+    assert api._local_today_weekday() == 3, f"Expected Thursday (3), got {api._local_today_weekday()}"
+
+    # No base at all: the live clock, rather than an exception.
+    api.base = None
+    assert api._local_today_weekday() == datetime.now().weekday()
+
+
 def test_teslemetry_tesla_dow_matches_python_weekday():
     """Tesla's tariff_content_v2 fromDayOfWeek/toDayOfWeek use Monday=0..Sunday=6, the same convention
     as datetime.weekday() (GH#4610) - so _tesla_dow must be the identity function. The previous
@@ -2372,7 +2398,7 @@ def test_teslemetry_build_tariff_boost_resolves_at_the_real_tesla_day_index():
     sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
     periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
 
-    real_dow = api.base.now.weekday()  # Tesla's actual day index for "today" - independent of _tesla_dow
+    real_dow = api.base.now_utc.weekday()  # Tesla's actual day index for "today" - independent of _tesla_dow
     minute = 17 * 60 + 30  # inside the window
 
     def resolve_tiers(dow, minute):
@@ -2706,6 +2732,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_quantise_two_distinct_exact()
     test_teslemetry_quantise_agile_three_bands_clamped_rounded()
     test_teslemetry_tesla_dow_matches_python_weekday()
+    test_teslemetry_local_weekday_follows_the_base_clock()
     test_teslemetry_build_tariff_boost_resolves_at_the_real_tesla_day_index()
     test_teslemetry_boost_price_floor_wins_on_low_rates()
     test_teslemetry_side_layout_partitions_every_day()

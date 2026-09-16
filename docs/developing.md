@@ -36,6 +36,21 @@ For coverage analysis install the 'coverage' library with Python, or use the ver
 1. ./run_cov --quick
 2. Open `htmlcov/index.html` in your web browser
 
+### Finding test order dependencies
+
+All tests run against one shared `PredBat`/Home Assistant fixture (see `create_predbat()` in `unit_test.py`), so a test that mutates shared state and doesn't fully restore it can make a *later* test fail - a bug in the test suite itself, not in Predbat (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)). These only show up when the two tests happen to run in that order, so a clean `./run_all` doesn't prove there isn't one lurking.
+
+`./run_shuffle` fuzzes the test order looking for these:
+
+- `./run_shuffle --hunt --quick` - one-liner: keep trying shuffled orderings until a failure is found, narrow it down to the minimal pair of tests that reproduces it, print that repro command, and record the pair in `tools/shuffle_fuzz_known_pairs.txt` so the next run looks for a *different* one instead of rediscovering the same pair. This is the normal way to run it.
+- `./run_all --shuffle [--shuffle-seed N]` - run the full suite (or whatever `--test`/`-k` selects) in a random order directly, without the fuzzing wrapper. Useful for a one-off check or replaying a specific `--shuffle-seed` a `--hunt` run reported.
+- `./run_shuffle --bisect <SHUFFLE_SEED>` - given a shuffle-seed that's known to fail, narrow down which earlier test caused it, without hunting for a new one.
+- `./run_shuffle --campaign N` - repeat hunt-and-bisect for `N` independent rounds and print a frequency table of which (culprit, victim) pairs recur, to tell a common leak apart from a one-off ordering artefact.
+
+A found pair only proves shared state leaked between two tests - it doesn't say by itself whether the fix belongs in the culprit test's cleanup, or whether it exposed a real gap in the production code the victim test exercises (e.g. a missing bounds check that would also matter outside of tests). Check both before assuming it's "just" a test hygiene issue.
+
+This is too slow for a per-commit CI gate (each hunt attempt is a full shuffled suite run, and a failure needs a further round of bisection on top), but cheap to run periodically or before a release.
+
 ## The C++ prediction kernel
 
 Predbat has an experimental compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), Off by default while it's tested more widely.

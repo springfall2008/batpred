@@ -128,6 +128,23 @@ def test_validate_config(my_predbat):
     print("  [integer zero:False] zero fails")
     _run(my_predbat, {"gateway_mqtt_port": 0}, expect_errors=["gateway_mqtt_port"])
 
+    # min/max constraint (log_count: {"type": "integer", "min": 2, "max": 100}) - declared in the
+    # schema but not actually enforced by validate_config()'s integer branch, so an out-of-range
+    # value silently passed validation despite the schema promising a range check
+    # (Copilot review on #5076).
+    print("  [integer min/max] in-range value passes")
+    _run(my_predbat, {"log_count": 25}, expect_clean=["log_count"])
+
+    print("  [integer min/max] below minimum fails")
+    _run(my_predbat, {"log_count": 1}, expect_errors=["log_count"])
+
+    print("  [integer min/max] above maximum fails")
+    _run(my_predbat, {"log_count": 101}, expect_errors=["log_count"])
+
+    print("  [integer min/max] exactly at the boundary passes")
+    _run(my_predbat, {"log_count": 2}, expect_clean=["log_count"])
+    _run(my_predbat, {"log_count": 100}, expect_clean=["log_count"])
+
     # ==========================================================================
     # INTEGER_LIST type  (days_previous: {"type": "integer_list"})
     # ==========================================================================

@@ -26,7 +26,8 @@ class MockBase:
 
     def __init__(self):
         """Initialise MockBase with default config."""
-        self.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.now_utc = datetime.now(pytz.utc)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.config = {}
 
     def get_arg(self, key, default=None, **kwargs):

@@ -51,6 +51,17 @@ SOLIS_MAX_RETRY_TIME = 30  # seconds
 SOLIS_INITIAL_RETRY_DELAY = 1  # seconds
 SOLIS_REQUEST_TIMEOUT = 30  # seconds
 
+# SolisCloud allows 200 OpenAPI requests per account per day. Once that is gone every further
+# request is refused with R0000, so requests are paused rather than retried - see
+# note_quota_exhausted(). One probe an hour is enough to notice the allowance coming back
+# without spending a meaningful part of the next day's budget on finding out (issue #5087).
+SOLIS_QUOTA_PAUSE_SECONDS = 3600
+
+# How long an inverter's reads are held back once SolisCloud reports its datalogger offline. The
+# datalogger coming back is the only thing that changes the answer, and that is a physical event on
+# a timescale of minutes at best, so probing it every minute only spends the daily allowance.
+SOLIS_DATALOGGER_OFFLINE_SECONDS = 900
+
 # CID Constants (Control IDs for inverter registers)
 SOLIS_CID_STORAGE_MODE = 636
 SOLIS_CID_BATTERY_RESERVE_SOC = 157
@@ -75,6 +86,18 @@ SOLIS_ALLOW_EXPORT_OFF = "1"  # Block export
 # Battery max current CIDs
 SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT = 7224
 SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT = 7226
+
+# Nominal pack voltage selection (issue #5090). Thresholds come from 30 days of battery_voltage
+# history across 30 LV systems plus a full inverterDetail from 14 of them:
+#  - no LV system exceeded 57.5V live, so a live reading above 60V is an HV pack;
+#  - the BMS-requested charge voltage separates the LV pack classes cleanly - 53.2V on every 15S
+#    pack that reported it, 56.5-58.4V on every 16S - so 55V sits in a 3.3V empty gap.
+# The live voltage itself cannot be used to tell 15S from 16S: the classes overlap (a full 15S
+# reaches 53.5V, a low 16S drops to 47.1V), which is why this is decided from the charge voltage.
+SOLIS_HV_BATTERY_VOLTAGE = 60.0
+SOLIS_LV_16S_CHARGE_VOLTAGE = 55.0
+SOLIS_LV_15S_NOMINAL_VOLTAGE = 48.0
+SOLIS_LV_16S_NOMINAL_VOLTAGE = 51.2
 
 # Charge slot CIDs (base + slot_index for slots 1-6)
 SOLIS_CID_CHARGE_ENABLE_BASE = 5916  # 5916-5921
@@ -340,8 +363,16 @@ SOLIS_API_CODES = {
     "10403": "Forbidden",
     "10404": "Not found",
     "10500": "Internal server error",
-    "B0115": "Failure to send",
+    "B0115": "Datalogger offline or disconnected",
+    "R0000": "Daily API request allowance exhausted",
 }
+
+# Response codes that are settled for this cycle: retrying cannot change the answer, and every
+# attempt still spends one of the 200 daily requests. B0115 means the datalogger is offline, not
+# that the request was throttled, and R0000 means the daily allowance is already gone (issue #5087).
+SOLIS_API_CODE_QUOTA_EXCEEDED = "R0000"
+SOLIS_API_CODE_DATALOGGER_OFFLINE = "B0115"
+SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALOGGER_OFFLINE}
 
 # Time options for selectors (HH:MM:SS format)
 BASE_TIME = datetime(2000, 1, 1, 0, 0, 0)
@@ -382,15 +413,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.session = None
         self.queued_events = []
-        # Fallback used only when an inverter has never reported a live batteryVoltage - matches
-        # the previous hard-coded assumption (issue #4493). get_nominal_voltage() below is the
-        # real source of truth once live data is available.
+        # Last-resort fallback, used only for an LV pack that reports no BMS charge voltage to be
+        # classified by - matches the previous hard-coded assumption (issue #4493).
+        # get_nominal_voltage() below is the real source of truth for the full priority order.
         self.nominal_voltage = 48.0
-        self.nominal_voltage_last_known = {}  # {inverter_sn: last measured battery voltage}
-        # Nominal *pack* voltage (e.g. cell count x nominal cell voltage), used for the capacity
-        # calculation only - deliberately distinct from the live measured voltage used for
-        # power/current conversions, since the two are not the same value on an HV battery
-        # be supplied via apps.yaml (solis_nominal_voltage) if capacity is to be accurate.
+        self.live_voltage_last_known = {}  # {inverter_sn: last measured battery voltage}
+        self.nominal_voltage_reported = {}  # {inverter_sn: conversion voltage already logged}
+        # Nominal *pack* voltage (e.g. cell count x nominal cell voltage) from apps.yaml. It is
+        # the preferred source for both the capacity calculation and the amp<->watt conversions,
+        # being the one figure available here that is an actual physical property rather than an
+        # inference from a measurement that moves with charge state.
         try:
             configured_pack_v = float(nominal_voltage) if nominal_voltage is not None else None
         except (TypeError, ValueError):
@@ -421,6 +453,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
+        self.quota_exhausted_until = None  # UTC time the daily API allowance pause lifts, None when not paused
+        self.datalogger_offline_until = {}  # {inverter_sn: UTC time that inverter's reads resume}
+        self.automatic_config_done = False  # Auto-config succeeded, so it does not need re-running
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
         self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
@@ -492,8 +527,85 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     # ==================== Core API Methods ====================
 
+    def _quota_pause_until(self):
+        """Return the UTC time at which Solis requests may resume after the daily allowance ran out.
+
+        The documented reset is the account's day boundary, but SolisCloud does not say which
+        timezone that is, so the pause is capped at SOLIS_QUOTA_PAUSE_SECONDS: whichever boundary
+        the allowance really uses, polling resumes within an hour of it, and a wrong guess at the
+        timezone cannot leave Predbat blind for a whole day.
+        """
+        now = self.now_utc_exact.astimezone(UTC)
+        next_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return min(next_midnight, now + timedelta(seconds=SOLIS_QUOTA_PAUSE_SECONDS))
+
+    def note_quota_exhausted(self):
+        """Pause all Solis requests after SolisCloud reports the daily API allowance is used up"""
+        resume_at = self._quota_pause_until()
+        if self.quota_exhausted_until and self.quota_exhausted_until >= resume_at:
+            # Already paused for at least this long - don't re-log it on every refused call
+            return
+        self.quota_exhausted_until = resume_at
+        self.log("Error: Solis API: SolisCloud daily API request allowance exhausted (code {}), pausing all Solis requests until {}".format(SOLIS_API_CODE_QUOTA_EXCEEDED, resume_at.strftime("%Y-%m-%d %H:%M:%S UTC")))
+
+    def quota_paused(self):
+        """Whether Solis requests are currently held back because the daily API allowance ran out.
+
+        Only the window is tested - quota_exhausted_until itself is left set once it passes, so the
+        next request goes out as a probe while the diagnostic survives for health_message(). It is
+        note_quota_restored() that clears it, on the first request that actually succeeds.
+        """
+        return bool(self.quota_exhausted_until) and self.now_utc_exact.astimezone(UTC) < self.quota_exhausted_until
+
+    def note_quota_restored(self):
+        """Clear the daily allowance diagnostic after a request succeeds"""
+        if self.quota_exhausted_until:
+            self.quota_exhausted_until = None
+            self.log("Solis API: SolisCloud daily API request allowance has been restored, resuming normal polling")
+
+    def datalogger_offline(self, inverter_sn):
+        """Whether this inverter's datalogger is in its offline cooldown and should not be polled"""
+        offline_until = self.datalogger_offline_until.get(inverter_sn)
+        return bool(offline_until) and self.now_utc_exact.astimezone(UTC) < offline_until
+
+    def note_datalogger_offline(self, inverter_sn):
+        """Back off this inverter's reads after SolisCloud reports its datalogger is offline.
+
+        Not retrying a B0115 is only half the cure: run() polls every inverter every minute, so an
+        offline datalogger left in the rotation still spends a request a minute out of the 200 a day
+        and is how the account in issue #5087 reached R0000 in the first place.
+        """
+        if not inverter_sn or self.datalogger_offline(inverter_sn):
+            # Already backed off - don't extend the cooldown or re-log on each refused read
+            return
+        resume_at = self.now_utc_exact.astimezone(UTC) + timedelta(seconds=SOLIS_DATALOGGER_OFFLINE_SECONDS)
+        self.datalogger_offline_until[inverter_sn] = resume_at
+        self.log("Warn: Solis API: Datalogger for inverter {} is offline or disconnected, pausing its reads until {}".format(inverter_sn, resume_at.strftime("%H:%M:%S UTC")))
+
+    def note_datalogger_online(self, inverter_sn):
+        """Clear an inverter's offline cooldown after one of its reads succeeds"""
+        if inverter_sn and self.datalogger_offline_until.pop(inverter_sn, None):
+            self.log("Solis API: Datalogger for inverter {} is back online".format(inverter_sn))
+
+    def health_message(self):
+        """Name the reason Solis is unhealthy so the run status says more than 'component errors: Solis'"""
+        if self.quota_exhausted_until:
+            return "Solis Cloud daily API limit reached, paused until {}".format(self.quota_exhausted_until.strftime("%H:%M UTC"))
+        offline = sorted(sn for sn in self.datalogger_offline_until if self.datalogger_offline(sn))
+        if offline:
+            return "datalogger offline for inverter {}".format(", ".join(offline))
+        return None
+
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # The daily allowance is gone - fail without sending. Requests made while it is exhausted
+        # are refused but still counted, so sending them is what keeps it exhausted (issue #5087).
+        if self.quota_paused():
+            raise SolisAPIError("SolisCloud daily API request allowance exhausted, requests paused until {}".format(self.quota_exhausted_until.strftime("%Y-%m-%d %H:%M:%S UTC")), response_code=SOLIS_API_CODE_QUOTA_EXCEEDED)
+        # Which inverter this request is for, so a B0115 backs off that one rather than the fleet.
+        # The read/control endpoints name it "inverterSn", the detail endpoint "sn"; the account-wide
+        # inverter list names neither, and has no single inverter to blame.
+        request_inverter_sn = payload.get("inverterSn") or payload.get("sn")
         # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
         # Translate before building the URL; in api-key mode the paths are used unchanged.
         if self.auth_method == "oauth":
@@ -536,14 +648,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
-                        if str(code) == "B0115":
-                            # Perform a wait as it maybe rate limiting
-                            self.log("Solis API: Received B0115 error, likely rate limiting. Waiting for 10 seconds before retrying.")
-                            await asyncio.sleep(10)
+                        if str(code) == SOLIS_API_CODE_QUOTA_EXCEEDED:
+                            self.note_quota_exhausted()
+                        elif str(code) == SOLIS_API_CODE_DATALOGGER_OFFLINE:
+                            # Not throttling, whatever the old 10 second sleep assumed: the datalogger
+                            # is offline, so this inverter is backed off rather than retried.
+                            self.note_datalogger_offline(request_inverter_sn)
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
                     record_api_call("solis")
+                    self.note_quota_restored()
+                    self.note_datalogger_online(request_inverter_sn)
                     return response_json.get("data")
 
         except asyncio.TimeoutError as err:
@@ -566,6 +682,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 # OAuth permanently failed (needs reauth) — abort immediately rather than
                 # burning the full retry window hitting the API with a known-bad token.
                 if self.oauth_failed:
+                    raise err
+                # An exhausted allowance or an offline datalogger will answer every retry the same
+                # way, and each attempt still costs one of the 200 daily requests (issue #5087).
+                if err.response_code in SOLIS_API_CODES_NO_RETRY:
                     raise err
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time >= max_retry_time:
@@ -1424,11 +1544,48 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """
         return not self._reports_no_battery(self.inverter_details.get(inverter_sn, {}))
 
+    async def save_discovery_cache(self):
+        """Remember the discovered inverters so a restart can auto-configure without reaching the API"""
+        if not self.storage or not self.inverter_sn:
+            return
+        try:
+            await self.storage.save("solis", "discovery", {"inverter_sn": self.inverter_sn, "inverter_details": self.inverter_details}, format="json", expiry=None)
+        except Exception as e:
+            self.log("Warn: Solis API: Could not save the discovered inverter list: {}".format(e))
+
+    async def restore_discovery_cache(self):
+        """Fall back to the last discovered inverter list when discovery itself could not run.
+
+        Every auto-configured arg is an entity name built from a serial number, so without one there
+        is nothing to bind. A restart while the daily API allowance is exhausted cannot discover, so
+        before this it left load_today and the rest unset and fetch_sensor_data raising ValueError
+        every cycle until the allowance came back (issue #5087). Only ever a fallback: a successful
+        discovery overwrites it, and the details are re-read as soon as the API answers again.
+        """
+        if not self.storage:
+            return False
+        try:
+            data = await self.storage.load("solis", "discovery")
+        except Exception as e:
+            self.log("Warn: Solis API: Could not load the cached inverter list: {}".format(e))
+            return False
+        if not data or not data.get("inverter_sn"):
+            return False
+        self.inverter_sn = list(data["inverter_sn"])
+        self.inverter_details = dict(data.get("inverter_details") or {})
+        self.log("Warn: Solis API: Discovery unavailable, falling back to the {} inverter(s) cached from the last successful discovery: {}".format(len(self.inverter_sn), ", ".join(self.inverter_sn)))
+        return True
+
     async def automatic_config(self):
-        """Automatically configure Predbat base args based on discovered inverters"""
+        """Automatically configure Predbat base args based on discovered inverters.
+
+        Returns True when the outcome is final - either the args were bound, or every inverter's
+        details have been read and there is nothing to bind. False means the details are still
+        missing, which is the retryable case run() tries again on a later cycle (issue #5087).
+        """
         if not self.inverter_sn:
             self.log("Warn: Solis API automatic_config: No inverters to configure")
-            return
+            return False
 
         # Count inverters with batteries
         batteries = []
@@ -1450,8 +1607,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
         num_inverters = len(batteries)
         self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s) with batteries")
         if num_inverters == 0:
-            self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration")
-            return
+            # Settled only once every inverter's details have actually been read: a PV-only fleet is
+            # a final answer and must not be re-asked every cycle, but details missing because the
+            # API is unreachable are exactly what the retry exists for.
+            details_read = all(sn in self.inverter_details for sn in self.inverter_sn)
+            self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration{}".format("" if details_read else " - inverter details not read yet, will retry"))
+            return details_read
 
         # Convert SNs to lowercase for entity naming
         devices = [sn.lower() for sn in batteries]
@@ -1489,11 +1650,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("export_today", [f"sensor.{self.prefix}_solis_{device}_today_export_energy" for device in devices])
 
         # Battery capacity and limits from cached details
-        # The arithmetic bug that made this sensor wrong by ~11x on HV batteries is fixed
-        # (issue #4493), but this stays commented out deliberately: without solis_nominal_voltage
-        # configured, battery_capacity falls back to the *live* measured voltage, which drifts
-        # with charge state - auto-binding soc_max to it would make soc_max itself wobble slightly
-        # cycle to cycle, which it never did before (the old 48V constant was wrong but static).
+        # The arithmetic bug that made this sensor wrong by ~11x on HV batteries is fixed (issue
+        # #4493), and since #5090 the sensor no longer wobbles cycle to cycle either - so the
+        # original reason this was commented out is gone. It stays off for a second one: without
+        # solis_nominal_voltage configured the capacity is still an *estimate* - the pack class is
+        # inferred from its BMS charge voltage, not stated - and
+        # set_arg_auto() defaults to overwrite=True, so enabling it would replace a correct
+        # hand-entered soc_max with an approximate one (noted in the log, but still replaced).
         # User must still set soc_max manually in apps.yaml.
         # self.set_arg("soc_max", [f"sensor.{self.prefix}_solis_{device}_battery_capacity" for device in devices])
 
@@ -1518,6 +1681,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
         self.log("Solis API: Automatic configuration complete")
+        return True
 
     async def poll_inverter_data(self, inverter_sn, cid_list, batch=True):
         """Poll CID values for specific inverter"""
@@ -1580,12 +1744,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         self.log(f"Solis API: Calculated max currents for {inverter_sn}: charge={max_charge}A, discharge={max_discharge}A")
 
-    def get_nominal_voltage(self, inverter_sn):
+    def get_live_battery_voltage(self, inverter_sn):
         """
-        Return the voltage to use for amp<->watt conversions for this inverter: the live measured
-        battery voltage if we have one, otherwise the last value we did measure, otherwise the
-        48V fallback. A hard-coded 48V here was issue #4493 - on a high-voltage battery it made
-        every derived power value wrong by roughly the ratio of the real pack voltage to 48V.
+        Return the live measured pack voltage, or the last one this inverter reported, or None.
+
+        This is the reading that moves with state of charge. It identifies an HV pack and is
+        published as a sensor for display, but must not be used for amp<->watt conversions on an
+        LV pack - see get_nominal_voltage().
         """
         detail = self.inverter_details.get(inverter_sn, {})
         try:
@@ -1593,24 +1758,103 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except (ValueError, TypeError):
             voltage = None
         if voltage and voltage > 0:
-            self.nominal_voltage_last_known[inverter_sn] = voltage
+            self.live_voltage_last_known[inverter_sn] = voltage
             return voltage
-        return self.nominal_voltage_last_known.get(inverter_sn, self.nominal_voltage)
+        return self.live_voltage_last_known.get(inverter_sn)
+
+    def get_bms_charge_voltage(self, inverter_sn):
+        """
+        Return the BMS-requested charge voltage for this pack, or None if it isn't reported.
+
+        Unlike the live pack voltage this is a setting rather than a measurement, so it holds
+        still, and it is what distinguishes a 15S pack from a 16S one (53.2V vs 56.5-58.4V across
+        14 sampled systems). inverterDetail carries it top level as batteryAcvSet and per battery
+        as batteryList[].batteryChargingVoltage; the two agreed on every system sampled, so either
+        will do and the first non-zero one wins. Some inverters report neither (one S5-EH1P3.6K-L
+        had batteryChargingVoltage absent and batteryAcvSet 0.0), hence the None case.
+        """
+        detail = self.inverter_details.get(inverter_sn, {})
+        candidates = [detail.get("batteryAcvSet")]
+        for entry in detail.get("batteryList") or []:
+            if isinstance(entry, dict):
+                candidates.append(entry.get("batteryChargingVoltage"))
+        for candidate in candidates:
+            try:
+                voltage = float(candidate)
+            except (ValueError, TypeError):
+                continue
+            if voltage > 0:
+                return voltage
+        return None
+
+    def get_nominal_voltage(self, inverter_sn):
+        """
+        Return the voltage to use for amp<->watt conversions on this inverter.
+
+        The inverter holds its limits as currents (CID 7224/7226, and the per-slot currents), so
+        every watt value Predbat sees is derived. Deriving them from the live measured voltage made
+        a fixed 70A limit republish as anything from 3352W to 3726W as the pack moved with state of
+        charge, dragging battery_rate_max, the write tolerance computed from it and the read-back of
+        every rate setpoint along with it (issue #5090). Live voltage swings 10-14% over a month on
+        every system sampled, so this affected all of them, not just edge cases. In priority order:
+
+          1. solis_nominal_voltage from apps.yaml - the pack's real nominal voltage, and the only
+             source here that is a stated physical property rather than an inference;
+          2. a live reading above 60V means an HV pack, where the live voltage continues to be used
+             as it has been since issue #4493. No LV system sampled exceeded 57.5V. HV packs still
+             drift for want of field data to classify them by; solis_nominal_voltage fixes that;
+          3. otherwise an LV pack, classified by the BMS-requested charge voltage: 16S (51.2V
+             nominal) at or above 55V, 15S (48V nominal) below it. Both are settings rather than
+             measurements, so the result holds still across polls;
+          4. otherwise the 48V fallback, for a pack that reports no charge voltage at all.
+
+        The live reading cannot do the classifying itself, which is what made the first attempt at
+        this wrong: 15S packs average 49.3-50.4V and 16S 52.6-54.4V, but a full 15S reaches 53.5V
+        and a low 16S drops to 47.1V, so a single sample lands in the wrong class. batteryType is
+        no help either - it names the BMS protocol, not the pack, and PYLON_LV was reported by both
+        classes.
+        """
+        if self.nominal_pack_voltage:
+            return self.nominal_pack_voltage
+        live_voltage = self.get_live_battery_voltage(inverter_sn)
+        if live_voltage and live_voltage > SOLIS_HV_BATTERY_VOLTAGE:
+            return live_voltage
+        charge_voltage = self.get_bms_charge_voltage(inverter_sn)
+        if charge_voltage:
+            nominal = SOLIS_LV_16S_NOMINAL_VOLTAGE if charge_voltage >= SOLIS_LV_16S_CHARGE_VOLTAGE else SOLIS_LV_15S_NOMINAL_VOLTAGE
+            self.report_nominal_voltage(inverter_sn, nominal, f"a BMS charge voltage of {charge_voltage}V")
+            return nominal
+        self.report_nominal_voltage(inverter_sn, self.nominal_voltage, "no BMS charge voltage being reported, so the pack class is unknown")
+        return self.nominal_voltage
+
+    def report_nominal_voltage(self, inverter_sn, nominal, reason):
+        """Log the conversion voltage chosen for an LV pack, but only when it changes.
+
+        get_nominal_voltage() runs for every published entity, several times a second during a
+        publish cycle, so this cannot log unconditionally. Keyed on the value rather than a
+        once-only flag so that a pack being reclassified - which should not happen, and is worth
+        seeing if it does - is still reported.
+        """
+        if self.nominal_voltage_reported.get(inverter_sn) == nominal:
+            return
+        self.nominal_voltage_reported[inverter_sn] = nominal
+        self.log(f"Solis API: {inverter_sn} will use {nominal}V for amp<->watt conversions, from {reason} - set solis_nominal_voltage in apps.yaml to state the pack's nominal voltage directly")
 
     def get_capacity_voltage(self, inverter_sn):
         """
         Return the configured nominal pack voltage to use for the battery capacity calculation,
-        or None if solis_nominal_voltage isn't set. This is deliberately NOT the same value as
-        get_nominal_voltage() (the live measured voltage): capacity should use the nominal pack
-        voltage (a fixed physical property, e.g. cell count x nominal cell voltage), and the live
-        value drifts with charge state.
+        or None if solis_nominal_voltage isn't set. Separate from get_nominal_voltage() only so
+        that the caller can tell a configured value from an inferred one and flag the published
+        capacity accordingly - when solis_nominal_voltage *is* set, both return it.
 
         Note on the None case: DEYE's equivalent (nominal_pack_voltage()/derive_battery_capacity()
         in deye.py) refuses to publish a capacity at all rather than guess, on the basis that a
-        wrong soc_max source is worse than none. Solis instead falls back to the live voltage and
-        flags the result unreliable (see the caller in publish_entities) so existing installs that
-        already had this sensor (using the old, worse, hard-coded 48V) don't lose it outright -
-        a different tradeoff than DEYE's for the same underlying problem, worth reviewer scrutiny.
+        wrong soc_max source is worse than none. Solis instead falls back to get_nominal_voltage()
+        - since #5090 an inferred nominal rather than a live reading on an LV pack, so the published
+        capacity holds still - and flags it unreliable (see the caller in publish_entities) so that
+        existing installs which already had this sensor (using the old, worse, hard-coded 48V)
+        don't lose it outright. A different tradeoff than DEYE's for the same underlying problem,
+        worth reviewer scrutiny.
         """
         return self.nominal_pack_voltage
 
@@ -2492,10 +2736,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     # is the per-battery Ah rating, same as the max charge/discharge current CIDs
                     # handled in _calculate_max_currents() above.
                     battery_count = self.parallel_battery_count.get(inverter_sn, 1)
-                    # Prefer the configured nominal pack voltage. Without it, fall back to the live
-                    # measured voltage rather than dropping the sensor entirely - existing installs
-                    # already have this sensor published (albeit with the old, worse, hard-coded 48V
-                    # figure) and losing it outright without any migration path was judged too
+                    # Prefer the configured nominal pack voltage. Without it, fall back to the
+                    # inferred conversion voltage rather than dropping the sensor - existing
+                    # installs already have this sensor published (albeit with the old, worse,
+                    # hard-coded 48V figure) and losing it outright with no migration path was too
                     # disruptive. It's flagged as unreliable via the reliable/voltage_source
                     # attributes and a warning instead, matching neither "guess silently" nor "go
                     # unavailable silently" - reviewers may want a different tradeoff here.
@@ -2509,8 +2753,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         if inverter_sn not in self.capacity_voltage_warned:
                             self.capacity_voltage_warned.add(inverter_sn)
                             self.log(
-                                f"Warn: Solis API {inverter_name} battery capacity is estimated from the live measured voltage ({capacity_voltage}V), which varies with charge state - "
-                                "set solis_nominal_voltage in apps.yaml for an accurate, stable value (this warning will not repeat)"
+                                f"Warn: Solis API {inverter_name} battery capacity is estimated using an inferred pack voltage ({capacity_voltage}V), which is only within a few percent of the pack's true nominal voltage - "
+                                "set solis_nominal_voltage in apps.yaml for an accurate value (this warning will not repeat)"
                             )
                     battery_capacity_kWh = battery_capacity_ah * battery_count * capacity_voltage / 1000.0
                     entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity"
@@ -2524,7 +2768,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                             "state_class": "measurement",
                             "icon": "mdi:battery" if reliable else "mdi:battery-alert",
                             "reliable": reliable,
-                            "voltage_source": "configured (solis_nominal_voltage)" if reliable else "estimated from the live measured voltage - set solis_nominal_voltage in apps.yaml for an accurate, stable value",
+                            "voltage_source": "configured (solis_nominal_voltage)" if reliable else "estimated using an inferred pack voltage - set solis_nominal_voltage in apps.yaml for an accurate value",
                         },
                         app="solis"
                     )
@@ -3286,9 +3530,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         # One-time startup configuration
         if first:
-            # Create aiohttp session
-            timeout = aiohttp.ClientTimeout(total=SOLIS_REQUEST_TIMEOUT)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+            # Create aiohttp session. Reused across startup attempts: the component backs off and
+            # re-runs this whole block on every failed start, and a fresh session each time would
+            # leak the previous one - which a spent API allowance makes a routine occurrence.
+            if self.session is None:
+                timeout = aiohttp.ClientTimeout(total=SOLIS_REQUEST_TIMEOUT)
+                self.session = aiohttp.ClientSession(timeout=timeout)
 
             # Discover inverters - always scan, filter by inverter_sn if specified
             try:
@@ -3321,6 +3568,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         # automatic_config() logs its own version of this, but only when auto-config is on
                         self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will poll it but not write any control registers to it")
 
+            # Keep the fleet for next time, or fall back to it when discovery could not run at all
+            if self.inverter_sn:
+                await self.save_discovery_cache()
+            else:
+                await self.restore_discovery_cache()
+
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 return False  # Stop further processing if no inverters
@@ -3339,6 +3592,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Frequent polling (every minute)
         if first or (seconds % 60 == 0):
             for sn in self.inverter_sn:
+                if self.datalogger_offline(sn):
+                    # Its datalogger is offline; the cooldown expiring is what re-probes it
+                    poll_success = False
+                    continue
                 success = await self.fetch_inverter_details(sn)  # Get inverter details for all inverters
                 if not success:
                     poll_success = False
@@ -3350,6 +3607,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Infrequent polling (every 60 minutes)
         if first or (seconds % 3600 == 0):
             for sn in self.inverter_sn:
+                if self.datalogger_offline(sn):
+                    poll_success = False
+                    continue
                 self.log(f"Solis API: Performing infrequent data poll for inverter {sn}...")
                 await self.poll_inverter_data(sn, SOLIS_CID_INFREQUENT)
                 # Read separately, the batch endpoint mis-reports these (see SOLIS_CID_INFREQUENT_SINGLE)
@@ -3394,7 +3654,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # the same cycle (issue #4774). One batch call, and only while it matters.
         if seconds % 300 == 0:
             for sn in self.inverter_sn:
-                if sn in slot_registers_polled:
+                if sn in slot_registers_polled or self.datalogger_offline(sn):
                     continue
                 if not self.is_battery_inverter(sn) or not self.is_inside_active_window(sn):
                     continue
@@ -3413,7 +3673,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
             if self.control_enable and not is_readonly:
                 for sn in self.inverter_sn:
-                    if not self.is_battery_inverter(sn):
+                    if not self.is_battery_inverter(sn) or self.datalogger_offline(sn):
                         continue
                     await self.reset_charge_windows_if_needed(sn)
                     if not await self.write_time_windows_if_changed(sn):
@@ -3425,9 +3685,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         if first or (seconds % 60 == 0):
             await self.publish_entities()
 
-        # Auto-configure Predbat if enabled
-        if first and self.automatic and self.inverter_sn:
-            await self.automatic_config()
+        # Auto-configure Predbat if enabled. Retried on later cycles rather than being a
+        # first-cycle-only step: when the first cycle can't read the inverter details (an exhausted
+        # API allowance, a cloud outage) there is nothing to bind the args to, and without a retry
+        # load_today and the rest stay unset until Predbat is restarted - which is what left
+        # fetch_sensor_data raising ValueError every cycle in issue #5087.
+        if self.automatic and self.inverter_sn and not self.automatic_config_done:
+            self.automatic_config_done = bool(await self.automatic_config())
 
         # Return status. A refused control write must not refresh the success timestamp:
         # components.is_alive() treats a stale timestamp as unhealthy, which surfaces as

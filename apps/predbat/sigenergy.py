@@ -2221,6 +2221,50 @@ class SigenergyAPI(ComponentBase):
                 active_mode = SIGENERGY_ACTIVE_MODE_CHARGE
                 charge_power_kw = charge_rate_w / 1000.0
                 charge_priority_type = "PV"
+        elif charge_rate_w == 0:
+            # No window is active, so the only thing left that can distinguish demand from a
+            # freeze export is the rates Predbat has written. Predbat expresses Freeze Export as
+            # "demand mode, but with charging disabled": execute.py turns the forced-export window
+            # off (adjust_force_export(False)) and calls adjust_charge_rate(0), because SIGCLOUD
+            # declares has_timed_pause False and charge_discharge_with_rate False, so that zero is
+            # the only lever it has left. The freeze_export branch above is therefore never
+            # reached from a planned freeze - export_enable is already False by the time we run -
+            # and the command came out identical to plain demand, which routes the surplus PV a
+            # freeze exists to export into the battery instead (GH#4761).
+            #
+            # This is the same inference fox.py, deye.py and sunsynk.py make from the same
+            # entities, for the same reason - see fox.py's freeze_export_requested(). Unlike those,
+            # a zero charge rate is read as a freeze here without also requiring a non-zero export
+            # rate. Their guard exists because their rate entities are published at 0, so all-zero
+            # is an absence of a plan rather than a plan; the Sigenergy rate controls default to
+            # the battery maximum instead (_control_info), so a zero only ever arrives by Predbat
+            # deliberately writing one.
+            duration_min = 720
+            if export_rate_w > 0:
+                # Charging disabled, discharging still allowed - a plain freeze export.
+                # Self-Consumption Grid is the right mode for it: surplus PV serves the load, then
+                # sells to the grid rather than charging the battery, while the battery still
+                # discharges to serve the house when solar is short. charge_power_kw is
+                # deliberately left None: the API documents it as bidirectional ("max energy
+                # storage charging/discharging power"), so zeroing it here would also stop the
+                # battery serving the house, which is a freeze CHARGE, not a freeze export.
+                new_mode = "freeze_export"
+                active_mode = SIGENERGY_ACTIVE_MODE_SELF_GRID
+            else:
+                # Both rates zero: a freeze export with a discharge hold on top. execute.py writes
+                # the export rate to 0 for a car-charging or iBoost hold (no timed pause on
+                # SIGCLOUD, so the rate is again the only lever), and the freeze export leaves the
+                # charge rate at 0 alongside it. Rare in practice - a car held off the battery is
+                # being charged from solar or grid - but reachable, and Self-Consumption Grid
+                # would be wrong for it because that mode lets the battery discharge to serve the
+                # house, which is exactly what the hold forbids.
+                #
+                # Plain self-consumption with the bidirectional power pinned to 0 expresses both
+                # halves at once: no charging from the PV surplus and no discharging to the hold,
+                # the same lever the freeze_charge branch above already uses to hold SoC flat.
+                new_mode = "freeze_export_hold"
+                active_mode = SIGENERGY_ACTIVE_MODE_SELF
+                charge_power_kw = 0
         else:
             duration_min = 720
             new_mode = "eco"

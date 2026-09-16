@@ -6,7 +6,6 @@ rotation, scheduled callback execution, and file change detection for
 development hot-reload.
 """
 
-import io
 import yaml
 import sys
 import asyncio
@@ -37,6 +36,7 @@ def write_git_version_marker():
 write_git_version_marker()
 
 import predbat
+from utils import load_apps_yaml, predbat_log_count, predbat_log_name, rotate_predbat_logs
 import time
 from datetime import datetime, timedelta
 from multiprocessing import set_start_method
@@ -177,39 +177,6 @@ class Hass:
     and file change detection for development hot-reload.
     """
 
-    def _rotate_log_if_needed(self, max_logs=9):
-        """
-        Rotate log files if current logfile exceeds size threshold.
-        """
-        if self.logfile.tell() <= 10000000 or threading.current_thread() is not threading.main_thread():
-            return
-        try:
-            for num_logs in range(max_logs - 1, 0, -1):
-                filename = "predbat." + format(num_logs) + ".log"
-                if os.path.isfile(filename):
-                    newfile = "predbat." + format(num_logs + 1) + ".log"
-                    try:
-                        if os.path.isfile(newfile):
-                            os.remove(newfile)
-                        os.rename(filename, newfile)
-                    except OSError:
-                        pass
-
-            self.logfile.close()
-            try:
-                if os.path.isfile("predbat.1.log"):
-                    os.remove("predbat.1.log")
-                os.rename("predbat.log", "predbat.1.log")
-            except OSError:
-                pass
-            self.logfile = open("predbat.log", "w")
-        except Exception:
-            try:
-                if self.logfile.closed:
-                    self.logfile = open("predbat.log", "a")
-            except Exception:
-                pass
-
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
@@ -221,7 +188,24 @@ class Hass:
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
-        self._rotate_log_if_needed()
+        # Total logfiles to keep including the live one, so max_logs rotated copies.
+        max_logs = predbat_log_count(self.args) - 1
+
+        log_size = self.logfile.tell()
+        if log_size > 10000000 and threading.current_thread() is threading.main_thread():
+            # Only rotate from the main thread to avoid race conditions with
+            # component threads that also call log().
+            rotate_predbat_logs(max_logs)
+
+            self.logfile.close()
+            try:
+                dest = predbat_log_name(1)
+                if os.path.isfile(dest):
+                    os.remove(dest)
+                os.rename("predbat.log", dest)
+            except OSError:
+                pass
+            self.logfile = open("predbat.log", "w")
 
     async def run_in_executor(self, callback, *args):
         """
@@ -264,56 +248,6 @@ class Hass:
             t.join(5 * 60)
         self.logfile.close()
 
-    def load_secrets(self):
-        """
-        Load secrets from secrets.yaml file
-        Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
-        """
-        secrets = {}
-        secrets_file = None
-
-        # Try loading from different locations in priority order
-        possible_locations = [
-            os.getenv("PREDBAT_SECRETS_FILE"),
-            "secrets.yaml",
-            "/homeassistant/secrets.yaml",
-            "/conf/secrets.yaml",
-            "/config/secrets.yaml",
-        ]
-
-        for location in possible_locations:
-            if location and os.path.isfile(location):
-                secrets_file = location
-                break
-
-        if secrets_file:
-            self.log(f"Loading secrets from {secrets_file}", quiet=False)
-            try:
-                with io.open(secrets_file, "r") as stream:
-                    secrets = yaml.safe_load(stream) or {}
-                    # Check for debug logging option
-                    if secrets.get("logger") == "debug":
-                        self.log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
-            except yaml.YAMLError as exc:
-                self.log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
-            except Exception as exc:
-                self.log(f"Error: Failed to open secrets file {secrets_file}: {exc}", quiet=False)
-        else:
-            self.log("Info: No secrets.yaml file found", quiet=False)
-
-        return secrets
-
-    def secret_constructor(self, loader, node):
-        """
-        YAML constructor for !secret tag
-        """
-        secret_key = loader.construct_scalar(node)
-        if secret_key in self.secrets:
-            return self.secrets[secret_key]
-        else:
-            self.log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
-            return None
-
     def __init__(self):
         """
         Start Predbat
@@ -326,22 +260,12 @@ class Hass:
 
         self.logfile = open("predbat.log", "a")
 
-        # Load secrets first
-        self.secrets = self.load_secrets()
-
-        # Register custom YAML constructor for !secret tag
-        yaml.add_constructor("!secret", self.secret_constructor, Loader=yaml.SafeLoader)
-
-        # Open YAML file apps.yaml and read it
-        apps_file = os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
-        self.log(f"Loading {apps_file}", quiet=False)
-        with io.open(apps_file, "r") as stream:
-            try:
-                config = yaml.safe_load(stream)
-                self.args = config["pred_bat"]
-            except yaml.YAMLError as exc:
-                print(exc)
-                sys.exit(1)
+        # Load apps.yaml (resolving !secret) through the shared loader
+        try:
+            self.args, self.secrets = load_apps_yaml(log=self.log)
+        except yaml.YAMLError as exc:
+            print(exc)
+            sys.exit(1)
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """

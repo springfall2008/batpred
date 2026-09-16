@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from prediction import Prediction
+from const import EXPORT_MODE_IDLE
+from utils import pack_export_limit, export_limit_exports_no_battery
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import, update_rates_export
 
 
@@ -79,7 +81,7 @@ def run_trim_export_tests(my_predbat):
     mn = my_predbat.minutes_now
 
     charge_limit_best = [0 for _ in charge_window_best]
-    export_limits_best = [100 for _ in export_window_best]
+    export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE) for _ in export_window_best]
     metric, _, _, _, _, _, _, _, metric_keep, _, _ = my_predbat.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record)
     my_predbat.charge_limit_best = charge_limit_best
     my_predbat.export_limits_best = export_limits_best
@@ -92,11 +94,11 @@ def run_trim_export_tests(my_predbat):
     peak_limit = my_predbat.export_limits_best[0]
 
     # The highest-priced peak slot must be exported for its full duration (start not clipped) and actually
-    # discharging the battery - a limit of 100 (off) or 99 (freeze export) both mean it is not exporting.
+    # discharging the battery - off and freeze export both mean it is not exporting.
     if peak["start"] != mn:
         print("ERROR: peak export window was clipped to {} (expected full window starting at {})".format(peak["start"], mn))
         failed = True
-    if peak_limit >= 99:
+    if export_limit_exports_no_battery(peak_limit):
         print("ERROR: peak export window is not exporting (limit {}, off/freeze) - it is the highest-priced slot".format(peak_limit))
         failed = True
 
@@ -105,7 +107,7 @@ def run_trim_export_tests(my_predbat):
     cheaper_reduced = False
     for n in range(1, len(my_predbat.export_window_best)):
         window = my_predbat.export_window_best[n]
-        if my_predbat.export_limits_best[n] >= 99 or window["start"] > (mn + 30 * n):
+        if export_limit_exports_no_battery(my_predbat.export_limits_best[n]) or window["start"] > (mn + 30 * n):
             cheaper_reduced = True
             break
     if not cheaper_reduced:

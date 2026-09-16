@@ -517,7 +517,8 @@ class FakeBase:
         self.html_plan = "x" * (MCP_STATE_DEFAULT_MAX_BYTES + 500)
 
         # Values a plain json.dumps would choke on
-        self.midnight_utc = datetime(2026, 8, 27, 0, 0, 0)
+        self.now_utc = datetime(2026, 8, 27, 12, 0, 0)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.inverter_object = object()
 
         # Legitimately-None state - a great deal of Predbat's is, so None must not double as
