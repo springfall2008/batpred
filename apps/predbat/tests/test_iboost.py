@@ -54,7 +54,7 @@ def snapshot_rate_state(my_predbat):
     from them, so a suite that rewrites rates with set_rate_profile can restore them however it
     exits (GH#5079 test-order state leaks)
     """
-    state = {"rate_import": dict(my_predbat.rate_import), "rate_export": dict(my_predbat.rate_export)}
+    state = {"rate_import": dict(my_predbat.rate_import), "rate_export": dict(my_predbat.rate_export), "low_rates": list(my_predbat.low_rates)}
     for name in RATE_STATE_ATTRS:
         if hasattr(my_predbat, name):
             value = getattr(my_predbat, name)
@@ -669,8 +669,8 @@ def run_iboost_forecast_test_cases(my_predbat):
     # fills carry forward to the draw, the trajectory is re-verified and the boosts booked in the
     # 5p/6p slots are trimmed so the level never exceeds the 1 kWh capacity anywhere. Refilling
     # resumes the interval after the draw (boost within an interval precedes its draw, so the
-    # draw interval itself is still full when its fill is considered). The fill only reaches the
-    # fetched forecast horizon, so demand at 900 lets fills run to 930 and 960 but not beyond.
+    # draw interval itself is still full when its fill is considered) and stops at 960 because
+    # the tank is back at capacity; the {990: 0.0} key keeps the forecast horizon open that far.
     set_rate_profile(my_predbat, [(780, 810, 5.0), (840, 870, 6.0)], default_rate=20.0)
     failed |= run_iboost_forecast_plan_test(
         "iboost_plan_fill_trim",
@@ -684,6 +684,25 @@ def run_iboost_forecast_test_cases(my_predbat):
             {"start": 750, "end": 780, "kwh": 0.5, "average": 20.0, "cost": 10.0},
             {"start": 930, "end": 960, "kwh": 0.5, "average": 20.0, "cost": 10.0},
             {"start": 960, "end": 990, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+        ],
+    )
+
+    # The fill pass stays within the fetched forecast horizon: with demand only at 900 the
+    # extent ends at 930, so although 1 kWh of headroom remains after the draw, no fill slot may
+    # start at or beyond 930 (protects the tariff compare's extended planning horizon)
+    set_rate_profile(my_predbat, [], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_fill_extent",
+        my_predbat,
+        {900: 1.0},
+        capacity=2.0,
+        max_power=1,
+        fill_rate_threshold=25.0,
+        expect_slots=[
+            {"start": 720, "end": 750, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 750, "end": 780, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 780, "end": 810, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 810, "end": 840, "kwh": 0.5, "average": 20.0, "cost": 10.0},
         ],
     )
 
