@@ -24,6 +24,12 @@ def run_clipping_tests(my_predbat):
     failed |= test_clipping_status_overrides_display(my_predbat)
     failed |= test_clipping_status_dynamic_clearsky_omits_amplification(my_predbat)
     failed |= test_predict_clipping_target_soc_best_dynamic(my_predbat)
+    failed |= test_inject_negative_minute_offset_lookup(my_predbat)
+    failed |= test_inject_fallback_to_target_soc_kwh_when_map_empty(my_predbat)
+    failed |= test_clipping_window_preserved_through_prune_and_discard(my_predbat)
+    failed |= test_calculate_plan_clipping_execution_order(my_predbat)
+    failed |= test_inject_clipping_idempotent_multi_run(my_predbat)
+    failed |= test_inject_replaces_existing_peak_window(my_predbat)
     return failed
 
 
@@ -728,6 +734,242 @@ def test_predict_clipping_target_soc_best_dynamic(my_predbat):
         my_predbat.scenario_summary_title = original_summary_title
         my_predbat.scenario_summary = original_summary
         my_predbat.scenario_summary_state = original_summary_state
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_inject_negative_minute_offset_lookup(my_predbat):
+    """Verify that when 30-minute boundary alignment causes current_start < minutes_now (negative offset),
+    inject_clipping_export_windows clamps lookup to 0 and uses predict_clipping_target_soc_best[0] rather
+    than falling back to 100% (soc_max)."""
+    print("**** test_inject_negative_minute_offset_lookup ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.minutes_now = 675  # 11:15
+    # Forecast with peak from 720 (12:00) to 840 (14:00)
+    # relative keys: 720 - 675 = 45, 750 - 675 = 75
+    my_predbat.clipping_buffer_forecast_kwh = {45: 0.6}
+    # Dynamic target soc: at minute 0, target is 9.4 kWh (94%)
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 5: 9.4, 45: 9.4, 75: 9.4}
+
+    my_predbat.inject_clipping_export_windows()
+
+    if not my_predbat.export_window_best:
+        print("ERROR: No export window injected!")
+        return True
+
+    w = my_predbat.export_window_best[0]
+    target_pct = w.get("clipping_target_soc_pct")
+    if target_pct != 94.0:
+        print("ERROR: Expected clipping_target_soc_pct 94.0, got {}".format(target_pct))
+        failed = True
+
+    if my_predbat.export_limits_best[0] != 94.0:
+        print("ERROR: Expected export_limits_best[0] 94.0, got {}".format(my_predbat.export_limits_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_inject_fallback_to_target_soc_kwh_when_map_empty(my_predbat):
+    """Verify that when predict_clipping_target_soc_best is empty, inject_clipping_export_windows
+    falls back to target_soc_kwh (derived from total_kwh_loss) instead of self.soc_max (100%)."""
+    print("**** test_inject_fallback_to_target_soc_kwh_when_map_empty ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.minutes_now = 675  # 11:15
+    # Forecast with peak from 720 (12:00) to 840 (14:00)
+    my_predbat.clipping_buffer_forecast_kwh = {45: 0.6}
+    my_predbat.predict_clipping_target_soc_best = {}
+
+    my_predbat.inject_clipping_export_windows()
+
+    if not my_predbat.export_window_best:
+        print("ERROR: No export window injected!")
+        return True
+
+    w = my_predbat.export_window_best[0]
+    target_pct = w.get("clipping_target_soc_pct")
+    # Total loss = 0.6 kWh -> target_soc_kwh = 10.0 - 0.6 = 9.4 -> 94.0%
+    if target_pct != 94.0:
+        print("ERROR: Expected fallback clipping_target_soc_pct 94.0, got {}".format(target_pct))
+        failed = True
+
+    if my_predbat.export_limits_best[0] != 94.0:
+        print("ERROR: Expected export_limits_best[0] 94.0, got {}".format(my_predbat.export_limits_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clipping_window_preserved_through_prune_and_discard(my_predbat):
+    """Verify that an injected clipping export window survives prune_dead_plan_slots and discard_unused_export_slots."""
+    print("**** test_clipping_window_preserved_through_prune_and_discard ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.minutes_now = 660  # 11:00
+    my_predbat.clipping_buffer_forecast_kwh = {60: 0.6}
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 60: 9.4}
+
+    my_predbat.inject_clipping_export_windows()
+
+    if not my_predbat.export_window_best:
+        print("ERROR: Window was not injected!")
+        return True
+
+    # Now run prune_dead_plan_slots and discard_unused_export_slots
+    my_predbat.prune_dead_plan_slots()
+    my_predbat.export_limits_best, my_predbat.export_window_best = my_predbat.discard_unused_export_slots(my_predbat.export_limits_best, my_predbat.export_window_best)
+
+    if len(my_predbat.export_window_best) == 0:
+        print("ERROR: Clipping export window was purged by prune/discard!")
+        failed = True
+    elif my_predbat.export_window_best[0].get("clipping_target_soc_pct") != 94.0:
+        print("ERROR: Injected clipping window lost target percentage, got {}".format(my_predbat.export_window_best[0].get("clipping_target_soc_pct")))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_calculate_plan_clipping_execution_order(my_predbat):
+    """Verify that calculate_clipping_target_soc executes before inject_clipping_export_windows in calculate_plan."""
+    print("**** test_calculate_plan_clipping_execution_order ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.clipping_buffer_enable = True
+
+    call_order = []
+    orig_calc_target = my_predbat.calculate_clipping_target_soc
+    orig_inject = my_predbat.inject_clipping_export_windows
+
+    def track_calc_target(*args, **kwargs):
+        call_order.append("calculate_clipping_target_soc")
+        return orig_calc_target(*args, **kwargs)
+
+    def track_inject(*args, **kwargs):
+        call_order.append("inject_clipping_export_windows")
+        return orig_inject(*args, **kwargs)
+
+    my_predbat.calculate_clipping_target_soc = track_calc_target
+    my_predbat.inject_clipping_export_windows = track_inject
+
+    try:
+        my_predbat.clipping_limit_override = 5.0
+        my_predbat.calculate_plan(recompute=False, publish=False)
+    finally:
+        my_predbat.calculate_clipping_target_soc = orig_calc_target
+        my_predbat.inject_clipping_export_windows = orig_inject
+
+    if "calculate_clipping_target_soc" not in call_order:
+        print("ERROR: calculate_clipping_target_soc was not called during calculate_plan")
+        failed = True
+    elif "inject_clipping_export_windows" not in call_order:
+        print("ERROR: inject_clipping_export_windows was not called during calculate_plan")
+        failed = True
+    else:
+        calc_idx = call_order.index("calculate_clipping_target_soc")
+        inject_idx = call_order.index("inject_clipping_export_windows")
+        if calc_idx > inject_idx:
+            print("ERROR: inject_clipping_export_windows ran before calculate_clipping_target_soc! Order: {}".format(call_order))
+            failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_inject_clipping_idempotent_multi_run(my_predbat):
+    """Verify that repeatedly running inject_clipping_export_windows maintains strict chronological order,
+    allows in_charge_window to find the active window at minutes_now, and does not duplicate high_export_rates."""
+    print("**** test_inject_clipping_idempotent_multi_run ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.minutes_now = 675  # 11:15
+    my_predbat.clipping_buffer_forecast_kwh = {45: 0.6}
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 45: 9.4, 75: 9.4}
+    my_predbat.high_export_rates = []
+
+    # First injection
+    my_predbat.inject_clipping_export_windows()
+    run1_count = len(my_predbat.export_window_best)
+    run1_high_count = len(my_predbat.high_export_rates)
+    if my_predbat.in_charge_window(my_predbat.export_window_best, 675) == -1:
+        print("ERROR: in_charge_window failed to find window at minute 675 on run 1")
+        failed = True
+
+    # Second injection (simulating repeated execution in daemon loop)
+    my_predbat.inject_clipping_export_windows()
+    run2_count = len(my_predbat.export_window_best)
+    run2_high_count = len(my_predbat.high_export_rates)
+
+    if run1_count != run2_count:
+        print("ERROR: Window count changed between runs: {} vs {}".format(run1_count, run2_count))
+        failed = True
+
+    if run2_high_count != run1_high_count:
+        print("ERROR: high_export_rates accumulated duplicates across runs: {} vs {}".format(run2_high_count, run1_high_count))
+        failed = True
+
+    # Verify chronological sorting
+    for i in range(len(my_predbat.export_window_best) - 1):
+        if my_predbat.export_window_best[i]["start"] > my_predbat.export_window_best[i + 1]["start"]:
+            print("ERROR: export_window_best is not chronologically sorted: {}".format(my_predbat.export_window_best))
+            failed = True
+            break
+
+    # Crucial check: in_charge_window must find the window at minute 675 on run 2
+    if my_predbat.in_charge_window(my_predbat.export_window_best, 675) == -1:
+        print("ERROR: in_charge_window failed to find active window at minute 675 on run 2 due to list order corruption")
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_inject_replaces_existing_peak_window(my_predbat):
+    """Verify that an existing stale/idle window during the peak period [peak_start, peak_end]
+    is replaced and assigned clipping_target_soc_pct rather than retaining an unconstrained 100% target."""
+    print("**** test_inject_replaces_existing_peak_window ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.minutes_now = 660  # 11:00
+    my_predbat.clipping_buffer_forecast_kwh = {60: 0.6}  # Peak at 720 to 750
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 60: 9.4, 90: 9.4}
+
+    # Pre-existing idle window covering the peak period with 100.0 limit
+    my_predbat.export_window_best = [{"start": 720, "end": 750}]
+    my_predbat.export_limits_best = [100.0]
+
+    my_predbat.inject_clipping_export_windows()
+
+    found_peak = False
+    for window, limit in zip(my_predbat.export_window_best, my_predbat.export_limits_best):
+        if window["start"] == 720 and window["end"] == 750:
+            found_peak = True
+            if window.get("clipping_target_soc_pct") != 94.0:
+                print("ERROR: Peak window missing clipping_target_soc_pct 94.0, got {}".format(window.get("clipping_target_soc_pct")))
+                failed = True
+            if limit != 94.0:
+                print("ERROR: Peak window limit is {}, expected 94.0".format(limit))
+                failed = True
+
+    if not found_peak:
+        print("ERROR: Peak window 720-750 was not found in export_window_best: {}".format(my_predbat.export_window_best))
+        failed = True
 
     if not failed:
         print("PASS")
