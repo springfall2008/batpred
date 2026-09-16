@@ -1021,6 +1021,7 @@ class Fetch:
 
         # iBoost hot water demand forecast and tank state of charge
         self.iboost_forecast = {}
+        self.iboost_forecast_extent = None
         self.iboost_tank_soc_percent = None
         if self.iboost_enable:
             self.iboost_forecast = self.fetch_iboost_forecast()
@@ -2978,15 +2979,19 @@ class Fetch:
             return {}
 
         # Convert the cumulative series into demand per plan interval, aligned to the same interval
-        # grid the planner books slots on. Per-minute positive deltas are taken per source (the
-        # same reading get_from_incrementing gives the load forecast) and only within that source's
-        # own raw extent, so a series that ends or resets never books phantom demand from
-        # minute_data's back-fill and one source's tail cannot mask another's draw. Minutes already
-        # elapsed in the current interval are skipped: any draw there is in the tank SoC reading.
+        # grid the planner books slots on. The grid covers the whole fetchable horizon (not just
+        # forecast_minutes) so a planning horizon raised after the fetch - the tariff compare sets
+        # forecast_minutes to 48h after fetching - still finds the demand. Per-minute positive
+        # deltas are taken per source (the same reading get_from_incrementing gives the load
+        # forecast) and only within that source's own raw extent, so a series that ends or resets
+        # never books phantom demand from minute_data's back-fill and one source's tail cannot
+        # mask another's draw. Minutes already elapsed in the current interval are skipped: any
+        # draw there is in the tank SoC reading.
         demand = {}
         total = 0.0
         start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
-        for minute in range(start_minute, start_minute + self.forecast_minutes, self.plan_interval_minutes):
+        grid_end = max(start_minute + self.forecast_minutes, (self.forecast_days + 1) * 24 * 60)
+        for minute in range(start_minute, grid_end, self.plan_interval_minutes):
             kwh = 0.0
             for _, forecast, first_minute, last_minute in sources:
                 for offset in range(self.plan_interval_minutes):
@@ -3003,6 +3008,7 @@ class Fetch:
             self.log("Warn: iBoost demand forecast contains no future demand, using the legacy iBoost smart plan")
             return {}
 
+        self.iboost_forecast_extent = last_data_minute
         self.log("iBoost demand forecast loaded: {} kWh over {} intervals of {} minutes from minute {}".format(dp2(total), len(demand), self.plan_interval_minutes, start_minute))
         return demand
 

@@ -76,6 +76,7 @@ def restore_iboost_state(my_predbat):
     my_predbat.iboost_tank_reserve = my_predbat.get_arg("iboost_tank_reserve")
     my_predbat.iboost_fill_rate_threshold = my_predbat.get_arg("iboost_fill_rate_threshold")
     my_predbat.iboost_forecast = {}
+    my_predbat.iboost_forecast_extent = None
     my_predbat.iboost_tank_soc_percent = None
     my_predbat.minutes_now = 12 * 60
 
@@ -313,6 +314,7 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
         del my_predbat.args[key]
     for entity_id in states:
         del my_predbat.ha_interface.dummy_items[entity_id]
+    my_predbat.iboost_forecast_extent = None
     if minutes_now is not None:
         my_predbat.minutes_now = 12 * 60
 
@@ -346,6 +348,7 @@ def run_iboost_forecast_plan_test(
     my_predbat.iboost_tank_soc_percent = tank_soc_percent
     my_predbat.iboost_fill_rate_threshold = fill_rate_threshold
     my_predbat.iboost_forecast = forecast
+    my_predbat.iboost_forecast_extent = None
     saved_gas = None
     if gas_rate is not None:
         saved_gas = (my_predbat.iboost_gas, my_predbat.iboost_gas_scale, my_predbat.rate_gas)
@@ -409,6 +412,22 @@ def run_iboost_forecast_test_cases(my_predbat):
         expect_demand={780: 1.0, 870: 1.0},
         expect_total=2.0,
     )
+    # The demand grid spans the whole fetchable horizon (the tariff compare raises
+    # forecast_minutes after the fetch) and the raw data extent is recorded for the fill clamp
+    print("**** Running Test: iboost_fetch_wide_grid ****")
+    my_predbat.args["iboost_forecast"] = ["sensor.hot_water_demand$results"]
+    my_predbat.ha_interface.set_state("sensor.hot_water_demand", "ok", attributes={"results": forecast_attribute})
+    demand = my_predbat.fetch_iboost_forecast()
+    if max(demand) < (my_predbat.forecast_days + 1) * 24 * 60 - my_predbat.plan_interval_minutes:
+        print("ERROR: iboost_fetch_wide_grid demand grid ends at {} which does not cover the fetchable horizon".format(max(demand)))
+        failed = True
+    if my_predbat.iboost_forecast_extent != 900:
+        print("ERROR: iboost_fetch_wide_grid forecast extent should be 900 got {}".format(my_predbat.iboost_forecast_extent))
+        failed = True
+    del my_predbat.args["iboost_forecast"]
+    del my_predbat.ha_interface.dummy_items["sensor.hot_water_demand"]
+    my_predbat.iboost_forecast_extent = None
+
     failed |= run_iboost_fetch_test(
         "iboost_fetch_scaling",
         my_predbat,

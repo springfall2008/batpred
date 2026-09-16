@@ -5513,7 +5513,7 @@ class Plan:
         # seen by later fill slots only counts energy that survives.
         fill_threshold = self.iboost_fill_rate_threshold
         if fill_threshold > -99.0:
-            forecast_extent = max(self.iboost_forecast.keys()) + interval
+            forecast_extent = self.iboost_forecast_extent if self.iboost_forecast_extent is not None else max(self.iboost_forecast.keys()) + interval
             levels_boosted, levels_after = self.iboost_tank_trajectory(stored_start, capacity, demand, boost)
             day_usage = self.iboost_forecast_day_usage(interval_starts, boost, total_days)
             for slot_n in range(num_intervals):
