@@ -752,7 +752,7 @@ Selected slots will be shown in the list in square brackets, and you can cancel 
 
 When you use the Manual Control features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-The **off** option at the bottom of the list will cancel all selected force charges.
+The **off** option at the top of the list will cancel all selected force charges.
 
 ![image](images/manual_select.png)
 
