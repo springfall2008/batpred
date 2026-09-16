@@ -777,6 +777,12 @@ class LoadMLComponent(ComponentBase):
                     self.log("ML Component: Doing training...")
                     await self._do_training(is_initial)
 
+                    if self.api_stop:
+                        # Training abandoned for shutdown - a re-fetch and a prediction cycle here
+                        # would just add their own delay to the stop we are already answering
+                        self.log("ML Component: Stopping, skipping the post-training prediction cycle")
+                        return True
+
                     # Training can run for many minutes, during which the data fetched above
                     # goes stale - both the lookback window feeding the prediction and the
                     # load_minutes_now baseline still refer to the pre-training time. Re-fetch
@@ -945,6 +951,10 @@ class LoadMLComponent(ComponentBase):
             self.export_rates_data = None
             self.data_ready = False
 
+    def training_stop_requested(self):
+        """Return True when the component is stopping, so an in-flight training run abandons itself."""
+        return self.api_stop
+
     async def _do_training(self, is_initial):
         """
         Perform model training.
@@ -953,8 +963,9 @@ class LoadMLComponent(ComponentBase):
             is_initial: True for full training, False for fine-tuning
         """
         # Snapshot data under the lock so we can release it before the CPU-bound
-        # training call.  predictor.train() can take 30-120 seconds on slow hardware
-        # and must NOT run while holding data_lock or the asyncio event loop will freeze.
+        # training call.  A curriculum run is many passes of many epochs and routinely takes
+        # minutes, so it must NOT run while holding data_lock, and must not run on the event
+        # loop either - see the to_thread call below.
         async with self.data_lock:
             if not self.load_data:
                 self.log("Warn: ML Component: No data for training")
@@ -974,48 +985,46 @@ class LoadMLComponent(ComponentBase):
             time_decay = min(self.ml_time_decay_days, self.load_data_age_days)
             holdout_hours = self.ml_validation_holdout_hours
             patience = self.ml_patience_initial if is_initial else self.ml_patience_update
-            max_intermediate_passes = self.ml_curriculum_max_passes
             window_days = self.ml_curriculum_window_days
-            step_days = self.ml_curriculum_step_days
-        # Lock released - event loop is free during training
+            # The initial curriculum walks the window out in fixed wider steps with a capped pass
+            # count rather than following the configured fine-tune sizing, so the first model is
+            # built from the oldest data forward without the run growing unbounded with history.
+            if is_initial:
+                step_days = 5
+                max_intermediate_passes = 8
+            else:
+                step_days = self.ml_curriculum_step_days
+                max_intermediate_passes = self.ml_curriculum_max_passes
+        # Lock released
 
         try:
-            if is_initial:
-                # Curriculum: progressively expand the training window from oldest week
-                # forward so the model learns gradually from historical structure.
-                val_mae = self.predictor.train_curriculum(
-                    load_data_snap,
-                    now_utc_snap,
-                    pv_minutes=pv_data_snap,
-                    temp_minutes=temp_data_snap,
-                    import_rates=import_rates_snap,
-                    export_rates=export_rates_snap,
-                    epochs=epochs,
-                    time_decay_days=time_decay,
-                    validation_holdout_hours=holdout_hours,
-                    patience=patience,
-                    curriculum_window_days=window_days,
-                    curriculum_step_days=5,
-                    max_intermediate_passes=8,
-                    progress_callback=self.update_success_timestamp,
-                )
-            else:
-                val_mae = self.predictor.train_curriculum(
-                    load_data_snap,
-                    now_utc_snap,
-                    pv_minutes=pv_data_snap,
-                    temp_minutes=temp_data_snap,
-                    import_rates=import_rates_snap,
-                    export_rates=export_rates_snap,
-                    epochs=epochs,
-                    time_decay_days=time_decay,
-                    validation_holdout_hours=holdout_hours,
-                    patience=patience,
-                    curriculum_window_days=window_days,
-                    curriculum_step_days=step_days,
-                    max_intermediate_passes=max_intermediate_passes,
-                    progress_callback=self.update_success_timestamp,
-                )
+            # Run the curriculum on a worker thread. It is synchronous, CPU-bound and minutes long,
+            # so calling it directly would pin this component's event loop for its whole duration:
+            # api_stop would go unnoticed, the run_timeout watchdog could never fire, and a shutdown
+            # landing mid-training would sit waiting on this component's thread (#5075).
+            val_mae = await asyncio.to_thread(
+                self.predictor.train_curriculum,
+                load_data_snap,
+                now_utc_snap,
+                pv_minutes=pv_data_snap,
+                temp_minutes=temp_data_snap,
+                import_rates=import_rates_snap,
+                export_rates=export_rates_snap,
+                epochs=epochs,
+                time_decay_days=time_decay,
+                validation_holdout_hours=holdout_hours,
+                patience=patience,
+                curriculum_window_days=window_days,
+                curriculum_step_days=step_days,
+                max_intermediate_passes=max_intermediate_passes,
+                progress_callback=self.update_success_timestamp,
+                stop_callback=self.training_stop_requested,
+            )
+
+            if val_mae is None and self.training_stop_requested():
+                # Abandoned on purpose, not a failure - and nothing to save, the model is partial
+                self.log("ML Component: Training abandoned because the component is stopping")
+                return
 
             if val_mae is not None:
                 self.last_train_time = datetime.now(timezone.utc)

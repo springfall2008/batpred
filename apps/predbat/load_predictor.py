@@ -1170,6 +1170,16 @@ class LoadPredictor:
 
         return predictions
 
+    def _should_stop(self, stop_callback):
+        """Return True when the caller has asked training to abort, treating a raising hook as no."""
+        if not stop_callback:
+            return False
+        try:
+            return bool(stop_callback())
+        except Exception as e:
+            self.log("Warn: ML Predictor: stop callback raised {}, continuing training".format(e))
+            return False
+
     def train(
         self,
         load_minutes,
@@ -1188,6 +1198,7 @@ class LoadPredictor:
         ema_smoothing_alpha=0.3,
         huber_delta=1.35,
         progress_callback=None,
+        stop_callback=None,
     ):
         """
         Train or fine-tune the model.
@@ -1215,9 +1226,13 @@ class LoadPredictor:
             progress_callback: Called with no arguments once per epoch, so a caller whose liveness is
                                judged on how recently it reported success can stay alive through a
                                training run longer than that window. Exceptions are logged and swallowed
+            stop_callback: Called with no arguments at the top of every epoch; returning True abandons
+                           the run. Distinct from progress_callback precisely because that hook must
+                           never be able to abort a run - this one is the caller explicitly asking to.
+                           Exceptions are logged and treated as "do not stop"
 
         Returns:
-            Validation MAE or None if training failed
+            Validation MAE, or None if training failed or was aborted via stop_callback
         """
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
 
@@ -1309,7 +1324,16 @@ class LoadPredictor:
         # EMA accumulator for early-stopping metric (seeds on first epoch)
         ema_combined = None
 
+        aborted = False
         for epoch in range(epochs):
+            # Abort point. A single pass is minutes of uninterruptible CPU work, so without a check
+            # here a shutdown has to wait the whole run out (#5075). Checked before the epoch's work
+            # rather than after so the caller stops paying for an epoch it has already given up on.
+            if self._should_stop(stop_callback):
+                self.log("ML Predictor: Training aborted at epoch {}/{} - stop requested".format(epoch + 1, epochs))
+                aborted = True
+                break
+
             # Cosine LR decay: lr_t decays from lr_max at epoch 0 to lr_min at the final epoch
             if lr_decay == "cosine":
                 lr_t = lr_min + 0.5 * (lr_max - lr_min) * (1.0 + np.cos(np.pi * epoch / max(epochs - 1, 1)))
@@ -1418,6 +1442,12 @@ class LoadPredictor:
                 )
             )
 
+        if aborted:
+            # Weights are restored above so the in-memory model is left consistent, but the run did
+            # not finish: report failure so the caller neither publishes nor saves a partial model,
+            # and skip the AR rollout diagnostic, which is itself minutes of the work we just abandoned.
+            return None
+
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)
@@ -1493,6 +1523,7 @@ class LoadPredictor:
         max_intermediate_passes=0,
         huber_delta=1.35,
         progress_callback=None,
+        stop_callback=None,
     ):
         """
                 Train using curriculum learning: progressively expand the training window
@@ -1526,6 +1557,8 @@ class LoadPredictor:
                     progress_callback: Called with no arguments once per epoch across every pass, so a
                                        run that lasts longer than the caller's liveness timeout can
                                        still report itself alive
+                    stop_callback: Called with no arguments before each pass and, via train(), before each
+                                   epoch; returning True abandons the whole curriculum and returns None
                     curriculum_window_days: Initial training window size in days (default 7)
                     curriculum_step_days: Days added per subsequent pass (default 7)
                     max_intermediate_passes: Maximum number of intermediate passes to run;
@@ -1535,8 +1568,13 @@ class LoadPredictor:
                     huber_delta: Huber loss transition point passed through to each train() call
 
                 Returns:
-                    Validation MAE from the final pass, or None if all passes failed.
+                    Validation MAE from the final pass, or None if all passes failed or the run was
+                    aborted via stop_callback.
         """
+        if self._should_stop(stop_callback):
+            self.log("ML Predictor: Curriculum training not started - stop requested")
+            return None
+
         # Build list of positive minute keys to find total history span
         hist_minutes = [k for k in load_minutes if isinstance(k, int) and k > 0]
         if not hist_minutes:
@@ -1581,6 +1619,7 @@ class LoadPredictor:
                 norm_ema_alpha=norm_ema_alpha,
                 huber_delta=huber_delta,
                 progress_callback=progress_callback,
+                stop_callback=stop_callback,
             )
 
         total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
@@ -1588,6 +1627,10 @@ class LoadPredictor:
 
         val_mae = None
         for pass_idx, window in enumerate(window_sizes):
+            if self._should_stop(stop_callback):
+                self.log("ML Predictor: Curriculum training aborted before pass {}/{} - stop requested".format(pass_idx + 1, total_passes))
+                return None
+
             # Slice data to the oldest 'window' minutes.
             # start_minute is the more-recent edge; after re-indexing it becomes key 0.
             # We pass slice_now = now_utc - start_minute to train() so that the
@@ -1618,7 +1661,12 @@ class LoadPredictor:
                 norm_ema_alpha=norm_ema_alpha,
                 huber_delta=huber_delta,
                 progress_callback=progress_callback,
+                stop_callback=stop_callback,
             )
+
+            if pass_mae is None and self._should_stop(stop_callback):
+                self.log("ML Predictor: Curriculum training aborted during pass {}/{} - stop requested".format(pass_idx + 1, total_passes))
+                return None
 
             if pass_mae is None:
                 self.log("Warn: ML Predictor: Curriculum pass {}/{} failed (insufficient data or training error) - skipping".format(pass_idx + 1, total_passes))
@@ -1627,6 +1675,10 @@ class LoadPredictor:
                 self.log("ML Predictor: Curriculum pass {}/{} complete, val_mae={:.4f} kWh".format(pass_idx + 1, total_passes, val_mae))
 
         # Final pass: full dataset, standard holdout window
+        if self._should_stop(stop_callback):
+            self.log("ML Predictor: Curriculum training aborted before final pass {}/{} - stop requested".format(total_passes, total_passes))
+            return None
+
         self.log("ML Predictor: Curriculum final pass {}/{}: full dataset ({:.1f} days)".format(total_passes, total_passes, max_minute / day_minutes))
         final_mae = self.train(
             load_minutes,
@@ -1643,7 +1695,12 @@ class LoadPredictor:
             norm_ema_alpha=norm_ema_alpha,
             huber_delta=huber_delta,
             progress_callback=progress_callback,
+            stop_callback=stop_callback,
         )
+
+        if final_mae is None and self._should_stop(stop_callback):
+            self.log("ML Predictor: Curriculum training aborted during final pass {}/{} - stop requested".format(total_passes, total_passes))
+            return None
 
         if final_mae is not None:
             val_mae = final_mae
