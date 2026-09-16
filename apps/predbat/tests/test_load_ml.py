@@ -56,6 +56,9 @@ def test_load_ml(my_predbat=None):
         ("curriculum_training", _test_curriculum_training, "Curriculum training with progressive window expansion"),
         ("training_progress_callback", _test_training_progress_callback, "Training reports liveness through progress_callback"),
         ("component_alive_during_training", _test_component_marks_itself_alive_during_training, "Component keeps its success timestamp fresh while training"),
+        ("training_stop_callback", _test_training_stops_on_stop_callback, "Training abandons a run when the stop hook trips"),
+        ("training_off_event_loop", _test_component_training_does_not_block_event_loop, "Component training leaves its event loop free to run"),
+        ("training_abandoned_on_stop", _test_component_training_abandons_run_on_stop, "Component abandons an in-flight training run when stopping"),
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
@@ -3374,20 +3377,11 @@ def _test_training_progress_callback():
     return True
 
 
-def _test_component_marks_itself_alive_during_training():
-    """_do_training must hand the trainer the component's own timestamp updater.
-
-    Driven through the real _do_training rather than by calling train_curriculum directly - a test
-    that passes the callback itself proves only that the test passes it, and would keep passing if
-    load_ml_component stopped wiring it up. That regression is invisible until a training run
-    silently crosses the liveness window again hours later.
-    """
+def _make_training_component(predictor, now_utc):
+    """Build a bare LoadMLComponent wired up with just the attributes _do_training reads."""
     import asyncio
 
     from load_ml_component import LoadMLComponent
-
-    now_utc = datetime.now(timezone.utc)
-    recorded = {}
 
     class FakeBase:
         """Minimal stand-in for the PredBat instance the component reads through."""
@@ -3400,27 +3394,12 @@ def _test_component_marks_itself_alive_during_training():
             """Swallow component logging."""
             return None
 
-    class FakePredictor:
-        """Captures the kwargs the component passes, and pulses the callback like a real run."""
-
-        def train_curriculum(self, *args, **kwargs):
-            """Record every call's progress callback and fire it once, as an epoch would.
-
-            Every call, not just the last: with is_initial the component runs the initial curriculum
-            and then a fine-tune pass, so keeping only the most recent kwargs would let an unwired
-            first call hide behind a correctly wired second one.
-            """
-            callback = kwargs.get("progress_callback")
-            recorded.setdefault("calls", []).append(callback)
-            if callback:
-                callback()
-            return 0.05
-
     component = LoadMLComponent.__new__(LoadMLComponent)
     component.base = FakeBase()
     component.log = component.base.log
+    component.api_stop = False
     component.last_success_timestamp = None
-    component.predictor = FakePredictor()
+    component.predictor = predictor
     component.data_lock = asyncio.Lock()
     component.load_data = {1: 0.1}
     component.load_data_age_days = 10
@@ -3443,10 +3422,42 @@ def _test_component_marks_itself_alive_during_training():
     component.model_status = "not_initialized"
     component.last_train_time = None
     component.initial_training_done = False
+    return component
 
-    # Both paths, because _do_training picks a different train_curriculum call site for each - the
-    # initial curriculum or the fine-tune - and wiring only one of them up leaves the other able to
-    # blow past the liveness window unnoticed
+
+def _test_component_marks_itself_alive_during_training():
+    """_do_training must hand the trainer the component's own timestamp updater.
+
+    Driven through the real _do_training rather than by calling train_curriculum directly - a test
+    that passes the callback itself proves only that the test passes it, and would keep passing if
+    load_ml_component stopped wiring it up. That regression is invisible until a training run
+    silently crosses the liveness window again hours later.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    recorded = {}
+
+    class FakePredictor:
+        """Captures the kwargs the component passes, and pulses the callback like a real run."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record every call's progress callback and fire it once, as an epoch would.
+
+            Every call, not just the last: with is_initial the component runs the initial curriculum
+            and then a fine-tune pass, so keeping only the most recent kwargs would let an unwired
+            first call hide behind a correctly wired second one.
+            """
+            callback = kwargs.get("progress_callback")
+            recorded.setdefault("calls", []).append(callback)
+            if callback:
+                callback()
+            return 0.05
+
+    component = _make_training_component(FakePredictor(), now_utc)
+
+    # Both paths, because _do_training sizes the initial curriculum and the fine-tune differently,
+    # and wiring only one of them up leaves the other able to blow past the liveness window unnoticed
     for is_initial in (False, True):
         recorded.clear()
         component.last_success_timestamp = None
@@ -3458,5 +3469,139 @@ def _test_component_marks_itself_alive_during_training():
             assert callback is not None, f"_do_training(is_initial={is_initial}) call {n + 1} must pass a progress_callback to train_curriculum"
             assert callback == component.update_success_timestamp, f"is_initial={is_initial} call {n + 1}: the callback must be the component's own update_success_timestamp, not some other hook"
         assert component.last_success_timestamp is not None, f"is_initial={is_initial}: firing the callback must move last_success_timestamp so components.is_alive() sees a recent success"
+
+    return True
+
+
+def _test_component_training_does_not_block_event_loop():
+    """_do_training must leave the component's event loop free while training runs (#5075).
+
+    train_curriculum() is synchronous and minutes long, so calling it straight from the coroutine
+    pins the loop for the whole run: api_stop goes unnoticed and the run_timeout watchdog can never
+    fire. The handshake here is deterministic rather than timed - the fake trainer blocks until a
+    task scheduled on the loop releases it - so a loop that cannot run at all fails on the timeout
+    instead of on a stopwatch.
+    """
+    import asyncio
+    import threading
+
+    now_utc = datetime.now(timezone.utc)
+    loop_made_progress = threading.Event()
+    observed = {}
+
+    class BlockingPredictor:
+        """Blocks inside training the way a real curriculum pass does."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Wait for the loop to prove it is still running, then finish the 'run'."""
+            observed["loop_ran_during_training"] = loop_made_progress.wait(timeout=10.0)
+            return 0.05
+
+    component = _make_training_component(BlockingPredictor(), now_utc)
+
+    async def scenario():
+        """Queue a loop task, train, and see whether the task ever got a chance to run."""
+
+        async def releaser():
+            """Release the trainer, which only happens if the loop is still being serviced."""
+            loop_made_progress.set()
+
+        task = asyncio.create_task(releaser())
+        await component._do_training(is_initial=False)
+        await task
+
+    asyncio.run(scenario())
+
+    assert observed.get("loop_ran_during_training") is True, "the event loop made no progress while training ran - training is still running on the loop, so a shutdown landing mid-training cannot be answered"
+
+    return True
+
+
+def _test_component_training_abandons_run_on_stop():
+    """_do_training must let a stopping component abandon an in-flight training run (#5075).
+
+    Freeing the loop is not enough on its own: the component's thread only exits once run() returns,
+    so a curriculum that cannot be interrupted still holds the shutdown for as long as it takes to
+    finish. The component has to hand the trainer a stop hook that tracks api_stop, and must read the
+    resulting None as an abandoned run rather than a failed one - a partial model must not be saved
+    or published, and must not stamp last_train_time and so suppress the next real run.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    observed = {}
+
+    class StoppablePredictor:
+        """Polls the stop hook the way a real pass does, and abandons the run once it trips."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record the hook's answer either side of the component being asked to stop."""
+            stop_callback = kwargs.get("stop_callback")
+            observed["hook"] = stop_callback
+            if stop_callback is None:
+                return 0.05
+            observed["before_stop"] = stop_callback()
+            component.api_stop = True
+            observed["after_stop"] = stop_callback()
+            return None if observed["after_stop"] else 0.05
+
+    component = _make_training_component(StoppablePredictor(), now_utc)
+    asyncio.run(component._do_training(is_initial=False))
+
+    assert observed.get("hook") is not None, "_do_training must pass a stop_callback to train_curriculum, or an in-flight run cannot be abandoned on shutdown"
+    assert observed.get("before_stop") is False, "the stop hook must report False while the component is still running"
+    assert observed.get("after_stop") is True, "the stop hook must report True once api_stop is set, so the run abandons itself"
+    assert component.model_valid is False, "an abandoned run must not be published as a valid model"
+    assert component.initial_training_done is False, "an abandoned run must not count as a completed training"
+    assert component.last_train_time is None, "an abandoned run must not stamp last_train_time, or the retrain interval skips the next real run"
+
+    return True
+
+
+def _test_training_stops_on_stop_callback():
+    """train() and train_curriculum() must abandon a run when the stop hook trips.
+
+    Deliberately a separate hook from progress_callback, which is barred from aborting a run: this
+    one is the caller explicitly asking training to give up. A hook that raises still must not.
+    """
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+
+    # train() checks at the top of every epoch, so a hook that trips part-way ends the run there
+    epochs_completed = []
+    checks = {"count": 0}
+
+    def stop_on_third_check():
+        """Run two full epochs, then ask training to stop."""
+        checks["count"] += 1
+        return checks["count"] >= 3
+
+    predictor = LoadPredictor(learning_rate=0.01)
+    val_mae = predictor.train(load_data, now_utc, epochs=10, patience=10, progress_callback=lambda: epochs_completed.append(1), stop_callback=stop_on_third_check)
+    assert val_mae is None, "an abandoned run must report None so the caller neither saves nor publishes a partial model"
+    assert len(epochs_completed) == 2, f"training should stop at the epoch the hook first trips, so 2 epochs complete, got {len(epochs_completed)}"
+
+    # A hook that raises must not abort the run, same rule the progress hook follows
+    def bad_stop():
+        """Blow up the way a badly behaved caller's hook might."""
+        raise RuntimeError("stop hook blew up")
+
+    predictor_bad = LoadPredictor(learning_rate=0.01)
+    val_mae_bad = predictor_bad.train(load_data, now_utc, epochs=3, patience=3, stop_callback=bad_stop)
+    assert val_mae_bad is not None, "training must survive a stop hook that raises"
+
+    # Curriculum abandons the whole run rather than carrying on into the next pass
+    load_data_28 = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
+    passes_started = []
+    predictor_c = LoadPredictor(learning_rate=0.01)
+    predictor_c.train = lambda *args, **kwargs: passes_started.append(1)
+    curriculum_mae = predictor_c.train_curriculum(load_data_28, now_utc, epochs=3, patience=3, curriculum_window_days=7, curriculum_step_days=7, stop_callback=lambda: True)
+    assert curriculum_mae is None, "a curriculum abandoned before its first pass must return None"
+    assert passes_started == [], "no pass should be started once the stop hook has tripped"
+
+    # Omitting the hook must stay valid - every existing caller relies on that
+    predictor_none = LoadPredictor(learning_rate=0.01)
+    assert predictor_none.train(load_data, now_utc, epochs=2, patience=3) is not None, "training without a stop hook must be unaffected"
 
     return True
