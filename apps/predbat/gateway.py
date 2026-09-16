@@ -55,6 +55,9 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
 
+# Minimum gap (seconds) between repeats of a warning raised while handling telemetry
+_WARN_REPEAT_INTERVAL = 10 * 60
+
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
 _STARTUP_WAIT_TICKS = 120 * 2
 _STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
@@ -291,6 +294,7 @@ class GatewayMQTT(ComponentBase):
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._warned_at = {}  # warning key -> time it was last logged, see _warn_rate_limited
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
@@ -762,11 +766,20 @@ class GatewayMQTT(ComponentBase):
 
         self._debug_dump("RX telemetry", status, raw=data)
 
-        # A status that only lists GivEnergy units without their serial carries no usable
-        # inverter data, so treat it like one with no inverters: keep the last good status
-        # and do not count it as fresh telemetry.
-        if all(_serial_missing(inv) for inv in status.inverters):
+        if len(status.inverters) == 0:
             return
+
+        # GivEnergy units listed without their serial are ignored until the hub identifies them.
+        # A status listing nothing else carries no usable inverter data: keep the last good
+        # status and do not count it as fresh telemetry, but keep the device-level entities
+        # (gateway online, EV chargers, EMS aggregates) and EV charger registration current.
+        missing = sum(1 for inv in status.inverters if _serial_missing(inv))
+        if missing:
+            self._warn_rate_limited("serial_missing", f"Warn: GatewayMQTT: ignoring {missing} GivEnergy unit(s) reported without a serial ({len(status.inverters)} unit(s) listed) until they are identified")
+            if missing == len(status.inverters):
+                self._inject_entities(status)
+                self._register_new_ev_chargers(status)
+                return
 
         self._last_status = status
         self._last_telemetry_time = time.time()
@@ -1187,7 +1200,9 @@ class GatewayMQTT(ComponentBase):
         if missing:
             addressable = [inv for inv in inverters if not _serial_missing(inv)]
             if not addressable or any(inv.type in coordinator_types for inv in missing):
-                self.log("Warn: GatewayMQTT: GivEnergy control target not identified yet (reported without a serial); auto-config skipped — will retry on next telemetry")
+                self._warn_rate_limited("auto_config_skipped", "Warn: GatewayMQTT: GivEnergy control target not identified yet (reported without a serial); auto-config skipped — will retry on next telemetry")
+                # EV chargers do not depend on the inverter binding, so do not hold them back.
+                self._register_new_ev_chargers(status)
                 return
             if len(addressable) < len(inverters):
                 self.log(f"Warn: GatewayMQTT: ignoring {len(inverters) - len(addressable)} GivEnergy inverter(s) reported without a serial")
@@ -1374,6 +1389,36 @@ class GatewayMQTT(ComponentBase):
         self._configured_ev_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters
+
+    def _register_new_ev_chargers(self, status):
+        """Register EV chargers that were not present at the last auto-config.
+
+        Used when a status cannot drive a full auto-config because a GivEnergy unit has no
+        serial yet. Chargers are device-level, so they are registered without touching the
+        inverter binding, and recording them stops the same chargers re-triggering auto-config
+        on every telemetry.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
+        if chargers - self._configured_ev_chargers:
+            self._register_ev_car(status)
+            self._configured_ev_chargers = chargers
+
+    def _warn_rate_limited(self, key, message):
+        """Log a warning unless the same warning was logged within the repeat interval.
+
+        For conditions seen while handling telemetry, which can arrive every few seconds.
+
+        Args:
+            key: Identifies the warning for rate limiting.
+            message: The full log line.
+        """
+        now = time.time()
+        if now - self._warned_at.get(key, 0) >= _WARN_REPEAT_INTERVAL:
+            self._warned_at[key] = now
+            self.log(message)
 
     def _register_ev_car(self, status):
         """Register a connected OCPP EV charger as a PredBat car.

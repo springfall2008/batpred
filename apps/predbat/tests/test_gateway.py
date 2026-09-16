@@ -2999,6 +2999,7 @@ class TestGatewayUnitControlBinding:
         gw.gateway_evc_automatic = False
         gw.gateway_evc_control = False
         gw._configured_ev_chargers = frozenset()
+        gw._warned_at = {}
 
         def capture_set_arg(key, value):
             gw._args[key] = value
@@ -3435,6 +3436,103 @@ class TestGatewayUnitControlBinding:
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"] == ["select.predbat_gateway_47g077_charge_slot1_start"]
         assert gw._configured_inverter_serials == frozenset({"GW2347G077", "CH2414G318"})
+
+    def _make_ev_handler_gateway(self):
+        """A telemetry-driven gateway with automatic EV charger registration enabled."""
+        from unittest.mock import MagicMock
+
+        gw = self._make_handler_gateway()
+        gw.gateway_evc_automatic = True
+        gw._ev_max_current = {}
+        gw.get_arg = MagicMock(return_value=100.0)
+        return gw
+
+    @staticmethod
+    def _add_ev_charger(status, charge_point_id="CP3XB749"):
+        """Add a connected EV charger that reports its own SoC to *status*."""
+        ev = status.ev_chargers.add()
+        ev.charge_point_id = charge_point_id
+        ev.connected = True
+        ev.status = "Charging"
+        ev.session_active = True
+        ev.power_w = 7000
+        ev.soc_percent = 40
+        return ev
+
+    @staticmethod
+    def _log_count(gw, text):
+        """Number of log lines containing *text*."""
+        return sum(1 for c in gw.log.call_args_list if text in str(c.args[0]))
+
+    @staticmethod
+    def _inverter_args(gw):
+        """The captured args other than the ones EV car registration sets."""
+        return {k: v for k, v in gw._args.items() if not k.startswith("car_") and k != "num_cars"}
+
+    def test_blank_serial_only_status_keeps_ev_chargers_current_and_warns_rate_limited(self):
+        """A status listing only unidentified GivEnergy units still updates EV chargers, and warns once per interval.
+
+        It is not inverter telemetry, so the binding and telemetry freshness stay as they were,
+        but device-level data does not depend on the inverters: the charger is published and
+        registered straight away instead of waiting for a serial to come back.
+        """
+        from gateway import _WARN_REPEAT_INTERVAL
+
+        gw = self._make_ev_handler_gateway()
+        gw._process_telemetry(self._aio_status_with_blank_serial(["CH2414G318"], include_blank=False).SerializeToString())
+        good_args = dict(gw._args)
+        good_telemetry_time = gw._last_telemetry_time
+        gw.dashboard_item.reset_mock()
+        gw.log.reset_mock()
+
+        blank_only = self._aio_status_with_blank_serial([])
+        self._add_ev_charger(blank_only)
+        for _ in range(3):
+            gw._process_telemetry(blank_only.SerializeToString())
+
+        published = {c.args[0] for c in gw.dashboard_item.call_args_list}
+        assert "sensor.predbat_gateway_ev_3xb749_power" in published
+        assert "binary_sensor.predbat_gateway_online" in published
+        assert gw._configured_ev_chargers == frozenset({"CP3XB749"})
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_3xb749_connected"]
+        assert self._inverter_args(gw) == good_args, "the inverter binding must not change"
+        assert gw._last_telemetry_time == good_telemetry_time
+        assert self._log_count(gw, "reported without a serial") == 1, "the warning must not repeat on every telemetry"
+
+        # Once the repeat interval has passed the condition is logged again.
+        gw._warned_at["serial_missing"] -= _WARN_REPEAT_INTERVAL
+        gw._process_telemetry(blank_only.SerializeToString())
+        assert self._log_count(gw, "reported without a serial") == 2
+
+    def test_blank_serial_coordinator_skip_registers_ev_charger_without_log_spam(self):
+        """While auto-config waits for an unidentified Gateway, a new EV charger is registered and nothing logs every frame."""
+        # First run: nothing configured yet.
+        gw = self._make_ev_handler_gateway()
+        status = self._gateway_plus_aios_status(["CH2414G318"])
+        status.inverters[0].serial = ""
+        self._add_ev_charger(status)
+        for _ in range(3):
+            gw._process_telemetry(status.SerializeToString())
+        assert gw._auto_configured is False
+        assert "num_inverters" not in gw._args
+        assert gw._configured_ev_chargers == frozenset({"CP3XB749"})
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_3xb749_connected"]
+        assert self._log_count(gw, "auto-config skipped") == 1
+        assert self._log_count(gw, "reported without a serial (") == 1
+
+        # Configured site: a charger that appears alongside an unidentified Gateway is registered
+        # once, and does not re-trigger auto-config on every following telemetry.
+        gw = self._make_ev_handler_gateway()
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        good_args = dict(gw._args)
+        gw.log.reset_mock()
+        for _ in range(3):
+            gw._process_telemetry(status.SerializeToString())
+        assert gw._configured_ev_chargers == frozenset({"CP3XB749"})
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_3xb749_connected"]
+        assert self._inverter_args(gw) == good_args
+        assert self._log_count(gw, "new EV charger(s) discovered") == 1
+        assert self._log_count(gw, "auto-config skipped") == 1
 
     def test_blank_serial_non_givenergy_inverter_configures_as_before(self):
         """Hub drivers other than GivEnergy never report a serial, so a blank one still binds exactly as it did.
