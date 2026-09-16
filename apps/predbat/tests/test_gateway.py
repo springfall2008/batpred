@@ -294,6 +294,7 @@ class TestInjectEntities:
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
         gw._suffix_to_serial = {}  # set by automatic_config; empty = nothing bound yet
+        gw._site_energy_serial = None  # set by automatic_config; None = no site energy source yet
         gw._dashboard_calls = {}  # entity_id → (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
@@ -489,6 +490,99 @@ class TestInjectEntities:
 
         state, _ = gw._dashboard_calls[f"sensor.predbat_gateway_{suffix}_battery_discharge_today"]
         assert approx_equal(state, 2.5)
+
+    def test_site_energy_counters_mirror_source_inverter(self):
+        """Site-level *_today entities carry the source inverter's counters and table attributes."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        gw = self._make_gateway()
+        gw._site_energy_serial = "CE123456789"
+        gw._inject_entities(self._make_status())
+
+        for name, expected in (("pv_today", 5.0), ("import_today", 1.0), ("export_today", 2.0), ("load_today", 8.0)):
+            state, attrs = gw._dashboard_calls[f"sensor.predbat_gateway_{name}"]
+            assert approx_equal(state, expected), name
+            assert state == gw._dashboard_calls[f"sensor.predbat_gateway_456789_{name}"][0], name
+            assert attrs == GATEWAY_ATTRIBUTE_TABLE.get(name, {}), name
+
+    def test_site_energy_counters_not_published_without_source(self):
+        """Before automatic_config picks a source, no site-level *_today entities are published."""
+        gw = self._make_gateway()
+        gw._inject_entities(self._make_status())
+
+        for name in ("pv_today", "import_today", "export_today", "load_today"):
+            assert f"sensor.predbat_gateway_{name}" not in gw._dashboard_calls, name
+        # The per-inverter counters are still published.
+        assert "sensor.predbat_gateway_456789_load_today" in gw._dashboard_calls
+
+    def test_site_energy_counters_follow_source_not_list_order(self):
+        """The site counters come from the source serial, not from whichever inverter is listed first."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        second = status.inverters.add()
+        second.type = pb.INVERTER_TYPE_GIVENERGY
+        second.serial = "CE000000001"
+        second.primary = True
+        second.battery.capacity_wh = 9500
+        second.energy.consumption_today_wh = 12340
+        second.energy.pv_today_wh = 4560
+
+        gw._site_energy_serial = "CE000000001"
+        gw._inject_entities(status)
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_load_today"][0], 12.34)
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_pv_today"][0], 4.56)
+        # This unit reports no grid import, so the site counter reads 0 rather than the first unit's 1.0.
+        assert gw._dashboard_calls["sensor.predbat_gateway_import_today"][0] == 0
+
+        # A source missing from this status publishes nothing rather than borrowing another unit's counters.
+        gw._dashboard_calls = {}
+        gw._site_energy_serial = "CE999999999"
+        gw._inject_entities(status)
+        assert "sensor.predbat_gateway_load_today" not in gw._dashboard_calls
+
+    def test_site_energy_counters_zero_without_energy_block(self):
+        """A source inverter reporting no energy block publishes 0 for every site counter, matching its own entities."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.inverters[0].ClearField("energy")
+        gw._site_energy_serial = "CE123456789"
+        gw._inject_entities(status)
+
+        for name in ("pv_today", "import_today", "export_today", "load_today"):
+            assert gw._dashboard_calls[f"sensor.predbat_gateway_{name}"][0] == 0, name
+            assert gw._dashboard_calls[f"sensor.predbat_gateway_456789_{name}"][0] == 0, name
+
+    def test_site_energy_entities_do_not_collide_with_other_gateway_entities(self):
+        """Each site-level *_today entity is written exactly once per status, by the site publisher only.
+
+        Uses an EMS with sub-inverters, a battery inverter and an EV charger so every other
+        gateway entity family is published alongside the site counters.
+        """
+        gw = self._make_gateway()
+        written = []
+
+        def record(entity_id, state=None, attributes=None, app=None):
+            """Record every entity id written, keeping duplicates."""
+            written.append(entity_id)
+
+        gw.dashboard_item = record
+
+        status = self._make_status()
+        ems = status.inverters.add()
+        ems.type = pb.INVERTER_TYPE_GIVENERGY_EMS
+        ems.serial = "EM123456"
+        ems.primary = True
+        ems.ems.num_inverters = 1
+        ems.ems.sub_inverters.add().soc = 50
+        ev = status.ev_chargers.add()
+        ev.charge_point_id = "CP3XB749"
+        ev.connected = True
+        ev.soc_percent = 40
+        gw._site_energy_serial = "CE123456789"
+        gw._inject_entities(status)
+
+        for name in ("pv_today", "import_today", "export_today", "load_today"):
+            assert written.count(f"sensor.predbat_gateway_{name}") == 1, name
 
     def test_battery_dod_entity(self):
         """Battery DoD is published as a fraction (firmware pct / 100)."""
@@ -695,6 +789,7 @@ class TestBoundEntitiesAreWritten:
         gw._last_status = None
         gw._auto_configured = False
         gw._suffix_to_serial = {}
+        gw._site_energy_serial = None
         gw.args = {}
         gw._args = {}
         gw.local_tz = pytz.timezone("Europe/London")
@@ -765,6 +860,31 @@ class TestBoundEntitiesAreWritten:
         gw._inject_entities(gw._last_status)
 
         assert bound in gw._dashboard_calls, "automatic_config bound soc_percent to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
+
+    def test_bound_energy_entities_are_written_from_control_target(self):
+        """The load/PV/import/export entities bound by automatic_config are written with the control target's counters.
+
+        On the Gateway + two AIOs topology the Gateway is inverter 0, so the site counters
+        must carry the Gateway's energy block, not an AIO's.
+        """
+        gw = self._make_gateway()
+        status = self._gateway_plus_two_aios()
+        for inv, wh in zip(status.inverters, (21000, 1000, 2000)):
+            inv.energy.consumption_today_wh = wh
+            inv.energy.pv_today_wh = wh // 2
+        gw._last_status = status
+        gw.automatic_config()
+
+        gw._dashboard_calls = {}
+        gw._inject_entities(gw._last_status)
+
+        expected = {"load_today": 21.0, "pv_today": 10.5, "import_today": 0, "export_today": 0}
+        for arg, value in expected.items():
+            bound = gw._args[arg][0]
+            assert bound == f"sensor.predbat_gateway_{arg}", arg
+            assert bound in gw._dashboard_calls, "automatic_config bound {} to {} but _inject_entities never wrote it".format(arg, bound)
+            assert approx_equal(gw._dashboard_calls[bound][0], value), arg
+            assert gw._dashboard_calls[bound][0] == gw._dashboard_calls[f"sensor.predbat_gateway_15g357_{arg}"][0], arg
 
 
 class TestDebugLogging:
@@ -1517,21 +1637,63 @@ class TestAutomaticConfig:
         assert gw._args["inverter_type"] == ["GWMQTT"]
 
     def test_single_inverter_energy_and_health_args(self):
-        """Energy counter, battery health, and inverter_time args use first inverter's suffix."""
+        """Energy counter args use the site-level entities; battery health and inverter_time use the first inverter's suffix."""
         gw = self._make_gateway()
         gw._last_status = self._basic_status(serial="CE123456789", primary=False)
         gw.automatic_config()
 
         suffix = "456789"
         base = f"predbat_gateway_{suffix}"
-        assert gw._args["pv_today"] == [f"sensor.{base}_pv_today"]
-        assert gw._args["import_today"] == [f"sensor.{base}_import_today"]
-        assert gw._args["export_today"] == [f"sensor.{base}_export_today"]
-        assert gw._args["load_today"] == [f"sensor.{base}_load_today"]
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_pv_today"]
+        assert gw._args["import_today"] == ["sensor.predbat_gateway_import_today"]
+        assert gw._args["export_today"] == ["sensor.predbat_gateway_export_today"]
+        assert gw._args["load_today"] == ["sensor.predbat_gateway_load_today"]
+        assert gw._site_energy_serial == "CE123456789"
         assert gw._args["battery_temperature_history"] == f"sensor.{base}_battery_temperature"
         assert gw._args["battery_scaling"] == [f"sensor.{base}_battery_dod"]
         assert gw._args["battery_rate_max"] == [f"sensor.{base}_battery_rate_max"]
         assert gw._args["inverter_time"] == [f"sensor.{base}_inverter_time"]
+
+    def test_energy_args_unchanged_when_bound_serial_changes(self):
+        """Replacing the inverter keeps load/PV/import/export on the same entity ids, so their history carries on."""
+        gw = self._make_gateway()
+        gw._last_status = self._basic_status(serial="CE123456789")
+        gw.automatic_config()
+        before = {arg: gw._args[arg] for arg in ("pv_today", "import_today", "export_today", "load_today")}
+
+        gw._last_status = self._basic_status(serial="CH9876543210")
+        gw.automatic_config()
+
+        assert gw._args["soc_percent"] == ["sensor.predbat_gateway_543210_soc"]  # control follows the new unit
+        assert gw._site_energy_serial == "CH9876543210"
+        for arg, entity in before.items():
+            assert gw._args[arg] == entity, arg
+            assert all(serial_suffix not in entity[0] for serial_suffix in ("456789", "543210")), arg
+
+    def test_multi_inverter_energy_source_is_slot_zero(self):
+        """With several inverters the site counters follow slot 0 (lowest serial), the unit the energy args always used."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE999999999")
+        self._make_inverter(status, serial="CE111111111")
+        gw._last_status = status
+        gw.automatic_config()
+
+        assert gw._args["soc_percent"][0] == "sensor.predbat_gateway_111111_soc"
+        assert gw._site_energy_serial == "CE111111111"
+        assert gw._args["battery_scaling"] == ["sensor.predbat_gateway_111111_battery_dod"]
+
+    def test_site_energy_entities_published_during_auto_config(self):
+        """automatic_config publishes the site counters it binds, so they exist before PredBat's first fetch."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789")
+        status.inverters[0].energy.consumption_today_wh = 7250
+        gw._last_status = status
+        gw.automatic_config()
+
+        published = {c.args[0]: c.args[1] for c in gw.dashboard_item.call_args_list}
+        for arg in ("pv_today", "import_today", "export_today", "load_today"):
+            assert gw._args[arg][0] in published, arg
+        assert approx_equal(published["sensor.predbat_gateway_load_today"], 7.25)
 
     def test_no_rate_max_falls_back_to_6000(self):
         """When firmware reports no battery_rate_max, the sensor is still published with a 6000 W default."""
@@ -2993,6 +3155,7 @@ class TestGatewayUnitControlBinding:
         gw._auto_configured = False
         gw._configured_inverter_serials = frozenset()
         gw._suffix_to_serial = {}
+        gw._site_energy_serial = None
         gw.args = {}
         gw._args = {}
         gw.gateway_inverter_serial = []
