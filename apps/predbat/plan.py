@@ -5310,11 +5310,18 @@ class Plan:
                 if slot_start < slot_end:
                     rate_okay = True
 
-                    for start in range(slot_start, slot_end, self.plan_interval_minutes):
-                        end = min(start + self.plan_interval_minutes, slot_end)
+                    # Book on the plan-interval grid: when minutes_now is off-grid the first
+                    # sub-slot is clipped to it, but keying and stepping stay on the grid so
+                    # overlapping windows can never emit overlapping slots
+                    grid_start = int(slot_start / self.plan_interval_minutes) * self.plan_interval_minutes
+                    for start_grid in range(grid_start, slot_end, self.plan_interval_minutes):
+                        start = max(start_grid, slot_start)
+                        end = min(start_grid + self.plan_interval_minutes, slot_end)
+                        if start >= end:
+                            continue
 
                         # Avoid duplicate slots
-                        if start in used_slots:
+                        if start_grid in used_slots:
                             rate_okay = False
 
                         # Boost on import/export rate thresholds and the gas comparisons
@@ -5345,7 +5352,7 @@ class Plan:
                             new_slot["average"] = window["average"]
                             new_slot["cost"] = dp2(new_slot["average"] * kwh)
                             plan.append(new_slot)
-                            used_slots[start] = True
+                            used_slots[start_grid] = True
 
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)

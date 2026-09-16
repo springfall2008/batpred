@@ -54,13 +54,15 @@ def check_slot_invariants(test_name, slots):
     return failed
 
 
-def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0):
+def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0, minutes_now=None):
     """
     Run a single iBoost smart planner test case and check the resulting plan totals
     """
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
+    if minutes_now is not None:
+        my_predbat.minutes_now = minutes_now
     my_predbat.iboost_smart = True
     my_predbat.iboost_slots = []
     my_predbat.iboost_today = today
@@ -93,6 +95,8 @@ def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_powe
     my_predbat.iboost_smart = False
     my_predbat.iboost_slots = []
     my_predbat.iboost_today = 0
+    if minutes_now is not None:
+        my_predbat.minutes_now = 12 * 60
 
     return failed
 
@@ -185,6 +189,12 @@ def run_iboost_smart_tests(my_predbat):
     # both would book it. Non-flat rates make the second booking attempt reachable.
     set_rate_profile(my_predbat, [(840, 870, 5.0), (870, 900, 6.0)], default_rate=20.0)
     failed |= run_iboost_smart_test("iboost_duplicate_slots", my_predbat, today=0, max_energy=1, max_power=1, min_length=60, expect_cost=2.75 + 2.75 + 10.0 + 10.0, expect_kwh=2.0, expect_time=120)
+
+    # Off-grid minutes_now with overlapping windows: the window containing minutes_now clips its
+    # first sub-slot to 12:15 but booking stays keyed on the interval grid, so the next window
+    # cannot emit a slot overlapping it (the invariant check verifies no overlaps)
+    set_rate_profile(my_predbat, [(720, 750, 4.0), (750, 780, 8.0)], default_rate=20.0)
+    failed |= run_iboost_smart_test("iboost_offgrid_overlap", my_predbat, today=0, max_energy=1, max_power=1, min_length=60, minutes_now=735, expect_cost=1.5 + 3.0 + 5.0 + 10.0 + 10.0, expect_kwh=2.0, expect_time=125)
 
     return failed
 
