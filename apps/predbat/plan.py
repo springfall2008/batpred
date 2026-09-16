@@ -5275,7 +5275,7 @@ class Plan:
                         end = min(start + self.plan_interval_minutes, slot_end)
 
                         # Avoid duplicate slots
-                        if minute in used_slots:
+                        if start in used_slots:
                             rate_okay = False
 
                         # Boost on import/export rate
