@@ -1198,7 +1198,8 @@ class Fetch:
             )
 
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
-        self.fetch_sensor_data_cars()
+        self.dispatch_timeline_pending = []
+        self.fetch_sensor_data_cars(save=save)
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1315,6 +1316,13 @@ class Fetch:
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
                 self.rate_import_cost_threshold = highest
+
+        # #4516 Stage 1: render the dispatch timelines captured during the car fetch. This has to
+        # come after the low-rate scan above, not merely after set_rate_thresholds(): in automatic
+        # mode (rate_low_threshold 0) set_rate_thresholds() only sets a provisional
+        # "everything but the most expensive" threshold, which the scan then replaces with the real
+        # low-rate band. Rendering on the provisional value painted most of the day as cheap.
+        self.log_dispatch_timelines()
 
         # Work out car plan?
         self.fetch_sensor_data_car_planning()
@@ -1439,9 +1447,12 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
-    def fetch_sensor_data_cars(self):
+    def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
+
+        `save` is False when compare.py re-runs the fetch for a candidate tariff rather than the
+        live plan; diagnostics that record state across cycles must be skipped in that case.
         """
 
         # Work out current car SoC and limit
@@ -1505,13 +1516,6 @@ class Fetch:
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
-                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
-                timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
-                should_log, marker = self.dispatch_timeline_should_log(car_n, timeline)
-                if should_log:
-                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), timeline, marker))
-
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
@@ -1542,6 +1546,31 @@ class Fetch:
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
+
+                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
+                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
+                # Only the live plan's view is worth recording: compare.py re-runs this whole
+                # fetch per candidate tariff (with save=False), which otherwise emits a burst of
+                # near-identical timelines for plans that were never active - and, because each
+                # one updates the "last logged" state, makes the real cycle's line look changed.
+                #
+                # Recorded here but rendered later: this runs before the rate fetch, so the cheap
+                # ('-') background would read from the previous cycle's rates - and be empty
+                # altogether on the first cycle after a restart. The dispatch lists and the
+                # plugged-in reading are only correct here though: further down this function the
+                # Octopus branch overwrites car_charging_planned with "has dispatch slots", so
+                # capture the inputs now and render once the rates are known.
+                if save:
+                    self.dispatch_timeline_pending.append(
+                        {
+                            "car_n": car_n,
+                            "completed": completed,
+                            "started": started,
+                            "planned": planned,
+                            "plugged": self.car_charging_planned[car_n],
+                            "charging_now": self.get_car_charging_now_tristate(car_n),
+                        }
+                    )
 
                 # Extract vehicle preference if we can get it
                 if self.octopus_intelligent_charging:
@@ -2514,6 +2543,31 @@ class Fetch:
 
         if print:
             self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
+
+    def get_car_charging_now_tristate(self, car_n):
+        """
+        Read car_charging_now as a tri-state (True/False/None) for the #4516 Stage 1 dispatch
+        timeline's GH#5080 reconciliation note.
+
+        self.car_charging_now (set by get_car_charging_planned()) is a plain boolean used
+        throughout the planner, where "no signal" and "confirmed not charging" both have to mean
+        False - there is no room there for a genuine unknown. This diagnostic needs that
+        distinction: flagging a slot as billing-risk when Predbat actually has no idea whether the
+        car is charging would be a false positive on every dispatch, for every IOG user who hasn't
+        configured the (optional) car_charging_now sensor, or during the "unknown"/"unavailable"
+        state HA reports for a real sensor briefly after a restart.
+
+        Returns None (unknown) when the sensor isn't configured, is out of range for this car, or
+        HA is currently reporting "unknown"/"unavailable"; otherwise the normalised boolean.
+        """
+        if "car_charging_now" not in self.args:
+            return None
+        raw = self.get_arg("car_charging_now", "no", index=car_n)
+        if raw is None:
+            return None
+        if isinstance(raw, str) and raw.lower() in ("unknown", "unavailable"):
+            return None
+        return self.car_charging_now[car_n]
 
     def get_car_charging_planned(self):
         """
