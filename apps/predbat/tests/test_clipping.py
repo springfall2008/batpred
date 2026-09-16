@@ -8,6 +8,11 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
+from utils import (
+    EXPORT_MODE_IDLE,
+    EXPORT_MODE_TARGET,
+    pack_export_limit,
+)
 
 
 def run_clipping_tests(my_predbat):
@@ -767,8 +772,8 @@ def test_inject_negative_minute_offset_lookup(my_predbat):
         print("ERROR: Expected clipping_target_soc_pct 94.0, got {}".format(target_pct))
         failed = True
 
-    if my_predbat.export_limits_best[0] != 94.0:
-        print("ERROR: Expected export_limits_best[0] 94.0, got {}".format(my_predbat.export_limits_best[0]))
+    if my_predbat.export_limits_best[0] != pack_export_limit(EXPORT_MODE_TARGET, 94):
+        print("ERROR: Expected export_limits_best[0] pack_export_limit(EXPORT_MODE_TARGET, 94), got {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
     if not failed:
@@ -801,8 +806,8 @@ def test_inject_fallback_to_target_soc_kwh_when_map_empty(my_predbat):
         print("ERROR: Expected fallback clipping_target_soc_pct 94.0, got {}".format(target_pct))
         failed = True
 
-    if my_predbat.export_limits_best[0] != 94.0:
-        print("ERROR: Expected export_limits_best[0] 94.0, got {}".format(my_predbat.export_limits_best[0]))
+    if my_predbat.export_limits_best[0] != pack_export_limit(EXPORT_MODE_TARGET, 94):
+        print("ERROR: Expected export_limits_best[0] pack_export_limit(EXPORT_MODE_TARGET, 94), got {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
     if not failed:
@@ -950,9 +955,9 @@ def test_inject_replaces_existing_peak_window(my_predbat):
     my_predbat.clipping_buffer_forecast_kwh = {60: 0.6}  # Peak at 720 to 750
     my_predbat.predict_clipping_target_soc_best = {0: 9.4, 60: 9.4, 90: 9.4}
 
-    # Pre-existing idle window covering the peak period with 100.0 limit
+    # Pre-existing idle window covering the peak period with idle limit
     my_predbat.export_window_best = [{"start": 720, "end": 750}]
-    my_predbat.export_limits_best = [100.0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE)]
 
     my_predbat.inject_clipping_export_windows()
 
@@ -963,8 +968,8 @@ def test_inject_replaces_existing_peak_window(my_predbat):
             if window.get("clipping_target_soc_pct") != 94.0:
                 print("ERROR: Peak window missing clipping_target_soc_pct 94.0, got {}".format(window.get("clipping_target_soc_pct")))
                 failed = True
-            if limit != 94.0:
-                print("ERROR: Peak window limit is {}, expected 94.0".format(limit))
+            if limit != pack_export_limit(EXPORT_MODE_TARGET, 94):
+                print("ERROR: Peak window limit is {}, expected {}".format(limit, pack_export_limit(EXPORT_MODE_TARGET, 94)))
                 failed = True
 
     if not found_peak:

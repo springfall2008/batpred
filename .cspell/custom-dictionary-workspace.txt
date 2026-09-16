@@ -58,6 +58,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+bisectable
 Bitwarden
 BLAS
 boostable
@@ -66,6 +67,7 @@ brickatius
 bwignore
 byok
 cadata
+calcsize
 calib
 Cantarell
 cbat
@@ -123,6 +125,7 @@ Dashlane
 datain
 datalist
 datalog
+datalogger
 datap
 datapoints
 datas
@@ -138,6 +141,7 @@ dedupe
 dend
 denorm
 derate
+derated
 derating
 desync
 desynced
@@ -249,6 +253,7 @@ GivEnergy
 givtcp
 gnueabihf
 GOELEC
+goldens
 gridcharge
 gridcode
 gridconsumption
@@ -316,6 +321,7 @@ keepalive
 keydb
 khtml
 killall
+Kiritimati
 kopt
 Kostal
 kostalplenticore
@@ -556,6 +562,7 @@ Sergoe
 sess
 setattr
 setdefault
+setpoints
 SFMB
 sg05lp1
 SIGALRM
@@ -574,6 +581,7 @@ snakeviz
 snprintf
 socb
 socketloop
+socmax
 socs
 sofar
 SolarEdge

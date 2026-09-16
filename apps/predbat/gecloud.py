@@ -1326,7 +1326,7 @@ class GECloudDirect(ComponentBase):
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
-        self.set_arg("inverter_mode", build_entities("switch", ["enable_eco_mode"]))
+        self.set_arg_auto("inverter_mode", build_entities("switch", ["enable_eco_mode"]), overwrite=False)
         if not self.get_arg("ge_cloud_load_today_ignore", default=False):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])

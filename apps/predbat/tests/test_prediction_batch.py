@@ -28,6 +28,8 @@ import io
 import plan
 import prediction_batch
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
+from const import EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
+from utils import pack_export_limit
 from plan import resolve_batch_threads
 from prediction import Prediction
 from prediction_kernel import create_kernel_context
@@ -55,16 +57,16 @@ def test_export_trial_does_not_mutate_caller_window(my_predbat):
     failed = False
     minutes_now = my_predbat.minutes_now
     export_window = make_export_windows(minutes_now)
-    export_limits = [100.0, 100.0]
+    export_limits = [pack_export_limit(EXPORT_MODE_IDLE), pack_export_limit(EXPORT_MODE_IDLE)]
     original = [dict(window) for window in export_window]
 
     prediction = Prediction(my_predbat, {}, {}, {}, {})
-    trial_window, trial_limits = prediction._prepare_export(5.0, minutes_now + 90, 0, export_window, export_limits, None)
+    trial_window, trial_limits = prediction._prepare_export(pack_export_limit(EXPORT_MODE_TARGET, 5), minutes_now + 90, 0, export_window, export_limits, None)
 
     if export_window != original:
         print("ERROR: _prepare_export mutated the caller's export window: {} vs {}".format(export_window, original))
         failed = True
-    if export_limits != [100.0, 100.0]:
+    if export_limits != [pack_export_limit(EXPORT_MODE_IDLE), pack_export_limit(EXPORT_MODE_IDLE)]:
         print("ERROR: _prepare_export mutated the caller's export limits: {}".format(export_limits))
         failed = True
     if trial_window[0]["start"] != minutes_now + 90:
@@ -73,12 +75,12 @@ def test_export_trial_does_not_mutate_caller_window(my_predbat):
     if trial_window[1] is not export_window[1]:
         print("ERROR: untouched windows should be shared with the caller's list, not copied")
         failed = True
-    if trial_limits[0] != 5.0:
+    if trial_limits[0] != pack_export_limit(EXPORT_MODE_TARGET, 5):
         print("ERROR: trial export limit not applied, got {}".format(trial_limits[0]))
         failed = True
 
     # The trial start is clamped to at least 5 minutes before the window end
-    trial_window, _ = prediction._prepare_export(5.0, minutes_now + 200, 0, export_window, export_limits, None)
+    trial_window, _ = prediction._prepare_export(pack_export_limit(EXPORT_MODE_TARGET, 5), minutes_now + 200, 0, export_window, export_limits, None)
     if trial_window[0]["start"] != minutes_now + 115:
         print("ERROR: trial window start not clamped to end-5, got {}".format(trial_window[0]["start"]))
         failed = True
@@ -131,7 +133,7 @@ def make_batch_prediction(my_predbat, seed=7):
     charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, 4)
     export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, 4)
     charge_limit = [round(my_predbat.soc_max / 2, 2)] * len(charge_window)
-    export_limits = [100.0] * len(export_window)
+    export_limits = [pack_export_limit(EXPORT_MODE_IDLE)] * len(export_window)
     return prediction, charge_window, export_window, charge_limit, export_limits
 
 
@@ -166,8 +168,8 @@ def test_queued_matches_direct(my_predbat):
         ),
         (
             "export",
-            lambda: prediction.thread_run_prediction_export(5.0, export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
-            lambda: prediction.queue_run_prediction_export(5.0, export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
+            lambda: prediction.thread_run_prediction_export(pack_export_limit(EXPORT_MODE_TARGET, 5), export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
+            lambda: prediction.queue_run_prediction_export(pack_export_limit(EXPORT_MODE_TARGET, 5), export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
         ),
         # The levels optimiser runs single predictions at a coarse "fast mode" step (plan_interval_minutes,
         # 30 by default), which is the only caller that passes a step other than PREDICT_STEP. It reaches

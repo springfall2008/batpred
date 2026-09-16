@@ -16,7 +16,7 @@ import signal
 import aiohttp
 import pytz
 from contextlib import redirect_stdout
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 from sunsynk import SunsynkAPI, test_sunsynk_api as run_sunsynk_cli_once
 from sunsynk_const import SUNSYNK_REGIONS, SUNSYNK_ENDPOINTS, SUNSYNK_RETRIES, SUNSYNK_MAX_DISCOVERY_PAGES
@@ -60,11 +60,26 @@ class MockSunsynk(SunsynkAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-sunsynk-1"}
-        self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.base.minutes_now = 0  # local minutes-since-midnight; tests set this for time-aware control
+        # A real clock on the mock base, not a MagicMock attribute: ComponentBase.minutes_now
+        # derives from base.now_utc (GH#4804), and MagicMock would answer that arithmetic with a
+        # value of its own rather than failing. Tests wanting a particular time of day call
+        # set_mock_clock(); writing base.minutes_now alone does nothing.
+        self.base.now_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.midnight_utc = self.base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.minutes_now = 0
         # Straight through, like the component: _init_oauth owns self.auth_method, so
         # collapsing the modes here would hide password_legacy from fetch_token.
         self._init_oauth(auth_method, "test-token", None, "sunsynk")
+
+    def set_mock_clock(self, minutes_now):
+        """Move the mock base's clock to minutes_now past midnight.
+
+        ComponentBase.minutes_now is derived from base.now_utc, so a test that wants a particular
+        time of day moves the clock rather than writing base.minutes_now (GH#4804). Both are set
+        so a direct base.minutes_now read stays honest too.
+        """
+        self.base.now_utc = self.base.midnight_utc + timedelta(minutes=minutes_now)
+        self.base.minutes_now = minutes_now
 
     def log(self, message):
         """Capture logs."""

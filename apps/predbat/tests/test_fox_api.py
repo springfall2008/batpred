@@ -25,6 +25,9 @@ from fox import (
     OPTIONS_WORK_MODE,
     FOX_SETTINGS_CACHE_VERSION,
     SCHEDULER_READ_STALE_SECONDS,
+    merge_fox_credentials,
+    FOX_CLI_CREDENTIAL_KEYS,
+    FOX_CLI_OAUTH_KEYS,
 )
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
@@ -34,7 +37,8 @@ class MockBase:
 
     def __init__(self):
         """Initialise MockBase with default config."""
-        self.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.now_utc = datetime.now(pytz.utc)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.config = {}
 
     def get_arg(self, key, default=None, **kwargs):
@@ -4804,14 +4808,21 @@ def test_run_midnight_reset(my_predbat):
     """
     print("  - test_run_midnight_reset")
 
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
 
-    # First run - initialise counters on day 1
+    saved_now_utc = my_predbat.now_utc
+    saved_midnight_utc = my_predbat.midnight_utc
+
+    # First run - initialise counters on day 1. now_utc has to move with midnight_utc:
+    # ComponentBase.midnight_utc derives today's midnight from now_utc (GH#4804), so setting
+    # midnight_utc alone no longer changes what the component sees.
     day1_midnight = datetime(2025, 12, 22, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.now_utc = day1_midnight + timedelta(hours=12)
     my_predbat.midnight_utc = day1_midnight
+    fox.base.now_utc = day1_midnight + timedelta(hours=12)
     fox.base.midnight_utc = day1_midnight
 
     # Simulate some requests on day 1
@@ -4836,7 +4847,9 @@ def test_run_midnight_reset(my_predbat):
 
     # Third run - simulate midnight crossing to day 2
     day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.now_utc = day2_midnight + timedelta(minutes=5)
     my_predbat.midnight_utc = day2_midnight
+    fox.base.now_utc = day2_midnight + timedelta(minutes=5)
     fox.base.midnight_utc = day2_midnight
 
     result = run_async(fox.run(0, first=False))
@@ -4847,6 +4860,9 @@ def test_run_midnight_reset(my_predbat):
     assert fox.rate_limit_errors_today == 0, f"Expected rate_limit_errors_today to be reset to 0, got {fox.rate_limit_errors_today}"
     assert fox.last_midnight_utc == day2_midnight, "Expected last_midnight_utc to be updated to day 2"
     assert fox.start_time_today > initial_start_time, "Expected start_time_today to be reset to current time"
+
+    my_predbat.now_utc = saved_now_utc
+    my_predbat.midnight_utc = saved_midnight_utc
 
     return False
 
@@ -6897,7 +6913,12 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
     day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
     day2_time = datetime(2025, 12, 23, 0, 5, 0, tzinfo=timezone.utc)
 
-    # Update the base object's midnight_utc to simulate day change
+    # Move the base object's clock on to simulate the day change. now_utc has to move with
+    # midnight_utc: ComponentBase.midnight_utc derives today's midnight from now_utc (GH#4804),
+    # so rewriting midnight_utc alone no longer changes what the component sees.
+    saved_now_utc = my_predbat.now_utc
+    saved_midnight_utc = my_predbat.midnight_utc
+    my_predbat.now_utc = day2_time
     my_predbat.midnight_utc = day2_midnight
 
     # Mark all cached data as fresh so the age-based refresh does not trigger any API polling
@@ -6913,6 +6934,9 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
 
         # Call run() to trigger midnight reset logic
         run_async(fox.run(seconds=0, first=False))
+
+    my_predbat.now_utc = saved_now_utc
+    my_predbat.midnight_utc = saved_midnight_utc
 
     assert fox.requests_today == 0, f"Requests should be reset to 0, got {fox.requests_today}"
     assert fox.rate_limit_errors_today == 0, f"Rate limit errors should be reset to 0, got {fox.rate_limit_errors_today}"
@@ -7258,6 +7282,159 @@ def test_scheduler_read_is_trusted_once_the_write_window_has_passed(my_predbat):
     return False
 
 
+def test_merge_fox_credentials_from_config(my_predbat):
+    """
+    Test fox credentials are taken from an apps.yaml-format config when not given on the command line
+    """
+    print("  - test_merge_fox_credentials_from_config")
+
+    config = {"fox_key": "config-key", "fox_inverter_sn": "SN123456", "fox_automatic": True}
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, config)
+
+    assert merged["api_key"] == "config-key", f"Expected the config key, got {merged['api_key']}"
+    assert merged["serial"] == "SN123456", f"Expected the config serial, got {merged['serial']}"
+    assert merged["token_hash"] is None
+
+    return False
+
+
+def test_merge_fox_credentials_command_line_wins(my_predbat):
+    """
+    Test an explicit command line value overrides the config file
+
+    The config is the fallback, so a one-off run against a different key or inverter does not mean
+    editing apps.yaml.
+    """
+    print("  - test_merge_fox_credentials_command_line_wins")
+
+    config = {"fox_key": "config-key", "fox_inverter_sn": "SN123456"}
+    merged = merge_fox_credentials({"api_key": "cli-key", "token_hash": None, "token_expires": None, "serial": "SN999999"}, config)
+
+    assert merged["api_key"] == "cli-key", f"Expected the CLI key to win, got {merged['api_key']}"
+    assert merged["serial"] == "SN999999", f"Expected the CLI serial to win, got {merged['serial']}"
+
+    return False
+
+
+def test_merge_fox_credentials_inverter_sn_list(my_predbat):
+    """
+    Test a list-valued fox_inverter_sn yields the first serial
+
+    fox_inverter_sn is "string|string_list" in APPS_SCHEMA, but the CLI drives one device at a time.
+    """
+    print("  - test_merge_fox_credentials_inverter_sn_list")
+
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, {"fox_inverter_sn": ["SN111111", "SN222222"]})
+
+    assert merged["serial"] == "SN111111", f"Expected the first serial, got {merged['serial']}"
+
+    return False
+
+
+def test_merge_fox_credentials_oauth(my_predbat):
+    """
+    Test an OAuth config supplies the token hash and expiry, and that auth_method breaks a tie
+
+    A config carrying both a key and a token hash is ambiguous, so fox_auth_method decides - the
+    same field the component itself uses to pick between them.
+    """
+    print("  - test_merge_fox_credentials_oauth")
+
+    oauth = {"fox_auth_method": "oauth", "fox_token_hash": "hash-abc", "fox_token_expires_at": "2026-09-11T09:53:12.236+00:00"}
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, oauth)
+    assert merged["token_hash"] == "hash-abc", f"Expected the token hash, got {merged['token_hash']}"
+    assert merged["token_expires"] == "2026-09-11T09:53:12.236+00:00"
+
+    # Both present, OAuth declared - the key must not be used
+    both_oauth = dict(oauth, fox_key="config-key")
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, both_oauth)
+    assert merged["api_key"] is None, f"Expected the key to be ignored under oauth, got {merged['api_key']}"
+    assert merged["token_hash"] == "hash-abc"
+
+    # Both present, api_key declared - the token hash must not be used
+    both_api = {"fox_auth_method": "api_key", "fox_key": "config-key", "fox_token_hash": "hash-abc"}
+    merged = merge_fox_credentials({"api_key": None, "token_hash": None, "token_expires": None, "serial": None}, both_api)
+    assert merged["api_key"] == "config-key"
+    assert merged["token_hash"] is None, f"Expected the token hash to be ignored under api_key, got {merged['token_hash']}"
+
+    return False
+
+
+def test_fox_cli_credential_keys_match_component(my_predbat):
+    """
+    Test the CLI's apps.yaml key names are the ones the Fox component actually declares
+
+    The CLI maps its own argument names onto apps.yaml keys by hand, because importing
+    components.py into fox.py would pull predbat in behind it. This is what keeps that copy honest
+    if a config key is ever renamed in COMPONENT_LIST.
+    """
+    print("  - test_fox_cli_credential_keys_match_component")
+
+    from components import COMPONENT_LIST
+
+    declared = {spec.get("config") for spec in COMPONENT_LIST["fox"]["args"].values() if spec.get("config")}
+    for cli_name, config_key in FOX_CLI_CREDENTIAL_KEYS.items():
+        assert config_key in declared, f"{cli_name} maps to {config_key}, which the fox component does not declare: {sorted(declared)}"
+    assert "fox_auth_method" in declared, "fox_auth_method is used to break the key/token tie but is not declared"
+
+    return False
+
+
+def test_merge_fox_credentials_supabase(my_predbat):
+    """
+    Test the OAuth refresh settings are picked up from the config too
+
+    An OAuth run is useless without them: oauth_mixin reads SUPABASE_URL/SUPABASE_KEY from the
+    environment and user_id from base.args, so a --config run carrying only a token hash refused
+    to refresh with "OAuth refresh skipped - SUPABASE_URL or SUPABASE_KEY not set" and every
+    request came back 401.
+
+    These are not Fox component args - supabase_url/supabase_key are environment variables in
+    production and user_id is a base arg - so they sit in their own mapping, away from the
+    fox_-prefixed keys the component declares.
+    """
+    print("  - test_merge_fox_credentials_supabase")
+
+    config = {
+        "fox_auth_method": "oauth",
+        "fox_token_hash": "hash-abc",
+        "supabase_url": "https://project.supabase.co",
+        "supabase_key": "anon-key-123",
+        "user_id": "user-uuid-456",
+    }
+    blank = {key: None for key in list(FOX_CLI_CREDENTIAL_KEYS) + list(FOX_CLI_OAUTH_KEYS)}
+    merged = merge_fox_credentials(blank, config)
+
+    assert merged["supabase_url"] == "https://project.supabase.co", f"Expected the supabase url, got {merged['supabase_url']}"
+    assert merged["supabase_key"] == "anon-key-123", f"Expected the supabase key, got {merged['supabase_key']}"
+    assert merged["user_id"] == "user-uuid-456", f"Expected the user id, got {merged['user_id']}"
+    assert merged["token_hash"] == "hash-abc"
+
+    # An explicit command line value still wins
+    merged = merge_fox_credentials(dict(blank, supabase_url="https://cli.supabase.co"), config)
+    assert merged["supabase_url"] == "https://cli.supabase.co", f"Expected the CLI url to win, got {merged['supabase_url']}"
+
+    return False
+
+
+def test_merge_fox_credentials_reports_what_it_used(my_predbat):
+    """
+    Test the merge reports which config keys it took, so a mis-named key is visible
+
+    The failure mode this guards against is silent: a key the CLI does not look for simply leaves
+    the credential unset, and the only symptom is a 401 several lines later.
+    """
+    print("  - test_merge_fox_credentials_reports_what_it_used")
+
+    blank = {key: None for key in list(FOX_CLI_CREDENTIAL_KEYS) + list(FOX_CLI_OAUTH_KEYS)}
+    merged, used = merge_fox_credentials(blank, {"fox_key": "k", "user_id": "u"}, report=True)
+
+    assert set(used) == {"fox_key", "user_id"}, f"Expected the keys actually used, got {used}"
+    assert merged["api_key"] == "k"
+
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -7477,6 +7654,15 @@ def run_fox_api_tests(my_predbat):
         failed |= test_stale_scheduler_read_does_not_overwrite_a_recent_write(my_predbat)
         failed |= test_stale_scheduler_read_does_not_skip_the_write_that_ends_a_freeze(my_predbat)
         failed |= test_scheduler_read_is_trusted_once_the_write_window_has_passed(my_predbat)
+
+        # --config credential loading tests
+        failed |= test_merge_fox_credentials_from_config(my_predbat)
+        failed |= test_merge_fox_credentials_command_line_wins(my_predbat)
+        failed |= test_merge_fox_credentials_inverter_sn_list(my_predbat)
+        failed |= test_merge_fox_credentials_oauth(my_predbat)
+        failed |= test_fox_cli_credential_keys_match_component(my_predbat)
+        failed |= test_merge_fox_credentials_supabase(my_predbat)
+        failed |= test_merge_fox_credentials_reports_what_it_used(my_predbat)
 
         # compute_schedule charge-rate power fix tests (issue #3610)
         failed |= test_compute_schedule_charge_power_reads_slot_fdpwr(my_predbat)

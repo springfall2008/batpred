@@ -56,6 +56,10 @@ cd coverage
 
 It lists every config item that differs from its default, recalculates the plan, and writes `plan_orig.html` / `plan_final.json` into `coverage/`. Add `--redo` to recompute rates, load model and Octopus slots instead of reusing the ones in the dump. Committed examples live in `coverage/cases/*.yaml` and run as golden regressions under `./run_all --test debug_cases`.
 
+### Finding test order dependencies
+
+All tests share one `PredBat`/HA fixture, so a test that mutates shared state without fully restoring it can make an unrelated _later_ test fail depending on run order (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)). `./run_shuffle --hunt --quick` (from `coverage/`) fuzzes the test order, bisects any failure down to the minimal (culprit, victim) pair, and records it so the next run looks for a different one. See "Finding test order dependencies" in [docs/developing.md](docs/developing.md) for the full set of modes (`--bisect`, `--campaign`).
+
 ### Debugging notes
 
 `tools/debug-journal.md` records what past investigations found: per-integration API quirks, symptom-to-module pointers, and traps such as stale kernel binaries and test-order pollution. Read it before debugging an integration or a "the plan is wrong" report, and add to it when you learn something a future session would want.
