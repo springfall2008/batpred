@@ -1318,6 +1318,10 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("import_today", [f"sensor.{site}_import_today"])
         self.set_arg("export_today", [f"sensor.{site}_export_today"])
         self.set_arg("load_today", [f"sensor.{site}_load_today"])
+        # History from before the site-level entities existed is under the serial-named entities
+        # these args used to point at, so read it from there and the rename loses no history.
+        for name in ("pv_today", "import_today", "export_today", "load_today"):
+            self.set_history_alias(f"sensor.{site}_{name}", [f"sensor.{base0}_{name}"])
         self._inject_site_energy_entities(status)
 
         # Battery health (first inverter)

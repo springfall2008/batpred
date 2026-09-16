@@ -1717,6 +1717,23 @@ class TestAutomaticConfig:
             assert gw._args[arg] == entity, arg
             assert all(serial_suffix not in entity[0] for serial_suffix in ("456789", "543210")), arg
 
+    def test_site_energy_history_reads_serial_entities_before_the_rename(self):
+        """Each site-level energy entity reads the history of the serial-named entity its arg used to point at."""
+        gw = self._make_gateway()
+        gw._last_status = self._basic_status(serial="CE123456789")
+        gw.automatic_config()
+
+        aliases = {c.args[0]: c.args[1] for c in gw.base.set_history_alias.call_args_list}
+        for name in ("pv_today", "import_today", "export_today", "load_today"):
+            assert aliases.get(f"sensor.predbat_gateway_{name}") == [f"sensor.predbat_gateway_456789_{name}"], name
+
+        # A later source follows the binding: its serial-named entity is the one to read before the site entity began.
+        gw.base.set_history_alias.reset_mock()
+        gw._last_status = self._basic_status(serial="CH9876543210")
+        gw.automatic_config()
+        aliases = {c.args[0]: c.args[1] for c in gw.base.set_history_alias.call_args_list}
+        assert aliases.get("sensor.predbat_gateway_load_today") == ["sensor.predbat_gateway_543210_load_today"]
+
     def test_multi_inverter_energy_source_is_slot_zero(self):
         """With several inverters the site counters follow slot 0 (lowest serial), the unit the energy args always used."""
         gw = self._make_gateway()
