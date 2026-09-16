@@ -2874,6 +2874,43 @@ def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     return failed
 
 
+def test_button_press_counts_as_register_write(test_name, ha, inv):
+    """
+    Regression test for issue #4712: a commit button press is a real (on Solis, non-volatile) write
+    and must be counted, so repeated presses are visible to users rather than silently hidden from
+    the register-write counter.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_button = inv.base.args.get("schedule_write_button", unset)
+    saved_item = ha.dummy_items.get("switch.inverter_button", unset)
+    try:
+        inv.base.args["schedule_write_button"] = "switch.inverter_button"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        before_writes = inv.count_register_writes
+        if not inv.press_and_poll_button(side="charge"):
+            print(f"ERROR: {test_name}: button press should have succeeded")
+            failed = True
+
+        if inv.count_register_writes != before_writes + 1:
+            print(f"ERROR: {test_name}: a button press must count as one register write, was {before_writes} now {inv.count_register_writes}")
+            failed = True
+    finally:
+        if saved_button is unset:
+            inv.base.args.pop("schedule_write_button", None)
+        else:
+            inv.base.args["schedule_write_button"] = saved_button
+        if saved_item is unset:
+            ha.dummy_items.pop("switch.inverter_button", None)
+        else:
+            ha.dummy_items["switch.inverter_button"] = saved_item
+
+    return failed
+
+
 def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
     """
     Regression test for issue #4709: a stable export window must commit to the inverter once, not on
@@ -4545,6 +4582,7 @@ charge_start_service:
 
     # Regression test for issue #4709: a stable export window must be committed once, not every cycle
     failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
+    failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)
     if failed:
         return failed
 
