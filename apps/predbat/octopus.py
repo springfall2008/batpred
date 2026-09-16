@@ -894,14 +894,21 @@ class OctopusAPI(ComponentBase):
                         isExport = True
                         deviceID_export = None
                         self.log("OctopusAPI: No export meter found but tariff code indicates export, treating as export tariff with device ID None")
+                # Each agreement carries its own supply point: an export agreement is a SEPARATE
+                # meterPoint with a different MPAN from the import one, and self.mpan only ever
+                # holds the import MPAN (set above, first active import meter wins). Recorded per
+                # direction so build_discovery() can give each meter record its own identity rather
+                # than publishing the import MPAN as the export meter's - which also gave the two
+                # records the same device_id. None for gas: a gas meterPoint is keyed by MPRN.
+                agreement_mpan = meterpoint.get("mpan")
                 if isImport:
                     self.log("OctopusAPI: Adding import tariff with code {} product {} device ID {}".format(tariffCode, productCode, deviceID_import))
-                    tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import}
+                    tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import, "mpan": agreement_mpan}
                     tariffs["import"]["data"] = self.tariffs.get("import", {}).get("data", None)
                     tariffs["import"]["standing"] = self.tariffs.get("import", {}).get("standing", None)
                 if isExport:
                     self.log("OctopusAPI: Adding export tariff with code {} product {} device ID {}".format(tariffCode, productCode, deviceID_export))
-                    tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}
+                    tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export, "mpan": agreement_mpan}
                     tariffs["export"]["data"] = self.tariffs.get("export", {}).get("data", None)
                     tariffs["export"]["standing"] = self.tariffs.get("export", {}).get("standing", None)
                 if isGas:
@@ -1408,10 +1415,14 @@ class OctopusAPI(ComponentBase):
         Describe the discovered Octopus meters, tariffs and intelligent-device cars for the discovery catalogue.
 
         One `meters` record per direction present in self.tariffs ("import", "export", "gas") -
-        never a fixed list, since not every account has an export or gas agreement. mpan is only
-        known for electricity (import/export); this component tracks no separate MPRN for gas, so
-        a gas record's account_ids carries only the account id rather than mislabelling it with
-        the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
+        never a fixed list, since not every account has an export or gas agreement. Each direction
+        uses ITS OWN agreement's mpan, recorded per direction by async_find_tariffs(): export is a
+        separate supply point with a different MPAN, so taking self.mpan (the import one) for both
+        published the import MPAN as the export meter's identity and gave the two records the same
+        device_id. self.mpan is still the fallback for import alone, the one direction it is known
+        to describe. mpan is only known for electricity (import/export); this component tracks no
+        separate MPRN for gas, so a gas record's account_ids carries only the account id rather
+        than mislabelling it with the electricity MPAN. Both mpan and account genuinely identify the customer, so they go in
         account_ids, the pseudonym container the redactor tokenises - see the module's docstring
         and docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md. The tariff and product
         codes describe a publicly listed Octopus product rather than the customer, so they go in
@@ -1449,7 +1460,9 @@ class OctopusAPI(ComponentBase):
         for direction, tariff in self.tariffs.items():
             tariff_code = tariff.get("tariffCode")
             product_code = tariff.get("productCode")
-            mpan = self.mpan if direction in ("import", "export") else None
+            mpan = tariff.get("mpan") if direction in ("import", "export") else None
+            if not mpan and direction == "import":
+                mpan = self.mpan
             record = {"device_id": "octopus:{}".format(mpan or direction), "direction": direction}
 
             account_ids = {}
@@ -1529,7 +1542,7 @@ class OctopusAPI(ComponentBase):
         _refresh_discovery_report() re-report on every tick instead of only when something
         build_discovery() actually renders differently has changed.
         """
-        tariff_key = tuple(sorted((direction, tariff.get("tariffCode"), tariff.get("productCode"), tariff.get("deviceID")) for direction, tariff in self.tariffs.items()))
+        tariff_key = tuple(sorted((direction, tariff.get("tariffCode"), tariff.get("productCode"), tariff.get("deviceID"), tariff.get("mpan")) for direction, tariff in self.tariffs.items()))
         return (tariff_key, tuple(self.get_active_intelligent_device_ids()))
 
     def _refresh_discovery_report(self):

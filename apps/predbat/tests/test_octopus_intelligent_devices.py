@@ -5,7 +5,7 @@ and the energyAddedKwh delta field used by the new Octopus dispatch API.
 
 import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, OCTOPUS_CAR_ENTITY_SPEC
 
@@ -17,6 +17,8 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_build_discovery_meters_intelligent_go_flag(my_predbat)
     failed += test_build_discovery_cars_entity_map_matches_automatic_config(my_predbat)
     failed += test_build_discovery_meters_direction_distinct(my_predbat)
+    failed += test_build_discovery_meters_carry_their_own_direction_mpan(my_predbat)
+    failed += asyncio.run(test_find_tariffs_records_each_agreements_own_mpan(my_predbat))
     failed += test_build_discovery_cars_entities_only_when_published(my_predbat)
     failed += test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
     failed += test_discovery_report_failure_contained_and_retried(my_predbat)
@@ -797,6 +799,100 @@ def test_build_discovery_meters_direction_distinct(my_predbat):
         return 1
     print("PASS: import and export tariffs yield two meter records with distinct direction")
     return 0
+
+
+def test_build_discovery_meters_carry_their_own_direction_mpan(my_predbat):
+    """
+    Review round: each meter record carries ITS OWN agreement's MPAN, not the import one for both.
+
+    self.mpan is set from the first active IMPORT meter's meterPoint only (async_find_tariffs), but
+    export is a separate supply point with a different MPAN. Using self.mpan for both published the
+    import MPAN as the export meter's identity AND gave the two records the same device_id, so a
+    dump described one supply point where the account has two. async_find_tariffs() now records
+    each agreement's own mpan per direction, which is what build_discovery() reads.
+    """
+    api = _make_discovery_api(my_predbat, "meters-own-mpan")
+    api.mpan = "1111111111111"
+    api.tariffs = {
+        "import": {"tariffCode": "E-1R-VAR-22-11-01-A", "productCode": "VAR-22-11-01", "deviceID": "meter-import", "mpan": "1111111111111"},
+        "export": {"tariffCode": "E-1R-OUTGOING-VAR-22-11-01-A", "productCode": "OUTGOING-VAR-22-11-01", "deviceID": "meter-export", "mpan": "2222222222222"},
+    }
+
+    report = api.build_discovery()
+
+    by_direction = {record["direction"]: record for record in report["meters"]}
+    failed = 0
+    if by_direction["export"]["account_ids"]["mpan"] != "2222222222222":
+        print("ERROR: the export meter must carry its own MPAN, got {}".format(by_direction["export"]["account_ids"]["mpan"]))
+        failed += 1
+    if by_direction["import"]["account_ids"]["mpan"] != "1111111111111":
+        print("ERROR: the import meter must carry the import MPAN, got {}".format(by_direction["import"]["account_ids"]["mpan"]))
+        failed += 1
+    if by_direction["import"]["device_id"] == by_direction["export"]["device_id"]:
+        print("ERROR: two supply points must not share one device_id, both are {}".format(by_direction["import"]["device_id"]))
+        failed += 1
+
+    # An export tariff whose agreement had no mpan must NOT fall back to the import one - an
+    # unknown export supply point is reported as unknown, never as the import meter's identity.
+    api.tariffs["export"].pop("mpan")
+    export_record = {record["direction"]: record for record in api.build_discovery()["meters"]}["export"]
+    if "mpan" in export_record.get("account_ids", {}):
+        print("ERROR: an export agreement with no MPAN must not borrow the import one, got {}".format(export_record["account_ids"]))
+        failed += 1
+    if failed == 0:
+        print("PASS: each meter record carries its own direction's MPAN and identity")
+    return failed
+
+
+async def test_find_tariffs_records_each_agreements_own_mpan(my_predbat):
+    """
+    Review round: async_find_tariffs() records the MPAN of the agreement it is reading, per direction.
+
+    Import and export arrive as two separate electricityAgreements entries, each with its own
+    meterPoint and MPAN. self.mpan keeps only the import one (first active import meter wins), so
+    the per-direction value has to come off the agreement being processed.
+    """
+    fixed_time = datetime(2024, 3, 15, 14, 30, 0, tzinfo=timezone.utc)
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    api.tariffs = {}
+    api.account_data = {
+        "account": {
+            "electricityAgreements": [
+                {
+                    "meterPoint": {
+                        "mpan": "1111111111111",
+                        "meters": [{"activeFrom": "2024-01-01", "activeTo": None, "smartImportElectricityMeter": {"deviceId": "IMPORT-DEVICE-123"}}],
+                        "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-AGILE-24-01-01-A", "productCode": "AGILE-24-01-01"}}],
+                    }
+                },
+                {
+                    "meterPoint": {
+                        "mpan": "2222222222222",
+                        "meters": [{"activeFrom": "2024-01-01", "activeTo": None, "smartExportElectricityMeter": {"deviceId": "EXPORT-DEVICE-456"}}],
+                        "agreements": [{"validFrom": "2024-01-01T00:00:00+00:00", "validTo": None, "tariff": {"tariffCode": "E-1R-OUTGOING-24-01-01-A", "productCode": "OUTGOING-24-01-01"}}],
+                    }
+                },
+            ],
+            "gasAgreements": [],
+        }
+    }
+
+    with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
+        result = await api.async_find_tariffs()
+
+    failed = 0
+    if result.get("import", {}).get("mpan") != "1111111111111":
+        print("ERROR: expected the import agreement's own MPAN, got {}".format(result.get("import", {}).get("mpan")))
+        failed += 1
+    if result.get("export", {}).get("mpan") != "2222222222222":
+        print("ERROR: expected the export agreement's own MPAN, got {}".format(result.get("export", {}).get("mpan")))
+        failed += 1
+    if api.mpan != "1111111111111":
+        print("ERROR: self.mpan must still be the import MPAN, got {}".format(api.mpan))
+        failed += 1
+    if failed == 0:
+        print("PASS: each agreement's own MPAN is recorded per direction")
+    return failed
 
 
 def test_build_discovery_cars_entities_only_when_published(my_predbat):

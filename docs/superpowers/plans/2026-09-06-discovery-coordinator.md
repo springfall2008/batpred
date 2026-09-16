@@ -18,7 +18,7 @@
 
 ## Global Constraints
 
-- Work on a new branch `feat/discovery-coordinator` created from `main` (current checkout is on an unrelated fix branch).
+- Work on a new branch `feat/discovery-coordinator` created from `main`.
 - CLAUDE.md mandates: run `impact({target: "<symbol>", direction: "upstream"})` before modifying any existing function/method listed in a task, and `detect_changes()` before every commit; warn on HIGH/CRITICAL.
 - Tests: run from `coverage/` (`source setup.csh` first time). ALWAYS redirect output to a log file and grep it, e.g. `./run_all --test coordinator > test_coordinator.log 2>&1; grep -E "PASS|FAIL|Error|Traceback" test_coordinator.log`. Never commit `.log` files.
 - 100% docstring coverage (`interrogate`) — every new function, class and method needs a docstring. British English spelling (CSpell, `en-gb`); add genuinely new words to `.cspell/custom-dictionary-workspace.txt` and re-stage after pre-commit sorts it.

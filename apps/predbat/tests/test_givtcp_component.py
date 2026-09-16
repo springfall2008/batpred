@@ -2500,7 +2500,7 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     An observer must never be able to degrade the health of the thing it observes: without the
     guard in run(), an exception here would skip update_success_timestamp() below it and retry -
     failing identically - every single cycle, eventually pushing an otherwise-healthy component
-    towards unhealthy over a bug in a side-channel report. self.reported_for is deliberately left
+    towards unhealthy over a bug in a side-channel report. self.reported_report is deliberately left
     unset on failure so the next cycle still retries, exactly as it would without the guard. This
     also proves the failure never reaches base.had_errors: that flag makes update_pred() skip
     record_status() and suppress the run notification, so a bug in this purely observational side
@@ -2513,14 +2513,15 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     result = run_async(component.run(seconds=0, first=True))
 
     assert result is True, "a discovery-reporting bug must not fail the whole run() call"
-    assert component.reported_for == [], "a failed report must not be marked as reported"
+    assert component.reported_report is None, "a failed report must not be marked as reported"
     assert component.last_updated_time() is not None, "the success timestamp must still be recorded"
     assert getattr(base, "had_errors", False) is False, "a discovery-reporting bug must not degrade Predbat's own status - see update_pred()'s had_errors branch"
 
     # Once the bug is fixed, the very next cycle retries and succeeds - nothing was permanently lost
     del component.build_discovery
     run_async(component.run(seconds=1, first=False))
-    assert component.reported_for == [0], "the retried report should now succeed"
+    assert component.reported_report is not None, "the retried report should now succeed"
+    assert [record["device_id"] for record in component.reported_report["inverters"]] == ["givtcp:http://givtcp:6345"], component.reported_report["inverters"]
     print("PASS: a build_discovery() failure is contained and retried, not left to degrade the component")
     return 0
 
@@ -2534,10 +2535,10 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
     rediscover() appends the newly-found index to self.discovered without publishing anything for
     it - publish_data() already ran that same cycle, over self.discovered as it stood at the TOP of
     the cycle, before the new index existed in it. The report block in run() is positioned BEFORE
-    "if rediscover:" for exactly this reason: on the rediscovery cycle it still matches
-    self.reported_for (self.discovered hasn't grown yet) and is a no-op, and the NEXT cycle's poll
-    republishes the now-grown fleet - including the rediscovered inverter's real entities - before
-    the (now mismatched) report block runs again. Drives an actual run() cycle through rediscovery
+    "if rediscover:" for exactly this reason: on the rediscovery cycle the report it builds still
+    equals self.reported_report (self.discovered hasn't grown yet) and is a no-op, and the NEXT
+    cycle's poll republishes the now-grown fleet - including the rediscovered inverter's real
+    entities - before the report block runs again. Drives an actual run() cycle through rediscovery
     rather than calling build_discovery() directly, since that ordering is exactly what a direct
     call sidesteps.
     """
@@ -2550,7 +2551,7 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
 
     run_async(component.run(seconds=0, first=True))
     assert len(reports) == 1, f"Expected the startup report, got {len(reports)}"
-    assert component.reported_for == [0]
+    assert len(component.reported_report["inverters"]) == 1
 
     # inverter 1 comes back, and the hourly re-probe finds it
     component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
@@ -2558,19 +2559,61 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
 
     assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
     # The rediscovery cycle itself must not have reported anything new: reporting here, before
-    # publish_data() has published inverter 1's entities, would emit an empty entity map for it and
-    # - since self.reported_for would advance regardless - never retry even once the entities exist.
+    # publish_data() has published inverter 1's entities, would emit an empty entity map for it.
     assert len(reports) == 1, "The rediscovery cycle itself must not report yet - inverter 1 has no published entities until next cycle's poll"
-    assert component.reported_for == [0], f"Expected the report to stay deferred this cycle, got {component.reported_for}"
+    assert len(component.reported_report["inverters"]) == 1, f"Expected the report to stay deferred this cycle, got {component.reported_report['inverters']}"
 
-    # The following cycle republishes the grown fleet before the (now mismatched) report block runs
+    # The following cycle republishes the grown fleet before the report block runs again
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS + GIVTCP_POLL_SECONDS, first=False))
     assert len(reports) == 2, "Expected the deferred report to fire once inverter 1's entities exist"
-    assert component.reported_for == [0, 1]
+    assert len(component.reported_report["inverters"]) == 2
     rediscovered_entities = reports[-1]["inverters"][1]["entities"]
     assert rediscovered_entities, "The rediscovered inverter's report must have a populated entity map, not an empty one"
     assert "charge_rate" in rediscovered_entities
     print("PASS: a rediscovered inverter's report is deferred until its entities actually exist, never emitted empty")
+    return 0
+
+
+def test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in(my_predbat=None):
+    """
+    A report filed before the inverter had reported its serial must be replaced once it arrives.
+
+    The report marker used to be the discovered INDEX list, which does not move when an endpoint's
+    later polls fill in facts its first answer lacked - a serial, a firmware or GivTCP version, or
+    any conditional capability. An endpoint that answered before GivTCP had decoded its inverter
+    registers therefore had its URL-derived device_id and missing hardware_ids frozen into the
+    catalogue for the life of the process, which is exactly the identity a dump is read for.
+    Comparing the built report itself is what lets the complete one replace it.
+
+    Also pins the other half: a cycle where nothing moved must NOT re-file, or every GivTCP
+    installation would churn the catalogue once a minute forever.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345"])
+    blob = _rest_data_blob()
+    component.rest[0].read_data = MagicMock(return_value=blob)
+
+    reports = []
+    component.report_discovery = lambda report: reports.append(report)
+
+    run_async(component.run(seconds=0, first=True))
+    assert len(reports) == 1, f"Expected the startup report, got {len(reports)}"
+    assert reports[0]["inverters"][0]["device_id"] == "givtcp:http://givtcp0:6345", "a first answer with no serial falls back to the URL"
+    assert "hardware_ids" not in reports[0]["inverters"][0]
+
+    # Nothing has changed - the next poll must not re-file the same report
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+    assert len(reports) == 1, f"An unchanged report must not be re-filed, got {len(reports)}"
+
+    # GivTCP now reports the inverter's identity registers
+    identified = _rest_data_blob()
+    identified["raw"] = {"invertor": {"serial_number": "CE1234G567"}}
+    component.rest[0].read_data = MagicMock(return_value=identified)
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS * 2, first=False))
+
+    assert len(reports) == 2, "the completed report must replace the partial one, not be suppressed by an unchanged index list"
+    assert reports[-1]["inverters"][0]["device_id"] == "givtcp:CE1234G567"
+    assert reports[-1]["inverters"][0]["hardware_ids"] == {"serial": "CE1234G567"}
+    print("PASS: a partial first report is replaced once the inverter reports its serial")
     return 0
 
 
@@ -2690,6 +2733,7 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_round_trip", test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
         ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
         ("discovery_rediscovery_ordering", test_rediscovered_inverter_is_reported_only_once_its_entities_exist, "rediscovered inverter reported only once its entities exist"),
+        ("discovery_partial_replaced", test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in, "a partial first report is replaced, an unchanged one is not re-filed"),
     ]
 
     passed = 0

@@ -400,11 +400,15 @@ class GivTCPComponent(ComponentBase):
         # The discovered set automatic_config() was last run against, so a fleet that grows on a
         # later re-probe reconfigures rather than staying at its startup size.
         self.configured_for = []
-        # The discovered set build_discovery() was last reported against - mirrors configured_for,
-        # but kept separate since reporting to the catalogue is independent of self.automatic and
-        # must still happen every time the fleet grows even when automatic_config() has nothing to
-        # do.
-        self.reported_for = []
+        # The report build_discovery() last filed successfully, compared whole rather than by the
+        # discovered index list: an endpoint's first answer can be missing its serial, its firmware
+        # or GivTCP version, or any of the conditional entities and capabilities publish_data()
+        # only publishes once GivTCP reports the underlying register. The index list does not move
+        # when those arrive on a later poll, so keying on it froze that first partial record - a
+        # URL-derived device_id and no hardware_ids - for the life of the process. Kept separate
+        # from configured_for since reporting is independent of self.automatic and must still
+        # happen every time the fleet grows even when automatic_config() has nothing to do.
+        self.reported_report = None
         # Whether the most recent poll read every inverter being managed. run() withholds the
         # success timestamp while this is False, which is what eventually puts the component into
         # error - a failed read otherwise leaves stale entities republishing as though nothing
@@ -484,31 +488,36 @@ class GivTCPComponent(ComponentBase):
         # self.discovered without publishing anything for it (publish_data() already ran, above,
         # over self.discovered as it stood at the TOP of this cycle - the new index isn't in it
         # yet), and automatic_config() only writes apps.yaml args, not HA entities, either. A
-        # report positioned after rediscover() would see the mismatch immediately and describe the
-        # rediscovered inverter with an empty entity map - and, since self.reported_for advances
-        # regardless, that empty record would never be retried even once publish_data() actually
-        # published its entities on the very next cycle. Positioned here, this cycle's report still
-        # matches self.reported_for (self.discovered hasn't grown yet) and is a no-op; the next
+        # report positioned after rediscover() would describe the rediscovered inverter with an
+        # empty entity map. Positioned here, this cycle's report is built over the fleet as it
+        # stood when publish_data() ran, so it equals self.reported_report and is a no-op; the next
         # cycle's poll republishes the grown fleet - including the rediscovered inverter - before
         # this block runs again, so the report that finally fires sees real entities.
+        #
+        # The whole report is compared rather than the discovered index list: see
+        # self.reported_report's own comment for why an index-keyed marker froze a first partial
+        # record. build_discovery() is cheap (dict lookups over already-read REST data) and run()
+        # is called once a minute, so rebuilding it every cycle to make that comparison costs
+        # nothing measurable, and report_discovery() is only reached when something actually moved.
         #
         # Exception-guarded like publish_data()'s per-inverter work, unlike the automatic_config()
         # call below: an observer must never be able to degrade the health of the thing it
         # observes. Without this, a bug in build_discovery() would propagate out of run() itself,
         # withholding update_success_timestamp() below and retrying - identically failing - every
-        # cycle, eventually pushing an otherwise-healthy component toward unhealthy. self.reported_for
+        # cycle, eventually pushing an otherwise-healthy component toward unhealthy. self.reported_report
         # is deliberately left unset on failure, so the next cycle still retries the report once the
         # bug is fixed, exactly as it would have without this guard. Logged only, not
         # non_fatal_error_occurred(): that sets base.had_errors, which makes update_pred() skip
         # record_status() and suppress the run notification - a purely observational side channel
         # must never be able to change Predbat's user-visible status this way (see solis.py's own
         # comment on the same trap).
-        if self.discovered != self.reported_for:
-            try:
-                self.report_discovery(self.build_discovery())
-                self.reported_for = list(self.discovered)
-            except Exception as e:
-                self.log("Warn: GivTCP: failed to report discovery for the catalogue: {}".format(e))
+        try:
+            report = self.build_discovery()
+            if report != self.reported_report:
+                self.report_discovery(report)
+                self.reported_report = report
+        except Exception as e:
+            self.log("Warn: GivTCP: failed to report discovery for the catalogue: {}".format(e))
 
         if rediscover:
             await self.rediscover()

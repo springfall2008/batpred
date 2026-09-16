@@ -159,6 +159,26 @@ def test_validate_report_never_raises_on_non_dict():
     return 0
 
 
+def test_validate_report_never_raises_on_a_non_list_section():
+    """Review round: a section that is not a list of records is dropped whole, never iterated.
+
+    The "never raises" contract has to hold for a malformed SECTION exactly as it already does for
+    a malformed report: a scalar ({"inverters": 1}) is not iterable at all, so it raised TypeError
+    straight out of report(), and a bare string would have iterated as its characters - one log
+    line per character, for a report that was simply the wrong shape.
+    """
+    base, coordinator = _coordinator()
+    coordinator.report("broken", {"inverters": 1, "meters": "octopus:1", "cars": {"device_id": "x"}})
+    assert coordinator.reports["broken"] == {"schema_version": SCHEMA_VERSION}, coordinator.reports["broken"]
+
+    # A valid section alongside a malformed one still survives - the drop is per section, not per report
+    coordinator.report("mixed", {"inverters": 1, "meters": [{"device_id": "octopus:m1", "direction": "import"}]})
+    assert "inverters" not in coordinator.reports["mixed"]
+    assert coordinator.reports["mixed"]["meters"][0]["device_id"] == "octopus:m1"
+    print("PASS: a non-list section is dropped rather than iterated")
+    return 0
+
+
 def test_automatic_field_absent_when_component_omits_it():
     """A component with no automatic-config concept (Solcast: solar-forecast sourcing is a plain
     apps.yaml choice, never something this catalogue auto-wires) omits "automatic" from its report
@@ -353,6 +373,52 @@ def test_observations_duplicate_serial():
     assert duplicate and sorted(duplicate[0]["claimed_by"]) == ["gecloud", "givtcp"]
     assert any(entry["kind"] == "multiple_inverter_sources" for entry in conflicts)
     print("PASS: duplicate serial and multiple sources observed")
+    return 0
+
+
+def test_observations_duplicate_serial_sees_a_gateways_fronted_batteries():
+    """Review round: a gateway record claims the batteries it fronts, so GE Cloud + GivTCP on the same battery collides.
+
+    GE Cloud in gateway composition reports the GATEWAY's serial in hardware_ids and the fronted
+    battery serials in the structural `serials` list, while GivTCP reports each battery's own
+    serial in hardware_ids. Grouping only on hardware_ids.serial therefore missed the single most
+    likely real-world double-claim - two components controlling the same physical battery - which
+    is the observation this catalogue release exists to count.
+    """
+    base, coordinator = _coordinator()
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:GW1", "hardware_ids": {"serial": "GW1"}, "composition": "gateway", "serials": ["BAT001", "BAT002"]}]})
+    coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:BAT001", "hardware_ids": {"serial": "bat001"}}]})
+    conflicts = coordinator.assemble()["observations"]["conflicts"]
+    duplicate = [entry for entry in conflicts if entry["kind"] == "duplicate_serial"]
+    assert duplicate, "a battery fronted by a gateway and claimed directly by GivTCP is a duplicate serial: {}".format(conflicts)
+    assert duplicate[0]["serial"] == "bat001", duplicate
+    assert sorted(duplicate[0]["claimed_by"]) == ["gecloud", "givtcp"], duplicate
+
+    # The gateway's own serials must not collide with themselves - one source cannot conflict with itself
+    base, coordinator = _coordinator()
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:GW1", "hardware_ids": {"serial": "GW1"}, "composition": "gateway", "serials": ["BAT001", "BAT002"]}]})
+    assert not [entry for entry in coordinator.assemble()["observations"]["conflicts"] if entry["kind"] == "duplicate_serial"], "a gateway alone claims nothing twice"
+    print("PASS: a gateway's fronted serials take part in duplicate_serial detection")
+    return 0
+
+
+def test_component_load_error_carries_no_free_text():
+    """Review round: a load_error status records THAT a component failed, never the exception text.
+
+    components.load_error() is the raw str() of whatever construction raised - unbounded free text
+    that could carry a URL, an account value or a credential from a component's own error message.
+    Every other value in this document reaches it through a typed container that cannot hold one;
+    a dump gets attached to a public issue, so the one field outside that boundary is removed
+    rather than trusted to the shape guard. The message stays in the log and on the
+    component-status entity, which is where a maintainer already reads it.
+    """
+    base, coordinator = _coordinator()
+    base.components = _StubRegistry(all_names=["fox"], errors={"fox": "auth failed for https://api.example.com/?key=SECRET123"})
+    entry = coordinator.assemble()["components"]["fox"]
+    assert entry["status"] == "load_error", entry
+    assert "error" not in entry, "the raw exception text must not be published into the catalogue: {}".format(entry)
+    assert "SECRET123" not in str(coordinator.catalogue()), "no part of an exception message may reach the published catalogue"
+    print("PASS: a load_error status carries no free-text exception message")
     return 0
 
 
@@ -1319,6 +1385,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_entities_options_preserves_realistic_values()
     failures += test_coverage_accepts_numbers_booleans_and_vocabulary_lists()
     failures += test_validate_report_never_raises_on_non_dict()
+    failures += test_validate_report_never_raises_on_a_non_list_section()
     failures += test_automatic_field_absent_when_component_omits_it()
     failures += test_unknown_container_dropped()
     failures += test_record_without_device_id_dropped()
@@ -1330,6 +1397,8 @@ def test_coordinator_all(my_predbat=None):
     failures += test_assemble_component_status()
     failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()
+    failures += test_observations_duplicate_serial_sees_a_gateways_fronted_batteries()
+    failures += test_component_load_error_carries_no_free_text()
     failures += test_observations_contested_cars_and_meters()
     failures += test_observations_resulting_config()
     failures += test_account_ids_pseudonymised_and_stable()

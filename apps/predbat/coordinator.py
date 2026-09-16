@@ -600,6 +600,15 @@ class Coordinator:
 
         A component that never reports is not an error: in this version only a handful report
         at all, so "no_report" has to read differently from "started but never answered".
+        A "load_error" status deliberately carries no message. components.load_error() is the raw
+        str() of whatever exception construction raised, which is free text this document has no
+        way to bound: every other value here reaches the catalogue through a typed container that
+        cannot hold a name or a credential however the schema grows, and one unbounded string
+        outside that boundary would be the single field a future component could leak a URL or an
+        account value through into a dump attached to a public issue. The message is not lost -
+        components.initialize() logs it (with a traceback for anything but an ImportError) and
+        inverter_source_status() puts it on the component-status entity - so a maintainer reading
+        a bug report still has it, just not from this document.
         reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
         lock as reports so the two agree with each other; it is only ever populated for a status
         "ok" component - one the coordinator has actually heard from. "automatic" is included only
@@ -621,20 +630,28 @@ class Coordinator:
                 entry["reported_at"] = reported_at.get(name)
             elif components and components.load_error(name):
                 entry["status"] = "load_error"
-                entry["error"] = components.load_error(name)
             elif components and components.is_active(name):
                 entry["status"] = "no_report" if components.is_alive(name) else "not_started"
             out[name] = entry
         return out
 
     def _conflicts(self, catalogue):
-        """Collisions that today resolve silently by component ordering - recorded, never resolved."""
+        """Collisions that today resolve silently by component ordering - recorded, never resolved.
+
+        A duplicate_serial claim covers every serial a record speaks for, not only its own
+        hardware_ids.serial: a gateway record names the gateway in hardware_ids and the batteries
+        it fronts in the structural `serials` list (see gecloud.py's build_discovery). GE Cloud in
+        gateway composition and GivTCP therefore claim the SAME physical battery under different
+        record identities, which is exactly the collision this observation exists to count - and
+        grouping on hardware_ids alone missed it, since the two never share a top-level serial.
+        """
         conflicts = []
         serials = {}
         for record in catalogue["inverters"]:
-            serial = record.get("hardware_ids", {}).get("serial")
-            if serial:
-                serials.setdefault(str(serial).casefold(), set()).add(record["source"])
+            claimed = [record.get("hardware_ids", {}).get("serial")] + list(record.get("serials") or [])
+            for serial in claimed:
+                if serial:
+                    serials.setdefault(str(serial).casefold(), set()).add(record["source"])
         for serial, sources in sorted(serials.items()):
             if len(sources) > 1:
                 conflicts.append({"kind": "duplicate_serial", "serial": serial, "claimed_by": sorted(sources)})
@@ -827,6 +844,11 @@ def validate_report(report, component_name, log):
     with no such concept (Solcast) omits the key entirely rather than have it default to True, so
     the catalogue never claims an auto-config relationship for a component that has none. See
     _component_status(), the only other place this key is read.
+
+    A section whose value is not a list is dropped whole rather than iterated. "Never raises" has
+    to hold for a malformed section exactly as it already does for a malformed report: a scalar
+    ({"inverters": 1}) is not iterable at all, and a bare string would iterate as its characters,
+    turning one component's mistake into a TypeError out of report() or a log line per character.
     """
     if not isinstance(report, dict):
         log("Warn: Coordinator: {} report is a {}, not a dict - treated as empty".format(component_name, type(report).__name__))
@@ -835,8 +857,12 @@ def validate_report(report, component_name, log):
     if "automatic" in report:
         cleaned["automatic"] = bool(report["automatic"])
     for section in SECTION_SPEC:
+        raw = report.get(section) or []
+        if not isinstance(raw, list):
+            log("Warn: Coordinator: {} {} is a {}, not a list of records - dropped".format(component_name, section, type(raw).__name__))
+            continue
         records = []
-        for record in report.get(section, []) or []:
+        for record in raw:
             validated = _validate_record(record, section, component_name, log)
             if validated:
                 records.append(validated)

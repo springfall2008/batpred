@@ -142,7 +142,8 @@ preserving positional ids) so a component restart re-reading the rewritten arg w
 Headline requirement: **multi-inverter automatic mode across two components** — GivTCP
 (mocked REST, one discovered inverter) + GECloud (`MockGECloudDirect`, one battery) both
 automatic, driven through report → allocate → apply, asserting the merged args:
-`num_inverters == 2`, `inverter_type == ["GE", "GEC"]`, each per-inverter list holds each
+`num_inverters == 2`, `inverter_type == ["GEC", "GE"]` (GE Cloud precedes GivTCP in
+`COMPONENT_LIST`, and that position is what orders the offers), each per-inverter list holds each
 vendor's entity at its assigned index, and summed keys contain both vendors' sensors.
 Plus: coordinator unit tests (determinism, dedup, stickiness/compaction, sensor-only
 offers, user-configured skip keys, car tri-state × tariff cases), per-component

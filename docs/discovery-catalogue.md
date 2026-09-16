@@ -64,7 +64,9 @@ extra top-level sections describe the fleet as a whole rather than any one devic
 - **`components`** - a status (`ok`, `no_report`, `not_started`, `load_error` or `not_configured`)
   for *every* component Predbat's registry knows about, not only the ones that reported something -
   so a component that should be describing your hardware but is not shows up as clearly as one that
-  is
+  is. `load_error` says only *that* the component failed to start; the reason is an arbitrary
+  exception message, which is free text this document deliberately does not carry - look in the
+  Predbat log, which records it in full alongside a traceback
 - **`observations`** - things noticed about the assembled picture rather than about any one
   component: `conflicts` (see below) and `resulting_config`, the handful of apps.yaml keys
   (`num_inverters`, `num_cars`, `inverter_type`) discovery can be compared against
@@ -76,7 +78,7 @@ happened to run first - the catalogue observes them, it does not resolve them:
 
 | Kind | Fires when |
 | ---- | ---------- |
-| `duplicate_serial` | Two components report an inverter with the same hardware serial |
+| `duplicate_serial` | Two components claim the same hardware serial - including a serial a gateway record fronts on behalf of the batteries behind it, not only the serial identifying the record itself |
 | `multiple_inverter_sources` | More than one component reports an inverter record at all (e.g. both GivTCP and GE Cloud) |
 | `multiple_import_meters` | More than one component reports an import meter |
 | `contested_car_slots` | A car is reported by a component that reports no charger, alongside a component that reports both a charger and a car - two components with a different idea of what should occupy a car slot |
