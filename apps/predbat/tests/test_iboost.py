@@ -429,10 +429,19 @@ def run_iboost_forecast_tests(my_predbat):
         expect_slots=[{"start": 780, "end": 790, "kwh": 0.2, "average": 5.0, "cost": 1.0}, {"start": 1440, "end": 1455, "kwh": 0.4, "average": 20.0, "cost": 8.0}],
     )
 
-    # A draw in the very first interval has no earlier slot to book: warn and keep planning the
-    # remaining draws
+    # A draw with no eligible slot at or before it (the 20p ambient is over the threshold) is
+    # warned about and the remaining draws are still planned
     set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
-    failed |= run_iboost_forecast_plan_test("iboost_plan_uncovered_first", my_predbat, {720: 1.0, 840: 1.0}, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+    failed |= run_iboost_forecast_plan_test("iboost_plan_uncovered_first", my_predbat, {720: 1.0, 840: 1.0}, rate_threshold=10, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+
+    # A draw inside the current interval is served by booking the current interval itself: the
+    # element runs while the water is drawn
+    set_rate_profile(my_predbat, [], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_current_interval", my_predbat, {720: 0.5}, expect_slots=[{"start": 720, "end": 740, "kwh": 0.5, "average": 20.0, "cost": 10.0}])
+
+    # The same mid-interval: only the remaining 15 minutes of the current interval are bookable
+    # and the emitted slot starts at minutes_now
+    failed |= run_iboost_forecast_plan_test("iboost_plan_current_interval_partial", my_predbat, {720: 0.4}, minutes_now=735, expect_slots=[{"start": 735, "end": 750, "kwh": 0.4, "average": 20.0, "cost": 8.0}])
 
     # Mid-interval replan: only 15 minutes of the current cheap interval remain, so at most
     # 0.5 kWh can be booked there (the rest books in the next slot) and the emitted slot starts
@@ -493,22 +502,31 @@ def run_iboost_forecast_tests(my_predbat):
 
     # Fill threshold at or above the ambient rate fills from the start of the plan; the earlier
     # fills carry forward to the draw, the trajectory is re-verified and the boosts booked in the
-    # 5p/6p slots are trimmed so the level never exceeds the 1 kWh capacity anywhere
+    # 5p/6p slots are trimmed so the level never exceeds the 1 kWh capacity anywhere. Refilling
+    # resumes the interval after the draw (boost within an interval precedes its draw, so the
+    # draw interval itself is still full when its fill is considered). The fill only reaches the
+    # fetched forecast horizon, so demand at 900 lets fills run to 930 and 960 but not beyond.
     set_rate_profile(my_predbat, [(780, 810, 5.0), (840, 870, 6.0)], default_rate=20.0)
     failed |= run_iboost_forecast_plan_test(
         "iboost_plan_fill_trim",
         my_predbat,
-        {900: 1.0},
+        {900: 1.0, 990: 0.0},
         capacity=1.0,
         max_power=1,
         fill_rate_threshold=25.0,
         expect_slots=[
             {"start": 720, "end": 750, "kwh": 0.5, "average": 20.0, "cost": 10.0},
             {"start": 750, "end": 780, "kwh": 0.5, "average": 20.0, "cost": 10.0},
-            {"start": 900, "end": 930, "kwh": 0.5, "average": 20.0, "cost": 10.0},
             {"start": 930, "end": 960, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 960, "end": 990, "kwh": 0.5, "average": 20.0, "cost": 10.0},
         ],
     )
+
+    # The fill threshold is independent of iboost_rate_threshold: with the demand threshold at
+    # -3p nothing can be booked for the draw (warned), but the -2p slot still fills the tank and
+    # covers the draw anyway
+    set_rate_profile(my_predbat, [(780, 810, -2.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_fill_independent", my_predbat, {840: 0.5}, capacity=2.0, rate_threshold=-3, fill_rate_threshold=0.0, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": -2.0, "cost": -2.0}])
 
     # Fill day-cap accounting: the fill at 780 initially exhausts the day cap, but trimming the
     # displaced 2p booking refunds it immediately, so the later 3p fill slot at 960 (after the
@@ -517,7 +535,7 @@ def run_iboost_forecast_tests(my_predbat):
     failed |= run_iboost_forecast_plan_test(
         "iboost_plan_fill_day_cap",
         my_predbat,
-        {900: 2.0},
+        {900: 2.0, 990: 0.0},
         capacity=2.0,
         max_energy=3.0,
         max_power=4,
