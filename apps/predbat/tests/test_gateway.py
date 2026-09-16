@@ -3399,13 +3399,30 @@ class TestGatewayUnitControlBinding:
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"] == ["select.predbat_gateway_47e077_charge_slot1_start"]
 
-        # GivEnergy Gateway without a serial coordinating two AIOs.
+        # GivEnergy Gateway without a serial, with two AIOs and with one: in both the control
+        # point is uncertain until the Gateway is identified, so nothing is bound.
+        for aio_serials in (["CH2414G318", "CH9999G999"], ["CH2414G318"]):
+            gw = self._make_handler_gateway()
+            status = self._gateway_plus_aios_status(aio_serials)
+            status.inverters[0].serial = ""
+            gw._process_telemetry(status.SerializeToString())
+            assert gw._auto_configured is False, f"aios={aio_serials}"
+            assert "num_inverters" not in gw._args, f"aios={aio_serials}"
+
+            gw._process_telemetry(self._gateway_plus_aios_status(aio_serials).SerializeToString())
+            assert gw._auto_configured, f"aios={aio_serials}"
+            expected = "47g077" if len(aio_serials) > 1 else "14g318"
+            assert gw._args["charge_start_time"] == [f"select.predbat_gateway_{expected}_charge_slot1_start"], f"aios={aio_serials}"
+
+        # After a good config, an unidentified Gateway appearing does not move the binding.
         gw = self._make_handler_gateway()
-        status = self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"])
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        good_args = dict(gw._args)
+        status = self._gateway_plus_aios_status(["CH2414G318"])
         status.inverters[0].serial = ""
-        gw._process_telemetry(status.SerializeToString())
-        assert gw._auto_configured is False
-        assert "num_inverters" not in gw._args
+        gw._last_status = status
+        gw.automatic_config()
+        assert gw._args == good_args
 
     def test_blank_serial_aio_still_counts_towards_gateway_topology(self):
         """A second AIO not yet identified still makes the Gateway the control point; only the blank unit is left unbound."""
@@ -3418,6 +3435,40 @@ class TestGatewayUnitControlBinding:
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"] == ["select.predbat_gateway_47g077_charge_slot1_start"]
         assert gw._configured_inverter_serials == frozenset({"GW2347G077", "CH2414G318"})
+
+    def test_blank_serial_non_givenergy_inverter_configures_as_before(self):
+        """Hub drivers other than GivEnergy never report a serial, so a blank one still binds exactly as it did.
+
+        Only GivEnergy discovery reads the serial; treating a blank serial as missing for every
+        type would leave these sites with no inverter at all.
+        """
+        for inv_type in (pb.INVERTER_TYPE_SOLIS_HYBRID, pb.INVERTER_TYPE_DEYE_SUNSYNK, pb.INVERTER_TYPE_UNKNOWN):
+            gw = self._make_handler_gateway()
+            status = pb.GatewayStatus()
+            status.device_id = "pbgw_other_driver"
+            status.firmware = "1.0.0"
+            status.schema_version = 1
+            status.timestamp = 1700000000
+            inv = status.inverters.add()
+            inv.type = inv_type
+            inv.serial = ""
+            inv.primary = True
+            inv.battery.soc_percent = 55
+            inv.battery.capacity_wh = 10000
+            inv.battery.rate_max_w = 5000
+
+            gw._process_telemetry(status.SerializeToString())
+
+            label = f"type={inv_type}"
+            assert gw._auto_configured, label
+            assert gw.api_started is True, label
+            assert gw._last_telemetry_time > 0, label
+            assert gw._args["num_inverters"] == 1, label
+            assert gw._args["soc_percent"] == ["sensor.predbat_gateway__soc"], label
+            assert gw._configured_inverter_serials == frozenset({""}), label
+            assert any(c.args[0] == "sensor.predbat_gateway__soc" for c in gw.dashboard_item.call_args_list), label
+            # The same status again is not "new".
+            assert gw._needs_reconfigure(status) is False, label
 
     # ------------------------------------------------------------------
     # EMS and AC3 topologies

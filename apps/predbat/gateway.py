@@ -79,21 +79,22 @@ def _serial_suffix(serial):
     return serial[-6:].lower() if len(serial) > 6 else serial.lower()
 
 
-def _has_serial(inv):
-    """Whether a gateway inverter entry carries a usable serial.
+def _serial_missing(inv):
+    """Whether a GivEnergy unit was reported without its serial.
 
-    The serial is the inverter's identity: it names the entities and addresses every
-    control command. A hub can briefly report an inverter with an empty serial, and
-    treating that entry as a real unit binds control to a phantom whose writes can
-    never succeed.
+    A GivEnergy unit's serial is its identity: it names the entities and addresses every
+    control command. GivEnergy discovery always reads it, so a blank serial means the hub
+    listed a unit it has not identified yet, and binding that entry sends every command
+    with an empty serial. The other hub drivers never report a serial, so a blank one is
+    normal for them and is not treated as missing.
 
     Args:
         inv: A ``predbat_InverterEntry`` from the gateway status.
 
     Returns:
-        bool: False when the serial is empty or whitespace.
+        bool: True for a GivEnergy inverter, EMS or Gateway whose serial is empty or whitespace.
     """
-    return bool(inv.serial.strip())
+    return inv.type in (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY) and not inv.serial.strip()
 
 
 PLAN_MODE_AUTO = 0
@@ -761,10 +762,10 @@ class GatewayMQTT(ComponentBase):
 
         self._debug_dump("RX telemetry", status, raw=data)
 
-        # A status whose inverters all lack a serial carries no usable inverter data, so treat
-        # it like one with no inverters: keep the last good status and do not count it as
-        # fresh telemetry.
-        if not any(_has_serial(inv) for inv in status.inverters):
+        # A status that only lists GivEnergy units without their serial carries no usable
+        # inverter data, so treat it like one with no inverters: keep the last good status
+        # and do not count it as fresh telemetry.
+        if all(_serial_missing(inv) for inv in status.inverters):
             return
 
         self._last_status = status
@@ -808,13 +809,14 @@ class GatewayMQTT(ComponentBase):
         Maps GatewayStatus fields to PredBat entity format using HA-style
         entity naming: {type}.{prefix}_gateway_{suffix}_{attribute}
 
-        Inverters reported without a serial get no per-inverter entities: their suffix
-        would be empty, producing ``{prefix}_gateway__*`` entities for a unit that cannot
-        be controlled. EMS aggregates carry no serial in their names and are still published.
+        GivEnergy units reported without their serial get no per-inverter entities: their
+        suffix would be empty, producing ``{prefix}_gateway__*`` entities for a unit that
+        cannot be controlled. EMS aggregates carry no serial in their names and are still
+        published.
         """
         device_id = status.device_id
         firmware = status.firmware
-        inverters = [inv for inv in status.inverters if _has_serial(inv)]
+        inverters = [inv for inv in status.inverters if not _serial_missing(inv)]
 
         self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_online",
@@ -1096,12 +1098,12 @@ class GatewayMQTT(ComponentBase):
         rewrites the inverter args; whether PredBat core re-reads ``num_inverters`` at
         runtime vs. needing a component restart is tracked separately.)
 
-        An inverter reported without a serial is never "new": it cannot be bound or
+        A GivEnergy unit reported without its serial is never "new": it cannot be bound or
         addressed, so re-running auto-config for it would only replace a working binding.
         """
         if not self._auto_configured:
             return True
-        new_serials = frozenset(inv.serial for inv in status.inverters if _has_serial(inv)) - self._configured_inverter_serials
+        new_serials = frozenset(inv.serial for inv in status.inverters if not _serial_missing(inv)) - self._configured_inverter_serials
         if new_serials:
             self.log(f"Info: GatewayMQTT: new inverter(s) discovered {sorted(new_serials)} — re-running auto-config")
             return True
@@ -1173,19 +1175,22 @@ class GatewayMQTT(ComponentBase):
         if not inverters:
             inverters = candidate_aios or list(all_inverters)  # last resort
 
-        # Never bind an inverter reported without a serial: it cannot be addressed, so every
-        # control command would go out with an empty serial. Such units still count in the
-        # classification above, because dropping them first could pick the wrong control
-        # point (an unidentified EMS would leave its AIOs controlled directly). When nothing
-        # addressable is left, e.g. the chosen EMS/Gateway has no serial yet, keep the existing
-        # binding and leave _auto_configured as it is, so a first-run config retries on the
-        # next telemetry. A serial reported later is a new serial and re-runs auto-config.
-        addressable = [inv for inv in inverters if _has_serial(inv)]
-        if len(addressable) < len(inverters):
-            if not addressable:
-                self.log("Warn: GatewayMQTT: control target reported without a serial; auto-config skipped — will retry on next telemetry")
+        # Never bind a GivEnergy unit reported without its serial: every control command would
+        # go out with an empty serial. Such units still count in the classification above,
+        # because dropping them first could pick the wrong control point (an unidentified
+        # second AIO would stop the Gateway being chosen). While a GivEnergy EMS or Gateway is
+        # unidentified the control point itself is uncertain, so skip this status, as when
+        # nothing addressable was chosen. The existing binding and _auto_configured are left
+        # as they are, so a first-run config retries on the next telemetry; a serial reported
+        # later is a new serial and re-runs auto-config.
+        missing = [inv for inv in all_inverters if _serial_missing(inv)]
+        if missing:
+            addressable = [inv for inv in inverters if not _serial_missing(inv)]
+            if not addressable or any(inv.type in coordinator_types for inv in missing):
+                self.log("Warn: GatewayMQTT: GivEnergy control target not identified yet (reported without a serial); auto-config skipped — will retry on next telemetry")
                 return
-            self.log(f"Warn: GatewayMQTT: ignoring {len(inverters) - len(addressable)} inverter(s) reported without a serial")
+            if len(addressable) < len(inverters):
+                self.log(f"Warn: GatewayMQTT: ignoring {len(inverters) - len(addressable)} GivEnergy inverter(s) reported without a serial")
             inverters = addressable
 
         # Apply serial filter if configured. A no-match is an error — configuring the
@@ -1365,7 +1370,7 @@ class GatewayMQTT(ComponentBase):
         self._register_ev_car(status)
 
         self._auto_configured = True
-        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters if _has_serial(inv))
+        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters if not _serial_missing(inv))
         self._configured_ev_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters
