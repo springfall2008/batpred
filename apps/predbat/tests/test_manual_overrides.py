@@ -7,7 +7,8 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
+from utils import pack_export_limit
 from tests.test_infra import reset_inverter
 
 
@@ -20,6 +21,7 @@ def run_manual_overrides_tests(my_predbat):
         failed |= test_manual_export_forces_active_export(my_predbat)
         failed |= test_manual_export_clamped_when_export_freeze_only(my_predbat)
         failed |= test_manual_freeze_export_unaffected_by_export_freeze_only(my_predbat)
+        failed |= test_manual_freeze_export_dropped_when_inverter_cannot_freeze(my_predbat)
         failed |= test_manual_demand_unaffected_by_export_freeze_only(my_predbat)
         failed |= test_manual_charge_forces_full_charge(my_predbat)
         failed |= test_manual_charge_clamped_when_charge_freeze_only(my_predbat)
@@ -32,6 +34,7 @@ def run_manual_overrides_tests(my_predbat):
         # tests should have to depend on.
         my_predbat.set_export_freeze_only = False
         my_predbat.set_charge_freeze_only = False
+        my_predbat.set_export_freeze = True
     return failed
 
 
@@ -55,7 +58,7 @@ def setup(my_predbat, set_export_freeze_only=False, set_charge_freeze_only=False
     my_predbat.charge_window_best = [{"start": 720, "end": 750, "average": 10.0}]
     my_predbat.charge_limit_best = [5.0]
     my_predbat.export_window_best = [{"start": 720, "end": 750, "average": 10.0}]
-    my_predbat.export_limits_best = [EXPORT_LIMIT_IDLE]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_IDLE)]
 
 
 def check_charge_limit(name, my_predbat, expected):
@@ -84,7 +87,7 @@ def test_manual_export_forces_active_export(my_predbat):
 
     my_predbat.optimise_charge_windows_manual()
 
-    return check_export_limit("test_manual_export_forces_active_export", my_predbat, 0.0)
+    return check_export_limit("test_manual_export_forces_active_export", my_predbat, pack_export_limit(EXPORT_MODE_TARGET, 0))
 
 
 def test_manual_export_clamped_when_export_freeze_only(my_predbat):
@@ -101,7 +104,7 @@ def test_manual_export_clamped_when_export_freeze_only(my_predbat):
 
     my_predbat.optimise_charge_windows_manual()
 
-    return check_export_limit("test_manual_export_clamped_when_export_freeze_only", my_predbat, EXPORT_LIMIT_FREEZE)
+    return check_export_limit("test_manual_export_clamped_when_export_freeze_only", my_predbat, pack_export_limit(EXPORT_MODE_FREEZE))
 
 
 def test_manual_freeze_export_unaffected_by_export_freeze_only(my_predbat):
@@ -112,7 +115,23 @@ def test_manual_freeze_export_unaffected_by_export_freeze_only(my_predbat):
 
     my_predbat.optimise_charge_windows_manual()
 
-    return check_export_limit("test_manual_freeze_export_unaffected_by_export_freeze_only", my_predbat, EXPORT_LIMIT_FREEZE)
+    return check_export_limit("test_manual_freeze_export_unaffected_by_export_freeze_only", my_predbat, pack_export_limit(EXPORT_MODE_FREEZE))
+
+
+def test_manual_freeze_export_dropped_when_inverter_cannot_freeze(my_predbat):
+    """An inverter that cannot freeze export must not have a manual freeze export planned for it.
+
+    execute.py forces set_export_freeze off from the inverter's support_discharge_freeze capability
+    (TESLA declares it False), but this override wrote EXPORT_LIMIT_FREEZE regardless - so the plan
+    assumed a hold the hardware would never perform. Falls back to demand rather than a forced
+    export: the user asked to hold the battery, and exporting it would be the opposite request.
+    """
+    print("**** test_manual_freeze_export_dropped_when_inverter_cannot_freeze ****")
+    setup(my_predbat)
+    my_predbat.set_export_freeze = False
+    my_predbat.manual_freeze_export_times = [720]
+    my_predbat.optimise_charge_windows_manual()
+    return check_export_limit("test_manual_freeze_export_dropped_when_inverter_cannot_freeze", my_predbat, pack_export_limit(EXPORT_MODE_IDLE))
 
 
 def test_manual_demand_unaffected_by_export_freeze_only(my_predbat):
@@ -123,7 +142,7 @@ def test_manual_demand_unaffected_by_export_freeze_only(my_predbat):
 
     my_predbat.optimise_charge_windows_manual()
 
-    return check_export_limit("test_manual_demand_unaffected_by_export_freeze_only", my_predbat, EXPORT_LIMIT_IDLE)
+    return check_export_limit("test_manual_demand_unaffected_by_export_freeze_only", my_predbat, pack_export_limit(EXPORT_MODE_IDLE))
 
 
 def test_manual_charge_forces_full_charge(my_predbat):

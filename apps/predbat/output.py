@@ -21,8 +21,8 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -817,7 +817,7 @@ class Output:
         export_window_n = -1
         for minute in range(minutes_now, self.forecast_minutes + minutes_now, PREDICT_STEP):
             export_window_n = self.in_charge_window(self.export_window_best, minute)
-            if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+            if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                 export_window_n = -1
             if export_window_n >= 0:
                 break
@@ -828,8 +828,21 @@ class Output:
         Get the charge export text for the given minute
         """
         if export_window_n >= 0:
-            target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
-            if self.export_limits_best[export_window_n] == EXPORT_LIMIT_FREEZE:
+            # The window carries a plain-number target once clipped; fall back to the instruction's
+            # own target rather than the instruction, which would print as a tuple. A stored target
+            # can itself still be the tuple/list/mapping instruction - from a replayed debug dump or
+            # a plan saved before the window was clipped this cycle - so normalise it the same way
+            # publish_html_plan does, rather than trusting get()'s fallback to catch every case: a
+            # *present* legacy value would otherwise print as "force exporting to (0, 47, 0.7)%"
+            # (GitHub Copilot review, PR #5047).
+            stored_target = self.export_window_best[export_window_n].get("target")
+            if isinstance(stored_target, (tuple, list, dict)):
+                target_export = export_target_of(export_limit_from_stored(stored_target))
+            elif stored_target is not None:
+                target_export = stored_target
+            else:
+                target_export = export_target_of(self.export_limits_best[export_window_n])
+            if export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_FREEZE:
                 text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
@@ -872,7 +885,7 @@ class Output:
         """
         Get the export type for the given export limit
         """
-        if export_limit == EXPORT_LIMIT_FREEZE:
+        if export_mode_of(export_limit) == EXPORT_MODE_FREEZE:
             if current:
                 return "freeze exporting"
             else:
@@ -988,7 +1001,7 @@ class Output:
             charge_window_n = -1
 
         export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
-        if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+        if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
             export_window_n = -1
 
         charge_export_text = self.get_charge_export_text(self.minutes_now, charge_window_n, export_window_n)
@@ -1082,6 +1095,8 @@ class Output:
             self.battery_temperature,
             self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
+            low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+            solar_full_rate=self.set_charge_low_power_solar_full_rate,
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
@@ -1186,7 +1201,7 @@ class Output:
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
-                if export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_IDLE:
+                if export_window_n >= 0 and export_mode_of(self.export_limits_best[export_window_n]) == EXPORT_MODE_IDLE:
                     export_window_n = -1
                 if export_window_n >= 0:
                     break
@@ -1202,7 +1217,7 @@ class Output:
                 discharge_intersect = -1
                 for try_minute in range(minute_start, charge_end_minute, PREDICT_STEP):
                     discharge_intersect = self.in_charge_window(self.export_window_best, try_minute)
-                    if discharge_intersect >= 0 and self.export_limits_best[discharge_intersect] == EXPORT_LIMIT_IDLE:
+                    if discharge_intersect >= 0 and export_mode_of(self.export_limits_best[discharge_intersect]) == EXPORT_MODE_IDLE:
                         discharge_intersect = -1
                     if discharge_intersect >= 0:
                         break
@@ -1232,6 +1247,7 @@ class Output:
 
             in_alert = self.alert_active_keep.get(minute, 0) > 0
             in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
+            in_manual_soc_max = self.manual_soc_max_keep.get(minute, 0) > 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -1445,11 +1461,23 @@ class Output:
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
-                target = limit
+                # The displayed target is the SoC percentage the instruction aims at, not the
+                # instruction itself - a mode carries no target, hence the None
+                target = export_target_of(limit)
                 if "target" in self.export_window_best[export_window_n]:
-                    target = self.export_window_best[export_window_n]["target"]
+                    stored_target = self.export_window_best[export_window_n]["target"]
+                    # A replayed debug dump can carry the instruction itself here, from before the
+                    # window target was stored as a plain number - take the target out of it. The
+                    # normal case is already a plain number, and must stay one: export_limit_from_stored
+                    # treats its input as a packed limit, not a target percentage, so running an
+                    # ordinary target through it misreads 47.0 as a packed instruction and can hand
+                    # back None (GH copilot review #5047 - fixed a raise here, introduced a None).
+                    if isinstance(stored_target, (tuple, list, dict)):
+                        target = export_target_of(export_limit_from_stored(stored_target))
+                    else:
+                        target = stored_target
 
-                if limit == EXPORT_LIMIT_FREEZE:  # freeze exporting
+                if export_mode_of(limit) == EXPORT_MODE_FREEZE:  # freeze exporting
                     if not had_state:
                         state = ""
                     if state:
@@ -1461,7 +1489,7 @@ class Output:
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                     reason_parts.append({"code": "freeze_export", "params": {}})
-                elif limit < EXPORT_LIMIT_IDLE:
+                elif export_mode_of(limit) != EXPORT_MODE_IDLE:
                     if not had_state:
                         state = ""
                     if state:
@@ -1469,25 +1497,25 @@ class Output:
                         split = True
                     else:
                         state_color = "#FFFF00"
-                    if limit > soc_percent_max_window:
+                    if target is not None and target > soc_percent_max_window:
                         state += "HoldExp&searr;"
                         raw_state = "HoldExp"
                         reason_parts.append({"code": "hold_export_unreachable", "params": {"target_percent": dp2(target)}})
                     else:
                         state += "Exp&searr;"
                         raw_state = "Exp"
-                        export_rate_adjust = 1 - (limit - int(limit))
+                        export_rate_adjust = export_power_of(limit)
                         rate_kw = dp2(self.battery_rate_max_export * export_rate_adjust * MINUTE_WATT / 1000.0)
                         reason_parts.append({"code": "export_high_rate", "params": {"target_percent": dp2(target), "rate": rate_text_export, "rate_kw": "{:.2f}".format(rate_kw)}})
                     show_limit = str(dp2(target))
                     raw_state_target = str(dp2(target))
 
-                    if limit > int(limit):
+                    if export_power_of(limit) < FULL_EXPORT_POWER:
                         # Snail symbol
                         state += "&#x1F40C;"
 
                     if plan_debug:
-                        show_limit += " ({})".format(dp2(limit))
+                        show_limit += " ({})".format(dp2(export_limit_sort_key(limit)))
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
@@ -1519,6 +1547,8 @@ class Output:
                 soc_sym = "&#9888; " + soc_sym
             if in_manual_soc:
                 soc_sym = "&#9998; " + soc_sym
+            if in_manual_soc_max:
+                soc_sym = "&#11015; " + soc_sym
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
@@ -2308,12 +2338,15 @@ class Output:
             window_n = self.in_charge_window(export_window, minute)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            if window_n >= 0 and (export_limits[window_n] < EXPORT_LIMIT_IDLE):
-                soc_perc = export_limits[window_n]
+            if window_n >= 0 and (export_mode_of(export_limits[window_n]) != EXPORT_MODE_IDLE):
+                limit = export_limits[window_n]
+                # Published as a chart series, so this wants the target SoC percentage for target
+                # windows; the packed-sort sentinel still represents freeze.
+                soc_perc = float(export_target_of(limit)) if export_mode_of(limit) == EXPORT_MODE_TARGET else float(export_limit_sort_key(limit))
                 soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not export_limit_first:
                     export_limit_soc = soc_kw
-                    export_limit_percent = export_limits[window_n]
+                    export_limit_percent = soc_perc
                     export_limit_first = True
             else:
                 soc_perc = EXPORT_LIMIT_IDLE
@@ -2451,7 +2484,7 @@ class Output:
                 },
             )
 
-    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc={}):
+    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc=None):
         """
         Create entity to chart charge limit
 
@@ -2464,6 +2497,8 @@ class Output:
 
         """
         # Calculate charge_limit_percent from charge_limit
+        if soc is None:
+            soc = {}
         charge_limit_percent = calc_percent_limit(charge_limit, self.soc_max)
 
         charge_limit_time = {}
@@ -2648,9 +2683,15 @@ class Output:
         if had_errors:
             error_count += 1
 
+        # Home Assistant rejects entity states over 255 characters, and this message is the state
+        # of the status sensor. Clamp what is written as the state - the full text survives in
+        # current_status, the log line and the notification, and attributes have no such cap.
+        # Motivated by the window warnings listing every configured inverter component (#4990):
+        # three or more of those push past 255, so the dashboard would keep a stale status on
+        # exactly the cycles the warning matters.
         self.dashboard_item(
             self.prefix + ".status",
-            state=message,
+            state=message[:255],
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,
@@ -3003,7 +3044,20 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
-    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
+    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step, minutes_now):
+        """Rebuild car charging slots for yesterday and today-so-far, and subtract them from the load band.
+
+        :param end_record: last plan-axis minute to reconstruct. calculate_yesterday widens
+            yesterday_load_step to cover today-so-far too (0 = yesterday midnight, up to
+            24*60 + minutes_now = now), so this must be passed the same width - reconstructing
+            only the first 24*60 minutes leaves today's sessions in the raw, unsplit load band
+            until the next day's run rolls them into the now-covered "yesterday" range (#5004).
+        :param yesterday_load_step: load per PREDICT_STEP, keyed on that same plan axis.
+        :param minutes_now: real minutes_now of the live plan. calculate_yesterday fakes
+            self.minutes_now to 0 before calling this, but car_charging_energy is still
+            indexed in minutes before the real now, so the lookup must use the real value
+            (#5004).
+        """
         # Normalize to list for multi-car support
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
         if entity_id_config and not isinstance(entity_id_config, list):
@@ -3019,12 +3073,21 @@ class Output:
 
         # re-construct car charging slots from non-octopus using the car energy sensor
         # sum the energy over each 30 minutes and add it to the car plan if missing
-        if self.num_cars > 0:
+        if self.num_cars > 0 and self.car_charging_energy:
             for start_minute in range(0, end_record, self.plan_interval_minutes):
                 car_energy = 0
-                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
-                    minute_previous = self.minutes_now + 24 * 60 - minute  # How far back in time are we looking
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                # end_record is minutes_now + 24*60 - the real "now" on this widened axis - but
+                # end_record is not generally a multiple of plan_interval_minutes (minutes_now is
+                # only rounded to PREDICT_STEP, 5 minutes, not to the 30-minute plan interval), so
+                # the last bucket can run past it. get_historical_base()'s minute_previous
+                # (minutes_now + 24*60) - minute then goes negative for those extra minutes, and
+                # get_from_incrementing() silently wraps a negative index by +24*60 - reading
+                # yesterday's data at roughly the same clock time instead of "nothing yet", and
+                # miscounting it into today's final bucket (the ghost-slot mechanism #5004 was
+                # fixed for elsewhere, review on #5048). Clamp the inner scan to end_record so it
+                # never reads past the real "now" this function was asked to reconstruct up to.
+                for minute in range(start_minute, min(start_minute + self.plan_interval_minutes, end_record)):
+                    car_energy += self.get_historical_base(self.car_charging_energy, minute, minutes_now + 24 * 60)
                 if car_energy > 0.1:
                     # Only add the slot if there isn't already one covering this time period
                     if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
@@ -3279,7 +3342,12 @@ class Output:
         self.car_charging_soc = [0] * len(self.car_charging_soc)
 
         # re-construct car charging slots from non-octopus using the sensor
-        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+        # Pass the real minutes_now: self.minutes_now has been faked to 0 above, but the car
+        # energy history is still indexed from the real now (#5004). Pass end_record + minutes_now,
+        # not the bare yesterday-only end_record, so the reconstruction reaches as far into today
+        # as yesterday_load_step itself already does - otherwise today's sessions are left in the
+        # raw load band until the next day's run (#5004 follow-up).
+        self.yesterday_reconstruct_car_slots(end_record + minutes_now, yesterday_load_step, minutes_now)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
@@ -3411,11 +3479,16 @@ class Output:
                     self.export_window_best.append(export_window)
                     if "freeze" in export_during_slot:
                         # Assume freeze export
-                        self.export_limits_best.append(EXPORT_LIMIT_FREEZE)
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_FREEZE))
                     else:
                         soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
-                        self.export_limits_best.append(soc_percent)
+                        # A target instruction, not the bare percentage this used to append. A bare
+                        # number still decodes through the legacy path, but only by accident, and
+                        # not at the top of the range: a slot that ended at 99% read back as a
+                        # freeze and one at 100% as an idle window, dropping it from the History
+                        # view entirely.
+                        self.export_limits_best.append(pack_export_limit(EXPORT_MODE_TARGET, soc_percent))
 
                 if "charging" in charge_during_slot:
                     # Assume charging at this time
@@ -3736,7 +3809,7 @@ class Output:
 
             if ignore_min and percent == 0.0:
                 continue
-            if ignore_max and percent == EXPORT_LIMIT_IDLE:
+            if ignore_max and export_mode_of(percent) == EXPORT_MODE_IDLE:
                 continue
 
             if not first_window:
@@ -3748,7 +3821,7 @@ class Output:
             end_time = end_timestamp.strftime("%d-%m %H:%M:%S")
             txt += start_time + " - "
             txt += end_time
-            txt += " @ {}{} {}%".format(dp2(average), self.currency_symbols[1], dp2(percent))
+            txt += " @ {}{} {}%".format(dp2(average), self.currency_symbols[1], dp2(export_limit_sort_key(percent)))
         txt += " ]"
         return txt
 

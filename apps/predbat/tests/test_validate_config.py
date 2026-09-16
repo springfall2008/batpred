@@ -128,6 +128,23 @@ def test_validate_config(my_predbat):
     print("  [integer zero:False] zero fails")
     _run(my_predbat, {"gateway_mqtt_port": 0}, expect_errors=["gateway_mqtt_port"])
 
+    # min/max constraint (log_count: {"type": "integer", "min": 2, "max": 100}) - declared in the
+    # schema but not actually enforced by validate_config()'s integer branch, so an out-of-range
+    # value silently passed validation despite the schema promising a range check
+    # (Copilot review on #5076).
+    print("  [integer min/max] in-range value passes")
+    _run(my_predbat, {"log_count": 25}, expect_clean=["log_count"])
+
+    print("  [integer min/max] below minimum fails")
+    _run(my_predbat, {"log_count": 1}, expect_errors=["log_count"])
+
+    print("  [integer min/max] above maximum fails")
+    _run(my_predbat, {"log_count": 101}, expect_errors=["log_count"])
+
+    print("  [integer min/max] exactly at the boundary passes")
+    _run(my_predbat, {"log_count": 2}, expect_clean=["log_count"])
+    _run(my_predbat, {"log_count": 100}, expect_clean=["log_count"])
+
     # ==========================================================================
     # INTEGER_LIST type  (days_previous: {"type": "integer_list"})
     # ==========================================================================
@@ -392,6 +409,43 @@ def test_validate_config(my_predbat):
 
         print(f"  [transient_ok] {name} pointing at an entity that does not exist still fails")
         _run(my_predbat, {name: "sensor.test_charger_typo"}, expect_errors=[name])
+
+    # ==========================================================================
+    # car_charging_battery_size  (#2172)
+    #
+    # A fixed battery size is written as a list with one entry per car, the form
+    # every apps.yaml template uses. A bare number on the same line as the key
+    # is not accepted: the sensor branch wraps a scalar into a list only when it
+    # is a string (predbat.py), so a numeric scalar never reaches the "fixed
+    # float values are allowed" check. The car-charging docs used to describe
+    # that failing form ("must be entered with one decimal place, e.g. 50.0"),
+    # which is what #2172 reported.
+    # ==========================================================================
+    print("  [sensor float] car_charging_battery_size as a one-entry list passes")
+    _run(my_predbat, {"car_charging_battery_size": [77.4], "num_cars": 1}, expect_clean=["car_charging_battery_size"])
+
+    print("  [sensor float] car_charging_battery_size as a whole number in a list passes (templates use '- 75')")
+    _run(my_predbat, {"car_charging_battery_size": [75], "num_cars": 1}, expect_clean=["car_charging_battery_size"])
+
+    print("  [sensor float] car_charging_battery_size written inline as a number fails (#2172)")
+    _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 1}, expect_errors=["car_charging_battery_size"])
+
+    # A string scalar IS wrapped into a list, so it validates - the docs must not
+    # claim a list is the only accepted form, only that an inline number fails.
+    print("  [sensor float] car_charging_battery_size as an entity name still passes (scalar strings are wrapped)")
+    _run(
+        my_predbat,
+        {"car_charging_battery_size": "sensor.test_car_battery_size", "num_cars": 1},
+        extra_states={"sensor.test_car_battery_size": 77.4},
+        expect_clean=["car_charging_battery_size"],
+    )
+
+    # entries is "num_cars", so the list must have one entry per car. With two
+    # cars an inline number fails earlier, as the wrong type rather than the
+    # wrong sensor, so the reported error differs from the one-car case above.
+    print("  [sensor float] car_charging_battery_size needs one entry per car")
+    _run(my_predbat, {"car_charging_battery_size": [77.4, 64.0], "num_cars": 2}, expect_clean=["car_charging_battery_size"])
+    _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 2}, expect_errors=["car_charging_battery_size"])
 
     print("**** test_validate_config PASSED ****")
     return False

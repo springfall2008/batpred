@@ -20,6 +20,8 @@ from this class.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+
+from utils import minutes_since_midnight
 import asyncio
 import time
 import traceback
@@ -179,8 +181,16 @@ class ComponentBase(ABC):
 
     @property
     def midnight_utc(self):
-        """Get today's midnight time in UTC"""
-        return self.base.midnight_utc
+        """Get today's midnight time in UTC
+
+        Derived from the base's now_utc rather than read from base.midnight_utc: calculate_yesterday()
+        (output.py) rewinds the shared base.midnight_utc by a day for the duration of the savings
+        calculation, and components run on their own threads, so a passthrough read can land on
+        yesterday's midnight (GH#4804). now_utc is never faked by calculate_yesterday(), and always
+        exists by the time a component does - initialize() calls update_time() before the components
+        are constructed. The two agree outside the rewind: update_time() sets midnight_utc from now_utc.
+        """
+        return self.base.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
     @property
     def now_utc_exact(self):
@@ -189,8 +199,23 @@ class ComponentBase(ABC):
 
     @property
     def minutes_now(self):
-        """Get the current time in minutes since midnight"""
-        return self.base.minutes_now
+        """Get the current time in minutes since midnight
+
+        Derived from the base's now_utc for the same reason as midnight_utc: calculate_yesterday()
+        (output.py) fakes the shared base.minutes_now to 0 for the duration of the savings
+        calculation, and a component reading it mid-rewind reads 0 - which, unlike a rewound date,
+        looks like a perfectly legitimate "just after midnight" (GH#4804).
+
+        This is the same calculation update_time() makes, through the same helper, so the value is
+        identical to base.minutes_now outside that window.
+
+        now_utc is snapshotted rather than read twice (once here, once through self.midnight_utc):
+        update_time() runs on the main thread and can replace it between the two reads, which at a
+        day boundary would subtract the new day's midnight from the old timestamp and return a
+        negative minute.
+        """
+        now_utc = self.base.now_utc
+        return minutes_since_midnight(now_utc, now_utc.replace(hour=0, minute=0, second=0, microsecond=0))
 
     @property
     def plan_interval_minutes(self):
@@ -353,10 +378,12 @@ class ComponentBase(ABC):
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
 
-    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
+        if attributes is None:
+            attributes = {}
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
 
-    async def set_state_external(self, entity_id, state, attributes={}):
+    async def set_state_external(self, entity_id, state, attributes=None):
         """Change one of Predbat's OWN entities as if a user had, updating its CONFIG_ITEMS value.
 
         Distinct from set_state_wrapper, which only writes the entity state: components use this when
@@ -364,6 +391,8 @@ class ComponentBase(ABC):
         for an AC-coupled Powerwall), where writing the state alone would move the displayed entity
         without changing the value the planner reads.
         """
+        if attributes is None:
+            attributes = {}
         return await self.base.ha_interface.set_state_external(entity_id, state, attributes=attributes)
 
     def call_notify(self, message):
@@ -399,6 +428,18 @@ class ComponentBase(ABC):
             bool: True if component is alive and healthy, False otherwise
         """
         return self.api_started
+
+    def health_message(self):
+        """
+        Return a short reason this component is unhealthy, or None when it has nothing to add.
+
+        Surfaced next to the component name in the final run status, so a user reading
+        "component errors: Solis" is told what actually went wrong.
+
+        Returns:
+            str: A short reason, or None
+        """
+        return None
 
     def last_updated_time(self):
         """

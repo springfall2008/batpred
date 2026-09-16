@@ -28,9 +28,12 @@ import io
 import plan
 import prediction_batch
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
+from const import EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
+from utils import pack_export_limit
 from plan import resolve_batch_threads
 from prediction import Prediction
 from prediction_kernel import create_kernel_context
+from tests.test_infra import FIXTURE_MINUTES_NOW
 from tests.test_kernel_parity import apply_random_scenario, kernel_available, make_step_data, make_windows, restore_scenario_state, snapshot_scenario_state
 
 
@@ -54,16 +57,16 @@ def test_export_trial_does_not_mutate_caller_window(my_predbat):
     failed = False
     minutes_now = my_predbat.minutes_now
     export_window = make_export_windows(minutes_now)
-    export_limits = [100.0, 100.0]
+    export_limits = [pack_export_limit(EXPORT_MODE_IDLE), pack_export_limit(EXPORT_MODE_IDLE)]
     original = [dict(window) for window in export_window]
 
     prediction = Prediction(my_predbat, {}, {}, {}, {})
-    trial_window, trial_limits = prediction._prepare_export(5.0, minutes_now + 90, 0, export_window, export_limits, None)
+    trial_window, trial_limits = prediction._prepare_export(pack_export_limit(EXPORT_MODE_TARGET, 5), minutes_now + 90, 0, export_window, export_limits, None)
 
     if export_window != original:
         print("ERROR: _prepare_export mutated the caller's export window: {} vs {}".format(export_window, original))
         failed = True
-    if export_limits != [100.0, 100.0]:
+    if export_limits != [pack_export_limit(EXPORT_MODE_IDLE), pack_export_limit(EXPORT_MODE_IDLE)]:
         print("ERROR: _prepare_export mutated the caller's export limits: {}".format(export_limits))
         failed = True
     if trial_window[0]["start"] != minutes_now + 90:
@@ -72,12 +75,12 @@ def test_export_trial_does_not_mutate_caller_window(my_predbat):
     if trial_window[1] is not export_window[1]:
         print("ERROR: untouched windows should be shared with the caller's list, not copied")
         failed = True
-    if trial_limits[0] != 5.0:
+    if trial_limits[0] != pack_export_limit(EXPORT_MODE_TARGET, 5):
         print("ERROR: trial export limit not applied, got {}".format(trial_limits[0]))
         failed = True
 
     # The trial start is clamped to at least 5 minutes before the window end
-    trial_window, _ = prediction._prepare_export(5.0, minutes_now + 200, 0, export_window, export_limits, None)
+    trial_window, _ = prediction._prepare_export(pack_export_limit(EXPORT_MODE_TARGET, 5), minutes_now + 200, 0, export_window, export_limits, None)
     if trial_window[0]["start"] != minutes_now + 115:
         print("ERROR: trial window start not clamped to end-5, got {}".format(trial_window[0]["start"]))
         failed = True
@@ -130,7 +133,7 @@ def make_batch_prediction(my_predbat, seed=7):
     charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, 4)
     export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, 4)
     charge_limit = [round(my_predbat.soc_max / 2, 2)] * len(charge_window)
-    export_limits = [100.0] * len(export_window)
+    export_limits = [pack_export_limit(EXPORT_MODE_IDLE)] * len(export_window)
     return prediction, charge_window, export_window, charge_limit, export_limits
 
 
@@ -165,8 +168,8 @@ def test_queued_matches_direct(my_predbat):
         ),
         (
             "export",
-            lambda: prediction.thread_run_prediction_export(5.0, export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
-            lambda: prediction.queue_run_prediction_export(5.0, export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
+            lambda: prediction.thread_run_prediction_export(pack_export_limit(EXPORT_MODE_TARGET, 5), export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
+            lambda: prediction.queue_run_prediction_export(pack_export_limit(EXPORT_MODE_TARGET, 5), export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
         ),
         # The levels optimiser runs single predictions at a coarse "fast mode" step (plan_interval_minutes,
         # 30 by default), which is the only caller that passes a step other than PREDICT_STEP. It reaches
@@ -607,28 +610,48 @@ def test_batch_thread_count_resolution():
 
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
-    failed = test_export_trial_does_not_mutate_caller_window(my_predbat)
-    failed |= test_batch_thread_count_resolution()
-    failed |= test_available_cpu_count_respects_a_cgroup_quota()
-    failed |= test_batch_state_exists_without_a_base(my_predbat)
-
-    available, required_failure = kernel_available()
-    if not available:
-        print("WARNING: kernel not available - batch tests that need it are SKIPPED")
-        return failed or required_failure
-
+    # The module pins the fixture clock (create_predbat already does, so this is belt and braces
+    # against the fixture ever drifting) and hands the caller's clock and scenario back through the
+    # snapshot. entry_minutes_now records the clock as the caller left it so the finally can prove
+    # the hand-back rather than trusting that the attribute list still carries minutes_now (#5026
+    # review): a dropped list entry or a snapshot taken after the pin leaves the pin's value behind
+    # and fails here.
+    entry_minutes_now = my_predbat.minutes_now
     state = snapshot_scenario_state(my_predbat)
+    clock_handed_back = False
+    failed = False
     try:
-        failed |= test_queued_matches_direct(my_predbat)
-        failed |= test_queued_range_window_in_the_past(my_predbat)
-        failed |= test_batch_is_lazy(my_predbat)
-        failed |= test_batch_cache_and_dedup(my_predbat)
-        failed |= test_batch_fallbacks(my_predbat)
-        failed |= test_save_run_drains_pending_batch(my_predbat)
-        failed |= test_batch_results_match_their_own_job(my_predbat)
+        my_predbat.minutes_now = FIXTURE_MINUTES_NOW
+
+        failed |= test_export_trial_does_not_mutate_caller_window(my_predbat)
+        failed |= test_batch_thread_count_resolution()
+        failed |= test_available_cpu_count_respects_a_cgroup_quota()
+        failed |= test_batch_state_exists_without_a_base(my_predbat)
+
+        available, required_failure = kernel_available()
+        if not available:
+            print("WARNING: kernel not available - batch tests that need it are SKIPPED")
+            failed |= required_failure
+        else:
+            # Reset the kernel flag only when the kernel tests actually ran - the skip path must not
+            # touch shared fixture state the caller never saw change before (#5026 review)
+            try:
+                failed |= test_queued_matches_direct(my_predbat)
+                failed |= test_queued_range_window_in_the_past(my_predbat)
+                failed |= test_batch_is_lazy(my_predbat)
+                failed |= test_batch_cache_and_dedup(my_predbat)
+                failed |= test_batch_fallbacks(my_predbat)
+                failed |= test_save_run_drains_pending_batch(my_predbat)
+                failed |= test_batch_results_match_their_own_job(my_predbat)
+            finally:
+                my_predbat.prediction_kernel_enable = False
     finally:
         restore_scenario_state(my_predbat, state)
-        my_predbat.prediction_kernel_enable = False
+        clock_handed_back = my_predbat.minutes_now == entry_minutes_now
+
+    if not clock_handed_back:
+        print("ERROR: the batch tests handed back minutes_now {} instead of the caller's {}".format(my_predbat.minutes_now, entry_minutes_now))
+        failed = True
 
     if failed:
         print("**** Prediction batch tests FAILED ****")

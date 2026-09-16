@@ -29,7 +29,7 @@ Same as `/issue-triage` step 2: if the new information links a log file, a `pred
   git describe --tags
   ```
 
-- Read [../issue-triage/references/debug-journal.md](../issue-triage/references/debug-journal.md) before revising your assessment.
+- Read [tools/debug-journal.md](../../../tools/debug-journal.md) before revising your assessment.
 - Re-check `git log`/`git blame` on the relevant area — the fix may have landed on `main` since the original triage.
 - If the new information points at a test module, run it via `tools/triage_test.sh <name> <scratch>/test.log` (never the full suite).
 

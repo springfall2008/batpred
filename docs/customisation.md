@@ -456,15 +456,29 @@ as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
 
-Low-power charging is skipped for any charge window that overlaps with forecast solar production, the full charge rate is used instead.
-Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus would be exported at the
-export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat planned for.
+Low-power charging is skipped for any charge window whose forecast solar production averages above **input_number.predbat_low_power_pv_threshold_w**,
+the full charge rate is used instead. Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus
+would be exported at the export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat
+planned for. A long charge window is also split at dawn so its dark, PV-free portion stays on low power even if the window continues on into daylight.
+This skipping can be turned off with **switch.predbat_set_charge_low_power_solar_full_rate** if it does not suit your tariff.
 
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low-power charging works and shows how Predbat automatically creates it.
 
 **input_number.predbat_charge_low_power_margin** (requires **switch.predbat_set_charge_low_power** to be turned On) Controls how many minutes before the completion time to target finishing charging,
 this defaults to 10 but can be changed between 0 and 30.
+
+**input_number.predbat_low_power_pv_threshold_w** (requires **switch.predbat_set_charge_low_power** to be turned On) The average forecast solar power, in Watts,
+above which a charge window (or the daylight portion of one split at dawn) is considered bright enough to abandon low-power charging for. This is an absolute
+figure rather than a percentage of your system's forecast peak, since a heavily overcast day's own peak is much lower than a clear day's - a percentage would
+make the threshold effectively different day to day. Defaults to 150W; increase it if low-power charging is being abandoned on days with only a trickle of solar,
+decrease it if a genuinely sunny window is still being throttled.
+
+**switch.predbat_set_charge_low_power_solar_full_rate** (requires **switch.predbat_set_charge_low_power** to be turned On) When turned On (the default) a charge
+window with solar forecast above the threshold above charges at the full rate rather than a throttled one, so the solar goes into the battery instead of being
+exported and bought back later. Turn it Off if you want low-power charging to apply during daylight anyway - worthwhile when the import in that window is free or
+very cheap, since the solar the throttled rate spills then costs nothing to replace. Be aware that on a sunny day this can export or clip a significant amount of
+solar, so leave it On unless you specifically want the slow charge.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When turned On (the default) the battery reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit.
@@ -811,6 +825,18 @@ If based upon your predicted load, solar generation and energy costs Predbat det
 If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM=percentage e.g. 05:30=100
 
 The manual SoC target works in conjunction with the [weather alert system](apps-yaml.md#weather-alert-system) - if both are active at the same time, the higher SoC target will be used.
+
+The **select.predbat_manual_soc_max** selector is the opposite of **select.predbat_manual_soc**: it sets a _maximum_ SoC ceiling for a specific time instead of a minimum floor.
+This is useful for a periodic calibration discharge - some batteries benefit from occasionally being run down close to empty just before a known cheap import slot (e.g. an Octopus Intelligent Go midnight slot), so the BMS can re-anchor its SoC estimate, and then Predbat can immediately recharge cheaply. See issue [#1578](https://github.com/springfall2008/batpred/issues/1578) for the discussion that led to this.
+
+The SoC ceiling percentage will be that configured in **input_number.predbat_manual_soc_max_value** (default 0%) which can be adjusted prior to making a selection.
+A ceiling of 0% is a real target meaning empty the battery as far as the reserve and the inverter allow, not 'no ceiling' - to remove a ceiling, clear the selection instead.
+
+For example, to run the battery down to 4% by 00:00 (just ahead of a midnight cheap slot), set **input_number.predbat_manual_soc_max_value** to 4 and select the 00:00 slot on **select.predbat_manual_soc_max**. Predbat will plan discharging so the battery is at or below that ceiling by that time, preferring to use the energy against load or export rather than simply forcing a fixed-duration export block, so it stays coordinated with the rest of the plan (car charging, existing charge/export windows, etc).
+
+If a manual SoC target (floor) and a manual SoC maximum (ceiling) ever apply to the same time and the ceiling is below the floor, that is a contradiction - the floor wins and the conflicting ceiling is dropped, with a warning logged.
+
+If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM=percentage e.g. 00:00=4
 
 ## Manual API
 

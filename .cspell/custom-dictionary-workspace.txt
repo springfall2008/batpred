@@ -1,4 +1,5 @@
 # Custom Dictionary Words
+3hy
 aaaabbbbccccdddd
 activepower
 adata
@@ -14,6 +15,7 @@ aios
 Alertfeed
 allclose
 alphaess
+am2
 annualform
 Anson
 antiphase
@@ -56,6 +58,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+bisectable
 Bitwarden
 BLAS
 boostable
@@ -64,6 +67,7 @@ brickatius
 bwignore
 byok
 cadata
+calcsize
 calib
 Cantarell
 cbat
@@ -120,6 +124,7 @@ Dashlane
 datain
 datalist
 datalog
+datalogger
 datap
 datapoints
 datas
@@ -128,12 +133,14 @@ dateutil
 dayname
 daynumber
 daysymbol
+deadband
 deadbeefdeadbeef
 dedup
 dedupe
 dend
 denorm
 derate
+derated
 derating
 desync
 desynced
@@ -237,13 +244,16 @@ geserial
 geseriale
 getaffinity
 getall
+getattr
 getrusage
 Ginlong
 gitnexus
+giv
 GivEnergy
 givtcp
 gnueabihf
 GOELEC
+goldens
 gridcharge
 gridcode
 gridconsumption
@@ -311,6 +321,7 @@ keepalive
 keydb
 khtml
 killall
+Kiritimati
 kopt
 Kostal
 kostalplenticore
@@ -441,6 +452,7 @@ onmouseover
 openapi
 openrouter
 openweathermap
+Opticaster
 overclaim
 overfitting
 oversizing
@@ -553,7 +565,9 @@ Sergoe
 sess
 setattr
 setdefault
+setpoints
 SFMB
+sg05lp1
 SIGALRM
 sigcloud
 sigen
@@ -570,6 +584,7 @@ snakeviz
 snprintf
 socb
 socketloop
+socmax
 socs
 sofar
 SolarEdge

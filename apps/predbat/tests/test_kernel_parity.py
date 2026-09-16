@@ -36,7 +36,7 @@ import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
-from utils import remove_intersecting_windows
+from utils import remove_intersecting_windows, unpack_export_limit
 from tests.test_infra import reset_inverter, reset_rates
 from tests.test_model import run_model_tests
 
@@ -58,8 +58,13 @@ RESULT_NAMES = [
 ]
 
 # Attributes mutated by the parity scenarios that reset_inverter/reset_rates do not restore;
-# snapshotted before the tests and restored afterwards so later tests see a clean predbat
+# snapshotted before the tests and restored afterwards so later tests see a clean predbat.
+# One exception: the parity scenarios only ever read minutes_now - its entry exists for
+# run_prediction_batch_tests, which pins the fixture clock while it runs and hands the caller's
+# back through the snapshot mechanism this list drives (#5026). Dropping the entry would leave
+# that module passing and only its own hand-back check failing, so it is documented here.
 SCENARIO_STATE_ATTRS = [
+    "minutes_now",
     "soc_max",
     "soc_kw",
     "reserve",
@@ -106,6 +111,7 @@ SCENARIO_STATE_ATTRS = [
     "rate_export",
     "io_adjusted",
     "all_active_keep",
+    "all_active_keep_max",
     "carbon_enable",
     "carbon_intensity",
     "carbon_today_sofar",
@@ -269,6 +275,13 @@ def apply_random_scenario(my_predbat, rng):
         start = my_predbat.minutes_now + rng.randrange(0, my_predbat.forecast_minutes - 60, 5)
         for minute in range(start, start + 120):
             my_predbat.all_active_keep[minute] = rng.choice([20, 50, 100])
+    # Derived entirely from the floor block above (same activation, same window, value transformed
+    # from the already-drawn floor value) rather than new draws, so the seeded scenario stream for
+    # everything after this point is unchanged - see the "derived from an existing draw" note above.
+    my_predbat.all_active_keep_max = {}
+    if my_predbat.all_active_keep:
+        for minute, floor_value in my_predbat.all_active_keep.items():
+            my_predbat.all_active_keep_max[minute] = 100 - floor_value
 
     # Carbon intensity
     my_predbat.carbon_enable = rng.random() < 0.3
@@ -373,6 +386,12 @@ def compare_results(name, python_result, kernel_result):
 
 def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=None, load90_step=None):
     """Run one scenario through both engines and compare, returns True on failure"""
+    # The cases and the fuzzer both express an export limit as the packed percentage the encoding
+    # used to be. Normalise once here so both stay readable. Values the fuzzer draws in (99, 100)
+    # become a 99% target: that interval used to decode as neither a freeze nor a target and left
+    # the window inert (GH#4914), a state the mode field cannot represent, so the fuzzer now
+    # explores the real boundary instead of the dead one.
+    export_limits = [unpack_export_limit(limit) for limit in export_limits]
     # Python engine first (kernel disabled so run_prediction cannot dispatch)
     my_predbat.prediction_kernel_enable = False
     prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
@@ -758,7 +777,7 @@ def run_random_sweep_tests(my_predbat, count=150):
         charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3), align=rng.choice([5, 5, 30, 3]))
         charge_limit = [rng.choice([0.0, my_predbat.reserve, my_predbat.soc_max, round(rng.uniform(0, my_predbat.soc_max), 2)]) for _ in charge_window]
         export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3), align=rng.choice([5, 5, 30]))
-        export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)]) for _ in export_window]
+        export_limits = [unpack_export_limit(rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)])) for _ in export_window]
         end_record = rng.choice([my_predbat.forecast_minutes, my_predbat.forecast_minutes - 30, rng.randrange(0, my_predbat.forecast_minutes, 5)])
 
         # No scenario is drawn from rng here: the draw that used to sit at this position was the last
@@ -853,7 +872,7 @@ def run_clipping_parity_tests(my_predbat, count=250):
 
         charge_window, export_window = make_intersecting_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes)
         charge_limit = [rng.choice([0.0, my_predbat.reserve, my_predbat.soc_max, round(rng.uniform(0, my_predbat.soc_max), 2)]) for _ in charge_window]
-        export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)]) for _ in export_window]
+        export_limits = [unpack_export_limit(rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)])) for _ in export_window]
         end_record = rng.choice([my_predbat.forecast_minutes, my_predbat.forecast_minutes - 30])
 
         # Count the layouts that actually split a charge window, so a generator that stopped
@@ -915,7 +934,7 @@ def build_batch_jobs(my_predbat, rng, count, window_variants=1):
         charge_window = charge_windows[index % window_variants]
         export_window = export_windows[index % window_variants]
         charge_limit = [round(rng.uniform(0, my_predbat.soc_max), 2) for _ in charge_window]
-        export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(1, 99), 1)]) for _ in export_window]
+        export_limits = [unpack_export_limit(rng.choice([100.0, 99.0, 0.0, round(rng.uniform(1, 99), 1)])) for _ in export_window]
         pv_scenario = rng.choice([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90])
         # Every third job asks for the SoC range over a charge window, as the min/max fan-out does
         range_window = charge_window[index % len(charge_window)] if (index % 3) == 0 else None

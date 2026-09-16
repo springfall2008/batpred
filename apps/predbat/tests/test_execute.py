@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.test_infra import reset_inverter
+from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE
+from utils import pack_export_limit
 from utils import calc_percent_limit
 
 
@@ -158,11 +160,11 @@ class ActiveTestInverter:
 def run_execute_test(
     my_predbat,
     name,
-    charge_window_best=[],
-    charge_limit_best=[],
-    export_window_best=[],
-    export_limits_best=[],
-    car_slot=[],
+    charge_window_best=None,
+    charge_limit_best=None,
+    export_window_best=None,
+    export_limits_best=None,
+    car_slot=None,
     soc_kw=0,
     soc_max=10,
     car_charging_from_battery=False,
@@ -222,10 +224,22 @@ def run_execute_test(
     assert_reserve_array=None,
     car_soc=0,
     battery_temperature=20,
-    assert_immediate_charge_soc_freeze_array=[],
+    assert_immediate_charge_soc_freeze_array=None,
     pv_forecast=0.0,
     set_charge_freeze_only=False,
 ):
+    if assert_immediate_charge_soc_freeze_array is None:
+        assert_immediate_charge_soc_freeze_array = []
+    if car_slot is None:
+        car_slot = []
+    if export_limits_best is None:
+        export_limits_best = []
+    if export_window_best is None:
+        export_window_best = []
+    if charge_limit_best is None:
+        charge_limit_best = []
+    if charge_window_best is None:
+        charge_window_best = []
     print("> Run scenario {}".format(name))
     my_predbat.log("> Run scenario {}".format(name))
     failed = False
@@ -545,6 +559,13 @@ def test_export_target_soc_percent(my_predbat):
         (20, False, 20),  # above the reserve, left alone
         (0, True, 0),  # Predbat owns the reserve, so the target is not its job
         (20, True, 20),
+        # The same as tuples: export_target_soc_percent must read the target field, not int() the
+        # instruction, which raised a TypeError once a limit was a tuple rather than a bare number.
+        (pack_export_limit(EXPORT_MODE_TARGET, 0), False, 10),
+        (pack_export_limit(EXPORT_MODE_TARGET, 20), True, 20),
+        # A freeze carries no target - `export_target_of(...) or 0` falls back to 0, which the
+        # reserve floor then raises when Predbat owns no register
+        (pack_export_limit(EXPORT_MODE_FREEZE), False, 10),
     ]
     for limit, reserve_enable, expect in cases:
         my_predbat.export_limits_best = [limit]
@@ -556,7 +577,7 @@ def test_export_target_soc_percent(my_predbat):
 
     # best_soc_min above the reserve wins, matching how discharge_soc resolves the floor
     my_predbat.best_soc_min = 3.0  # 30%
-    my_predbat.export_limits_best = [0]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
     my_predbat.set_reserve_enable = False
     if my_predbat.export_target_soc_percent() != 30:
         print("ERROR: export target should follow best_soc_min of 30%, got {}".format(my_predbat.export_target_soc_percent()))
@@ -606,7 +627,7 @@ def run_execute_tests(my_predbat):
     export_window_best5 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     export_window_best6 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
     export_window_best7 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
-    export_limits_best = [0]
+    export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
     export_limits_best2 = [50]
     export_limits_best3 = [50.5]
     export_limits_best_frz = [99]
@@ -3141,6 +3162,28 @@ def run_execute_tests(my_predbat):
 
     if my_predbat.quick_inverter_data_update() is not True:
         print("ERROR: quick_inverter_data_update should return True")
+        failed = True
+    if failed:
+        return failed
+
+    # Template mode (#4965): update_pred() early-returns before fetch_config_options(), so the
+    # attributes update_status() reads were never created - the quick update must skip rather
+    # than AttributeError every 120 seconds. Deleting the attribute reproduces that state.
+    saved_template = my_predbat.args.get("template")
+    had_skew = "inverter_clock_skew_discharge_start" in my_predbat.__dict__
+    saved_skew = my_predbat.__dict__.pop("inverter_clock_skew_discharge_start", None)
+    my_predbat.args["template"] = True
+    try:
+        result = my_predbat.quick_inverter_data_update()
+    finally:
+        if had_skew:
+            my_predbat.inverter_clock_skew_discharge_start = saved_skew
+        if saved_template is None:
+            my_predbat.args.pop("template", None)
+        else:
+            my_predbat.args["template"] = saved_template
+    if result is not False:
+        print("ERROR: quick_inverter_data_update should return False in template mode")
         failed = True
     if failed:
         return failed

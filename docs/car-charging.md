@@ -219,7 +219,15 @@ To make Predbat-led car charging more accurate, additionally you can configure t
   #  - 're:sensor.tsunami_battery'
 ```
 
-- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh which *must* be entered with one decimal place, e.g. 50.0.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh, as a list with one entry per car:
+
+```yaml
+  car_charging_battery_size:
+    - 75
+```
+
+Writing the number on the same line as the key (`car_charging_battery_size: 75`) fails Predbat's `apps.yaml` validation
+with *"is not of type 'sensor'"*, so use the list form above. A whole number is fine - a decimal place is not required.
 If not set, Predbat defaults to 100.0kWh. This will be used to predict when Predbat will stop car charging.
 
 - **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
@@ -471,6 +479,53 @@ Predbat will still assume all Octopus charging slots are low rates even if some 
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
 - Let the Octopus app control when your car charges.
+
+#### Reading the dispatch timeline in the logs
+
+When Octopus Intelligent charging is active Predbat writes a diagnostic line to the log each cycle
+showing how your dispatch slots have changed over time. It is purely informational - nothing in the
+plan depends on it - but it is the quickest way to see whether Octopus has moved or withdrawn a slot
+Predbat was relying on:
+
+```text
+Octopus: Dispatch timeline car 0 @ 09-13 18:00:00 [-4h..+24h]: -----P--|....p.......................... soc 12.4/40.0kWh plugged
+```
+
+Each character covers 30 minutes, running from 4 hours in the past to 24 hours ahead, and the `|`
+marks now - so everything left of it has already happened. The characters are:
+
+| Symbol | Meaning |
+|--------|---------|
+| `.` | Nothing scheduled, at a normal (expensive) import rate |
+| `-` | Nothing scheduled, but this is a cheap slot - normally the overnight off-peak session |
+| `?` | The import rate for that block is not known yet (rates are still being fetched) |
+| `p` | A planned (provisional) dispatch slot |
+| `s` | A slot Octopus has started |
+| `c` | A completed slot |
+| `P` `S` `C` | UPPERCASE means Predbat's own plan is charging in that slot too |
+| `I` | Predbat plans to import here on a cheap rate, with no dispatch slot |
+| `X` | Predbat plans to import here at a normal rate, with no dispatch slot |
+
+The case distinction is the useful one. A lowercase `p` that vanishes costs nothing because Predbat
+was not relying on it, whereas an uppercase `P` that disappears before reaching the `|` column is a
+charge Predbat had committed to and will now not get - so the slots worth worrying about are the
+ones that shout.
+
+`X` is the one to watch for. Every block where Predbat plans to import shows as exactly one of
+`P`/`S`/`C` (inside a dispatch slot), `I` (cheap rate, no slot) or `X` (normal rate, no slot). When
+Octopus withdraws a slot Predbat had committed to, the dispatch letter disappears but the import
+does not - so the stripe turns from `P` into `I` or `X` instead of vanishing, and an `X` trail
+means Predbat is planning to import at full price where it expected a dispatch.
+
+The end of the line shows the car's current SoC and target, and whether the car is plugged in
+(`plugged` / `unplugged`, from the **car_charging_planned** sensor in `apps.yaml`). An unplugged car
+with planned slots is normal - Octopus still publishes the schedule - but an unplugged car is also
+the usual explanation for a plan that never charges.
+
+Lines are written every 30 minutes, plus immediately whenever the timeline changes - a change-driven
+line is marked with a trailing `*`. Because every line is the same width and aligned to the same
+30-minute grid, stacking them in a monospace viewer shows each dispatch drifting one column left per
+line, so a withdrawn slot appears as a stripe that stops before it reaches `|`.
 
 ### Predbat-led charging
 

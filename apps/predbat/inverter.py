@@ -23,9 +23,24 @@ import time
 import pytz
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE, INVERTER_WRITE_POLL_INTERVAL, INVERTER_WRITE_POLL_MAX_INTERVAL
+from const import (
+    MINUTE_WATT,
+    TIME_FORMAT,
+    TIME_FORMAT_OCTOPUS,
+    INVERTER_TEST,
+    TIME_FORMAT_SECONDS,
+    INVERTER_MAX_RETRY,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_IDLE,
+    FULL_EXPORT_POWER,
+    INVERTER_WRITE_POLL_INTERVAL,
+    INVERTER_WRITE_POLL_MAX_INTERVAL,
+    INVERTER_CLOCK_SKEW_RESTART_MINUTES,
+    INVERTER_CLOCK_SKEW_WARN_MINUTES,
+    INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
+)
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -99,13 +114,62 @@ class Inverter:
         component can be active at once, so naming whichever happened to be checked first sends
         the user to look at credentials for hardware they may not even own. Falls back to the
         active component names when the type has no display name.
+
+        An unset type is not a statement about the hardware. With inverter_type absent from
+        apps.yaml the type is "GE" only because nothing said otherwise, so naming GivEnergy told
+        the Solis owner in #4990 to go and check credentials for hardware they do not own. The
+        active components are the better answer there, and INVERTER_DEF is consulted only if there
+        are none - a defaulted type with no component is a bare apps.yaml setup, where "GivEnergy"
+        at least matches the behaviour Predbat is actually using.
+
+        Whether the type is unset is re-derived at message time rather than taken from a
+        constructor snapshot: a component's automatic_config() writes inverter_type into
+        base.args once discovery succeeds, and Inverter objects outlive that, so a startup-time
+        flag goes stale in both directions (#4990).
         """
+        components = getattr(self.base, "components", None)
+        names = components.inverter_source_names() if components else []
+        if self.inverter_type_is_assumed() and names:
+            return ", ".join(names)
         name = INVERTER_DEF.get(self.inverter_type, {}).get("name", None)
         if name:
             return name
-        components = getattr(self.base, "components", None)
-        names = components.inverter_source_names() if components else []
         return ", ".join(names) if names else self.inverter_type
+
+    def inverter_type_is_assumed(self):
+        """Whether inverter_type is currently unset, so GE is Predbat's assumption not a choice.
+
+        Deliberately re-derived from base.args every time rather than remembered from Inverter
+        construction: components write inverter_type into base.args after discovery (each one's
+        automatic_config()), while Inverter objects persist across cycles, so a snapshot taken at
+        construction would keep asserting "no inverter_type is set" long after Solis had been
+        discovered and configured (#4990).
+        """
+        return "inverter_type" not in self.base.args
+
+    def inverter_type_assumed_name(self):
+        """Display name of the assumed inverter type, for user-facing messages."""
+        return INVERTER_DEF.get(self.inverter_type, {}).get("name", None) or self.inverter_type
+
+    def inverter_source_hint(self):
+        """
+        What the user should go and check when a configured source returns no data.
+
+        Normally that is the named source's credentials. When inverter_type was never set there is
+        no credential Predbat can point at with any confidence, so it says so and lists the
+        inverter components that ARE configured together with whether each is in error - on #4990
+        a SolisCloud comms failure surfaced as "check the GivEnergy credentials", naming neither
+        the real component nor the real fault. The assumed type is named from INVERTER_DEF rather
+        than hardcoded, so the wording follows whatever the default actually is.
+        """
+        components = getattr(self.base, "components", None)
+        status = components.inverter_source_status() if components else []
+        if self.inverter_type_is_assumed() and status:
+            listed = "; ".join(status)
+            return "no inverter_type is set in apps.yaml so {} ({}) is assumed - configured inverter components: {} - set inverter_type to match your inverter, and check any component reported above as in error".format(
+                self.inverter_type_assumed_name(), self.inverter_type, listed
+            )
+        return "check the {} credentials and that the account still has this inverter attached".format(self.inverter_source_name())
 
     def _poll_after_write(self, entity_id, matched, refresh=True, required_unit=None):
         """
@@ -137,6 +201,36 @@ class Inverter:
             self.sleep(step)
             waited += step
             delay = min(delay * 2, INVERTER_WRITE_POLL_MAX_INTERVAL)
+
+    def check_clock_skew(self, tdiff, now_utc):
+        """
+        Act on the measured inverter clock skew in minutes, warning (and restarting) on a large skew and warning periodically on a moderate one
+        """
+        if abs(tdiff) >= INVERTER_CLOCK_SKEW_RESTART_MINUTES:
+            skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
+            message = "Warn: {}, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(skew_message)
+            self.base.log(message)
+            self.base.record_status(message, had_errors=True)
+            # Trigger restart
+            self.auto_restart("Clock skew >= {} minutes".format(INVERTER_CLOCK_SKEW_RESTART_MINUTES))
+            return
+
+        # Below the restart threshold nothing is restarted, but a steady moderate skew still shifts every
+        # charge and export slot Predbat writes, so say so periodically rather than every cycle (#4989)
+        self.base.restart_active = False
+        if abs(tdiff) >= INVERTER_CLOCK_SKEW_WARN_MINUTES:
+            last_warn = self.base.clock_skew_warn_time.get(self.id, None)
+            if (last_warn is None) or ((now_utc - last_warn) >= timedelta(minutes=INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES)):
+                self.base.clock_skew_warn_time[self.id] = now_utc
+                skew_message = "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed".format(self.inverter_time, now_utc, tdiff)
+                self.base.log(
+                    "Warn: Inverter {}: {}. This is below the {} minute restart threshold but will still shift every charge and export slot Predbat writes - correct the inverter clock, or compensate for it with inverter_clock_skew_start/inverter_clock_skew_end and inverter_clock_skew_discharge_start/inverter_clock_skew_discharge_end in apps.yaml".format(
+                        self.id, skew_message, INVERTER_CLOCK_SKEW_RESTART_MINUTES
+                    )
+                )
+        else:
+            # Back within tolerance, forget the last warning so a recurrence is reported promptly
+            self.base.clock_skew_warn_time.pop(self.id, None)
 
     def auto_restart(self, reason):
         """
@@ -195,6 +289,19 @@ class Inverter:
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
+        elif len(self.base.args[arg]) <= self.id:
+            # A list that stops short of this inverter is just as missing for it as no list at all,
+            # and every caller assigns into [self.id] straight afterwards - so a short one raised
+            # IndexError rather than getting its dummy entity. Reachable whenever apps.yaml or a
+            # component's auto-config names fewer inverters than num_inverters, which is now the
+            # normal shape of a mixed fleet: a component configures the inverters it discovered and
+            # leaves the rest of the list to the user (#5029).
+            #
+            # Padded with None rather than the default: the caller overwrites [self.id] with its
+            # dummy entity, so the padding is only ever read by some other inverter, for which this
+            # key is genuinely unconfigured. A bare value there reads back as an entity id and is
+            # then looked up as one.
+            self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
     def __init__(self, base, id=0, quiet=False):
         """
@@ -254,10 +361,18 @@ class Inverter:
         self.track_discharge_end = "00:00:00"
         self.idle_start_minutes = 0
         self.idle_end_minutes = 0
+        # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
+        # None means nothing has been committed yet in this run, so the next call commits once.
+        self.last_export_schedule_committed = None
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
-        if "inverter_type" not in self.base.args:
-            self.log("Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming GivEnergy (GE) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id))
+        # An assumed type is not a chosen one. The user-facing "source returned no data" warnings
+        # must not name it as though the user had picked it (#4990); those messages re-derive the
+        # fact at message time (inverter_type_is_assumed) because discovery can set the type later.
+        if self.inverter_type_is_assumed():
+            self.log(
+                "Warn: Inverter {}: inverter_type is not set in apps.yaml, assuming {} ({}) - if this is not correct, set inverter_type to match your inverter, see the documentation".format(self.id, self.inverter_type_assumed_name(), self.inverter_type)
+            )
 
         # Read user defined inverter type
         if "inverter" in self.base.args:
@@ -313,7 +428,6 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
-        self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -416,22 +530,7 @@ class Inverter:
             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
                 self.base.log("Inverter time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
-            if abs(tdiff) >= 30:
-                self.base.log(
-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    )
-                )
-                self.base.record_status(
-                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    ),
-                    had_errors=True,
-                )
-                # Trigger restart
-                self.auto_restart("Clock skew >=10 minutes")
-            else:
-                self.base.restart_active = False
+            self.check_clock_skew(tdiff, now_utc)
 
         # Get the expected minimum reserve value for the current inverter
         reserve_min_postfix = "" if self.id == 0 else "_" + str(self.id)
@@ -526,7 +625,7 @@ class Inverter:
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
-        if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
+        if not self.inv_has_ge_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
@@ -1467,8 +1566,16 @@ class Inverter:
                 # real cause is upstream: a cloud account with no devices attached, revoked or
                 # rotated API credentials, or a lapsed entitlement, none of which Predbat can tell
                 # apart from here beyond naming where the data should have come from.
-                source = self.inverter_source_name()
-                hint = "check the {} credentials and that the account still has this inverter attached".format(source)
+                if "charge_start_time" in self.base.args:
+                    # A configured apps.yaml entity that has stopped reporting is the user's own
+                    # setup to fix, not a component outage - the same distinction the export
+                    # window makes, so the component listing does not point past a broken entity
+                    # at hardware that is fine.
+                    source = "charge_start_time"
+                    hint = "check the charge_start_time/charge_end_time entities in apps.yaml are reporting"
+                else:
+                    source = self.inverter_source_name()
+                    hint = self.inverter_source_hint()
                 self.log("Warn: Inverter {} unable to read charge window time - {} returned no data, {}, will retry next update".format(self.id, source, hint))
                 self.base.record_status("Warn: Inverter {} unable to read charge window time - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
                 # Set safe defaults to allow graceful recovery on next update
@@ -1586,7 +1693,7 @@ class Inverter:
             if export_source == "discharge_start_time":
                 hint = "check the discharge_start_time/discharge_end_time entities in apps.yaml are reporting"
             else:
-                hint = "check the {} credentials and that the account still has this inverter attached".format(export_source)
+                hint = self.inverter_source_hint()
             self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, export_source, hint))
             self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, export_source, hint), had_errors=True)
             # Safe defaults must be INERT, not merely disabled. forecast_minutes parks the window
@@ -1645,9 +1752,9 @@ class Inverter:
 
         # Pre-fill best discharge enables
         if self.discharge_enable_time:
-            self.export_limits = [0.0 for i in range(len(self.export_window))]
+            self.export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 0, FULL_EXPORT_POWER) for i in range(len(self.export_window))]
         else:
-            self.export_limits = [EXPORT_LIMIT_IDLE for i in range(len(self.export_window))]
+            self.export_limits = [pack_export_limit(EXPORT_MODE_IDLE) for i in range(len(self.export_window))]
 
         # Idle time?
         # Get previous idle start and end
@@ -1742,6 +1849,11 @@ class Inverter:
         always discovered from the device: where an API reports no bound the component publishes the
         model's known floor instead (GivTCP does this with GE's 4%), so a user who has configured
         battery_min_soc lower has that reflected in what is published.
+
+        reserve does not have to be an entity at all - the huawei and sofar templates ship a literal
+        percentage, because those inverters have no reserve register to point at. A literal carries
+        no attributes, so the reads below warn and come back with nothing and there are no bounds to
+        honour, rather than the state lookup on a number that used to raise (GH#5003).
 
         The rounding is the caller's contract as much as this one's: reserve is written as a whole
         percent, so a floor takes the ceiling and a ceiling takes the floor and the value returned is
@@ -1965,7 +2077,7 @@ class Inverter:
 
             # For inverters that need a button press to apply changes (e.g., Fox), press the button now
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="charge")
 
             if self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} Target SoC has been changed to {soc}% at {self.base.time_now_str()}")
@@ -2012,14 +2124,32 @@ class Inverter:
             self.base.log("Inverter {} control ledger: {} ({}) verdict {} - Predbat set {}, inverter now reads {}".format(self.id, name, entity_id, verdict, owned, value))
         return verdict
 
+    def check_write_entity(self, caller, name, entity_id, new_value):
+        """
+        Whether a control can be written to, warning if it is missing or is a fixed value.
+
+        apps.yaml settings may hold a literal rather than an entity id - the huawei and sofar
+        templates ship one for reserve, because those inverters have no register to point at - and a
+        literal is not somewhere a value can be written. Every write path used to split it as though
+        it were an entity id, so a control configured that way raised instead of reporting that
+        Predbat cannot set it (GH#5003).
+        """
+        if is_entity_id(entity_id):
+            return True
+        if entity_id:
+            message = "Warn: Inverter {} {}: {} for {} is a fixed value, not an entity id, so {} can not be written".format(self.id, caller, entity_id, name, new_value)
+        else:
+            message = "Warn: Inverter {} {}: No entity_id for {} to write {}".format(self.id, caller, name, new_value)
+        self.base.log(message)
+        self.base.record_status(message, had_errors=True)
+        return False
+
     def write_and_poll_switch(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
         # Re-written to minimise writes
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_switch", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
 
@@ -2098,9 +2228,7 @@ class Inverter:
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_value", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
 
@@ -2191,9 +2319,7 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
-        if not entity_id:
-            self.base.log("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value))
-            self.base.record_status("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+        if not self.check_write_entity("write_and_poll_option", name, entity_id, new_value):
             return False
         entity_base = entity_id.split(".")[0]
 
@@ -2325,7 +2451,7 @@ class Inverter:
 
             self.base.log("Inverter {} set pause mode to {}".format(self.id, new_pause_mode))
 
-    def adjust_inverter_mode(self, force_export):
+    def adjust_inverter_mode(self, force_export, changed_start_end=False):
         """
         Adjust inverter mode between force export and Demand mode (ECO)
 
@@ -2343,22 +2469,23 @@ class Inverter:
 
         """
         inverter_mode_configured = "inverter_mode" in self.base.args
+        if changed_start_end:
+            # XXX: Workaround for GivTCP window state update time to take effort
+            self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
+            self.sleep(30)
         old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
-        if not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
-            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
-            if old_inverter_mode == "Eco (Paused)":
-                old_inverter_mode = "Eco"
-
-        if self.inv_has_fox_inverter_mode:
-            # For fox we only use selfuse as the rest is done by schedule
-            new_inverter_mode = "SelfUse"
-        elif self.inv_has_ge_eco_toggle:
+        if self.inv_has_ge_eco_toggle:
+            # GE has an eco toggle rather than a mode, so exporting means eco off
             if force_export:
                 new_inverter_mode = "off"
             else:
                 new_inverter_mode = "on"
         else:
+            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
+            if old_inverter_mode == "Eco (Paused)":
+                old_inverter_mode = "Eco"
+
             # Force export or Eco mode?
             if force_export:
                 new_inverter_mode = "Timed Export"
@@ -2506,6 +2633,12 @@ class Inverter:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
             return False
 
+        # Whether the caller asked us to manage the export times at all this cycle. execute.py calls
+        # adjust_force_export(False) with no times whenever nothing is being exported, which is a
+        # different thing from both an explicit caller-supplied window and the plain-GS midnight
+        # disable window synthesised below.
+        times_supplied = (new_start_time is not None) or (new_end_time is not None)
+
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -2540,9 +2673,11 @@ class Inverter:
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", False)
 
+        schedule_write_ok = True
+
         # Turn off scheduled discharge
         if not force_export and old_discharge_enable:
-            self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
+            schedule_write_ok = self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False) and schedule_write_ok
             self.log("Inverter {} Turning off scheduled export".format(self.id))
 
         self.base.log("Inverter {} Adjust force export to {}, change times from {} - {} to {} - {}".format(self.id, force_export, old_start, old_end, new_start, new_end))
@@ -2562,25 +2697,27 @@ class Inverter:
                 # Always write to this as it is the GE default
                 changed_start_end = True
                 entity_discharge_start_time_id = self.base.get_arg("discharge_start_time", indirect=False, index=self.id)
-                self.write_and_poll_option("discharge_start_time", entity_discharge_start_time_id, new_start)
+                schedule_write_ok = self.write_and_poll_option("discharge_start_time", entity_discharge_start_time_id, new_start) and schedule_write_ok
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
                     # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
                     start_hour_id = self.base.get_arg("discharge_start_hour", indirect=False, index=self.id)
                     if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
-                        self.write_and_poll_option("discharge_start_hour", start_hour_id, new_start)
-                    else:
-                        self.write_and_poll_option("discharge_start_hour", start_hour_id, int(new_start[:2]))
+                        schedule_write_ok = self.write_and_poll_option("discharge_start_hour", start_hour_id, new_start) and schedule_write_ok
+                    elif start_hour_id:
+                        schedule_write_ok = self.write_and_poll_option("discharge_start_hour", start_hour_id, int(new_start[:2])) and schedule_write_ok
                     start_minute_id = self.base.get_arg("discharge_start_minute", indirect=False, index=self.id)
                     if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
-                        self.write_and_poll_option("discharge_start_minute", start_minute_id, new_start)
-                    else:
-                        self.write_and_poll_option("discharge_start_minute", start_minute_id, int(new_start[3:5]))
+                        schedule_write_ok = self.write_and_poll_option("discharge_start_minute", start_minute_id, new_start) and schedule_write_ok
+                    elif start_minute_id:
+                        schedule_write_ok = self.write_and_poll_option("discharge_start_minute", start_minute_id, int(new_start[3:5])) and schedule_write_ok
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
                     discharge_time = new_start + "-" + new_end
-                    self.write_and_poll_option("discharge_time", self.base.get_arg("discharge_time", indirect=False, index=self.id), discharge_time)
+                    discharge_time_id = self.base.get_arg("discharge_time", indirect=False, index=self.id)
+                    if discharge_time_id:
+                        schedule_write_ok = self.write_and_poll_option("discharge_time", discharge_time_id, discharge_time) and schedule_write_ok
             else:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
@@ -2591,21 +2728,21 @@ class Inverter:
                 # Always write to this as it is the GE default
                 changed_start_end = True
                 entity_discharge_end_time_id = self.base.get_arg("discharge_end_time", indirect=False, index=self.id)
-                self.write_and_poll_option("discharge_end_time", entity_discharge_end_time_id, new_end)
+                schedule_write_ok = self.write_and_poll_option("discharge_end_time", entity_discharge_end_time_id, new_end) and schedule_write_ok
 
                 # If the inverter uses hours and minutes then write to these entities too
                 if self.inv_charge_time_format == "H M":
                     # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
                     end_hour_id = self.base.get_arg("discharge_end_hour", indirect=False, index=self.id)
                     if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
-                        self.write_and_poll_option("discharge_end_hour", end_hour_id, new_end)
-                    else:
-                        self.write_and_poll_option("discharge_end_hour", end_hour_id, int(new_end[:2]))
+                        schedule_write_ok = self.write_and_poll_option("discharge_end_hour", end_hour_id, new_end) and schedule_write_ok
+                    elif end_hour_id:
+                        schedule_write_ok = self.write_and_poll_option("discharge_end_hour", end_hour_id, int(new_end[:2])) and schedule_write_ok
                     end_minute_id = self.base.get_arg("discharge_end_minute", indirect=False, index=self.id)
                     if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
-                        self.write_and_poll_option("discharge_end_minute", end_minute_id, new_end)
-                    else:
-                        self.write_and_poll_option("discharge_end_minute", end_minute_id, int(new_end[3:5]))
+                        schedule_write_ok = self.write_and_poll_option("discharge_end_minute", end_minute_id, new_end) and schedule_write_ok
+                    elif end_minute_id:
+                        schedule_write_ok = self.write_and_poll_option("discharge_end_minute", end_minute_id, int(new_end[3:5])) and schedule_write_ok
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass
             else:
@@ -2636,23 +2773,60 @@ class Inverter:
 
         # Change scheduled discharge enable
         if force_export:
-            self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
+            schedule_write_ok = self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True) and schedule_write_ok
             if not old_discharge_enable:
                 self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
+        # Whether the export schedule itself actually needs (re)committing to the inverter, as opposed
+        # to us merely having rewritten the time registers. For H M format those registers are rewritten
+        # every cycle as a write-reliability workaround (#1529), so changed_start_end is True on every
+        # cycle of a stable export window and must not be used to gate the commit - on Solis each button
+        # press zeroes the timed current registers (#4709), and it also triggers the 30s GivTCP sleep in
+        # adjust_inverter_mode. Tracking what we last committed keeps a stable window quiet while still
+        # committing once after a restart, when nothing has been committed yet (#4000).
+        # When neither side is managing times this cycle (e.g. idle cloud/GS_fb00 types), comparing None
+        # against the time the inverter still reports is never equal and would press the update button on
+        # every idle cycle for the rest of the day (#2328). Plain GS-style inverters still synthesise and
+        # manage a midnight disable window above, so their internally generated times must continue to count
+        # as a real schedule change that needs committing; GE's immediate-control disable path remains
+        # excluded from that synthetic-window rule, but still counts a caller-supplied window as managed.
+        times_managed = times_supplied or (not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode and not force_export)
+        start_changed = times_managed and new_start != old_start
+        end_changed = times_managed and new_end != old_end
+        export_schedule = (new_start, new_end, force_export)
+        # Separately, whether the start/end times themselves actually moved - used below to gate the
+        # GivTCP settle sleep, which exists for the window write specifically ("start/end of discharge
+        # window was just adjusted"). schedule_changed alone is too broad for that: it also goes True on
+        # a bare scheduled_discharge_enable flip with the window untouched, which doesn't need settling.
+        times_changed = start_changed or end_changed
+        schedule_changed = times_changed or (force_export != old_discharge_enable)
+        if is_hm_format and export_schedule != self.last_export_schedule_committed:
+            # Only the H M path rewrites unconditionally, so only it needs the extra commit-once-per-run
+            # safety net; every other format already commits on a real change alone. Treat it as a real
+            # window write too, so the settle sleep still runs on this first post-restart commit.
+            schedule_changed = True
+            times_changed = True
+
+        if schedule_changed:
+            button_committed = True
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                button_committed = self.press_and_poll_button(side="discharge")
+            committed = schedule_write_ok and button_committed
+            if committed:
+                # Only remember a commit that actually succeeded, otherwise a failed button press would
+                # be recorded as done and never retried until the schedule next changes on its own; the
+                # same applies if one of the time/switch writes failed before the button press.
+                self.last_export_schedule_committed = export_schedule
 
         # Force export, turn it on after we change the window
         if force_export:
-            self.adjust_inverter_mode(force_export)
+            self.adjust_inverter_mode(force_export, changed_start_end=times_changed)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)
 
         # Notify
-        if changed_start_end:
+        if schedule_changed and changed_start_end:
             if self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} Export time slot set to {new_start} - {new_end} at time {self.base.time_now_str()}")
 
@@ -2706,7 +2880,7 @@ class Inverter:
             else:
                 # Press button if needed
                 if self.inv_time_button_press:
-                    self.press_and_poll_button()
+                    self.press_and_poll_button(side="charge")
 
         # Updated cached status to disabled
         # Don't do it if notify is not set as this is just a temporary call when setting the charge window
@@ -2810,10 +2984,12 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
-    def call_service_template(self, service, data, domain="charge", extra_data={}):
+    def call_service_template(self, service, data, domain="charge", extra_data=None):
         """
         Call a service template with data
         """
+        if extra_data is None:
+            extra_data = {}
         service_list = self.base.args.get(service, "")
         if not service_list:
             return False
@@ -3122,14 +3298,22 @@ class Inverter:
         if (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off"):
             # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="charge")
 
-    def press_and_poll_button(self):
+    def press_and_poll_button(self, side="both"):
         """
         Press charge/discharge update button(s) for the inverter.
         Priority:
         1. charge_discharge_update_button
         2. charge_update_button and discharge_update_button
+
+        `side` is one of "charge", "discharge" or "both" - the side that actually changed and
+        needs its update pressed. A single combined button (schedule_write_button or
+        charge_discharge_update_button) always covers both sides regardless, so `side` only
+        matters when separate charge_update_button/discharge_update_button entities are
+        configured (e.g. some Solis setups) - pressing the unrelated side's button there writes
+        an unnecessary command to the inverter (and, on hardware that counts these towards flash/
+        EEPROM wear, batpred#2328).
         """
         success = True
 
@@ -3142,17 +3326,18 @@ class Inverter:
         elif entity_id_charge_discharge_updated_button:
             success = self._press_single_button_and_poll(entity_id_charge_discharge_updated_button)
         else:
-            # Try separate charge and discharge buttons
-            charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
-            discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
+            # Try separate charge and discharge buttons - only press the one(s) relevant to `side`
+            if side in ("charge", "both"):
+                charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
+                if charge_button:
+                    if not self._press_single_button_and_poll(charge_button):
+                        success = False
 
-            if charge_button:
-                if not self._press_single_button_and_poll(charge_button):
-                    success = False
-
-            if discharge_button:
-                if not self._press_single_button_and_poll(discharge_button):
-                    success = False
+            if side in ("discharge", "both"):
+                discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
+                if discharge_button:
+                    if not self._press_single_button_and_poll(discharge_button):
+                        success = False
 
         return success
 
@@ -3160,9 +3345,14 @@ class Inverter:
         """
         This is just a switch we can toggle to on, it will turn off again automatically.
         """
-        self.base.call_service_wrapper("switch/turn_on", entity_id=entity_id)
-        self.log(f"Inverter {self.id} pressed toggle button {entity_id}")
-        return True
+        result = self.base.call_service_wrapper("switch/turn_on", entity_id=entity_id)
+        state = self.base.get_state_wrapper(entity_id=entity_id)
+        if result or (isinstance(state, str) and state.lower() in ["on", "enable", "true"]) or (state is True):
+            self.log(f"Inverter {self.id} pressed toggle button {entity_id}")
+            return True
+        self.base.log(f"Warn: Inverter {self.id} Trying to press toggle button {entity_id} failed")
+        self.base.record_status(f"Warn: Inverter {self.id} Trying to press toggle button {entity_id} failed", had_errors=True)
+        return False
 
     def _press_single_button_and_poll(self, entity_id):
         """

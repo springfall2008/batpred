@@ -1298,6 +1298,9 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     my_predbat.failures_total = 0
     # Set midnight_utc to match the test data (2025-12-17)
     my_predbat.midnight_utc = datetime.strptime("2025-12-17T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
+    # now_utc has to move with midnight_utc - ComponentBase.midnight_utc derives today's
+    # midnight from now_utc (GH#4804), and this pin is left behind for later test modules.
+    my_predbat.now_utc = my_predbat.midnight_utc
     test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
 
     with patch("requests.get") as mock_get:

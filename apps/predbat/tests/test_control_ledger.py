@@ -1845,6 +1845,8 @@ def test_every_entry_point_opens_its_own_cycle():
     stub = Execute.__new__(Execute)
     ledger = ControlLedger()
     stub.control_ledger = ledger
+    # The template-mode guard reads config before anything else; answer with the default (off)
+    stub.get_arg = lambda arg, default=None, **kwargs: default
     stub.inverters = []
     stub.fetch_inverter_data = lambda create=True: False
     before = ledger.cycle
@@ -1860,6 +1862,16 @@ def test_every_entry_point_opens_its_own_cycle():
     if ledger.cycle != before:
         print("ERROR: quick_inverter_data_update opened a cycle with no inverters to read")
         failed = True
+
+    # Template mode must return before begin_cycle() - it would otherwise burn a ledger cycle on
+    # every tick of update_time_loop, since nothing stamps inverter_data_last_fetch there.
+    stub.get_arg = lambda arg, default=None, **kwargs: True if arg == "template" else default
+    stub.inverters = []
+    before = ledger.cycle
+    if stub.quick_inverter_data_update() is not False or ledger.cycle != before:
+        print("ERROR: template mode did not return False before opening a control-ledger cycle")
+        failed = True
+    stub.get_arg = lambda arg, default=None, **kwargs: default
 
     # A missing ledger must not take the path out.
     stub.inverters = []
