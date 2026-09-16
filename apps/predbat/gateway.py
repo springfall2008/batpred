@@ -79,6 +79,23 @@ def _serial_suffix(serial):
     return serial[-6:].lower() if len(serial) > 6 else serial.lower()
 
 
+def _has_serial(inv):
+    """Whether a gateway inverter entry carries a usable serial.
+
+    The serial is the inverter's identity: it names the entities and addresses every
+    control command. A hub can briefly report an inverter with an empty serial, and
+    treating that entry as a real unit binds control to a phantom whose writes can
+    never succeed.
+
+    Args:
+        inv: A ``predbat_InverterEntry`` from the gateway status.
+
+    Returns:
+        bool: False when the serial is empty or whitespace.
+    """
+    return bool(inv.serial.strip())
+
+
 PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
@@ -744,7 +761,10 @@ class GatewayMQTT(ComponentBase):
 
         self._debug_dump("RX telemetry", status, raw=data)
 
-        if len(status.inverters) == 0:
+        # A status whose inverters all lack a serial carries no usable inverter data, so treat
+        # it like one with no inverters: keep the last good status and do not count it as
+        # fresh telemetry.
+        if not any(_has_serial(inv) for inv in status.inverters):
             return
 
         self._last_status = status
@@ -787,9 +807,14 @@ class GatewayMQTT(ComponentBase):
 
         Maps GatewayStatus fields to PredBat entity format using HA-style
         entity naming: {type}.{prefix}_gateway_{suffix}_{attribute}
+
+        Inverters reported without a serial get no per-inverter entities: their suffix
+        would be empty, producing ``{prefix}_gateway__*`` entities for a unit that cannot
+        be controlled. EMS aggregates carry no serial in their names and are still published.
         """
         device_id = status.device_id
         firmware = status.firmware
+        inverters = [inv for inv in status.inverters if _has_serial(inv)]
 
         self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_online",
@@ -801,10 +826,10 @@ class GatewayMQTT(ComponentBase):
         # Inverter time from gateway timestamp — write it under the suffix PredBat
         # actually reads (the control target), not the primary's, or the bound
         # inverter_time arg is never updated and silently freezes.
-        if status.timestamp > 0 and len(status.inverters) > 0:
-            ts_inv = next((inv for inv in status.inverters if self._is_bound_target(inv)), None)
+        if status.timestamp > 0 and len(inverters) > 0:
+            ts_inv = next((inv for inv in inverters if self._is_bound_target(inv)), None)
             if ts_inv is None:
-                ts_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
+                ts_inv = next((inv for inv in inverters if inv.primary), inverters[0])
             ts_suffix = _serial_suffix(ts_inv.serial)
             dt = datetime.datetime.fromtimestamp(status.timestamp, tz=self.local_tz)
             self.dashboard_item(
@@ -814,7 +839,7 @@ class GatewayMQTT(ComponentBase):
                 app="gateway",
             )
 
-        for inv in status.inverters:
+        for inv in inverters:
             # Inject primary (battery-bearing) units, plus whichever unit automatic_config
             # bound PredBat's args to. On a multi-AIO site the control target is the
             # Gateway/EMS, which firmware never flags primary — skipping it left every
@@ -1070,10 +1095,13 @@ class GatewayMQTT(ComponentBase):
         onboarding/restart path. (NOTE: re-running re-selects the control target and
         rewrites the inverter args; whether PredBat core re-reads ``num_inverters`` at
         runtime vs. needing a component restart is tracked separately.)
+
+        An inverter reported without a serial is never "new": it cannot be bound or
+        addressed, so re-running auto-config for it would only replace a working binding.
         """
         if not self._auto_configured:
             return True
-        new_serials = frozenset(inv.serial for inv in status.inverters) - self._configured_inverter_serials
+        new_serials = frozenset(inv.serial for inv in status.inverters if _has_serial(inv)) - self._configured_inverter_serials
         if new_serials:
             self.log(f"Info: GatewayMQTT: new inverter(s) discovered {sorted(new_serials)} — re-running auto-config")
             return True
@@ -1144,6 +1172,21 @@ class GatewayMQTT(ComponentBase):
             inverters = aios
         if not inverters:
             inverters = candidate_aios or list(all_inverters)  # last resort
+
+        # Never bind an inverter reported without a serial: it cannot be addressed, so every
+        # control command would go out with an empty serial. Such units still count in the
+        # classification above, because dropping them first could pick the wrong control
+        # point (an unidentified EMS would leave its AIOs controlled directly). When nothing
+        # addressable is left, e.g. the chosen EMS/Gateway has no serial yet, keep the existing
+        # binding and leave _auto_configured as it is, so a first-run config retries on the
+        # next telemetry. A serial reported later is a new serial and re-runs auto-config.
+        addressable = [inv for inv in inverters if _has_serial(inv)]
+        if len(addressable) < len(inverters):
+            if not addressable:
+                self.log("Warn: GatewayMQTT: control target reported without a serial; auto-config skipped — will retry on next telemetry")
+                return
+            self.log(f"Warn: GatewayMQTT: ignoring {len(inverters) - len(addressable)} inverter(s) reported without a serial")
+            inverters = addressable
 
         # Apply serial filter if configured. A no-match is an error — configuring the
         # wrong inverter set is worse than not configuring at all. Leave _auto_configured
@@ -1322,7 +1365,7 @@ class GatewayMQTT(ComponentBase):
         self._register_ev_car(status)
 
         self._auto_configured = True
-        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
+        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters if _has_serial(inv))
         self._configured_ev_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters

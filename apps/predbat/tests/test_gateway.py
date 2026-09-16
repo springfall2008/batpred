@@ -3254,6 +3254,172 @@ class TestGatewayUnitControlBinding:
         assert gw.api_started is True
 
     # ------------------------------------------------------------------
+    # Inverters reported without a serial
+    # ------------------------------------------------------------------
+
+    def _aio_status_with_blank_serial(self, aio_serials, blank_serial="", blank_battery=False, include_blank=True):
+        """Build a status listing an inverter with a blank serial ahead of the AIOs in *aio_serials*.
+
+        The blank entry mirrors a hub that briefly reported an inverter it had not yet
+        identified: primary, no serial and, unless *blank_battery* is set, no battery block.
+        With *include_blank* False only the AIOs are listed.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_blank_serial"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        status.timestamp = 1700000000
+        if include_blank:
+            blank = status.inverters.add()
+            blank.type = pb.INVERTER_TYPE_GIVENERGY
+            blank.serial = blank_serial
+            blank.primary = True
+            if blank_battery:
+                blank.battery.rate_max_w = 6000
+        for serial in aio_serials:
+            inv = status.inverters.add()
+            inv.type = pb.INVERTER_TYPE_GIVENERGY
+            inv.serial = serial
+            inv.primary = True
+            inv.battery.soc_percent = 80
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 6000
+        return status
+
+    @staticmethod
+    def _blank_suffix_entities(gw):
+        """Entity ids published with an empty or whitespace serial suffix (``predbat_gateway__*``, ``predbat_gateway_   _*``)."""
+        import re
+
+        return [c.args[0] for c in gw.dashboard_item.call_args_list if re.search(r"predbat_gateway_\s*_", c.args[0])]
+
+    def test_blank_serial_alongside_real_inverter_on_first_telemetry_is_ignored(self):
+        """An inverter without a serial next to a real one is neither bound, remembered nor published."""
+        for blank_serial in ("", "   "):
+            for blank_battery in (False, True):
+                label = f"serial={blank_serial!r} battery={blank_battery}"
+                gw = self._make_handler_gateway()
+                gw._process_telemetry(self._aio_status_with_blank_serial(["CH2414G318"], blank_serial=blank_serial, blank_battery=blank_battery).SerializeToString())
+
+                assert gw._auto_configured, label
+                assert gw._args["num_inverters"] == 1, label
+                assert gw._args["charge_start_time"] == ["select.predbat_gateway_14g318_charge_slot1_start"], label
+                assert gw._args["reserve"] == ["number.predbat_gateway_14g318_reserve_soc"], label
+                assert gw._configured_inverter_serials == frozenset({"CH2414G318"}), label
+                assert set(gw._suffix_to_serial) == {"14g318"}, label
+                assert self._blank_suffix_entities(gw) == [], label
+
+    def test_blank_serial_after_good_config_keeps_binding(self):
+        """A blank-serial inverter appearing after a good config never re-runs auto-config or moves the binding."""
+        gw = self._make_handler_gateway()
+        real_only = self._aio_status_with_blank_serial(["CH2414G318"], include_blank=False)
+        gw._process_telemetry(real_only.SerializeToString())
+        assert gw._auto_configured
+        good_args = dict(gw._args)
+        good_serials = gw._configured_inverter_serials
+        good_telemetry_time = gw._last_telemetry_time
+        gw.dashboard_item.reset_mock()
+        gw.log.reset_mock()
+
+        # The incident shape: the real inverter vanishes and a single serial-less one is listed.
+        # It carries no usable inverter data, so it is handled like an empty status.
+        blank_only = self._aio_status_with_blank_serial([])
+        assert gw._needs_reconfigure(blank_only) is False
+        gw._process_telemetry(blank_only.SerializeToString())
+        assert gw._last_status is not None and gw._last_status.inverters[0].serial == "CH2414G318"
+        assert gw._last_telemetry_time == good_telemetry_time
+
+        # Listed next to the real inverter it is not "new" either.
+        mixed = self._aio_status_with_blank_serial(["CH2414G318"])
+        assert gw._needs_reconfigure(mixed) is False
+        gw._process_telemetry(mixed.SerializeToString())
+
+        assert gw._args == good_args
+        assert gw._configured_inverter_serials == good_serials
+        assert gw._auto_configured
+        assert self._blank_suffix_entities(gw) == []
+        assert not any("new inverter(s) discovered" in str(c.args[0]) for c in gw.log.call_args_list)
+
+        # Even if auto-config is forced with only a blank-serial inverter, the good binding stands.
+        gw._last_status = blank_only
+        gw.automatic_config()
+        assert gw._args == good_args
+        assert gw._auto_configured
+        assert any(str(c.args[0]).startswith("Warn:") and "without a serial" in str(c.args[0]) for c in gw.log.call_args_list)
+
+        # The real inverter coming back is not "new".
+        assert gw._needs_reconfigure(real_only) is False
+
+    def test_only_blank_serial_on_first_telemetry_is_not_configured_and_retries(self):
+        """A first status listing only a blank-serial inverter leaves the gateway unconfigured until a real one arrives."""
+        gw = self._make_handler_gateway()
+        gw._process_telemetry(self._aio_status_with_blank_serial([]).SerializeToString())
+
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+        assert "num_inverters" not in gw._args
+        assert gw._configured_inverter_serials == frozenset()
+        assert gw._last_telemetry_time == 0, "a status with no identified inverter must not count as fresh telemetry"
+        assert self._blank_suffix_entities(gw) == []
+
+        # Called directly, auto-config refuses to bind the blank entry and stays unconfigured.
+        gw._last_status = self._aio_status_with_blank_serial([])
+        gw.automatic_config()
+        assert gw._auto_configured is False
+        assert "num_inverters" not in gw._args
+        assert any(str(c.args[0]).startswith("Warn:") and "without a serial" in str(c.args[0]) for c in gw.log.call_args_list)
+
+        # The next telemetry with the real inverter configures and starts the API.
+        assert gw._needs_reconfigure(self._aio_status_with_blank_serial(["CH2414G318"])) is True
+        gw._process_telemetry(self._aio_status_with_blank_serial(["CH2414G318"]).SerializeToString())
+        assert gw._auto_configured
+        assert gw.api_started is True
+        assert gw._args["charge_start_time"] == ["select.predbat_gateway_14g318_charge_slot1_start"]
+
+    def test_blank_serial_coordinator_is_not_bypassed(self):
+        """An EMS or Gateway reported without a serial must not leave its AIOs controlled directly.
+
+        The unit still counts when choosing the control point, and because that point cannot
+        be addressed yet, auto-config waits. Once the serial is reported the coordinator is bound.
+        """
+        # Plant EMS without a serial in front of two AIOs.
+        gw = self._make_handler_gateway()
+        status = self._status_with_ems(["CH1111A111", "CH2222B222"], ems_serial="")
+        status.inverters[0].ems.num_inverters = 2
+        status.inverters[0].ems.total_soc = 60
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._auto_configured is False
+        assert "num_inverters" not in gw._args
+        assert gw.api_started is False
+        # EMS aggregate names carry no serial, so they are still published.
+        assert any(c.args[0] == "sensor.predbat_gateway_ems_total_soc" for c in gw.dashboard_item.call_args_list)
+
+        gw._process_telemetry(self._status_with_ems(["CH1111A111", "CH2222B222"]).SerializeToString())
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 1
+        assert gw._args["charge_start_time"] == ["select.predbat_gateway_47e077_charge_slot1_start"]
+
+        # GivEnergy Gateway without a serial coordinating two AIOs.
+        gw = self._make_handler_gateway()
+        status = self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"])
+        status.inverters[0].serial = ""
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._auto_configured is False
+        assert "num_inverters" not in gw._args
+
+    def test_blank_serial_aio_still_counts_towards_gateway_topology(self):
+        """A second AIO not yet identified still makes the Gateway the control point; only the blank unit is left unbound."""
+        gw = self._make_handler_gateway()
+        status = self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"])
+        status.inverters[2].serial = ""
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 1
+        assert gw._args["charge_start_time"] == ["select.predbat_gateway_47g077_charge_slot1_start"]
+        assert gw._configured_inverter_serials == frozenset({"GW2347G077", "CH2414G318"})
+
+    # ------------------------------------------------------------------
     # EMS and AC3 topologies
     # ------------------------------------------------------------------
 
