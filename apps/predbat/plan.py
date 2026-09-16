@@ -1323,11 +1323,23 @@ class Plan:
                     # If so, we do not need to force it to act as an anti-clipping window,
                     # because it will naturally export to create headroom, AND we don't
                     # want it to cap the charging window that precedes it.
+                    # This only applies BEFORE the clipping peak; during the peak itself
+                    # (current_start >= peak_start), the window must enforce the clipping ceiling.
                     is_native_export = False
-                    for hw in original_export_windows:
-                        if hw["start"] < m and hw["end"] > current_start:
-                            is_native_export = True
-                            break
+                    if current_start < peak_start:
+                        for hw in original_export_windows:
+                            if "clipping_target_soc_pct" in hw:
+                                continue
+                            if hw["start"] < m and hw["end"] > current_start:
+                                is_manual = hasattr(self, "manual_export_times") and bool(self.manual_export_times) and (hw["start"] in self.manual_export_times or current_start in self.manual_export_times)
+                                is_axle = bool(getattr(self, "axle_sessions", None)) and any(s.get("start", 0) <= current_start < s.get("end", 0) for s in self.axle_sessions if isinstance(s, dict))
+                                is_profitable_export = current_rate > 0 and (
+                                    current_rate > self.rate_import.get(current_start, 999.0)
+                                    or (getattr(self, "rate_export_cost_threshold", 0.0) > 0 and current_rate >= getattr(self, "rate_export_cost_threshold", 0.0) and current_rate > getattr(self, "rate_average", 0.0))
+                                )
+                                if is_manual or is_axle or is_profitable_export:
+                                    is_native_export = True
+                                    break
 
                     new_window = {
                         "start": current_start,
@@ -1336,9 +1348,17 @@ class Plan:
                     }
                     if not is_native_export:
                         # Use dynamic ceiling from predict_clipping_target_soc_best
-                        # which is indexed by minute
-                        target = getattr(self, "predict_clipping_target_soc_best", {}).get(current_start - self.minutes_now, self.soc_max)
-                        new_window["clipping_target_soc_pct"] = float(int(target / self.soc_max * 100.0))
+                        # which is indexed by minute. Minute offset can be negative due to 30-minute
+                        # boundary alignment (current_start < minutes_now), so clamp to 0.
+                        minute_offset = max(0, current_start - self.minutes_now)
+                        target_soc_map = getattr(self, "predict_clipping_target_soc_best", {})
+                        target = target_soc_map.get(minute_offset)
+                        if target is None and target_soc_map:
+                            aligned_offset = int(round(minute_offset / PREDICT_STEP)) * PREDICT_STEP
+                            target = target_soc_map.get(aligned_offset)
+                        if target is None:
+                            target = target_soc_kwh
+                        new_window["clipping_target_soc_pct"] = max(0.0, min(100.0, float(int(target / self.soc_max * 100.0)))) if self.soc_max > 0 else 100.0
 
                     new_windows.append(new_window)
                     current_start = m
@@ -1348,21 +1368,32 @@ class Plan:
             new_export_windows = []
             new_export_limits = []
             for w, limit in zip(self.export_window_best, self.export_limits_best):
-                if not intersects(w, morning_start, peak_start):
+                if not intersects(w, morning_start, peak_end):
                     new_export_windows.append(w)
                     new_export_limits.append(limit)
             self.export_window_best = new_export_windows
             self.export_limits_best = new_export_limits
 
+            # Clean high_export_rates for the same range to prevent duplicates
+            if getattr(self, "high_export_rates", None) is not None:
+                self.high_export_rates = [w for w in self.high_export_rates if not intersects(w, morning_start, peak_end)]
+
             # Inject our new unified windows
             for new_window in new_windows:
                 if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
                     self.export_window_best.append(new_window)
-                    self.export_limits_best.append(target_soc_pct)
+                    self.export_limits_best.append(new_window.get("clipping_target_soc_pct", EXPORT_LIMIT_IDLE))
                     if getattr(self, "high_export_rates", None) is not None:
                         self.high_export_rates.append(new_window.copy())
 
-                self.log("Injected anti-clipping candidate export window {} to {} at rate {}p (Target SOC: {}%)".format(self.time_abs_str(new_window["start"]), self.time_abs_str(new_window["end"]), round(new_window["average"], 2), target_soc_pct))
+                self.log(
+                    "Injected anti-clipping candidate export window {} to {} at rate {}p (Target SOC: {}%)".format(
+                        self.time_abs_str(new_window["start"]),
+                        self.time_abs_str(new_window["end"]),
+                        round(new_window["average"], 2),
+                        new_window.get("clipping_target_soc_pct", target_soc_pct),
+                    )
+                )
 
             # Inject candidate charge windows for any negative import rate slots during anti-clipping windows
             for m in range(morning_start, peak_start, 30):
@@ -1397,6 +1428,18 @@ class Plan:
                 )
                 self.charge_window_best = [x[0] for x in combined_cw]
                 self.charge_limit_best = [x[1] for x in combined_cw]
+
+            # Re-sort export_window_best and export_limits_best chronologically
+            if self.export_window_best:
+                combined_ew = sorted(
+                    zip(self.export_window_best, self.export_limits_best),
+                    key=lambda x: x[0]["start"],
+                )
+                self.export_window_best = [x[0] for x in combined_ew]
+                self.export_limits_best = [x[1] for x in combined_ew]
+
+            if getattr(self, "high_export_rates", None) is not None:
+                self.high_export_rates.sort(key=lambda w: w.get("start", 0))
 
     def plan_fragmentation(self, charge_window, charge_limit, export_window, export_limits):
         """Count the contiguous active (charge/export) segments in a plan.
@@ -1972,9 +2015,6 @@ class Plan:
             if self.clipping_buffer_kwh > 0:
                 self.clipping_remaining_today = max(self.clipping_remaining_today, self.clipping_buffer_kwh)
 
-            # Inject export windows to create headroom for clipping peaks
-            self.inject_clipping_export_windows()
-
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
         self.load_minutes_step10 = load_minutes_step10
@@ -1983,8 +2023,11 @@ class Plan:
         self.pv_forecast_minute10_step = pv_forecast_minute10_step
         self.pv_forecast_minute90_step = pv_forecast_minute90_step
         self.pv_forecast_peak_step = pv_forecast_peak_step
+
         if self.clipping_buffer_enable:
             self.calculate_clipping_target_soc(pred=self, step=PREDICT_STEP)
+            # Inject export windows to create headroom for clipping peaks
+            self.inject_clipping_export_windows()
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
@@ -3492,6 +3535,8 @@ class Plan:
                     continue
                 if window["start"] in self.manual_all_times:
                     continue
+                if "clipping_target_soc_pct" in window:
+                    continue
                 if baseline is None:
                     baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
                     start_metric = baseline
@@ -3666,6 +3711,8 @@ class Plan:
                 ):
                     new_best[-1]["end"] = export_window_best[window_n]["end"]
                     new_best[-1]["target"] = export_window_best[window_n].get("target", export_limits_best[window_n])
+                    if "clipping_target_soc_pct" in export_window_best[window_n]:
+                        new_best[-1]["clipping_target_soc_pct"] = export_window_best[window_n]["clipping_target_soc_pct"]
                     if self.debug_enable:
                         self.log("Combine export slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
                 else:
