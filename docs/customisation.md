@@ -801,6 +801,8 @@ which can be adjusted prior to making a selection. As with the other selectors t
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
+Once a slot has passed its rate override is kept for 24 hours, shown in the selector with the date (e.g. `2025-12-19 11:00=0.0`), so that the energy used during that slot is still costed at the overridden rate. Selecting **off** clears past overrides as well as future ones.
+
 The **select.predbat_manual_export_rates** selector is used to override the export rates for a slot,
 the rate selected will be that configured in **input_number.predbat_manual_export_value** (default 0p) which can be adjusted prior to making a selection.
 

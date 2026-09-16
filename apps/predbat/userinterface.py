@@ -1349,6 +1349,19 @@ class UserInterface:
         """
         return await self.run_in_executor(self.api_select, config_item, value)
 
+    def manual_rate_same_slot(self, stored_value, time_part):
+        """
+        True if a stored manual rate entry (e.g. "Fri 11:00=0.0") refers to the same slot as
+        time_part. Compared by resolved time so that weekday and absolute-date forms match.
+        """
+        stored_time_part = stored_value.split("=")[0]
+        if stored_time_part == time_part:
+            return True
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        stored_time = get_override_time_from_string(self.now_utc, stored_time_part, plan_interval)
+        wanted_time = get_override_time_from_string(self.now_utc, time_part, plan_interval)
+        return stored_time is not None and stored_time == wanted_time
+
     def manual_select(self, config_item, value):
         """
         Selection on manual times dropdown
@@ -1380,7 +1393,7 @@ class UserInterface:
             if manual_rate and "=" in value:
                 time_part = value.split("=")[0]
                 old_count = len(values_list)
-                values_list = [v for v in values_list if not v.startswith(time_part + "=")]
+                values_list = [v for v in values_list if not self.manual_rate_same_slot(v, time_part)]
                 if len(values_list) < old_count:
                     self.log(f"Cleared rate override for {time_part}")
             elif value in values_list:
@@ -1392,7 +1405,7 @@ class UserInterface:
                 time_part = value.split("=")[0]
                 # Remove any existing entries with the same time
                 old_count = len(values_list)
-                values_list = [v for v in values_list if not v.startswith(time_part + "=")]
+                values_list = [v for v in values_list if not self.manual_rate_same_slot(v, time_part)]
                 if len(values_list) < old_count:
                     self.log(f"Removed existing rate override for {time_part} before adding new value")
 
@@ -1549,6 +1562,12 @@ class UserInterface:
 
         Set update=False to decode the stored selection without writing it back - read-only
         callers should use this. See the note in manual_times() for the shared time origin.
+
+        Import/export rate overrides are kept for 24 hours after their slot, written back with an
+        absolute date so the passed weekday is not re-read as next week. today_cost() then prices
+        the energy consumed in that slot at the overridden rate, and calculate_yesterday(), which
+        shifts the rate table back a day for the savings baseline, sees the same rate. The other
+        manual items only affect the plan going forwards, so their past slots are dropped.
         """
         if exclude is None:
             exclude = []
@@ -1563,6 +1582,10 @@ class UserInterface:
         item = self.config_index.get(config_item)
         if item is None:
             return rate_overrides_minutes
+
+        # Import/export overrides are kept for the past 24 hours (see docstring); other manual items drop past slots
+        keep_past = item.get("manual_rate", False) and ("_import" in config_item or "_export" in config_item)
+        minutes_lower_bound = -24 * 60 if keep_past else None
 
         if new_value:
             values = new_value
@@ -1593,16 +1616,21 @@ class UserInterface:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - midnight_utc).total_seconds() / 60)
                 minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
+                lower_bound = minutes_now_slot if minutes_lower_bound is None else minutes_lower_bound
 
-                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now_real) < manual_rate_max:
+                if minutes >= lower_bound and (minutes - minutes_now_real) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
 
-        # Reconstruct the list in order based on minutes
+        # Reconstruct the list in order based on minutes, past slots with an absolute date
         values_list = []
         for minute, rate in rate_overrides:
-            minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
+            slot_time = midnight_utc + timedelta(minutes=minute)
+            if minute < minutes_now:
+                minute_str = slot_time.strftime("%Y-%m-%d %H:%M")
+            else:
+                minute_str = slot_time.strftime("%a %H:%M")
             minute_rate_str = minute_str + "=" + str(rate)
             if minute_rate_str not in exclude and minute_rate_str not in values_list:
                 values_list.append(minute_rate_str)
