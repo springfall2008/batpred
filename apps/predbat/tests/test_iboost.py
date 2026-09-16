@@ -30,7 +30,22 @@ def set_rate_profile(my_predbat, profile, default_rate=20.0, export_rate=0.0):
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
-RATE_STATE_ATTRS = ["rate_min", "rate_max", "rate_average", "rate_min_minute", "rate_max_minute", "rate_min_forward", "rate_min_base", "rate_max_base", "rate_export_min", "rate_export_max", "rate_export_average", "rate_export_min_minute", "rate_export_max_minute", "rate_export_max_forward"]
+RATE_STATE_ATTRS = [
+    "rate_min",
+    "rate_max",
+    "rate_average",
+    "rate_min_minute",
+    "rate_max_minute",
+    "rate_min_forward",
+    "rate_min_base",
+    "rate_max_base",
+    "rate_export_min",
+    "rate_export_max",
+    "rate_export_average",
+    "rate_export_min_minute",
+    "rate_export_max_minute",
+    "rate_export_max_forward",
+]
 
 
 def snapshot_rate_state(my_predbat):
