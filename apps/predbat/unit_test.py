@@ -49,6 +49,7 @@ from tests.test_window2minutes import test_window2minutes
 from tests.test_hass_watcher import test_hass_watcher
 from tests.test_new_install_detection import test_new_install_detection
 from tests.test_history_attribute import test_history_attribute
+from tests.test_history_alias import run_history_alias_tests
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_clock import run_clock_tests
@@ -461,6 +462,7 @@ def main():
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),
+        ("history_alias", run_history_alias_tests, "History alias tests (an entity reading the history of the entity it replaced)", False),
         ("minute_data_state", test_minute_data_state, "Minute data state tests", False),
         ("minute_data_copy", run_minute_data_copy_tests, "Minute data history copying tests", False),
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),

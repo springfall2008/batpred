@@ -802,6 +802,39 @@ def update_nested_yaml_value(data, path, value):
             raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
 
+def prepend_older_history(records, older_records):
+    """
+    Return the older_records from before the first of records, followed by records.
+
+    Both are lists of history records (dicts with last_updated) oldest first, as get_history
+    returns them. Used to carry an entity's history back through the entity it replaced: only
+    the older entity's records from before the newer one starts are kept, so where both were
+    recorded the newer entity wins. A record whose time cannot be parsed is skipped.
+
+    :param records: The newer entity's history records, possibly empty.
+    :param older_records: The replaced entity's history records.
+    :return: A new list of records, oldest first.
+    """
+    if not older_records:
+        return list(records)
+    cutoff = None
+    if records:
+        try:
+            cutoff = str2time(records[0]["last_updated"])
+        except (KeyError, ValueError, TypeError):
+            return list(records)
+    older = []
+    for record in older_records:
+        try:
+            record_time = str2time(record["last_updated"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if cutoff is not None and record_time >= cutoff:
+            break
+        older.append(record)
+    return older + list(records)
+
+
 def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
     """
     Get historical data for an attribute

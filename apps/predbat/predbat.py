@@ -90,6 +90,8 @@ from utils import (
     MALLOC_ARENA_LIMIT,
     export_limits_to_stored,
     export_limits_from_stored,
+    prepend_older_history,
+    str2time,
 )
 from predheat import PredHeat
 from octopus import Octopus
@@ -265,6 +267,21 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return False
         return self.ha_interface.get_services()
 
+    def set_history_alias(self, entity_id, legacy_entity_ids):
+        """
+        Read the history of entity_id from legacy_entity_ids for the time before its own history starts
+
+        History is fetched by entity id, so an entity that takes over from another under a new id
+        would otherwise start from no history at all. Every history read for entity_id then fills
+        in the legacy entities' records from before its first record (see get_history_wrapper).
+        An empty list removes the alias.
+        """
+        legacy_entity_ids = [legacy for legacy in (legacy_entity_ids or []) if legacy and legacy != entity_id]
+        if legacy_entity_ids:
+            self.history_aliases[entity_id] = legacy_entity_ids
+        else:
+            self.history_aliases.pop(entity_id, None)
+
     def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         """
         Wrapper function to get history from HA
@@ -277,10 +294,34 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         ha_history = None
         if self.components:
             ha_history = self.components.get_component("ha_history")
-        if ha_history:
-            history = ha_history.get_history(entity_id, days=days, tracked=tracked)
-        else:
-            history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
+
+        def fetch(fetch_entity_id, fetch_tracked):
+            """Fetch one entity's history, through the history cache when there is one"""
+            if ha_history:
+                return ha_history.get_history(fetch_entity_id, days=days, tracked=fetch_tracked)
+            return self.ha_interface.get_history(fetch_entity_id, days=days, now=self.now_utc)
+
+        history = fetch(entity_id, tracked)
+
+        # Fill in the history of the entities this one replaced (set_history_alias), for the part of the
+        # window before its own records start. Once its own history covers the whole window the legacy
+        # entities are not read at all; they are never tracked, so the cache does not keep refreshing them.
+        legacy_entity_ids = self.history_aliases.get(entity_id)
+        if legacy_entity_ids:
+            records = history[0] if (history and isinstance(history, list)) else []
+            covered = False
+            if records:
+                try:
+                    covered = str2time(records[0]["last_updated"]) <= self.now_utc - timedelta(days=days) + timedelta(hours=1)
+                except (KeyError, ValueError, TypeError):
+                    covered = False
+            if not covered:
+                for legacy_entity_id in legacy_entity_ids:
+                    legacy_history = fetch(legacy_entity_id, False)
+                    if legacy_history and isinstance(legacy_history, list) and legacy_history[0]:
+                        records = prepend_older_history(records, legacy_history[0])
+                if records:
+                    history = [records]
 
         if history and isinstance(history, list):
             ## Get default units and patch it into missing entries in the history
@@ -333,6 +374,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
+        self.history_aliases = {}  # entity id -> entity ids it replaced, whose older history it reads (set_history_alias)
         self.unmatched_args = {}
         self.define_service_list()
         self.stop_thread = False
