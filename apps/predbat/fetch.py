@@ -2611,6 +2611,21 @@ class Fetch:
         self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
 
+        # car_charging_now_confirmed_slots/streak_last_read store minutes-since-midnight_utc, so a
+        # slot number only means anything alongside the midnight_utc it was recorded against. Rebase
+        # both onto the current midnight_utc before reading or writing them below: without this, a
+        # slot confirmed yesterday (e.g. 840 for 14:00) survives the 24h prune unchanged and is then
+        # indistinguishable from today's 14:00, letting "started" trust a future slot on the strength
+        # of a sensor reading from the day before.
+        if self.car_charging_now_confirmed_midnight_utc != self.midnight_utc:
+            if self.car_charging_now_confirmed_midnight_utc is not None:
+                day_shift_minutes = int((self.midnight_utc - self.car_charging_now_confirmed_midnight_utc).total_seconds() / 60)
+                for car_n in range(PREDBAT_MAX_CARS):
+                    self.car_charging_now_confirmed_slots[car_n] = {s - day_shift_minutes for s in self.car_charging_now_confirmed_slots[car_n]}
+                    if self.car_charging_now_streak_last_read[car_n] is not None:
+                        self.car_charging_now_streak_last_read[car_n] -= day_shift_minutes
+            self.car_charging_now_confirmed_midnight_utc = self.midnight_utc
+
         # Car charging planned sensor
         for car_n in range(self.num_cars):
             # Get car N planned status
