@@ -8010,6 +8010,22 @@ if (getDarkModePreference()) {
         margin-left: 10px;
     }
 
+    /* Export icon colour tells active export (stored capacity being sold) from freeze export
+       (solar surplus only) at a glance - the icon is identical for both otherwise (batpred#5125).
+       Both pairs are picked to stay legible against the light and dark page backgrounds. */
+    .export-active {
+        color: #0a8f3c;
+    }
+    .export-freeze {
+        color: #b06a00;
+    }
+    body.dark-mode .export-active {
+        color: #4ee08a;
+    }
+    body.dark-mode .export-freeze {
+        color: #ffb84d;
+    }
+
     /* Flying bat animation */
     @keyframes flyAcross {
         0% {

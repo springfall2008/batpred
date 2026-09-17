@@ -12,7 +12,7 @@ import asyncio
 import os
 
 from web import WebInterface, is_data_numerical
-from web_helper import get_plan_renderer_js
+from web_helper import get_plan_renderer_js, get_header_html
 
 
 def make_web(my_predbat):
@@ -46,8 +46,10 @@ def run_web_functions_tests(my_predbat):
     def set_charging(on):
         set_entity(my_predbat, charging_entity, state="on" if on else "off")
 
-    def set_exporting(on):
-        set_entity(my_predbat, exporting_entity, state="on" if on else "off")
+    # export_status values are spelt out as literals rather than imported from const: they are published on
+    # an HA entity, so a user automation reading them breaks if they are renamed, constant or not (#5125)
+    def set_exporting(on, export_status="none"):
+        set_entity(my_predbat, exporting_entity, state="on" if on else "off", export_status=export_status)
 
     original_dashboard_index = my_predbat.dashboard_index
 
@@ -129,6 +131,60 @@ def run_web_functions_tests(my_predbat):
     if "transmission-tower-export" in result:
         print(f"  ERROR: unexpected export icon when not exporting, got: {result}")
         failed += 1
+
+    # -------------------------------------------------------------------------
+    # Active export (stored capacity being sold) and freeze export (solar surplus only) rendered the
+    # identical black icon, so one was easily mistaken for the other (issue #5125)
+    print("Test: active export marks the export icon as active")
+    set_exporting(True, "target")
+    result = web.get_battery_status_icon()
+    if "export-active" not in result:
+        print(f"  ERROR: expected export-active class for active export, got: {result}")
+        failed += 1
+    if "export-freeze" in result:
+        print(f"  ERROR: unexpected export-freeze class for active export, got: {result}")
+        failed += 1
+    if "Active export" not in result:
+        print(f"  ERROR: expected an 'Active export' tooltip, got: {result}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: freeze export marks the export icon as freeze")
+    set_exporting(True, "freeze")
+    result = web.get_battery_status_icon()
+    if "export-freeze" not in result:
+        print(f"  ERROR: expected export-freeze class for freeze export, got: {result}")
+        failed += 1
+    if "export-active" in result:
+        print(f"  ERROR: unexpected export-active class for freeze export, got: {result}")
+        failed += 1
+    if "Freeze export" not in result:
+        print(f"  ERROR: expected a 'Freeze export' tooltip, got: {result}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # An install that has not published the attribute yet (older state, or a restart before the first
+    # execute) must keep the plain icon rather than being mislabelled as one kind of export or the other
+    print("Test: exporting with no published status keeps the plain export icon")
+    set_entity(my_predbat, exporting_entity, state="on")
+    result = web.get_battery_status_icon()
+    if "transmission-tower-export" not in result:
+        print(f"  ERROR: expected the export icon with no status published, got: {result}")
+        failed += 1
+    if ("export-active" in result) or ("export-freeze" in result):
+        print(f"  ERROR: expected no export status class with no status published, got: {result}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # The classes above only colour anything if the page stylesheet defines them
+    print("Test: header stylesheet defines the export icon colours for light and dark mode")
+    header_html = get_header_html("Test", False, "./dash", {}, "1.0", result)
+    for css_rule in [".export-active {", ".export-freeze {", "body.dark-mode .export-active {", "body.dark-mode .export-freeze {"]:
+        if css_rule not in header_html:
+            print(f"  ERROR: expected the header stylesheet to define '{css_rule}'")
+            failed += 1
+
+    set_exporting(False)
 
     # -------------------------------------------------------------------------
     print("Test: 30% SOC rounds to nearest 10 (battery-30)")
