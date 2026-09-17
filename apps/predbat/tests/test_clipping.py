@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
 from utils import (
+    EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     EXPORT_MODE_TARGET,
     pack_export_limit,
@@ -53,6 +54,7 @@ def setup(my_predbat):
     my_predbat.export_rate = {}
     my_predbat.export_window_best = []
     my_predbat.high_export_rates = []
+    my_predbat.predict_clipped_best = {}
     # Adding log mock to avoid exceptions if not using MockBase
     if not hasattr(my_predbat, "log"):
         my_predbat.log = lambda x: print(x)
@@ -983,29 +985,68 @@ def test_inject_replaces_existing_peak_window(my_predbat):
 
 
 def test_publish_html_plan_overlapping_windows_tuple_limit(my_predbat):
-    """Verify that publish_html_plan handles tuple export limits during overlapping windows without TypeError."""
+    """Verify that publish_html_plan handles tuple export limits and clipping/freeze priority without TypeError."""
     print("**** test_publish_html_plan_overlapping_windows_tuple_limit ****")
     failed = False
     setup(my_predbat)
     my_predbat.soc_max = 10.0
     my_predbat.minutes_now = 660  # 11:00
     my_predbat.forecast_minutes = 24 * 60
+    pv_step = {m: 0.0 for m in range(0, 24 * 60, 5)}
+    load_step = {m: 0.1 for m in range(0, 24 * 60, 5)}
 
-    # Overlapping charge and export windows at minute 720
+    # Case 1: Standard target export window WITHOUT clipping suppresses overlapping charge window
     my_predbat.charge_window_best = [{"start": 720, "end": 750, "target": 80.0}]
     my_predbat.charge_limit_best = [8.0]
     my_predbat.export_window_best = [{"start": 720, "end": 750}]
     my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 50)]
 
     try:
-        pv_step = {m: 0.0 for m in range(0, 24 * 60, 5)}
-        load_step = {m: 0.1 for m in range(0, 24 * 60, 5)}
-        my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
-    except TypeError as e:
-        print("ERROR: publish_html_plan raised TypeError: {}".format(e))
-        failed = True
+        html1, _ = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
+        if "HoldExp" not in html1 or "Chrg" in html1:
+            print("ERROR: Case 1 expected HoldExp without Chrg, got HoldExp={}, Chrg={}".format("HoldExp" in html1, "Chrg" in html1))
+            failed = True
     except Exception as e:
-        print("ERROR: publish_html_plan raised unexpected exception: {}".format(e))
+        print("ERROR: Case 1 publish_html_plan raised unexpected exception: {}".format(e))
+        failed = True
+
+    # Case 2: Anti-clipping target export window preserves charge window (split-cell rendering)
+    my_predbat.export_window_best = [{"start": 720, "end": 750, "clipping_target_soc_pct": 50}]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 50)]
+
+    try:
+        html2, _ = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
+        if "HoldExp" not in html2 or "Chrg" not in html2:
+            print("ERROR: Case 2 expected split-cell with HoldExp and Chrg, got HoldExp={}, Chrg={}".format("HoldExp" in html2, "Chrg" in html2))
+            failed = True
+    except Exception as e:
+        print("ERROR: Case 2 publish_html_plan raised unexpected exception: {}".format(e))
+        failed = True
+
+    # Case 3: Freeze export window preserves charge window (split-cell rendering with FrzExp)
+    my_predbat.export_window_best = [{"start": 720, "end": 750}]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_FREEZE)]
+
+    try:
+        html3, _ = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
+        if "FrzExp" not in html3 or "Chrg" not in html3:
+            print("ERROR: Case 3 expected split-cell with FrzExp and Chrg, got FrzExp={}, Chrg={}".format("FrzExp" in html3, "Chrg" in html3))
+            failed = True
+    except Exception as e:
+        print("ERROR: Case 3 publish_html_plan raised unexpected exception: {}".format(e))
+        failed = True
+
+    # Case 4: Legacy float export limit backwards compatibility
+    my_predbat.export_window_best = [{"start": 720, "end": 750}]
+    my_predbat.export_limits_best = [50.0]
+
+    try:
+        html4, _ = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
+        if "HoldExp" not in html4 or "Chrg" in html4:
+            print("ERROR: Case 4 expected legacy float HoldExp without Chrg, got HoldExp={}, Chrg={}".format("HoldExp" in html4, "Chrg" in html4))
+            failed = True
+    except Exception as e:
+        print("ERROR: Case 4 publish_html_plan raised unexpected exception: {}".format(e))
         failed = True
 
     if not failed:

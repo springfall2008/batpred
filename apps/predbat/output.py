@@ -1713,8 +1713,9 @@ class Output:
                     carbon_color = "#FFFFFF"
 
             # Work out clipped
-            clipped_amount = self.predict_clipped_best.get(minute_relative_start, 0)
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            predict_clipped_best = getattr(self, "predict_clipped_best", {})
+            clipped_amount = predict_clipped_best.get(minute_relative_start, 0)
+            clipped_amount_end = predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             clipped_change = clipped_amount_end - clipped_amount
             clipped_change = dp2(clipped_change)
             if clipped_change == 0:
@@ -1886,7 +1887,7 @@ class Output:
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(load_total))
         if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            clipped_amount_end = getattr(self, "predict_clipped_best", {}).get(minute_relative_slot_end, clipped_amount)
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
@@ -1913,7 +1914,7 @@ class Output:
         totals["total_cost"] = dp2(metric_end / 100.0)
         totals["pv_forecast"] = dp2(pv_total)
         totals["load_forecast"] = dp2(load_total)
-        clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+        clipped_amount_end = getattr(self, "predict_clipped_best", {}).get(minute_relative_slot_end, clipped_amount)
         totals["clipped"] = dp2(clipped_amount_end)
         if self.load_forecast:
             totals["extra_load"] = dp2(xload_total)
