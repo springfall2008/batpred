@@ -3104,6 +3104,90 @@ def test_inverters_persist_across_cycles(test_name, my_predbat, ha):
     return failed
 
 
+def test_in_calibration_clears_when_battery_leaves_calibration(test_name, my_predbat, ha):
+    """
+    Regression test: in_calibration must clear when battery_calibration reports off again.
+
+    refresh_config() only ever sets in_calibration True - there is no matching "set it False" read,
+    because most inverter types never configure battery_calibration at all (absent means never
+    calibrating). Before Inverter objects persisted, that was fine: in_calibration was reseeded
+    False by __init__ every single cycle. With persistence (#4712) a stuck True would never clear
+    on its own once the real device left calibration - reset_cycle_state() must be the one place
+    that still clears it, run once at construction, not on every refresh.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_calibration = my_predbat.args.get("battery_calibration", unset)
+    saved_inverters = my_predbat.inverters
+
+    try:
+        my_predbat.args["battery_calibration"] = "on"
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed")
+            return True
+
+        if not my_predbat.inverters[0].in_calibration:
+            print(f"ERROR: {test_name}: in_calibration should be True while battery_calibration is on")
+            failed = True
+
+        my_predbat.args["battery_calibration"] = "off"
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after calibration cleared")
+            return True
+
+        if my_predbat.inverters[0].in_calibration:
+            print(f"ERROR: {test_name}: in_calibration is still True after battery_calibration went off - it is stuck on a persisted object")
+            failed = True
+    finally:
+        if saved_calibration is unset:
+            my_predbat.args.pop("battery_calibration", None)
+        else:
+            my_predbat.args["battery_calibration"] = saved_calibration
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
+def test_set_current_from_power_before_battery_voltage_known(test_name, my_predbat):
+    """
+    Regression test: set_current_from_power() must not crash before update_status() has ever run.
+
+    battery_voltage is seeded to None (not a guessed 52.0) since #4712's __init__ split, precisely
+    so a caller that reaches the charge/discharge current path before the inverter's own state was
+    fetched - test_force_export_off_does_not_press_every_cycle does exactly this by construction -
+    gets an explicit skip rather than a silent divide against a made-up value.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_type = my_predbat.args.get("inverter_type", unset)
+
+    try:
+        my_predbat.args["inverter_type"] = ["GS"]
+        inv = Inverter(my_predbat, 0, quiet=True)
+
+        if inv.battery_voltage is not None:
+            print(f"ERROR: {test_name}: battery_voltage should be None before update_status() has run, got {inv.battery_voltage}")
+            failed = True
+
+        try:
+            inv.set_current_from_power("charge", 1000)
+        except TypeError as e:
+            print(f"ERROR: {test_name}: set_current_from_power() raised {e} instead of skipping cleanly")
+            failed = True
+    finally:
+        if saved_type is unset:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+
+    return failed
+
+
 def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
     """
     Regression test for issue #4709: a stable export window must commit to the inverter once, not on
@@ -4777,6 +4861,8 @@ charge_start_service:
     failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
     failed |= test_charge_window_stuck_enable_presses_button_once("charge_window_stuck_enable_button_once", ha, inv, my_predbat)
     failed |= test_inverters_persist_across_cycles("inverters_persist_across_cycles", my_predbat, ha)
+    failed |= test_in_calibration_clears_when_battery_leaves_calibration("in_calibration_clears", my_predbat, ha)
+    failed |= test_set_current_from_power_before_battery_voltage_known("set_current_from_power_before_voltage_known", my_predbat)
     if failed:
         return failed
 

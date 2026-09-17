@@ -306,49 +306,25 @@ class Inverter:
     def __init__(self, base, id=0, quiet=False):
         """
         Inverter class
+
+        Only genuinely persistent state is set here - values this object accumulates over its
+        lifetime and that nothing ever unconditionally overwrites. Everything else is set to None
+        by reset_cycle_state() below: it is about to be replaced with real data by refresh_config()
+        or update_status() before anything reads it, so giving it a real-looking placeholder value
+        (a prior version of this code set reserve_percent = 4.0, battery_rate_max_raw = 2600.0, and
+        so on) is indistinguishable from a deliberately configured one and invites exactly the kind
+        of implicit "is this the placeholder or a real reading" sentinel check that
+        battery_size_tracking() below has to do on nominal_capacity. None cannot be mistaken for a
+        real value.
         """
         self.id = id
         self.base = base
         self.log = self.base.log
-        self.charge_enable_time = False
-        self.charge_start_time_minutes = self.base.forecast_minutes
-        self.charge_start_end_minutes = self.base.forecast_minutes
-        self.charge_window = []
-        self.export_window = []
-        self.export_limits = []
-        self.current_charge_limit = 0.0
-        self.soc_kw = 0
-        self.soc_percent = 0
-        self.soc_max = None
-        self.nominal_capacity = None
-        self.inverter_limit = 7500.0 / MINUTE_WATT
-        self.export_limit = 99999.0 / MINUTE_WATT
-        self.inverter_time = None
-        self.reserve_percent = 4.0
-        self.reserve_percent_current = 4.0
-        self.battery_scaling = 1.0
-        self.battery_scaling_config = 1.0
 
-        self.reserve_max = 100
-        self.battery_rate_max_raw = 2600.0
-        self.battery_rate_max_charge = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_charge_dc = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_discharge = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_export = 2600.0 / MINUTE_WATT
-        self.battery_temperature = 20
-        self.battery_power = 0
-        self.battery_voltage = 52.0
-        self.pv_power = 0
-        self.load_power = 0
-        self.in_calibration = False
+        # Accumulated across the object's lifetime; never reset while it persists (#4712 - these
+        # used to be reseeded every cycle because the object itself was rebuilt every cycle).
         self.count_register_writes = 0
         self.created_attributes = {}
-        self.track_charge_start = "00:00:00"
-        self.track_charge_end = "00:00:00"
-        self.track_discharge_start = "00:00:00"
-        self.track_discharge_end = "00:00:00"
-        self.idle_start_minutes = 0
-        self.idle_end_minutes = 0
         # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
         # None means nothing has been committed yet in this run, so the next call commits once.
         self.last_export_schedule_committed = None
@@ -359,9 +335,74 @@ class Inverter:
         # even though the times now read back as already correct.
         self.charge_schedule_commit_pending = False
 
+        self.reset_cycle_state()
+
         # Everything below here is re-read every cycle, not just at construction - see
         # refresh_config().
         self.refresh_config(quiet=quiet)
+
+    def reset_cycle_state(self):
+        """
+        Set every attribute that refresh_config()/update_status() are about to overwrite to None.
+
+        Called once from __init__, before the object has any real data to give an attribute a
+        placeholder value that could be mistaken for one. Not called again afterwards: these
+        attributes persist and get reassigned in place by refresh_config()/update_status() every
+        cycle, the same as any other state on a persisted object - this only establishes the
+        starting shape.
+        """
+        # Read every cycle by refresh_config().
+        self.soc_max = None
+        self.nominal_capacity = None
+        # Not a placeholder like the rest of this group: these are the real standing defaults
+        # (7500W / 99999W), only conditionally overridden if the user configures them - see the
+        # `if "inverter_limit" in self.base.args:` guard in refresh_config(). They also double as
+        # get_arg()'s own fallback when the key exists but the read is unusable, so they must
+        # always hold a real number, never None.
+        self.inverter_limit = 7500.0 / MINUTE_WATT
+        self.export_limit = 99999.0 / MINUTE_WATT
+        self.inverter_time = None
+        self.reserve_percent = None
+        self.reserve_percent_current = None
+        self.battery_scaling = None
+        self.battery_scaling_config = None
+        self.reserve_max = None
+        self.battery_rate_max_raw = None
+        self.battery_rate_max_charge = None
+        self.battery_rate_max_charge_dc = None
+        self.battery_rate_max_discharge = None
+        self.battery_rate_max_export = None
+        self.battery_temperature = None
+        # refresh_config() now does a real two-way read of battery_calibration (see there), so this
+        # is only the starting shape before the first refresh_config() call inside __init__ runs.
+        self.in_calibration = None
+
+        # Read every cycle by update_status().
+        self.charge_enable_time = False
+        self.charge_start_time_minutes = self.base.forecast_minutes
+        self.charge_end_time_minutes = self.base.forecast_minutes
+        self.discharge_start_time_minutes = self.base.forecast_minutes
+        self.discharge_end_time_minutes = self.base.forecast_minutes
+        self.charge_window = []
+        self.export_window = []
+        self.export_limits = []
+        self.current_charge_limit = None
+        self.soc_kw = None
+        self.soc_percent = None
+        # battery_voltage is None, not a guessed default: get_arg() in update_status() already
+        # supplies the real fallback (52.0) whenever the entity is absent, so nothing here is a
+        # second source of truth for it - this seed is only "not read yet", and set_current_from_power()
+        # checks for that explicitly rather than silently dividing by a placeholder.
+        self.battery_power = 0
+        self.battery_voltage = None
+        self.pv_power = 0
+        self.load_power = 0
+        self.track_charge_start = "00:00:00"
+        self.track_charge_end = "00:00:00"
+        self.track_discharge_start = "00:00:00"
+        self.track_discharge_end = "00:00:00"
+        self.idle_start_minutes = 0
+        self.idle_end_minutes = 0
 
     def refresh_config(self, quiet=False):
         """
@@ -502,9 +543,15 @@ class Inverter:
         # A calibration cycle deliberately drives the battery outside its normal SoC range, so any
         # plan made during one is wrong - Predbat disables itself for this inverter until it ends.
         # Only inverters that report it configure battery_calibration; absent means never calibrating.
-        if self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True):
-            self.in_calibration = True
+        # A real two-way read, not "only ever set True": with the Inverter object persisting across
+        # cycles (#4712), this has to be the one place that clears it too, or a real device leaving
+        # calibration would leave Predbat stuck thinking it never did.
+        was_in_calibration = self.in_calibration
+        self.in_calibration = self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True)
+        if self.in_calibration and not was_in_calibration:
             self.log("Warn: Inverter {} is in calibration mode, Predbat will not function correctly and will be disabled".format(self.id))
+        elif was_in_calibration and not self.in_calibration:
+            self.log("Info: Inverter {} has left calibration mode".format(self.id))
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -3007,6 +3054,13 @@ class Inverter:
         (#4415). write_and_poll_value() already no-ops when the live value already matches, so
         this is cheap when nothing has drifted.
         """
+        if self.battery_voltage is None:
+            # update_status() has not run yet, so there is no real reading - a caller reached the
+            # charge/discharge rate path before the inverter's own state was ever fetched. Skip
+            # rather than divide by a guessed constant; the next cycle's update_status() will supply
+            # a real value (or its own 52.0 fallback if the entity is genuinely absent).
+            self.log("Warn: Inverter {} battery_voltage not yet known, skipping current calculation for {}".format(self.id, direction))
+            return
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
