@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from const import CAR_CHARGING_NOW_STREAK_MAX_ROLLOVER_SLOTS, PREDBAT_MAX_CARS
 
@@ -43,14 +43,7 @@ def test_car_charging_now_confirmed_slots(my_predbat):
     print("**** Running car_charging_now_confirmed_slots tests ****")
     failed = False
 
-    # Save original state
-    old_num_cars = my_predbat.num_cars
-    old_car_charging_now = my_predbat.car_charging_now
-    old_minutes_now = my_predbat.minutes_now
-    old_midnight_utc = my_predbat.midnight_utc
-    old_args = dict(my_predbat.args)
-    old_confirmed_slots = getattr(my_predbat, "car_charging_now_confirmed_slots", None)
-    old_streak_last_read = getattr(my_predbat, "car_charging_now_streak_last_read", None)
+    # No state to save/restore here: each test gets a fresh PredBat (#5102).
 
     def reset_streak_state():
         """
@@ -303,22 +296,74 @@ def test_car_charging_now_confirmed_slots(my_predbat):
     else:
         print("Test 11 passed")
 
-    # Restore original state
-    my_predbat.num_cars = old_num_cars
-    my_predbat.car_charging_now = old_car_charging_now
-    my_predbat.minutes_now = old_minutes_now
-    my_predbat.midnight_utc = old_midnight_utc
-    my_predbat.args = old_args
-    reset_streak_state()
-    if old_confirmed_slots is not None:
-        my_predbat.car_charging_now_confirmed_slots = old_confirmed_slots
-    if old_streak_last_read is not None:
-        my_predbat.car_charging_now_streak_last_read = old_streak_last_read
-    my_predbat.get_car_charging_planned()
-
     if not failed:
         print("**** All car_charging_now_confirmed_slots tests PASSED ****")
     else:
         print("**** Some car_charging_now_confirmed_slots tests FAILED ****")
+
+    return failed
+
+
+def test_car_charging_now_confirmed_slots_midnight_rollover(my_predbat):
+    """
+    A slot confirmed yesterday must not be mistaken for the same slot number today (Copilot review).
+
+    car_charging_now_confirmed_slots/streak_last_read store minutes-since-midnight_utc - a slot
+    number only means anything alongside the midnight_utc it was recorded against. midnight_utc
+    itself is recomputed fresh from real time on every update_time() call, so a long-running install
+    crosses real midnight while these structures still hold yesterday's numbers. Confirming slot 840
+    (14:00) yesterday and then, after midnight_utc rolls over, reading minutes_now near 840 again
+    today must not find that stale entry - get_car_charging_planned() has to rebase (or otherwise
+    invalidate) both structures onto the new midnight_utc, not merely rely on the 24h prune, which
+    does not catch this: the prune bound is itself computed from the same (now day-changed)
+    minutes_now, so a small positive slot number like 840 always satisfies it regardless of which
+    calendar day it was actually recorded on.
+    """
+    print("**** Running car_charging_now_confirmed_slots_midnight_rollover tests ****")
+    failed = False
+
+    my_predbat.num_cars = 1
+    my_predbat.midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    my_predbat.car_charging_now_confirmed_slots = [set() for _ in range(PREDBAT_MAX_CARS)]
+    my_predbat.car_charging_now_streak_last_read = [None for _ in range(PREDBAT_MAX_CARS)]
+
+    # Day 1: confirm slot 840 (14:00) and end the streak there with an explicit False read, so
+    # nothing is left active to roll forward across the rollover below - isolating this test to the
+    # stale-slot-number risk rather than streak persistence, which is covered elsewhere.
+    print("*** Test 1: slot 840 confirmed on day 1, streak explicitly ended ***")
+    my_predbat.minutes_now = 14 * 60  # 14:00
+    my_predbat.args["car_charging_now"] = "yes"
+    my_predbat.get_car_charging_planned()
+    my_predbat.minutes_now = 14 * 60 + 25  # still within slot 840, but ends the streak
+    my_predbat.args["car_charging_now"] = "no"
+    my_predbat.get_car_charging_planned()
+
+    if 840 not in my_predbat.car_charging_now_confirmed_slots[0]:
+        print("ERROR: slot 840 should be confirmed from the day-1 reading")
+        failed = True
+
+    # Day 2: midnight_utc rolls forward exactly one day, as update_time() does every cycle against
+    # the real clock. minutes_now lands back at 840 (14:00) with NO car_charging_now reading at all
+    # today - car_charging_now defaults to "no" via get_arg's own default, so if get_car_charging_planned()
+    # incorrectly treated yesterday's slot 840 as still valid for today, this call's fresh negative
+    # reading would need to explicitly clear it; the actual regression is that a value with no
+    # reading either way (a replan landing exactly on 840 before any today reading has happened)
+    # would see yesterday's leftover entry and treat it as already confirmed.
+    print("*** Test 2: after midnight_utc rolls over, day-1's slot 840 must not confirm day-2's slot 840 ***")
+    my_predbat.midnight_utc = my_predbat.midnight_utc + timedelta(days=1)
+    my_predbat.minutes_now = 14 * 60  # 14:00 again, but this is a new calendar day
+    del my_predbat.args["car_charging_now"]  # no reading yet today - get_arg() falls back to its "no" default
+    my_predbat.get_car_charging_planned()
+
+    if 840 in my_predbat.car_charging_now_confirmed_slots[0]:
+        print("ERROR: slot 840 is confirmed on day 2 with no positive reading - yesterday's entry leaked across the midnight rollover")
+        failed = True
+    else:
+        print("Test 2 passed - the stale day-1 entry did not survive the rollover")
+
+    if not failed:
+        print("**** All car_charging_now_confirmed_slots_midnight_rollover tests PASSED ****")
+    else:
+        print("**** Some car_charging_now_confirmed_slots_midnight_rollover tests FAILED ****")
 
     return failed

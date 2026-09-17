@@ -542,6 +542,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # evidence across cycles.
         self.car_charging_now_confirmed_slots = [set() for _ in range(PREDBAT_MAX_CARS)]
         self.car_charging_now_streak_last_read = [None for _ in range(PREDBAT_MAX_CARS)]
+        # The midnight_utc both structures above are currently keyed relative to. Slot numbers in
+        # them are minutes-since-that-midnight, so get_car_charging_planned() must rebase both
+        # whenever midnight_utc moves on to a new day, or a slot number from yesterday becomes
+        # indistinguishable from the same slot number today.
+        self.car_charging_now_confirmed_midnight_utc = None
         # car_n's whose missing-car_charging_now warning has already been logged once, so the
         # "started without a sensor" warning doesn't repeat every cycle.
         self.trust_iog_no_sensor_warned = set()
