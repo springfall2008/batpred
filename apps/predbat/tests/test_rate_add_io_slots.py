@@ -748,6 +748,22 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     my_predbat.io_adjusted = saved_io_adjusted_40
 
+    print("\n**** Test 41: plan_interval_minutes=15 - a slot rounded off the 30-min boundary must still decide its own admission ****")
+    # With the default 30-minute interval, every slot's own [start, end) range always contains its
+    # slot_start minute, so the needed/trusted/cap decision always fires from within the slot itself.
+    # At a 15-minute interval a slot can round to a sub-range that skips that minute entirely - a
+    # 14:15-14:30 slot never contains minute 840 or 870 - which must not leave its admission
+    # decision undecided (previously it silently rode on whatever slots_added_set state some other,
+    # unrelated slot happened to have left behind for the same slot_start).
+    my_predbat.trust_future_dynamic_iog_slots = "planned"
+    my_predbat.plan_interval_minutes = 15
+    slot_start_41 = midnight_utc_26 + timedelta(hours=14, minutes=15)  # 14:15-14:30, no 30-min boundary minute
+    slot_end_41 = slot_start_41 + timedelta(minutes=15)
+    slots_41 = [{"start": slot_start_41.strftime(TIME_FORMAT), "end": slot_end_41.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    expected_rates_41 = {minute: 4.0 for minute in range(855, 870)}
+    failed |= run_rate_add_io_slots_test("test41_sub_30min_interval_slot_decides_its_own_admission", my_predbat, slots_41, True, 12, expected_rates_41, confirmed=False)
+    my_predbat.plan_interval_minutes = 30
+
     # Restore original state
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
     my_predbat.octopus_intelligent_limit_future_slots = saved_limit_future_slots
