@@ -3665,6 +3665,14 @@ class Octopus:
 
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
+        # Track which 30-min slot starts have had their needed/trusted/cap admission decided. Keyed
+        # separately from slots_added_set (which records the outcome, not whether a decision was
+        # made) because the decision must fire exactly once per slot_start, on whichever minute is
+        # visited first - it cannot wait for minute % 30 == 0, since with plan_interval_minutes < 30
+        # a slot's rounded range can skip that boundary entirely (e.g. a 14:15-14:30 slot never
+        # contains minute 840 or 870), which would otherwise leave the slot's own admission never
+        # decided and its rate dependent on whether some other slot happened to cover the boundary.
+        slots_decided = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
 
@@ -3790,8 +3798,11 @@ class Octopus:
                         else:  # "none"
                             trusted = False
 
-                        # At the start of each 30-min slot, decide if we can add it
-                        if minute % 30 == 0:
+                        # Decide admission once per slot_start, on whichever minute is visited first -
+                        # not gated on minute % 30 == 0, since a slot rounded to a sub-30-minute
+                        # range (plan_interval_minutes < 30) can skip that boundary entirely.
+                        if slot_start not in slots_decided:
+                            slots_decided.add(slot_start)
                             if needed and trusted and slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
