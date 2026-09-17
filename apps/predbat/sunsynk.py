@@ -1107,6 +1107,22 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         cry-wolf failure this docstring already warns about above: a perfectly healthy
         inverter warned about forever because encode_setting(key, None) can never match what
         was actually applied.
+
+        Past the settle window, divergence also clears applied_payload[sn], matching
+        alphaess.py's note_external_change (PR #4664, Task 10b): apply_settings only writes
+        when the owned payload differs from applied_payload, so a write the cloud
+        acknowledged but the dongle never actually collected would otherwise be trusted
+        forever and never retried, with no automatic recovery short of a Predbat restart
+        (which rebuilds applied_payload from a fresh read via restore_state). See #5138,
+        where exactly that left an export slot stuck for 55+ minutes because nothing else
+        happened to change Predbat's intended state in that window. Clearing the cache does
+        not write anything by itself - it just stops the next genuine write from being
+        skipped as a no-op.
+
+        TODO(#5140): this settle_count/applied_payload/clear-on-diverge shape is duplicated
+        between here and alphaess.py with no shared abstraction; deye.py, fox.py and
+        teslemetry.py have no equivalent detection at all. Extract into a ComponentBase
+        helper instead of a third copy next time this needs touching.
         """
         applied = self.applied_payload.get(sn)
         if not applied or not settings:
@@ -1121,6 +1137,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
         if self.settle_count[sn] > SUNSYNK_SETTLE_POLLS:
             self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} settings polls; check the inverter is online in the Sunsynk app")
+            # Clear the recorded intent so the next cycle re-applies rather than deciding
+            # the payload is unchanged and leaving the inverter stuck on whatever it
+            # actually has - see docstring above and #5138.
+            self.applied_payload.pop(sn, None)
 
     def _owned_fields(self):
         """Return every settings key this component writes, so the rest can be watched."""
