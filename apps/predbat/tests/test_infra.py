@@ -385,6 +385,15 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
+        self.inverter_type = "GE"
+
+    def refresh_config(self, quiet=False):
+        """
+        No-op stand-in for Inverter.refresh_config().
+
+        The real one re-reads runtime config on each cycle now that the Inverter objects persist;
+        this double carries no config, so there is nothing to re-read.
+        """
         pass
 
 

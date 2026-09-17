@@ -899,7 +899,7 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
-    def fetch_inverter_data(self, create=True):
+    def fetch_inverter_data(self):
         """
         Fetch data about the inverters
         """
@@ -934,10 +934,27 @@ class Execute:
         export_limit = 0.0
         inverter_support_feedin_first = True
 
-        # Create inverters list if needed
-        if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
+        # Create the inverters only when we don't already have the right ones. The objects persist
+        # across cycles: rebuilding them every cycle wiped any state they accumulated, which is why
+        # the committed-schedule guard never suppressed a repeated commit (#4712). The config they
+        # read is not cached with them - refresh_config() re-reads it below, so a runtime change to
+        # battery_min_soc, battery_scaling or the rate limits still takes effect immediately.
+        #
+        # The type is checked as well as the count. A component's automatic_config() normally runs
+        # once at startup, before any inverter exists, but a deferred startup (e.g. AlphaESS
+        # retrying until telemetry arrives) can set inverter_type after these objects were built -
+        # and the capability flags derived from it are the half refresh_config() does not re-derive.
+        # A changed count already forces a rebuild; this covers a same-count type change.
+        create = (not self.inverters) or (len(self.inverters) != self.num_inverters)
+        if not create:
+            for id in range(self.num_inverters):
+                wanted_type = self.get_arg("inverter_type", "GE", indirect=False, index=id)
+                if self.inverters[id].inverter_type != wanted_type:
+                    self.log("Info: Inverter {} type changed to {}, rebuilding".format(id, wanted_type))
+                    create = True
+                    break
+        if create:
             self.inverters = []
-            create = True
 
         # For each inverter get the details
         for id in range(self.num_inverters):
@@ -951,6 +968,12 @@ class Execute:
                 self.inverters.append(inverter)
             else:
                 inverter = self.inverters[id]
+                try:
+                    inverter.refresh_config(quiet=True)
+                except Exception as e:
+                    self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
+                    self.inverters = []
+                    return False
             inverter.update_status(self.minutes_now, quiet=not create)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
@@ -1124,7 +1147,7 @@ class Execute:
         # entry point that can observe or confirm gets its own cycle.
         if self.control_ledger is not None:
             self.control_ledger.begin_cycle()
-        if self.fetch_inverter_data(create=False):
+        if self.fetch_inverter_data():
             self.publish_inverter_data()
             return True
         return False
