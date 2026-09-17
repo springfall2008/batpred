@@ -35,6 +35,7 @@ def run_clipping_tests(my_predbat):
     failed |= test_calculate_plan_clipping_execution_order(my_predbat)
     failed |= test_inject_clipping_idempotent_multi_run(my_predbat)
     failed |= test_inject_replaces_existing_peak_window(my_predbat)
+    failed |= test_publish_html_plan_overlapping_windows_tuple_limit(my_predbat)
     return failed
 
 
@@ -974,6 +975,37 @@ def test_inject_replaces_existing_peak_window(my_predbat):
 
     if not found_peak:
         print("ERROR: Peak window 720-750 was not found in export_window_best: {}".format(my_predbat.export_window_best))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_publish_html_plan_overlapping_windows_tuple_limit(my_predbat):
+    """Verify that publish_html_plan handles tuple export limits during overlapping windows without TypeError."""
+    print("**** test_publish_html_plan_overlapping_windows_tuple_limit ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.minutes_now = 660  # 11:00
+    my_predbat.forecast_minutes = 24 * 60
+
+    # Overlapping charge and export windows at minute 720
+    my_predbat.charge_window_best = [{"start": 720, "end": 750, "target": 80.0}]
+    my_predbat.charge_limit_best = [8.0]
+    my_predbat.export_window_best = [{"start": 720, "end": 750}]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 50)]
+
+    try:
+        pv_step = {m: 0.0 for m in range(0, 24 * 60, 5)}
+        load_step = {m: 0.1 for m in range(0, 24 * 60, 5)}
+        my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
+    except TypeError as e:
+        print("ERROR: publish_html_plan raised TypeError: {}".format(e))
+        failed = True
+    except Exception as e:
+        print("ERROR: publish_html_plan raised unexpected exception: {}".format(e))
         failed = True
 
     if not failed:
