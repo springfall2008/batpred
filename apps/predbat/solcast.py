@@ -905,13 +905,20 @@ class SolarAPI(ComponentBase):
         # only means anything if both sides are on the same basis. A pv_scaling change part way through the
         # window is applied to the whole of it, which settles as the window rolls over.
         #
-        # Fall back to the state when no history point carries the attribute at all: "now" was added in the
-        # same change that made the state calibrated (c448c9ff), so a history without it was recorded by a
-        # version whose state was the raw forecast anyway.
+        # Fall back to the state, point by point, wherever a history point doesn't carry the attribute:
+        # "now" was added in the same change that made the state calibrated (c448c9ff), so a point without
+        # it was recorded by a version whose state was the raw forecast anyway. Doing this per-point (rather
+        # than only when the whole window lacks the attribute) matters because a user upgrading inside their
+        # recorder's retention window has a genuine mix of pre/post-upgrade points; an all-or-nothing
+        # fallback would silently drop the pre-upgrade days instead of using them.
         forecast_history = self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)
-        forecast_history_raw = history_attribute(forecast_history, state_key="now", attributes=True, scale=self.pv_scaling)
+        forecast_history_raw = history_attribute(forecast_history, state_key="now", attributes=True, scale=self.pv_scaling, fallback_to_state=True)
         if not forecast_history_raw:
-            forecast_history_raw = history_attribute(forecast_history, scale=self.pv_scaling)
+            # Every point lacked "now" and the fallback also found nothing - e.g. the DB mirror's stored
+            # attributes JSON failed to decode for the whole window (db_engine.py). Warn rather than let
+            # calibration silently either disable itself or, if this ever changes, measure against the
+            # calibrated state again.
+            self.log("Warn: SolarAPI: PV Calibration: could not read any raw forecast history from sensor.{}_pv_forecast_h0 (now attribute or state) - calibration may be disabled or degraded".format(self.prefix))
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(forecast_history_raw, self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
 
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)

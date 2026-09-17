@@ -3513,7 +3513,33 @@ def _make_h0_history(now_utc, days_back, raw_kw, calibrated_kw=None):
     return [entries]
 
 
-def _raw_forecast_adjustment(raw_kw, calibrated_kw=None, days_back=5, actual_kw=0.8, pv_scaling=1.0):
+def _make_mixed_h0_history(now_utc, days_back, raw_kw, pre_now_raw_kw, calibrated_kw, pre_now_days):
+    """Build an h0 history where the oldest `pre_now_days` days predate the "now" attribute.
+
+    Reproduces a user upgrading inside their recorder's retention window: the tail of history is
+    genuinely from a version that only ever recorded the raw forecast as the state (c448c9ff added
+    "now" and calibration in the same change, so a point without "now" never carried a calibrated
+    state either). Points within pre_now_days of the window's start get the pre-upgrade shape (state
+    is pre_now_raw_kw, no "now" attribute); the rest get the post-upgrade shape (state is calibrated,
+    "now" carries raw_kw). The two raw levels are deliberately different so that a test measuring the
+    settled adjustment can tell whether the pre-upgrade days were actually used: a per-point fallback
+    uses every day and measures against the blend of both levels; an all-or-nothing fallback only
+    sees the post-upgrade days are non-empty, drops the rest, and measures against raw_kw alone.
+    """
+    entries = []
+    start = now_utc - timedelta(days=days_back + 1)
+    cutover = start + timedelta(days=pre_now_days)
+    for step in range((days_back + 1) * 24 * 2 + 1):
+        point_time = start + timedelta(minutes=30 * step)
+        stamp = point_time.strftime("%Y-%m-%dT%H:%M:%S+0000")
+        if point_time < cutover:
+            entries.append({"last_updated": stamp, "state": str(pre_now_raw_kw), "attributes": {"now10": pre_now_raw_kw, "now90": pre_now_raw_kw, "nowCL": pre_now_raw_kw * 0.9}})
+        else:
+            entries.append({"last_updated": stamp, "state": str(calibrated_kw), "attributes": {"now": raw_kw, "now10": raw_kw, "now90": raw_kw, "nowCL": calibrated_kw}})
+    return [entries]
+
+
+def _raw_forecast_adjustment(raw_kw, calibrated_kw=None, days_back=5, actual_kw=0.8, pv_scaling=1.0, h0_history_builder=None):
     """Run pv_calibration against a real h0 history and return the total adjustment it settles on.
 
     Every past day generates actual_kw continuously, so both the day and the slot ratios reduce to
@@ -3526,7 +3552,10 @@ def _raw_forecast_adjustment(raw_kw, calibrated_kw=None, days_back=5, actual_kw=
     solar = test_api.solar
     base = test_api.mock_base
     solar.pv_scaling = pv_scaling
-    h0_history = _make_h0_history(base.now_utc_exact, days_back, raw_kw, calibrated_kw=calibrated_kw)
+    if h0_history_builder is not None:
+        h0_history = h0_history_builder(base.now_utc_exact)
+    else:
+        h0_history = _make_h0_history(base.now_utc_exact, days_back, raw_kw, calibrated_kw=calibrated_kw)
 
     # Cumulative pv_today kWh keyed by minutes-ago, a constant actual_kw through every past day
     hist = {}
@@ -3591,6 +3620,41 @@ def test_pv_calibration_learns_from_raw_forecast(my_predbat):
         if abs(adjustment - expected) > 0.01:
             print("ERROR: {}: total_adjustment {}, expected {}".format(name, adjustment, expected))
             failed = True
+
+    return failed
+
+
+def test_pv_calibration_learns_from_mixed_upgrade_history(my_predbat):
+    """
+    A history mixing pre-upgrade (no "now" attribute) and post-upgrade points must use all of it.
+
+    Reproduces upgrading inside the HA recorder's retention window: some of the fetched history
+    predates the "now" attribute, the rest postdates it. The per-point fallback in history_attribute
+    should read every day from whichever field it actually has, rather than the old all-or-nothing
+    fallback which only checked whether the whole result was empty and, seeing the post-upgrade days
+    were not, silently dropped the pre-upgrade days entirely.
+
+    5 days of history, 2 pre-upgrade at a raw forecast of 2.0 kW and 3 post-upgrade at 1.0 kW, both
+    against a constant 0.8 kW actual. The two levels are deliberately different so the settled
+    adjustment reveals which days were used: using all 5 days measures against the blended average
+    forecast (0.4 kWh, weighted by the day/slot scoring below); dropping the pre-upgrade days would
+    measure against 1.0 kW alone and settle near 0.8 instead - a value this test would otherwise be
+    unable to distinguish from a correct blend if both levels were equal.
+    """
+    print("  - test_pv_calibration_learns_from_mixed_upgrade_history")
+    failed = False
+
+    days_back = 5
+    pre_now_days = 2
+    raw_kw = 1.0
+    pre_now_raw_kw = 2.0
+    builder = lambda now_utc: _make_mixed_h0_history(now_utc, days_back, raw_kw=raw_kw, pre_now_raw_kw=pre_now_raw_kw, calibrated_kw=0.9, pre_now_days=pre_now_days)
+    adjustment = _raw_forecast_adjustment(1.0, days_back=days_back, h0_history_builder=builder)
+
+    all_post_upgrade_adjustment = _raw_forecast_adjustment(1.0, calibrated_kw=0.9, days_back=days_back)
+    if abs(adjustment - all_post_upgrade_adjustment) < 0.01:
+        print("ERROR: mixed pre/post-upgrade history: total_adjustment {} matches the all-1.0kW result {} - the 2.0kW pre-upgrade days were likely dropped".format(adjustment, all_post_upgrade_adjustment))
+        failed = True
 
     return failed
 
@@ -5292,6 +5356,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_raw_within_ceiling_no_warning(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_learns_from_raw_forecast(my_predbat)
+    failed |= test_pv_calibration_learns_from_mixed_upgrade_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
     failed |= test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat)
     failed |= test_pv_calibration_total_adjustment_recency_weighted(my_predbat)
