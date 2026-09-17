@@ -789,6 +789,14 @@ _CAUTION: If you leave Predbat turned off for a long period of time then the ove
 The **select.predbat_manual_export** selector can be used to manually force Predbat to export within a slot. If you set a force export then this takes priority over force charging.
 
 The **select.predbat_manual_demand** selector is used to force Predbat to demand mode for a slot, this implies no forced grid charging or exporting of the battery.
+
+**select.predbat_manual_car_away** marks half-hour slots when the car will not be plugged in - out at work, out for the afternoon, anywhere.
+Predbat cannot know this in advance: **car_charging_planned** reports whether the car is plugged in _now_, so a plan made this morning will happily
+schedule an afternoon charge for a car that will be gone, and only find out when the afternoon arrives.
+
+A slot marked away is skipped entirely rather than shortened or repriced - if the car is not there, nothing can go into it, from cheap import or
+surplus solar alike. The charge moves to slots the car is present for, so telling Predbat the car leaves at noon lets it charge earlier and use the
+afternoon sun for the house battery instead. Like the other manual overrides it clears itself once the slot has passed.
 House load will be supplied from solar, or the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'Eco' Mode for GivEnergy inverters but other inverters use different terminology.
 

@@ -352,6 +352,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.manual_freeze_charge_times = []
         self.manual_freeze_export_times = []
         self.manual_demand_times = []
+        self.manual_car_away_times = []
         self.manual_all_times = []
         self.manual_api = []
         self.manual_import_rates = {}
@@ -500,6 +501,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Set by fetch_sensor_data_cars() for cars on Octopus Intelligent dispatch slots (#4967).
         self.car_charging_limit_model = None
         self.car_charging_soc = [0]
+        self.car_charging_solar_battery_soc = 0
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
         self.car_charging_loss = 1.0
