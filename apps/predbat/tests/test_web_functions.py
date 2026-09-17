@@ -339,6 +339,30 @@ def run_compare_empty_state_tests(my_predbat, web):
         print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
         failed += 1
 
+    # -------------------------------------------------------------------------
+    print("Test: a tariff whose result was never published to an entity still renders the page (#5133)")
+
+    class _UnpublishedComparison:
+        """Stand-in for Compare holding a result it declined to publish, so there is no entity_id."""
+
+        def get_comparison(self, tariff_id):
+            """Return a stored result with no entity_id, as compare keeps for an unpublishable id."""
+            return {"cost": 123.0, "metric": 100.0, "name": "Unpublishable tariff", "date": ""}
+
+    original_comparison = my_predbat.comparison
+    my_predbat.comparison = _UnpublishedComparison()
+    my_predbat.args["compare_list"] = [{"id": "///", "name": "Unpublishable tariff"}]
+    try:
+        text = asyncio.run(web.html_compare(None)).text
+        if "Unpublishable tariff" not in text:
+            print(f"  ERROR: expected the tariff to still be listed on the Compare page")
+            failed += 1
+    except KeyError as e:
+        print(f"  ERROR: Compare page raised KeyError {e} for a stored result with no entity_id")
+        failed += 1
+    finally:
+        my_predbat.comparison = original_comparison
+
     my_predbat.args = original_args
 
     print("**** Compare empty state tests completed ****")

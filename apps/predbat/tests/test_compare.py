@@ -16,9 +16,13 @@ Covers:
   - hardware isolation between tariffs: overrides applied for tariff N must not
     bleed into tariff N+1 in run_all() (regression for the bug where agile_fixed
     reported a final SOC larger than the normal battery size)
+  - publish_data: the published entity id is a valid Home Assistant one whatever the
+    tariff id contains, and stored results for tariffs dropped from compare_list are
+    not republished forever (#5133)
 """
 
 import inspect
+import re
 
 from compare import Compare
 from const import MINUTE_WATT
@@ -43,14 +47,20 @@ class _FakePredbat:
         self.prefix = "predbat"
         self.currency_symbols = ["£", "p"]
         self.comparisons = {}
+        self.args = {}
+        self.published = []
 
     def log(self, msg):
         """Discard log messages."""
         pass
 
-    def dashboard_item(self, *args, **kwargs):
-        """Stub."""
-        pass
+    def get_arg(self, name, default=None, **kwargs):
+        """Return a stubbed apps.yaml argument."""
+        return self.args.get(name, default)
+
+    def dashboard_item(self, entity, state=None, attributes=None, app=None):
+        """Record what would have been published to HA."""
+        self.published.append({"entity": entity, "state": state, "attributes": attributes})
 
 
 def _make_compare():
@@ -634,6 +644,100 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T23: non-finite override values are skipped")
+
+    # ------------------------------------------------------------------
+    # T24: publish_data - the entity id published for a tariff is always a
+    #      valid Home Assistant one. An id containing a slash used to be
+    #      published verbatim, so /api/states/predbat.compare_tariff_IGO/Prime
+    #      matched no route and logged a 404 warning twice per cycle (#5133)
+    # ------------------------------------------------------------------
+    # Home Assistant's own entity id rule: lowercase/digits/single underscores, no leading
+    # or trailing underscore in either the domain or the object id
+    valid_entity_id = re.compile(r"^(?!.+__)(?!_)[\da-z_]+(?<!_)\.(?!_)[\da-z_]+(?<!_)$")
+    for tariff_id, expected_entity in [
+        ("IGO/Prime", "predbat.compare_tariff_igo_prime"),
+        ("igo_prime", "predbat.compare_tariff_igo_prime"),
+        ("Agile - Fixed", "predbat.compare_tariff_agile_fixed"),
+        ("flux ", "predbat.compare_tariff_flux"),
+    ]:
+        cmp, pb = _make_compare()
+        pb.args["compare_list"] = [{"id": tariff_id, "name": "Test tariff"}]
+        cmp.comparisons = {tariff_id: {"cost": 12.3, "name": "Test tariff"}}
+        cmp.publish_data()
+
+        published = [item["entity"] for item in pb.published]
+        if published != [expected_entity]:
+            print("ERROR T24: tariff id '{}' should publish to [{}], got {}".format(tariff_id, expected_entity, published))
+            failed += 1
+        elif not valid_entity_id.match(published[0]):
+            print("ERROR T24: tariff id '{}' published invalid entity id {}".format(tariff_id, published[0]))
+            failed += 1
+        elif cmp.comparisons[tariff_id].get("entity_id") != expected_entity:
+            print("ERROR T24: stored entity_id should be {}, got {} (the web Compare page reads history from it)".format(expected_entity, cmp.comparisons[tariff_id].get("entity_id")))
+            failed += 1
+        else:
+            print("PASS T24: tariff id '{}' publishes to {}".format(tariff_id, expected_entity))
+
+    # ------------------------------------------------------------------
+    # T25: publish_data - a stored result whose tariff id is no longer in
+    #      compare_list is dropped rather than republished every cycle.
+    #      comparisons.yaml is reloaded at startup, so before this a renamed
+    #      id kept being published for as long as the file survived (#5133)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "igo_prime", "name": "Current tariff"}]
+    cmp.comparisons = {
+        "igo_prime": {"cost": 10.0, "name": "Current tariff"},
+        "old_renamed_id": {"cost": 11.0, "name": "Tariff removed from apps.yaml"},
+    }
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if "old_renamed_id" in cmp.comparisons:
+        print("ERROR T25: stored result for a tariff no longer in compare_list should be discarded, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif "igo_prime" not in cmp.comparisons:
+        print("ERROR T25: the tariff still in compare_list was discarded, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif published != ["predbat.compare_tariff_igo_prime"]:
+        print("ERROR T25: only the tariff still in compare_list should be published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T25: stored results for tariffs dropped from compare_list are not republished")
+
+    # ------------------------------------------------------------------
+    # T26: publish_data - an empty compare_list means compare is not
+    #      configured, not that every tariff was removed, so stored results
+    #      must survive it (otherwise commenting out compare_list for a run
+    #      would throw away the history behind the Compare page)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = []
+    cmp.comparisons = {"igo_prime": {"cost": 10.0, "name": "Current tariff"}}
+    cmp.publish_data()
+
+    if "igo_prime" not in cmp.comparisons:
+        print("ERROR T26: an empty compare_list should not discard stored comparisons")
+        failed += 1
+    else:
+        print("PASS T26: an empty compare_list leaves stored comparisons alone")
+
+    # ------------------------------------------------------------------
+    # T27: publish_data - an id with no characters usable in an entity id is
+    #      skipped rather than publishing predbat.compare_tariff_ (a trailing
+    #      underscore, which Home Assistant rejects just as it does a slash)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "///", "name": "Broken id"}, {"id": "igo_prime", "name": "Current tariff"}]
+    cmp.comparisons = {"///": {"cost": 10.0, "name": "Broken id"}, "igo_prime": {"cost": 11.0, "name": "Current tariff"}}
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if published != ["predbat.compare_tariff_igo_prime"]:
+        print("ERROR T27: an unusable tariff id should be skipped and the rest still published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T27: a tariff id with no usable characters is skipped without blocking the others")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))

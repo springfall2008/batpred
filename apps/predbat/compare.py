@@ -15,6 +15,7 @@ per-tariff plan visualisations.
 
 import os
 import math
+import re
 from datetime import datetime
 from const import MINUTE_WATT
 from utils import dp0, dp2
@@ -25,6 +26,19 @@ import copy
 # 1. Update web UI to show a chart of historical differences
 # 2. Allow change to start/end comparison points e.g. tomorrow or today
 # 3. Consider Octopus API key to access current tariff info and switch links
+
+
+def tariff_entity_slug(tariff_id):
+    """
+    Convert a compare tariff id into the entity id fragment used to publish its sensor.
+
+    Home Assistant only accepts lowercase letters, digits and single non-repeating underscores in
+    an entity id, so any other character is folded to an underscore and leading/trailing ones are
+    dropped. An id containing a slash used to be published verbatim, which made the REST URL
+    /api/states/predbat.compare_tariff_<id> miss its route entirely and log a 404 warning on every
+    publish (GH#5133). Returns an empty string when the id has no usable characters at all.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", str(tariff_id).lower()).strip("_")
 
 
 class Compare:
@@ -458,10 +472,31 @@ class Compare:
         with open(filepath, "w") as f:
             f.write(yaml.dump(save_data, default_flow_style=False))
 
+    def prune_comparisons(self):
+        """
+        Drop stored comparison results for tariff ids that are no longer in compare_list
+
+        The results are persisted in comparisons.yaml and reloaded at startup, so without this a
+        tariff id removed or renamed in apps.yaml keeps being republished to HA forever (GH#5133).
+        An empty compare_list means compare is not configured at all rather than that every tariff
+        was removed, so nothing is dropped in that case.
+        """
+        compare_list = self.pb.get_arg("compare_list", [])
+        if not compare_list:
+            return
+
+        wanted_ids = {compare.get("id", "") for compare in compare_list}
+        stale_ids = [tariff_id for tariff_id in self.comparisons if tariff_id not in wanted_ids]
+        for tariff_id in stale_ids:
+            self.log("Compare, discarding stored result for tariff {} which is no longer in compare_list".format(tariff_id))
+            del self.comparisons[tariff_id]
+
     def publish_data(self):
         """
         Publish comparison data to HA
         """
+        self.prune_comparisons()
+
         for tariff_id in self.comparisons:
             result = self.get_comparison(tariff_id)
 
@@ -482,7 +517,12 @@ class Compare:
                     if item != "html":
                         attributes[item] = value
 
-                entity_id = self.prefix + ".compare_tariff_" + tariff_id
+                slug = tariff_entity_slug(tariff_id)
+                if not slug:
+                    self.log("Warn: Compare, tariff id '{}' has no characters usable in an entity id, not publishing it".format(tariff_id))
+                    continue
+
+                entity_id = self.prefix + ".compare_tariff_" + slug
                 self.dashboard_item(
                     entity_id,
                     state=cost,
