@@ -408,15 +408,19 @@ def test_balance_cross_charging2(my_predbat):
     services = ha.get_service_store()
     ha.service_store_enable = False
 
-    # Should turn off discharge for inverter 0
+    # Stop the SINK, not the source. Inverter 1 (SoC 50) is charging off inverter 0 (SoC 40), so
+    # the emptier battery is feeding the fuller one. Cutting inverter 0's discharge - which is what
+    # this used to do - leaves nothing covering the ~900W house load while inverter 1 is still
+    # drawing, so the whole lot comes in from the grid (GH#3172). Cutting inverter 1's charge only
+    # removes load, so it can never import.
     charge_set = False
     for service, kwargs in services:
-        if service == "number/set_value" and kwargs.get("entity_id") == "number.discharge_rate" and kwargs.get("value") == 0:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.charge_rate_2" and kwargs.get("value") == 0:
             charge_set = True
             break
 
     if not charge_set:
-        print("ERROR: Expected inverter 1 discharge rate to be set to 0 to stop cross-charging")
+        print("ERROR: Expected inverter 1 charge rate to be set to 0 to stop cross-charging")
         return True
 
     print("✓ Test passed: Cross-charging inverter discharge rate set to 0")

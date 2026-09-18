@@ -2484,8 +2484,6 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
 
     above_reserve = [(socs[id] - reserves[id]) >= 4.0 for id in range(num_inverters)]
     below_full = [socs[id] < 100.0 for id in range(num_inverters)]
-    can_power_house = [(total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power for id in range(num_inverters)]
-    can_store_pv = [total_pv_power <= (total_charge_rates - charge_rates[id]) for id in range(num_inverters)]
     power_enough_discharge = [battery_powers[id] >= 50.0 for id in range(num_inverters)]
     power_enough_charge = [battery_powers[id] <= -50.0 for id in range(num_inverters)]
 
@@ -2496,47 +2494,68 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             )
         )
 
-    for this_inverter in range(num_inverters):
-        other_inverter = (this_inverter + 1) % num_inverters
-        if this_inverter not in intent:
-            continue
-        if (
-            balance_discharge
-            and total_discharge_rates > 0
-            and out_of_balance
-            and during_discharge
-            and soc_low[this_inverter]
-            and above_reserve[other_inverter]
-            and can_power_house[this_inverter]
-            and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0)
-        ):
+    # An inverter working against the fleet direction is the wasteful case: energy makes a round
+    # trip through two batteries for no benefit. Correct that first and EXCLUSIVELY - a pass must
+    # never pause in both directions, because the inverters share an AC bus and the remaining units
+    # simply absorb or supply whatever the paused pair stopped doing. Stopping an against-direction
+    # inverter needs no rate guard: it only removes load (fleet discharging) or removes draw (fleet
+    # charging), so it can never leave the house short.
+    if during_discharge:
+        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+    else:
+        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+
+    if against_fleet:
+        if balance_crosscharge:
+            for id in against_fleet:
+                if log_to:
+                    log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
+                if during_discharge:
+                    intent[id]["charge_rate"] = 0
+                else:
+                    intent[id]["discharge_rate"] = 0
+        # Either way this pass is done: while the fleet is fighting itself, SoC balancing on top
+        # would be the second direction of pause we just ruled out.
+        return
+
+    if not out_of_balance:
+        return
+
+    # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
+    # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
+    # ones already taken this pass or two holds each pass a check computed for one.
+    if during_discharge and balance_discharge and total_discharge_rates > 0:
+        held_rate = 0.0
+        for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
+            if not soc_low[id]:
+                continue
+            if not (power_enough_discharge[id] or discharge_rates[id] == 0):
+                continue
+            # Somebody else has to have the energy to take over - any of them, not an arbitrary
+            # index neighbour, which is what the (i + 1) % n ring used to ask (F7).
+            if not any(above_reserve[other] for other in range(num_inverters) if other != id):
+                continue
+            if (total_discharge_rates - held_rate - discharge_rates[id] - 200) < total_battery_power:
+                continue
             if log_to:
-                log_to("BALANCE: Inverter {} is out of balance low - during discharge, holding it using inverter {}".format(this_inverter, other_inverter))
-            intent[this_inverter]["discharge_rate"] = 0
-        elif (
-            balance_charge
-            and total_charge_rates > 0
-            and out_of_balance
-            and during_charge
-            and soc_high[this_inverter]
-            and below_full[other_inverter]
-            and can_store_pv[this_inverter]
-            and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0)
-        ):
+                log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
+            intent[id]["discharge_rate"] = 0
+            held_rate += discharge_rates[id]
+    elif during_charge and balance_charge and total_charge_rates > 0:
+        held_rate = 0.0
+        for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: -socs[id]):
+            if not soc_high[id]:
+                continue
+            if not (power_enough_charge[id] or charge_rates[id] == 0):
+                continue
+            if not any(below_full[other] for other in range(num_inverters) if other != id):
+                continue
+            if total_pv_power > (total_charge_rates - held_rate - charge_rates[id]):
+                continue
             if log_to:
-                log_to("BALANCE: Inverter {} is out of balance high - during charge, holding it".format(this_inverter))
-            intent[this_inverter]["charge_rate"] = 0
-        elif balance_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
-            if log_to:
-                log_to("BALANCE: Inverter {} is cross charging during discharge, holding it".format(this_inverter))
-            if soc_low[this_inverter] and can_power_house[other_inverter]:
-                intent[this_inverter]["charge_rate"] = 0
-            elif can_power_house[this_inverter] and other_inverter in intent:
-                intent[other_inverter]["discharge_rate"] = 0
-        elif balance_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
-            if log_to:
-                log_to("BALANCE: Inverter {} is cross discharging during charge, holding it".format(this_inverter))
-            intent[this_inverter]["discharge_rate"] = 0
+                log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
+            intent[id]["charge_rate"] = 0
+            held_rate += charge_rates[id]
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):
