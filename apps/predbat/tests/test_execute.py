@@ -3234,6 +3234,38 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # A freeze-charge hold on a mixed fleet: the inverter with timed pause holds via pause mode,
+    # the one without expresses the same hold as discharge rate 0. That split is the F5 / #829
+    # shape - with two writers the balancer's reset loop raised the zero back to max. This
+    # characterises today's behaviour so the intent refactor has a regression guard.
+    charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 5.0}]
+    charge_limit_best = [my_predbat.reserve]
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_freeze_hold",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        soc_kw=7.35,
+        soc_kw_array=[4.75, 2.6],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        has_timed_pause_array=[True, False],
+        set_charge_window=True,
+        set_export_window=True,
+        set_discharge_during_charge=False,
+        assert_status="Freeze charging",
+        assert_pause_discharge_array=[True, False],
+        assert_discharge_rate_array=[2600, 0],
+        assert_charge_rate_array=[2600, 2600],
+        assert_immediate_soc_target=50,
+        # Inverter 0 holds via pause mode so its reserve is untouched; inverter 1 has no timed
+        # pause, so the hold is carried by reserve at soc_percent + 1 instead.
+        assert_reserve_array=[0, 51],
+    )
+    if failed:
+        return failed
+
     return failed
 
 
