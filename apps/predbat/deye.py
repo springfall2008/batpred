@@ -1407,8 +1407,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return False
 
     async def save_control(self):
-        """Cache control state: what was last written, and any order still in flight."""
-        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count})
+        """Cache control state: what was last written, any order still in flight, and control_active.
+
+        Believed to be the same bug as batpred#5138 (Sunsynk), found by reading this file
+        alongside the Sunsynk fix rather than from a reported deye.py incident: without
+        control_active surviving a restart, _reconcile_control (deye.py:1664) stays gated off
+        for every inverter until a fresh write-button event happens to arrive - silently
+        skipping every automatic re-apply, including one meant to stop an export already in
+        progress, until something unrelated re-arms it. Fixed the same way as sunsynk.py and
+        alphaess.py, which already persist control_active for exactly this reason.
+        """
+        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's refresh clock.
@@ -1476,6 +1485,15 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if isinstance(applied, dict) and applied:
                 if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
                     self.applied_payload = applied
+                    # Restored alongside applied_payload, not just it: control_active is what
+                    # actually lets _reconcile_control write at all (deye.py:1664), so restoring
+                    # applied_payload without it would still leave every inverter silently
+                    # unmanaged after a restart. Past the age bound both are dropped together,
+                    # so a stale cache still forces a fresh write-button press to recommit,
+                    # rather than trusting old control state indefinitely.
+                    active = control.get("control_active")
+                    if isinstance(active, list):
+                        self.control_active = set(active)
                 else:
                     # Deliberately discarded. This cache asserts the inverter still holds
                     # what Predbat last wrote; after a long gap that may be false, and a
