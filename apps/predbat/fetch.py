@@ -2685,29 +2685,44 @@ class Fetch:
             # streak's original evidence rather than collapsing onto the slot just confirmed.
             streak_anchor = self.car_charging_now_streak_last_read[car_n]
 
+            # A transient HA "unknown"/"unavailable" reading (tristate None) is no evidence either
+            # way, not a confirmed stop - ending the streak on it would drop confirmation after a
+            # sensor hiccup or restart even though the car may still be charging throughout. Only a
+            # real negative reading (tristate False) ends the streak; None falls through the same as
+            # a True read inside the guard window.
+            charging_now_tristate = self.get_car_charging_now_tristate(car_n)
+
             if slot_reading_confirms:
                 self.car_charging_now_confirmed_slots[car_n].add(current_slot_start)
                 self.car_charging_now_streak_last_read[car_n] = current_slot_start
-            elif not charging_now:
+            elif charging_now_tristate is False:
                 # Clearing the anchor too skips the backfill, so nothing is confirmed on the strength
                 # of a streak this read just ended.
                 streak_anchor = None
                 self.car_charging_now_streak_last_read[car_n] = None
-            # The third case (True inside the guard window) intentionally falls through untouched.
+            # The remaining cases (True inside the guard window, or an unknown/unavailable reading)
+            # intentionally fall through untouched.
             # Corollary worth knowing: if a streak has lapsed and every subsequent positive read lands
             # inside the guard window, no new streak starts and "started" silently behaves as
             # "none" for that car. It needs replans to have all but stopped for a whole slot, so
             # it is unlikely at the ~15s poll cadence, and it fails safe (under-trusting, not over-).
 
             # Confirm every slot from the anchor to now, so slots no replan happened to land in are
-            # still covered. Idempotent.
+            # still covered. Idempotent. streak_anchor here is deliberately the *previous* cycle's
+            # anchor (read above, before slot_reading_confirms could reassign it) - a fresh read this
+            # cycle still wants the gap since that old anchor backfilled (Test 3: resuming a streak at
+            # slot 4 must retroactively confirm slots 2 and 3 too). What must NOT happen is the
+            # cap-exceeded branch clobbering an anchor this cycle just (re-)set: a streak that had
+            # already lapsed past the rollover cap, followed by a fresh confirming read this cycle,
+            # would otherwise immediately wipe the anchor slot_reading_confirms just wrote, discarding
+            # the fresh confirm it was supposed to record (Copilot review on #5110).
             if streak_anchor is not None:
                 slots_since_anchor = (current_slot_start - streak_anchor) // 30
                 if 0 <= slots_since_anchor <= CAR_CHARGING_NOW_STREAK_MAX_ROLLOVER_SLOTS:
                     # + 30 rather than + 1: range()'s stop is exclusive and a step is a whole slot.
                     for backfill_slot in range(streak_anchor, current_slot_start + 30, 30):
                         self.car_charging_now_confirmed_slots[car_n].add(backfill_slot)
-                else:
+                elif not slot_reading_confirms:
                     # Cap exceeded with no fresh evidence - lapse the streak, but leave slots already
                     # confirmed while it was valid alone.
                     self.car_charging_now_streak_last_read[car_n] = None
