@@ -646,7 +646,11 @@ class Inverter:
             self.reserve_percent = min(self.reserve_percent, device_max)
         self.reserve = dp3(self.soc_max * self.reserve_percent / 100.0)
 
-        # Max inverter rate override
+        # Max inverter rate override. Reset to the standing default before the conditional
+        # re-read, or a key removed at runtime (or popped by a test) would leave the previous
+        # cycle's override in place indefinitely instead of reverting.
+        self.inverter_limit = 7500.0 / MINUTE_WATT
+        self.export_limit = 99999.0 / MINUTE_WATT
         if "inverter_limit" in self.base.args:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:

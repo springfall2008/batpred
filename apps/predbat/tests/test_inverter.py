@@ -2893,9 +2893,9 @@ def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_p
     failed = False
     print("Test: {}".format(test_name))
 
-    # The suite shares one PredBat/HA fixture across every registry test, so anything mutated here
-    # has to be put back or a later test runs against altered config (batpred#5079, and the same
-    # review point raised on batpred#4711).
+    # run_inverter_tests() shares one PredBat/HA fixture across its scenarios, so anything mutated
+    # here has to be put back or a later scenario runs against altered config (batpred#5079, and
+    # the same review point raised on batpred#4711).
     unset = object()
     arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
     item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
