@@ -965,6 +965,14 @@ class Fetch:
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
+        if self.get_arg("eon_optimise_enable", False):
+            from eon_optimise import validate_planner_source
+
+            try:
+                validate_planner_source(self)
+            except ValueError as exc:
+                self.record_status(message=str(exc), had_errors=True)
+                raise
 
         prev_octopus_slots = self.octopus_slots.copy()
         prev_octopus_saving_slots = self.octopus_saving_slots.copy()
@@ -1116,6 +1124,8 @@ class Fetch:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
             import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            if self.get_arg("eon_optimise_enable", False) and self.minutes_now not in import_rates:
+                raise ValueError("E.ON Optimise: current import sensor price unavailable")
             if not import_rates:
                 self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
@@ -1193,6 +1203,8 @@ class Fetch:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
             export_rates = self.fetch_octopus_rates(entity_id)
+            if self.get_arg("eon_optimise_enable", False) and self.minutes_now not in export_rates:
+                raise ValueError("E.ON Optimise: current export sensor price unavailable")
             if not export_rates:
                 self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)

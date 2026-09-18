@@ -64,6 +64,25 @@ def coverage(rates, now):
     return current, until.isoformat() if until else None
 
 
+def validate_cached_rates(rates):
+    """Validate normalised cache rows without reconstructing an API response."""
+    if not isinstance(rates, dict) or set(rates) != {"import", "export"}:
+        raise ValueError("Invalid cached channels")
+    for rows in rates.values():
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("Missing cached prices")
+        previous = None
+        for row in rows:
+            start, end = parse_time(row["valid_from"]), parse_time(row["valid_to"])
+            price = row["value_inc_vat"]
+            if start.minute not in (0, 30) or start.second or start.microsecond or end - start != timedelta(minutes=30) or (previous is not None and start <= previous):
+                raise ValueError("Invalid cached interval")
+            if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or row["source_quality"] not in ("current", "history", "forecast"):
+                raise ValueError("Invalid cached price")
+            previous = start
+    return rates
+
+
 GRAPHQL_URL = "https://backend.production.eon-next.amber-international.com.au/graphql"
 AUTH_URL = "https://cognito-idp.eu-west-2.amazonaws.com/"
 CLIENT_ID = "5tjc4igm29bcmsal7eridtuii6"  # cspell:disable-line

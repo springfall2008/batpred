@@ -49,6 +49,12 @@ both inputs to its sensors, replacing existing manual sensor bindings. Keep the
 existing standing-charge configuration: this endpoint does not return a
 standing charge, so this component neither guesses nor overwrites one.
 
+Remove `rates_import_octopus_url` and `rates_export_octopus_url` keys entirely,
+including empty entries. They take precedence over sensors in Predbat. The
+component and planner reject these settings, a configured `kraken_provider`,
+or a configured Octopus API account/key pair rather than silently using another
+tariff. The planner also checks that both sensor bindings still belong to E.ON.
+
 ## Published entities
 
 With the default `predbat` prefix:
@@ -81,11 +87,20 @@ or authentication tokens in the price cache. Responses expire after 15 minutes;
 a restart or failed fetch never resets their age. Missing current coverage or
 expired data publishes empty rate lists with an explicit unavailable status.
 
-The source AlphaESS fork has `NEXT_OPTIMISE` coverage guards that bound planning
-to contiguous published import/export intervals and reject an empty current
-horizon. These guards are not included in this upstream draft yet. Equivalent
-missing-price handling is required before this component is ready for live use
-on upstream Predbat. No new fixed fallback price is introduced by this component.
+The planner checks freshness and current import/export coverage before starting
+a new calculation, and rejects missing current sensor prices before basic-rate
+fallback. This blocks a new calculation; it does not cancel commands already
+sent to an inverter.
+
+For gaps beyond the current interval, use the same shared `rate_replicate`
+behaviour as Kraken: copy the previous day's available rates, or use the last
+available rate where no matching interval exists. Predbat's configured future
+rate adjustments still apply. Replicated intervals remain marked as estimates
+in the planner; they are not published as new supplier rates. Shortened forecasts
+replace the supplier data, then this common estimation fills future gaps.
+Unlike Kraken's longer-lived cache, this app feed expires after 15 minutes
+because its prices can change during the day. No new fixed fallback price is
+introduced, and the planning horizon is not restricted to published intervals.
 
 ## Scope and validation
 

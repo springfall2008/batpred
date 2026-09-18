@@ -8,10 +8,33 @@ import aiohttp
 
 from component_base import ComponentBase
 from eon_optimise_client import OptimiseClient, AuthenticationError, PriceFeedError
-from eon_optimise_rates import coverage, normalise_response, parse_time
+from eon_optimise_rates import coverage, parse_time, validate_cached_rates
 
 POLL_SECONDS = 300
 MAX_AGE_SECONDS = 900
+CACHE_VERSION = 1
+
+
+def validate_sources(args):
+    """Reject ambiguous price ownership without logging configuration values."""
+    conflicts = [key for key in ("rates_import_octopus_url", "rates_export_octopus_url") if key in args]
+    if args.get("kraken_provider"):
+        conflicts.append("kraken_provider")
+    if args.get("octopus_api_key") and args.get("octopus_api_account"):
+        conflicts.append("octopus_api_account")
+    if conflicts:
+        raise ValueError("E.ON Optimise: remove conflicting tariff settings: " + ", ".join(conflicts))
+
+
+def validate_planner_source(base):
+    """Block a new calculation before URL selection or basic-rate fallback."""
+    validate_sources(base.args)
+    api = base.components.get_component("eon_optimise") if base.components else None
+    if api is None or not api.usable(datetime.now(timezone.utc)):
+        raise ValueError("E.ON Optimise: current import/export prices unavailable; check the component status")
+    for channel in ("import", "export"):
+        if base.args.get("metric_octopus_" + channel) != api.entity(channel + "_rates"):
+            raise ValueError("E.ON Optimise: tariff sensor binding changed; disable the competing price provider")
 
 
 class EonOptimiseAPI(ComponentBase):
@@ -26,7 +49,6 @@ class EonOptimiseAPI(ComponentBase):
         self.attempted_at = None
         self.error = None
         self.cache_key = hashlib.sha256((email or "").strip().lower().encode()).hexdigest()
-        self.wired = False
         self.restored = False
         self.run_timeout = 120
 
@@ -36,9 +58,19 @@ class EonOptimiseAPI(ComponentBase):
 
     def usable(self, now):
         """Require a recent response and current coverage in both channels."""
-        if self.fetched_at is None or not 0 <= (now - self.fetched_at).total_seconds() < MAX_AGE_SECONDS:
-            return False
-        return all(coverage(self.rates[ch], now)[0] is not None for ch in ("import", "export"))
+        return self.price_status(now)[0]
+
+    def price_status(self, now):
+        """Calculate freshness and both coverage summaries once per publication."""
+        summaries = {ch: coverage(rows, now) for ch, rows in self.rates.items()}
+        fresh = self.fetched_at is not None and 0 <= (now - self.fetched_at).total_seconds() < MAX_AGE_SECONDS
+        return fresh and all(current is not None for current, until in summaries.values()), summaries
+
+    def bind_sources(self):
+        """Validate configuration before binding both planner price inputs."""
+        validate_sources(self.base.args)
+        for channel in ("import", "export"):
+            self.set_arg("metric_octopus_" + channel, self.entity(channel + "_rates"))
 
     async def restore_cache(self, now):
         """Restore price evidence only; never renew timestamps or persist tokens."""
@@ -50,7 +82,9 @@ class EonOptimiseAPI(ComponentBase):
             return
         try:
             fetched = parse_time(cached["fetched_at"])
-            rates = normalise_response(cached["payload"])
+            if cached.get("version") != CACHE_VERSION:
+                return
+            rates = validate_cached_rates(cached["rates"])
             if not 0 <= (now - fetched).total_seconds() < MAX_AGE_SECONDS:
                 return
         except (KeyError, TypeError, ValueError, AttributeError):
@@ -61,17 +95,7 @@ class EonOptimiseAPI(ComponentBase):
         """Store only requested price fields, using the existing Storage component."""
         if not self.storage:
             return
-        windows = []
-        for channel, rows in self.rates.items():
-            groups = {"previousPeriods": [], "forecastPeriods": []}
-            for row in rows:
-                item = dict(start=row["valid_from"], kwhPriceInCents=row["value_inc_vat"] * (-1 if channel == "export" else 1), estimate=row.get("provider_estimate"))
-                if row["source_quality"] == "current":
-                    groups["currentPeriod"] = item
-                else:
-                    groups["forecastPeriods" if row["source_quality"] == "forecast" else "previousPeriods"].append(item)
-            windows.append(dict(usageType="GENERAL" if channel == "import" else "FEED_IN", **groups))
-        await self.storage.save("eon_optimise", self.cache_key, dict(payload={"data": {"sitePricing": {"meterWindows": windows}}}, fetched_at=self.fetched_at.isoformat()), format="yaml", expiry=self.fetched_at + timedelta(seconds=MAX_AGE_SECONDS))
+        await self.storage.save("eon_optimise", self.cache_key, dict(version=CACHE_VERSION, rates=self.rates, fetched_at=self.fetched_at.isoformat()), format="yaml", expiry=self.fetched_at + timedelta(seconds=MAX_AGE_SECONDS))
 
     async def fetch_prices(self):
         """Bound each request and retain the in-memory authentication session."""
@@ -83,12 +107,12 @@ class EonOptimiseAPI(ComponentBase):
             return await self.client.fetch(asyncio.to_thread)
 
     def publish(self, now):
-        """Withdraw stale rates explicitly so the existing horizon guard applies."""
-        usable = self.usable(now)
+        """Publish supplier evidence separately from planner source binding."""
+        usable, summaries = self.price_status(now)
         status = "cached" if usable and self.error else "current" if usable else "unavailable"
         for channel in ("import", "export"):
             rows = self.rates[channel] if usable else []
-            current, until = coverage(rows, now)
+            current, until = summaries[channel] if usable else (None, None)
             self.dashboard_item(
                 self.entity(channel + "_rates"),
                 state=len(rows),
@@ -113,16 +137,16 @@ class EonOptimiseAPI(ComponentBase):
             attributes={"friendly_name": "E.ON Next Optimise Status", "refresh_error": self.error, "last_success": self.fetched_at.isoformat() if self.fetched_at else None, "poll_seconds": POLL_SECONDS, "max_age_seconds": MAX_AGE_SECONDS},
             app="eon_optimise",
         )
-        # Opting in makes this the price owner, including when unavailable: never
-        # silently revert to an unrelated tariff or retain expired rate sensors.
-        if not self.wired:
-            self.set_arg("metric_octopus_import", self.entity("import_rates"))
-            self.set_arg("metric_octopus_export", self.entity("export_rates"))
-            self.wired = True
         return usable
 
     async def run(self, seconds, first):
         """Poll five-minutely; publish freshness on each component housekeeping tick."""
+        try:
+            self.bind_sources()
+        except ValueError as exc:
+            self.error = str(exc)
+            self.log("Error: " + self.error)
+            return False
         now = datetime.now(timezone.utc)
         if not self.restored:
             await self.restore_cache(now)

@@ -6,9 +6,10 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-from eon_optimise import EonOptimiseAPI
+from eon_optimise import EonOptimiseAPI, validate_planner_source
 from eon_optimise_client import OptimiseClient, AuthenticationError, PriceFeedError
-from eon_optimise_rates import normalise_response
+from eon_optimise_rates import normalise_response, validate_cached_rates
+from fetch import Fetch
 
 
 def payload(now=None, price=3, export=-2):
@@ -28,6 +29,7 @@ def component():
     base = MagicMock()
     base.prefix = "predbat"
     base.args = {}
+    base.set_arg.side_effect = base.args.__setitem__
     base.components = None
     return EonOptimiseAPI(base, enabled=True, email="example@example.invalid", password="test-private-password")
 
@@ -147,7 +149,7 @@ class EonOptimiseTests(unittest.IsolatedAsyncioTestCase):
         api.fetched_at = datetime.now(timezone.utc)
         await api.save_cache()
         cached = store.save.call_args.args[2]
-        self.assertEqual(set(cached), {"payload", "fetched_at"})
+        self.assertEqual(set(cached), {"version", "rates", "fetched_at"})
         self.assertNotIn(api.password, str(cached))
         self.assertNotIn(api.email, str(cached))
         restored = component()
@@ -158,6 +160,94 @@ class EonOptimiseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.fetched_at, api.fetched_at)
         await restored.restore_cache(datetime.now(timezone.utc) + timedelta(minutes=16))
         self.assertFalse(restored.usable(datetime.now(timezone.utc) + timedelta(minutes=16)))
+
+    async def test_conflicts_block_consumer_before_url_download(self):
+        """Exercise the real fetch entry point, including conflicts after startup."""
+        api = component()
+        api.fetch_prices = AsyncMock(return_value=normalise_response(payload()))
+        await api.run(0, True)
+        base = api.base
+        base.args["eon_optimise_enable"] = True
+        base.get_arg.side_effect = lambda key, default=None: base.args.get(key, default)
+        for conflict in ({"rates_import_octopus_url": "https://example.invalid/private"}, {"rates_export_octopus_url": None}, {"kraken_provider": "eon"}, {"octopus_api_key": "private", "octopus_api_account": "private"}):
+            with self.subTest(conflict=list(conflict)):
+                base.args.update(conflict)
+                with self.assertRaisesRegex(ValueError, "conflicting tariff settings") as error:
+                    Fetch.fetch_sensor_data(base)
+                self.assertNotIn("private", str(error.exception))
+                base.download_octopus_rates.assert_not_called()
+                base.basic_rates.assert_not_called()
+                for key in conflict:
+                    del base.args[key]
+
+    async def test_consumer_rejects_stale_missing_and_rebound_source(self):
+        """Validate current evidence at consumption, even between publish ticks."""
+        api = component()
+        api.fetch_prices = AsyncMock(return_value=normalise_response(payload()))
+        await api.run(0, True)
+        base = api.base
+        base.components = MagicMock()
+        base.components.get_component.return_value = api
+        validate_planner_source(base)
+        base.args["metric_octopus_import"] = "sensor.old_tariff"
+        with self.assertRaisesRegex(ValueError, "binding changed"):
+            validate_planner_source(base)
+        api.bind_sources()
+        api.fetched_at -= timedelta(minutes=16)
+        with self.assertRaisesRegex(ValueError, "unavailable"):
+            validate_planner_source(base)
+        api.fetched_at = datetime.now(timezone.utc)
+        api.rates["export"] = []
+        with self.assertRaisesRegex(ValueError, "unavailable"):
+            validate_planner_source(base)
+
+    def test_cache_rejects_invalid_normalised_rows(self):
+        """Malformed caches cannot bypass response validation or invert signs."""
+        for key, value in (("value_inc_vat", float("nan")), ("value_inc_vat", True), ("valid_to", "2020-01-01T00:00:00+00:00"), ("source_quality", "unknown")):
+            rates = normalise_response(payload())
+            rates["export"][0][key] = value
+            with self.assertRaises(ValueError):
+                validate_cached_rates(rates)
+
+    async def test_consumer_rejects_missing_sensor_current_price(self):
+        """Healthy component memory cannot hide missing published sensor prices."""
+        api = component()
+        api.fetch_prices = AsyncMock(return_value=normalise_response(payload()))
+        await api.run(0, True)
+        base = api.base
+        base.args["eon_optimise_enable"] = True
+        base.get_arg.side_effect = lambda key, default=None, **kwargs: base.args.get(key, default)
+        base.components = MagicMock()
+        base.components.get_component.side_effect = lambda name: api if name == "eon_optimise" else None
+        base.num_cars, base.minutes_now, base.max_days_previous = 0, 600, 7
+        base.import_today_now = base.export_today_now = base.pv_today_now = 0
+        base.fetch_extra_load_forecast.return_value = ({0: 1}, [])
+        base.get_history_wrapper.return_value = []
+        base.carbon_enable = False
+        for channel in ("import", "export"):
+            for missing in ({}, {630: 8}):
+                with self.subTest(channel=channel, sensor=missing):
+                    base.fetch_octopus_rates.side_effect = lambda entity, **kwargs: missing if entity == api.entity(channel + "_rates") else {600: 3}
+                    with self.assertRaisesRegex(ValueError, "current " + channel + " sensor price unavailable"):
+                        Fetch.fetch_sensor_data(base)
+                    base.basic_rates.assert_not_called()
+                    base.rate_replicate.assert_not_called()
+
+    def test_future_gaps_use_shared_kraken_replication(self):
+        """Supplier prices win; missing future prices use the common estimates."""
+        base = MagicMock()
+        base.forecast_minutes = 2 * 1440
+        base.metric_future_rate_offset_import = 0
+        base.metric_future_rate_offset_export = 0
+        base.get_arg.return_value = False
+        for is_import in (True, False):
+            rates, copied = Fetch.rate_replicate(base, {0: 3.0, 30: 8.0, 1440: 4.0}, is_import=is_import)
+            self.assertEqual(rates[1440], 4.0)
+            self.assertNotIn(1440, copied)
+            self.assertEqual(rates[1470], 8.0)
+            self.assertEqual(copied[1470], "copy")
+        rates, copied = Fetch.rate_replicate(base, {})
+        self.assertEqual(rates, {})
 
     async def test_auth_retry_and_error_redaction(self):
         """Retry a 401 once, never expose authentication exception details."""
