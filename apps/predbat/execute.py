@@ -17,7 +17,7 @@ reserve level adjustments, and multi-inverter balancing.
 
 from datetime import timedelta, datetime
 from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, export_mode_of, export_power_of, export_target_of
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -188,6 +188,43 @@ class Execute:
             log_to=self.log,
         )
 
+    def allocate_fleet_export_rates(self):
+        """
+        Split the planned fleet export power across the inverters, by how much each has to shed.
+
+        A fleet-level pre-pass because it needs every inverter's target, which is why it cannot
+        live inside execute_plan's per-inverter loop. adjust_battery_target_multi(check=True) is
+        the existing non-writing probe, so nothing is written here.
+
+        Outside low power mode the planned power equals the sum of the ceilings, so every inverter
+        clamps at its own maximum and this reproduces today's uniform scaling exactly.
+
+        Returns:
+        - dict: inverter id -> export rate in W, empty when no export is planned
+        """
+        if not self.export_limits_best or not self.set_export_window:
+            return {}
+        if export_mode_of(self.export_limits_best[0]) != EXPORT_MODE_TARGET:
+            return {}
+
+        export_rate_adjust = export_power_of(self.export_limits_best[0]) if self.set_export_low_power else 1.0
+        export_target_percent = self.export_target_soc_percent()
+
+        needs = []
+        max_rates = []
+        for inverter in self.inverters:
+            inv_target_percent = self.adjust_battery_target_multi(inverter, export_target_percent, False, True, check=True)
+            target_kwh = inv_target_percent * inverter.soc_max / 100.0
+            needs.append(max(0.0, inverter.soc_kw - target_kwh))
+            max_rates.append(inverter.battery_rate_max_export * MINUTE_WATT)
+
+        allocation = allocate_export_rates(needs, max_rates, sum(max_rates) * export_rate_adjust)
+        result = {}
+        for index, inverter in enumerate(self.inverters):
+            result[inverter.id] = allocation[index]
+        self.log("Export allocation: needs {}kWh ceilings {}W adjust {} -> {}W".format([dp2(need) for need in needs], [dp0(rate) for rate in max_rates], export_rate_adjust, [dp0(rate) for rate in allocation]))
+        return result
+
     def apply_inverter_rates(self, inverter, intent):
         """
         Write one inverter's charge and discharge rates from its intent.
@@ -259,6 +296,7 @@ class Execute:
         isCharging = False
         isExporting = False
         intent = {}
+        export_rate_alloc = self.allocate_fleet_export_rates()
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -587,7 +625,7 @@ class Execute:
 
                         self.log("Exporting now - current SoC {}kWh and target {}kWh and power adjust {}".format(self.soc_kw, dp2(discharge_soc), export_rate_adjust))
 
-                        discharge_rate = inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT
+                        discharge_rate = export_rate_alloc.get(inverter.id, inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
                         rate_owner = "export"
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:

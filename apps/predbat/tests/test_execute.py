@@ -275,6 +275,11 @@ def run_execute_test(
         assert_discharge_rate = battery_max_rate
     if battery_max_export_rate is None:
         battery_max_export_rate = battery_max_rate
+    # Mirror the scalar fallback for the arrays: a per-inverter rate ceiling with no explicit
+    # export array means the export ceiling follows it, exactly as battery_max_export_rate
+    # follows battery_max_rate above.
+    if battery_max_export_rate_array is None and battery_max_rate_array is not None:
+        battery_max_export_rate_array = list(battery_max_rate_array)
 
     total_inverters = len(my_predbat.inverters)
     # Fleet totals are summed from the per-inverter values rather than assumed uniform, so a
@@ -3285,6 +3290,38 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_quick_poll_rebalance_guards(my_predbat)
+    if failed:
+        return failed
+
+    # Mixed fleet exporting to empty at 70% of fleet max. With a target of 0 the per-inverter
+    # needs are the raw SoCs (9:1), which is NOT proportional to the rate ceilings (2600:1000) -
+    # so the allocation genuinely differs from uniform scaling. The fuller inverter does more of
+    # the work, and the fleet still delivers exactly the power the planner costed.
+    export_window_best_alloc = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 20.0}]
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_export_allocation",
+        export_window_best=export_window_best_alloc,
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0, 0.7)],
+        assert_force_export=True,
+        soc_kw=10.0,
+        soc_kw_array=[9.0, 1.0],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 1000],
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        # Uniform scaling would give [1820, 700]. Allocating by need instead sends the fuller
+        # inverter to 2268W and the emptier one to 252W - and 2268 + 252 = 2520 = 3600W * 0.7,
+        # exactly the fleet power the planner costed.
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_discharge_rate_array=[2268, 252],
+        assert_charge_rate_array=[2600, 1000],
+    )
     if failed:
         return failed
 

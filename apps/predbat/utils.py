@@ -2537,3 +2537,63 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             if log_to:
                 log_to("BALANCE: Inverter {} is cross discharging during charge, holding it".format(this_inverter))
             intent[this_inverter]["discharge_rate"] = 0
+
+
+def allocate_export_rates(needs, max_rates, p_fleet):
+    """
+    Split the planned fleet export power across inverters by how much each still has to shed.
+
+    The planner costs a specific fleet export power (the low power ladder in plan.py), so the sum
+    of the allocation is pinned to it and only the split varies. An inverter already at its target
+    takes none of the budget and its share spills to inverters that can still deliver, which is
+    what stops fleet export power sagging below plan as inverters finish one by one.
+
+    At full rate p_fleet equals the sum of the ceilings, so every inverter clamps at its own
+    maximum and this reduces to exactly today's uniform scaling.
+
+    Args:
+        needs (list): kWh each inverter still has to shed before reaching its own target
+        max_rates (list): per-inverter export ceiling in W
+        p_fleet (float): planned fleet export power in W
+
+    Returns:
+    - list: export rate in W per inverter, summing to min(p_fleet, sum(max_rates))
+    """
+    count = len(max_rates)
+    if count == 0:
+        return []
+
+    remaining = min(p_fleet, sum(max_rates))
+    if remaining <= 0:
+        return [0.0] * count
+
+    shares = [need if need > 0 else 0.0 for need in needs]
+    if sum(shares) <= 0:
+        # Nothing to shed anywhere - fall back to the uniform split rather than dividing by zero
+        shares = [1.0] * count
+
+    alloc = [0.0] * count
+    open_set = [id for id in range(count) if shares[id] > 0]
+
+    # Water-fill: hand out the budget in proportion to need, clamp anyone who hits their ceiling,
+    # then redistribute what they could not take among those still open. Terminates because each
+    # pass either closes at least one inverter or places the whole remainder.
+    while remaining > 0.01 and open_set:
+        share_total = sum(shares[id] for id in open_set)
+        if share_total <= 0:
+            break
+        clamped_any = False
+        budget = remaining
+        for id in list(open_set):
+            want = alloc[id] + budget * (shares[id] / share_total)
+            if want >= max_rates[id]:
+                remaining -= max_rates[id] - alloc[id]
+                alloc[id] = max_rates[id]
+                open_set.remove(id)
+                clamped_any = True
+        if not clamped_any:
+            for id in open_set:
+                alloc[id] += remaining * (shares[id] / share_total)
+            remaining = 0.0
+
+    return alloc
