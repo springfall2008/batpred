@@ -4,7 +4,7 @@ import copy
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from eon_optimise import EonOptimiseAPI, validate_planner_source
 from eon_optimise_client import OptimiseClient, AuthenticationError, PriceFeedError
@@ -268,6 +268,63 @@ class EonOptimiseTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PriceFeedError) as error:
             await client.fetch(asyncio.to_thread)
         self.assertNotIn("private-password", str(error.exception))
+
+    def test_refresh_and_revoked_session(self):
+        """Renew valid sessions; use password sign-in once for a revoked session."""
+        from botocore.exceptions import ClientError
+
+        for revoked in (False, True):
+            with self.subTest(revoked=revoked), patch("pycognito.Cognito") as factory:
+                cognito = factory.return_value
+                cognito.id_token = None
+                cognito.refresh_token = "private-refresh"
+
+                def renew():
+                    """Simulate the documented token-renewal outcomes."""
+                    if revoked:
+                        raise ClientError({"Error": {"Code": "NotAuthorizedException", "Message": "private"}}, "refresh")
+                    cognito.id_token = "private-id"
+
+                cognito.renew_access_token.side_effect = renew
+                cognito.authenticate.side_effect = lambda password: setattr(cognito, "id_token", "private-id")
+                client = OptimiseClient(None, "private-email", "private-password", refresh_token="private-refresh")
+                client.authenticate()
+                cognito.renew_access_token.assert_called_once()
+                self.assertEqual(cognito.authenticate.call_count, int(revoked))
+                self.assertEqual(client.id_token, "private-id")
+
+    def test_auth_challenge_and_transient_refresh_are_sanitised(self):
+        """Unsupported challenges and transport errors do not leak credentials."""
+        for refresh in (None, "private-refresh"):
+            with self.subTest(refresh=bool(refresh)), patch("pycognito.Cognito") as factory:
+                cognito = factory.return_value
+                cognito.id_token = None
+                cognito.renew_access_token.side_effect = RuntimeError("private-refresh")
+                cognito.authenticate.side_effect = RuntimeError("private-password")
+                client = OptimiseClient(None, "private-email", "private-password", refresh_token=refresh)
+                with self.assertRaises((AuthenticationError, PriceFeedError)) as error:
+                    client.authenticate()
+                self.assertNotIn("private", str(error.exception))
+                if refresh:
+                    cognito.authenticate.assert_not_called()
+
+    async def test_volunteer_probe_reads_twice_without_control(self):
+        """The standalone helper uses only the price client and requests renewal."""
+        import importlib.util
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[3] / "tools" / "eon_optimise_probe.py"
+        spec = importlib.util.spec_from_file_location("eon_optimise_probe", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        client = MagicMock()
+        client.fetch = AsyncMock(return_value=normalise_response(payload()))
+        with patch.object(module, "OptimiseClient", return_value=client):
+            rates = await module.probe("private-email", "private-password")
+        self.assertEqual(client.fetch.await_count, 2)
+        self.assertEqual(client.expires, 0)
+        self.assertEqual(set(rates), {"import", "export"})
+        self.assertNotIn("private", str(rates))
 
     async def test_shortened_forecast_replaces_old_future(self):
         """A shorter response must not retain the previous forecast's tail."""
