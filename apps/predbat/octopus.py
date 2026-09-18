@@ -67,6 +67,24 @@ BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
 
 
+def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
+    """
+    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+
+    The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
+    same validity window. minute_data() writes each row over its range, so whichever row comes last
+    in the response wins, and that order is not stable across periods. Rows with no payment_method
+    (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
+    method, which keeps single-variant tariffs behaving exactly as before.
+    """
+    if not rates:
+        return rates
+    methods = {rate.get("payment_method") for rate in rates if isinstance(rate, dict)}
+    if preferred not in methods:
+        return rates
+    return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
+
+
 def is_active(now_utc, activeFrom, activeTo):
     if not activeFrom:
         return False
@@ -1851,6 +1869,7 @@ class OctopusAPI(ComponentBase):
                     if valid_to is None:
                         rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
 
+            tariff_data = filter_payment_method(tariff_data)
             pdata, ignore_io = minute_data(tariff_data, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
             return pdata
         else:
@@ -2759,6 +2778,7 @@ class Octopus:
             url = data.get("next", None)
             pages += 1
 
+        mdata = filter_payment_method(mdata)
         pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
