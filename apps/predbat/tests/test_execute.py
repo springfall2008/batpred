@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.test_infra import reset_inverter
-from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE
+from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, MINUTE_WATT
 from utils import pack_export_limit
 from utils import calc_percent_limit
 
@@ -604,6 +604,78 @@ def test_export_target_soc_percent(my_predbat):
         failed = True
 
     my_predbat.export_limits_best, my_predbat.set_reserve_enable, my_predbat.reserve, my_predbat.best_soc_min, my_predbat.soc_max = saved
+    return failed
+
+
+def test_quick_poll_rebalance_guards(my_predbat):
+    """
+    The inverter poll is the second caller of the single write path, so it must never invent a
+    rate the executor did not ask for.
+
+    Three guards: it does nothing before execute_plan has ever run, nothing when balancing is
+    disabled, and it works on a COPY of the stored intent so successive polls cannot compound
+    their own skew on top of each other.
+    """
+    failed = False
+    saved_intent = my_predbat.inverter_rate_intent
+    saved_enable = my_predbat.balance_inverters_enable
+    saved_read_only = my_predbat.set_read_only
+    try:
+        # No intent yet - a poll that beats the first plan run must write nothing
+        my_predbat.inverter_rate_intent = {}
+        my_predbat.balance_inverters_enable = True
+        my_predbat.set_read_only = False
+        my_predbat.rebalance_inverter_rates()
+
+        # Balancing disabled - the poll must leave the intent alone
+        my_predbat.inverter_rate_intent = {0: {"charge_rate": 1234, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "charge"}}
+        my_predbat.balance_inverters_enable = False
+        my_predbat.rebalance_inverter_rates()
+        if my_predbat.inverter_rate_intent[0]["charge_rate"] != 1234:
+            print("ERROR: a poll with balancing disabled modified the stored intent")
+            failed = True
+
+        # Enabled, and forced into a state where balancing genuinely acts: inverter 0 well below
+        # inverter 1 while both discharge hard. Balance must set discharge_rate 0 on inverter 0 in
+        # its working copy, and the STORED intent must still come back untouched - otherwise
+        # successive polls would compound their own skew on top of each other.
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_discharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_crosscharge = False
+        my_predbat.balance_inverters_threshold_discharge = 5
+        my_predbat.balance_inverters_threshold_charge = 5
+        saved_readings = [(inverter.soc_percent, inverter.battery_power, inverter.discharge_rate_now, inverter.reserve_current) for inverter in my_predbat.inverters]
+        try:
+            for inverter in my_predbat.inverters:
+                inverter.soc_percent = 20 if inverter.id == 0 else 80
+                inverter.battery_power = 1000
+                inverter.discharge_rate_now = 2600 / MINUTE_WATT
+                inverter.reserve_current = 4
+            my_predbat.inverter_rate_intent = {inverter.id: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for inverter in my_predbat.inverters}
+
+            # Prove balancing really does act on these readings, or the copy assertion below is vacuous
+            probe = {inverter_id: dict(value) for inverter_id, value in my_predbat.inverter_rate_intent.items()}
+            my_predbat.balance_inverter_rates(probe)
+            if probe[0]["discharge_rate"] != 0:
+                print("ERROR: the rebalance fixture does not actually trigger balancing, so the copy test proves nothing")
+                failed = True
+
+            my_predbat.rebalance_inverter_rates()
+            for inverter_id, value in my_predbat.inverter_rate_intent.items():
+                if value["discharge_rate"] is not None:
+                    print("ERROR: the poll mutated the stored intent for inverter {} - successive polls would compound".format(inverter_id))
+                    failed = True
+        finally:
+            for inverter, (soc, power, rate, reserve) in zip(my_predbat.inverters, saved_readings):
+                inverter.soc_percent = soc
+                inverter.battery_power = power
+                inverter.discharge_rate_now = rate
+                inverter.reserve_current = reserve
+    finally:
+        my_predbat.inverter_rate_intent = saved_intent
+        my_predbat.balance_inverters_enable = saved_enable
+        my_predbat.set_read_only = saved_read_only
     return failed
 
 
@@ -3209,6 +3281,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_freeze_flags_do_not_leak_between_scenarios(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_quick_poll_rebalance_guards(my_predbat)
     if failed:
         return failed
 

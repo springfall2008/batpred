@@ -1219,8 +1219,30 @@ class Execute:
             self.control_ledger.begin_cycle()
         if self.fetch_inverter_data(create=False):
             self.publish_inverter_data()
+            self.rebalance_inverter_rates()
             return True
         return False
+
+    def rebalance_inverter_rates(self):
+        """
+        Re-derive the balance skew against fresh SoC and re-apply the executor's intent.
+
+        The second caller of the single write path. execute_plan() owns the intent; this only
+        adjusts a COPY of it, so the poll can never invent a rate the executor did not ask for and
+        successive polls cannot compound their own skew on top of each other.
+
+        Does nothing until execute_plan() has run at least once, so a poll that beats the first
+        plan run cannot write anything.
+        """
+        if not self.inverter_rate_intent:
+            return
+        if not self.balance_inverters_enable or self.set_read_only:
+            return
+        intent = {inverter_id: dict(value) for inverter_id, value in self.inverter_rate_intent.items()}
+        self.balance_inverter_rates(intent)
+        for inverter in self.inverters:
+            if inverter.id in intent:
+                self.apply_inverter_rates(inverter, intent[inverter.id])
 
     def update_car_charging_power(self):
         """
