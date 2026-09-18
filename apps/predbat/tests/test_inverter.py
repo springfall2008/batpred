@@ -12,6 +12,7 @@ import json
 import copy
 import yaml
 import os
+import pytz
 from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface
@@ -19,7 +20,7 @@ from predbat import PredBat
 from inverter import Inverter
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
-from const import MINUTE_WATT
+from const import MINUTE_WATT, TIME_FORMAT_SECONDS
 
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
@@ -2907,6 +2908,58 @@ def test_button_press_counts_as_register_write(test_name, ha, inv):
             ha.dummy_items.pop("switch.inverter_button", None)
         else:
             ha.dummy_items["switch.inverter_button"] = saved_item
+        inv.count_register_writes = before_writes
+
+    return failed
+
+
+def test_button_press_and_poll_counts_as_register_write(test_name, ha, inv):
+    """
+    Regression test for issue #4712, second success path: unlike schedule_write_button (a toggle
+    switch, covered above), charge_discharge_update_button goes through
+    _press_single_button_and_poll - a button entity whose success is read back by polling its
+    last_updated timestamp. That path increments count_register_writes separately, so it needs its
+    own coverage rather than relying on the toggle-button test to exercise it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_button = inv.base.args.get("charge_discharge_update_button", unset)
+    saved_schedule_button = inv.base.args.get("schedule_write_button", unset)
+    saved_item = ha.dummy_items.get("button.charge_discharge_update", unset)
+    saved_sleep = inv.sleep
+    try:
+        inv.base.args["charge_discharge_update_button"] = "button.charge_discharge_update"
+        inv.base.args.pop("schedule_write_button", None)
+        inv.sleep = lambda seconds: None
+
+        local_tz = pytz.timezone(inv.base.get_arg("timezone", "Europe/London"))
+        ha.dummy_items["button.charge_discharge_update"] = datetime.now(local_tz).strftime(TIME_FORMAT_SECONDS)
+
+        before_writes = inv.count_register_writes
+        if not inv.press_and_poll_button(side="charge"):
+            print(f"ERROR: {test_name}: button press should have succeeded")
+            failed = True
+
+        if inv.count_register_writes != before_writes + 1:
+            print(f"ERROR: {test_name}: a button press must count as one register write, was {before_writes} now {inv.count_register_writes}")
+            failed = True
+    finally:
+        inv.sleep = saved_sleep
+        if saved_button is unset:
+            inv.base.args.pop("charge_discharge_update_button", None)
+        else:
+            inv.base.args["charge_discharge_update_button"] = saved_button
+        if saved_schedule_button is unset:
+            inv.base.args.pop("schedule_write_button", None)
+        else:
+            inv.base.args["schedule_write_button"] = saved_schedule_button
+        if saved_item is unset:
+            ha.dummy_items.pop("button.charge_discharge_update", None)
+        else:
+            ha.dummy_items["button.charge_discharge_update"] = saved_item
+        inv.count_register_writes = before_writes
 
     return failed
 
@@ -4583,6 +4636,7 @@ charge_start_service:
     # Regression test for issue #4709: a stable export window must be committed once, not every cycle
     failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
     failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)
+    failed |= test_button_press_and_poll_counts_as_register_write("button_press_and_poll_counts_as_register_write", ha, inv)
     if failed:
         return failed
 
