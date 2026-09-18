@@ -167,6 +167,7 @@ def run_execute_test(
     car_slot=None,
     soc_kw=0,
     soc_max=10,
+    soc_max_array=None,
     car_charging_from_battery=False,
     car_energy_reported_load=True,
     read_only=False,
@@ -196,6 +197,8 @@ def run_execute_test(
     inverter_charge_time_minutes_end=-1,
     assert_charge_rate=None,
     assert_discharge_rate=None,
+    assert_charge_rate_array=None,
+    assert_discharge_rate_array=None,
     assert_reserve=0,
     assert_soc_target=100,
     assert_soc_target_array=None,
@@ -209,12 +212,15 @@ def run_execute_test(
     assert_immediate_soc_target_array=None,
     set_reserve_enable=True,
     has_timed_pause=True,
+    has_timed_pause_array=None,
     has_target_soc=True,
     has_charge_enable_time=True,
     has_ge_eco_toggle=False,
     inverter_hybrid=False,
     battery_max_rate=1000,
     battery_max_export_rate=None,
+    battery_max_rate_array=None,
+    battery_max_export_rate_array=None,
     minutes_now=12 * 60,
     update_plan=False,
     reserve=1,
@@ -271,10 +277,20 @@ def run_execute_test(
         battery_max_export_rate = battery_max_rate
 
     total_inverters = len(my_predbat.inverters)
-    my_predbat.battery_rate_max_charge = battery_max_rate / 1000.0 * total_inverters / 60.0
-    my_predbat.battery_rate_max_charge_dc = battery_max_rate / 1000.0 * total_inverters / 60.0
-    my_predbat.battery_rate_max_discharge = battery_max_rate / 1000.0 * total_inverters / 60.0
-    my_predbat.battery_rate_max_export = battery_max_export_rate / 1000.0 * total_inverters / 60.0
+    # Fleet totals are summed from the per-inverter values rather than assumed uniform, so a
+    # heterogeneous fleet still satisfies the Predbat-level sanity checks below.
+    if battery_max_rate_array:
+        fleet_rate_w = sum(battery_max_rate_array)
+    else:
+        fleet_rate_w = battery_max_rate * total_inverters
+    if battery_max_export_rate_array:
+        fleet_export_w = sum(battery_max_export_rate_array)
+    else:
+        fleet_export_w = battery_max_export_rate * total_inverters
+    my_predbat.battery_rate_max_charge = fleet_rate_w / 1000.0 / 60.0
+    my_predbat.battery_rate_max_charge_dc = fleet_rate_w / 1000.0 / 60.0
+    my_predbat.battery_rate_max_discharge = fleet_rate_w / 1000.0 / 60.0
+    my_predbat.battery_rate_max_export = fleet_export_w / 1000.0 / 60.0
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
@@ -283,14 +299,16 @@ def run_execute_test(
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
             inverter.soc_kw = soc_kw / total_inverters
-        inverter.soc_max = soc_max / total_inverters
+        inverter.soc_max = soc_max_array[inverter.id] if soc_max_array else soc_max / total_inverters
         inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
         inverter.in_calibration = in_calibration_array[inverter.id] if in_calibration_array else in_calibration
-        inverter.battery_rate_max_charge = my_predbat.battery_rate_max_charge / total_inverters
-        inverter.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc / total_inverters
-        inverter.battery_rate_max_discharge = my_predbat.battery_rate_max_discharge / total_inverters
-        inverter.battery_rate_max_export = my_predbat.battery_rate_max_export / total_inverters
-        inverter.inv_has_timed_pause = has_timed_pause
+        inv_rate_w = battery_max_rate_array[inverter.id] if battery_max_rate_array else battery_max_rate
+        inv_export_w = battery_max_export_rate_array[inverter.id] if battery_max_export_rate_array else battery_max_export_rate
+        inverter.battery_rate_max_charge = inv_rate_w / 1000.0 / 60.0
+        inverter.battery_rate_max_charge_dc = inv_rate_w / 1000.0 / 60.0
+        inverter.battery_rate_max_discharge = inv_rate_w / 1000.0 / 60.0
+        inverter.battery_rate_max_export = inv_export_w / 1000.0 / 60.0
+        inverter.inv_has_timed_pause = has_timed_pause_array[inverter.id] if has_timed_pause_array else has_timed_pause
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
         inverter.inv_has_ge_eco_toggle = has_ge_eco_toggle
@@ -393,11 +411,13 @@ def run_execute_test(
         if assert_force_export and assert_discharge_end_time_minutes != inverter.discharge_end_time_minutes:
             print("ERROR: Inverter {} Discharge end time should be {} got {}".format(inverter.id, assert_discharge_end_time_minutes, inverter.discharge_end_time_minutes))
             failed = True
-        if assert_charge_rate != inverter.charge_rate:
-            print("ERROR: Inverter {} Charge rate should be {} got {}".format(inverter.id, assert_charge_rate, inverter.charge_rate))
+        expect_charge_rate = assert_charge_rate_array[inverter.id] if assert_charge_rate_array else assert_charge_rate
+        expect_discharge_rate = assert_discharge_rate_array[inverter.id] if assert_discharge_rate_array else assert_discharge_rate
+        if expect_charge_rate != inverter.charge_rate:
+            print("ERROR: Inverter {} Charge rate should be {} got {}".format(inverter.id, expect_charge_rate, inverter.charge_rate))
             failed = True
-        if assert_discharge_rate != inverter.discharge_rate:
-            print("ERROR: Inverter {} Discharge rate should be {} got {}".format(inverter.id, assert_discharge_rate, inverter.discharge_rate))
+        if expect_discharge_rate != inverter.discharge_rate:
+            print("ERROR: Inverter {} Discharge rate should be {} got {}".format(inverter.id, expect_discharge_rate, inverter.discharge_rate))
             failed = True
         inv_assert_reserve = assert_reserve_array[inverter.id] if assert_reserve_array else assert_reserve
         if inv_assert_reserve != inverter.reserve_last:
@@ -3189,6 +3209,30 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_freeze_flags_do_not_leak_between_scenarios(my_predbat)
+    if failed:
+        return failed
+
+    # Mixed fleet: 9.5kWh/2600W alongside 5.2kWh/1500W, one with timed pause and one without.
+    # Nothing planned, so each inverter resets to its OWN maximum rather than a shared one -
+    # which is what the per-inverter arrays exist to express. Asserts the plumbing, not new behaviour.
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_idle",
+        soc_kw=7.35,
+        soc_kw_array=[4.75, 2.6],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 1500],
+        has_timed_pause_array=[True, False],
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        assert_charge_rate_array=[2600, 1500],
+        assert_discharge_rate_array=[2600, 1500],
+    )
+    if failed:
+        return failed
 
     return failed
 
