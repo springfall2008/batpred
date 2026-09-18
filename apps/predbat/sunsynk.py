@@ -1457,8 +1457,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
 
     async def save_control(self):
-        """Persist the applied-payload cache used for write change detection."""
-        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload})
+        """Persist the applied-payload cache used for write change detection, and control_active.
+
+        Without control_active surviving a restart, _reconcile_control (sunsynk.py:1346) stays
+        gated off for every inverter until a fresh battery_schedule_charge_write event happens to
+        arrive - silently skipping every write, including one meant to stop an export already in
+        progress - until something unrelated re-arms it. alphaess.py's save_control/restore_state
+        already persists control_active for exactly this reason; this mirrors it.
+        """
+        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload, "control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's clock from its file age.
@@ -1507,10 +1514,16 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
         # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
+        # control_active is restored alongside applied_payload, not just it: control_active is
+        # what actually lets _reconcile_control write at all (sunsynk.py:1346), so restoring
+        # applied_payload without it would still leave every inverter silently unmanaged after a
+        # restart. Past the age bound both are dropped together, so a stale cache still forces a
+        # fresh write-button press to recommit, rather than trusting old control state indefinitely.
         control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
         if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
             control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
             self.applied_payload = control.get("applied_payload", {}) or {}
+            self.control_active = set(control.get("control_active") or [])
         elif control_age is not None:
             self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
 
