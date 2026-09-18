@@ -339,8 +339,12 @@ class OhmeAPI(ComponentBase):
                 end = self.local_tz.localize(datetime.datetime.strptime(window["end"], PLAN_TIME_FORMAT).replace(year=now.year))
             except (KeyError, TypeError, ValueError):
                 continue
-            # The plan carries no year, so rebuild it around now for windows that cross New Year
-            if start < now - timedelta(hours=23):
+            # The plan carries no year, so rebuild it around now for windows that cross New Year.
+            # A start more than 23 hours in the past is only a rollover artifact if the window has
+            # also finished - a still-active long window (its end still ahead of now) legitimately
+            # started that long ago and must not be shifted a year forward, or should_charge_now()
+            # stops seeing it as current and the charger is told to stop mid-window (#269).
+            if start < now - timedelta(hours=23) and end < now:
                 start = start.replace(year=start.year + 1)
                 end = end.replace(year=end.year + 1)
             elif end < start:

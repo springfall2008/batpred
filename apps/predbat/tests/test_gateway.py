@@ -4420,6 +4420,28 @@ class TestEvControl:
         # After year bump, start should be in the future (next year)
         assert start_dt > now
 
+    def test_refresh_ev_windows_long_active_not_shifted(self):
+        """A still-active window whose start is over 23h old is not mistaken for a year rollover (#269)."""
+        import datetime as dt_mod
+
+        gw = self._make_gateway()
+        now = dt_mod.datetime.now(gw.local_tz)
+        # A long/flat-rate window that started well over 23h ago but has not finished yet - its
+        # end is still ahead of now, so this is a genuinely active window, not a stale one left
+        # over from a plan built before a year boundary.
+        start = now - dt_mod.timedelta(hours=30)
+        end = now + dt_mod.timedelta(hours=2)
+        planned = [{"start": start.strftime("%m-%d %H:%M:%S"), "end": end.strftime("%m-%d %H:%M:%S"), "kwh": 5.0, "average": 20.0, "cost": 1.0}]
+        gw.get_state_wrapper = lambda entity, attribute=None: planned if attribute == "planned" else "on"
+
+        gw._refresh_ev_windows()
+
+        assert len(gw._ev_windows) == 1
+        start_dt, end_dt = gw._ev_windows[0]
+        # Must not be bumped a year forward, or the still-active window stops matching "now"
+        assert start_dt.year == now.year
+        assert gw._should_ev_charge_now() is True
+
     def test_apply_sends_start_on_transition(self):
         """_apply_ev_charging_state sends SetChargingProfile then RemoteStartTransaction when entering a window."""
         import asyncio
