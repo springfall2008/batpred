@@ -421,6 +421,49 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: flat pre-export tooltip unexpected: {}".format(_render(row, templates)))
         failed = True
 
+    # --- Test 10d: Demand slot held for a charging car reads as hold_for_car, not plain demand ---
+    # Mirrors the discharge hold execute.py applies for the live "Hold for car" status
+    # (car_charging_from_battery off, a car charging slot active, charge windows in use) - the
+    # plan should explain the same held SoC a non-read-only user would see labelled that way live.
+    print("Test Demand slot held for a charging car reads as hold_for_car")
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_from_battery = False
+    my_predbat.car_charging_slots = [[{"start": minutes_now, "end": minutes_now + 30, "kwh": 1.0, "average": 8.0, "octopus": True}]]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)  # flat - held, not falling
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_for_car"]:
+        print("ERROR: car-held demand reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "Hold for car" not in _render(row, templates):
+        print("ERROR: car-held demand rendered text unexpected: {}".format(_render(row, templates)))
+        failed = True
+    elif row["state_html"] != "&#128663;":
+        print("ERROR: car-held demand state cell should show the car icon in place of the arrow, got: {}".format(row["state_html"]))
+        failed = True
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_slots = []
+
+    # --- Test 10e: same car slot, but car_charging_from_battery on - plain demand, no hold ---
+    print("Test car charging slot with car_charging_from_battery on stays plain demand")
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_from_battery = True
+    my_predbat.car_charging_slots = [[{"start": minutes_now, "end": minutes_now + 30, "kwh": 1.0, "average": 8.0, "octopus": True}]]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["demand_steady"]:
+        print("ERROR: car-charging-from-battery-on reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_from_battery = False
+    my_predbat.car_charging_slots = []
+    my_predbat.charge_window_best = window
+    my_predbat.charge_limit_best = [8.0]
+
     # --- Test 11: reason_templates has an entry for every code used across all scenarios ---
     print("Test reason_templates covers every code used")
     all_codes = set()
