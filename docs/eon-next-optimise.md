@@ -81,11 +81,11 @@ or authentication tokens in the price cache. Responses expire after 15 minutes;
 a restart or failed fetch never resets their age. Missing current coverage or
 expired data publishes empty rate lists with an explicit unavailable status.
 
-This fork's existing `NEXT_OPTIMISE` coverage guards bound planning to contiguous
-published import/export intervals and reject an empty current horizon. Those
-guards are a dependency of an upstream contribution: the connector alone must
-not be cherry-picked without equivalent missing-price handling. No new fixed
-fallback price is introduced by this component.
+The source AlphaESS fork has `NEXT_OPTIMISE` coverage guards that bound planning
+to contiguous published import/export intervals and reject an empty current
+horizon. These guards are not included in this upstream draft yet. Equivalent
+missing-price handling is required before this component is ready for live use
+on upstream Predbat. No new fixed fallback price is introduced by this component.
 
 ## Scope and validation
 
