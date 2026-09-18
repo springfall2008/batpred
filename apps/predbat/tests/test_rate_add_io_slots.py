@@ -764,6 +764,70 @@ def run_rate_add_io_slots_tests(my_predbat):
     failed |= run_rate_add_io_slots_test("test41_sub_30min_interval_slot_decides_its_own_admission", my_predbat, slots_41, True, 12, expected_rates_41, confirmed=False)
     my_predbat.plan_interval_minutes = 30
 
+    print("\n**** Test 42: exclude_dynamic_io_slots strips a feed-side discount rate_add_io_slots() never trusted ****")
+    # rate_add_io_slots() only overlays a discount for minutes it explicitly adds to trusted_dynamic_
+    # minutes. A real Intelligent tariff can hand back an already-discounted rate straight from the
+    # feed for a future out-of-window minute (flagged via io_adjusted) that rate_add_io_slots() never
+    # even visited this cycle - exclude_dynamic_io_slots() is what has to catch and undo that one.
+    # "planned" is a deliberate no-op for this function (old pre-#4516 behaviour), so use "none" -
+    # the strictest level, and the only one that actually walks io_adjusted below.
+    my_predbat.trust_future_dynamic_iog_slots = "none"
+    saved_io_adjusted_42 = dict(my_predbat.io_adjusted)
+    my_predbat.trusted_dynamic_minutes = set()  # nothing trusted this cycle
+    rates_42 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    for minute in range(840, 870):  # 14:00-14:30, well outside the 23:30-05:30 fixed window
+        rates_42[minute] = 4.0
+        my_predbat.io_adjusted[minute] = True
+    result_rates_42 = my_predbat.exclude_dynamic_io_slots(rates_42)
+    for minute in range(840, 870):
+        if result_rates_42.get(minute) != my_predbat.rate_max_base:
+            print("ERROR: untrusted feed-discounted minute {} should be restored to rate_max_base ({}), got {}".format(minute, my_predbat.rate_max_base, result_rates_42.get(minute)))
+            failed = True
+        if minute in my_predbat.io_adjusted:
+            print("ERROR: untrusted feed-discounted minute {} should have its io_adjusted marker cleared".format(minute))
+            failed = True
+    my_predbat.io_adjusted = saved_io_adjusted_42
+
+    print("\n**** Test 43: exclude_dynamic_io_slots preserves a feed-side discount rate_add_io_slots() did trust ****")
+    my_predbat.trust_future_dynamic_iog_slots = "none"
+    saved_io_adjusted_43 = dict(my_predbat.io_adjusted)
+    rates_43 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    for minute in range(840, 870):
+        rates_43[minute] = 4.0
+        my_predbat.io_adjusted[minute] = True
+    my_predbat.trusted_dynamic_minutes = set(range(840, 870))  # this cycle already trusted these minutes
+    result_rates_43 = my_predbat.exclude_dynamic_io_slots(rates_43)
+    for minute in range(840, 870):
+        if result_rates_43.get(minute) != 4.0:
+            print("ERROR: trusted feed-discounted minute {} should keep its 4.0 rate, got {}".format(minute, result_rates_43.get(minute)))
+            failed = True
+        if minute not in my_predbat.io_adjusted:
+            print("ERROR: trusted feed-discounted minute {} should keep its io_adjusted marker".format(minute))
+            failed = True
+    my_predbat.io_adjusted = saved_io_adjusted_43
+    my_predbat.trusted_dynamic_minutes = set()
+
+    print("\n**** Test 44: exclude_dynamic_io_slots leaves a fixed-window minute alone even when untrusted ****")
+    # 02:00 is inside the guaranteed-cheap 23:30-05:30 window - that discount comes from the tariff
+    # itself, not a reclaimable dispatch, so it must survive regardless of trust_future_dynamic_iog_slots.
+    my_predbat.trust_future_dynamic_iog_slots = "none"
+    saved_io_adjusted_44 = dict(my_predbat.io_adjusted)
+    rates_44 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    fixed_window_minute_44 = 26 * 60  # 02:00 the following day relative to midnight_utc_26, well ahead of minutes_now=600
+    for minute in range(fixed_window_minute_44, fixed_window_minute_44 + 30):
+        rates_44[minute] = 4.0
+        my_predbat.io_adjusted[minute] = True
+    my_predbat.trusted_dynamic_minutes = set()
+    result_rates_44 = my_predbat.exclude_dynamic_io_slots(rates_44)
+    for minute in range(fixed_window_minute_44, fixed_window_minute_44 + 30):
+        if result_rates_44.get(minute) != 4.0:
+            print("ERROR: fixed-window minute {} should keep its 4.0 rate regardless of trust, got {}".format(minute, result_rates_44.get(minute)))
+            failed = True
+        if minute not in my_predbat.io_adjusted:
+            print("ERROR: fixed-window minute {} should keep its io_adjusted marker".format(minute))
+            failed = True
+    my_predbat.io_adjusted = saved_io_adjusted_44
+
     # Restore original state
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
     my_predbat.octopus_intelligent_limit_future_slots = saved_limit_future_slots

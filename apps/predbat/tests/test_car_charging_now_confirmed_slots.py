@@ -199,6 +199,38 @@ def test_car_charging_now_confirmed_slots(my_predbat):
     if not failed:
         print("Test 7 passed - streak correctly lapses beyond the rollover cap with no fresh read")
 
+    # Test 7b: a fresh confirming read must actually stick even when the *previous* cycle's anchor
+    # (still on record when this cycle starts) is already more than the rollover cap behind the new
+    # slot - it must not be wiped in the same cycle by the rollover-cap check comparing the fresh
+    # anchor against that now-superseded old one (Copilot review on #5110). Distinct from Test 7:
+    # there the lapse and the eventual read are two separate cycles; here both the stale-old-anchor
+    # comparison and the fresh confirming read happen in the SAME get_car_charging_planned() call.
+    print("*** Test 7b: a fresh read whose own old anchor is already past the cap still re-anchors ***")
+    reset_streak_state()
+    my_predbat.minutes_now = 8 * 60  # 08:00 - slot 480, a genuine positive read to establish an anchor
+    my_predbat.args["car_charging_now"] = "yes"
+    my_predbat.get_car_charging_planned()
+    old_anchor_7b = my_predbat.car_charging_now_streak_last_read[0]
+    if old_anchor_7b != 480:
+        print("ERROR: setup assumption broken - expected an anchor at slot 480, got {}".format(old_anchor_7b))
+        failed = True
+
+    # Jump straight to a slot comfortably beyond the rollover cap from slot 480, in one single call -
+    # the old anchor (480) is now stale enough that, uncorrected, the cap check would clear it, but
+    # this same cycle's own reading independently confirms and re-anchors the current slot.
+    fresh_slot = old_anchor_7b + (CAR_CHARGING_NOW_STREAK_MAX_ROLLOVER_SLOTS + 5) * 30
+    my_predbat.minutes_now = fresh_slot  # start of the slot - plenty of time left, passes the confirm guard
+    my_predbat.get_car_charging_planned()  # car_charging_now is still "yes"
+
+    if fresh_slot not in my_predbat.car_charging_now_confirmed_slots[0]:
+        print("ERROR: slot {} should be confirmed by this cycle's own fresh positive read".format(fresh_slot))
+        failed = True
+    if my_predbat.car_charging_now_streak_last_read[0] != fresh_slot:
+        print("ERROR: the fresh read should have re-anchored the streak at slot {}, got {}".format(fresh_slot, my_predbat.car_charging_now_streak_last_read[0]))
+        failed = True
+    if not failed:
+        print("Test 7b passed - a fresh read survives even when its own old anchor was already past the cap")
+
     # Test 8: old slots (more than a day behind the current slot) are pruned so the set cannot grow
     # unbounded on a long-running install.
     print("*** Test 8: stale confirmed slots are pruned ***")
@@ -295,6 +327,41 @@ def test_car_charging_now_confirmed_slots(my_predbat):
         failed = True
     else:
         print("Test 11 passed")
+
+    # Test 12: a transient HA "unknown"/"unavailable" reading is not evidence of a stop - it must
+    # fall through the same as a guard-failing True read, leaving an active streak intact, rather
+    # than being treated as a negative edge (Copilot review on #5110). A real sensor genuinely goes
+    # "unknown" for a few seconds around an HA restart while the car may still be charging throughout.
+    print("*** Test 12: an unknown/unavailable reading does not end an active streak ***")
+    reset_streak_state()
+    my_predbat.minutes_now = 9 * 60  # 09:00 - slot 540, a genuine positive read starts the streak
+    my_predbat.args["car_charging_now"] = "yes"
+    my_predbat.get_car_charging_planned()
+    if my_predbat.car_charging_now_streak_last_read[0] != 540:
+        print("ERROR: setup assumption broken - expected an anchor at slot 540, got {}".format(my_predbat.car_charging_now_streak_last_read[0]))
+        failed = True
+
+    my_predbat.minutes_now = 9 * 60 + 30  # 09:30 - next slot (570), sensor now reporting "unknown"
+    my_predbat.args["car_charging_now"] = "unknown"
+    my_predbat.get_car_charging_planned()
+
+    if my_predbat.car_charging_now_streak_last_read[0] != 540:
+        print("ERROR: an unknown/unavailable reading should not have moved or cleared the streak anchor, got {}".format(my_predbat.car_charging_now_streak_last_read[0]))
+        failed = True
+    if 570 not in my_predbat.car_charging_now_confirmed_slots[0]:
+        print("ERROR: slot 570 should still have been backfilled by the still-active streak despite the unknown reading")
+        failed = True
+
+    # A genuine negative edge afterwards must still end the streak normally - "unknown" only
+    # suspends judgement, it does not disable the mechanism.
+    my_predbat.minutes_now = 10 * 60  # 10:00 - slot 600
+    my_predbat.args["car_charging_now"] = "no"
+    my_predbat.get_car_charging_planned()
+    if my_predbat.car_charging_now_streak_last_read[0] is not None:
+        print("ERROR: a genuine False reading after an unknown one should still end the streak, got anchor {}".format(my_predbat.car_charging_now_streak_last_read[0]))
+        failed = True
+    if not failed:
+        print("Test 12 passed - unknown/unavailable readings are ignored, real negative edges still end the streak")
 
     if not failed:
         print("**** All car_charging_now_confirmed_slots tests PASSED ****")
