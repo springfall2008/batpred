@@ -93,9 +93,10 @@ The feature is disabled by default. It requires no custom Home Assistant price
 integration. The existing HA integration can remain running for comparison or
 research, but only the selected native component should own planner inputs.
 
-The app backend is not a guaranteed public API. Initial live validation is on
-one account; multi-site selection and interactive MFA challenges are not
-implemented. An MFA/login challenge produces an authentication error rather
+The app backend is not a guaranteed public API. **Live testing is limited to
+the contributor's own E.ON Next Optimise account in their UK supply region.
+Other accounts and regions have not been tested.** Multi-site selection and
+interactive MFA challenges are not implemented. An MFA/login challenge produces an authentication error rather
 than requesting or logging a one-time code.
 
 Registered `eon_optimise` tests cover sign/negative-price handling, credentials
@@ -103,6 +104,3 @@ redaction metadata, partial and duplicate channels, polling, cache restoration,
 expiry, missing current prices, shortened coverage and bounded 401 retry.
 The initial read-only live probe matched all 97 returned periods per channel
 against the existing Home Assistant feed, with zero price differences.
-
-AgilePredict extension, daily-refresh research, AlphaESS controls and household
-automation are separate features. This component does not change them.
