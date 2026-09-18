@@ -1187,14 +1187,14 @@ CONFIG_ITEMS = [
         "friendly_name": "Balance Inverters for charging",
         "type": "switch",
         "enable": "balance_inverters_enable",
-        "default": True,
+        "default": False,
     },
     {
         "name": "balance_inverters_discharge",
         "friendly_name": "Balance Inverters for discharge",
         "type": "switch",
         "enable": "balance_inverters_enable",
-        "default": True,
+        "default": False,
     },
     {
         "name": "balance_inverters_crosscharge",
