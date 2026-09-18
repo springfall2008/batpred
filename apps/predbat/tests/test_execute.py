@@ -1129,7 +1129,7 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
-        assert_charge_rate=600,  # Within 10%
+        assert_charge_rate=500,  # Low power picks 500W; the old execute-side 10% (200W) check suppressed the change and left 600, the single 5% (100W) deadband does not
         battery_max_rate=2000,
     )
     if failed:

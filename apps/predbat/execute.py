@@ -417,15 +417,14 @@ class Execute:
                             )
                         )
 
-                        # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
+                        # One deadband, applied in the only writer. adjust_charge_rate and
+                        # adjust_discharge_rate both suppress a change below 5% of max, which lines
+                        # up with the GE power steps. The 10% that used to live here came from the
+                        # same PR (#1676) as that 5% and was never reconciled with it; being the
+                        # stricter of the two it was the only one that ever fired. Intent now
+                        # carries the rate we actually want, not one a deadband has rounded off.
                         max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
-                        if abs(new_charge_rate - current_charge_rate) > (0.1 * max_rate) or (new_charge_rate == max_rate):
-                            charge_rate = new_charge_rate
-                        else:
-                            # Inside the low-power deadband: intend the rate already set, so the apply
-                            # pass is a no-op rather than a reset to max. Reconciled to the global 5%
-                            # deadband in a later change.
-                            charge_rate = current_charge_rate
+                        charge_rate = new_charge_rate
                         rate_owner = "charge"
 
                         if inverter.inv_charge_discharge_with_rate:
