@@ -139,6 +139,30 @@ class Execute:
             self.log("Control ledger: dropping ownership of {} control(s) - {}".format(len(self.control_ledger.records), reason))
         self.control_ledger.clear()
 
+    def apply_inverter_rates(self, inverter, intent):
+        """
+        Write one inverter's charge and discharge rates from its intent.
+
+        The single point at which a rate reaches the hardware. A rate of None means no branch of
+        execute_plan claimed it, so the inverter returns to its own maximum - which is what the
+        resetCharge / resetDischarge flags used to express at the end of the per-inverter loop.
+
+        Because "max" is resolved here rather than produced by the balancer, a deliberate hold of
+        rate 0 can no longer be overwritten by a second writer (F5 / #829).
+
+        Args:
+            inverter: the Inverter to write to
+            intent (dict): keys charge_rate and discharge_rate (W, or None for max)
+        """
+        charge_rate = intent.get("charge_rate", None)
+        discharge_rate = intent.get("discharge_rate", None)
+        if charge_rate is None:
+            charge_rate = inverter.battery_rate_max_charge * MINUTE_WATT
+        if discharge_rate is None:
+            discharge_rate = inverter.battery_rate_max_discharge * MINUTE_WATT
+        inverter.adjust_charge_rate(int(charge_rate))
+        inverter.adjust_discharge_rate(int(discharge_rate))
+
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
@@ -185,6 +209,7 @@ class Execute:
 
         isCharging = False
         isExporting = False
+        intent = {}
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -212,8 +237,11 @@ class Execute:
                 self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
                 break
 
-            resetDischarge = self.set_charge_window or self.set_export_window
-            resetCharge = self.set_charge_window or self.set_export_window
+            charge_rate = None
+            discharge_rate = None
+            rate_owner = "demand"
+            pause_charge_requested = False
+            pause_discharge_requested = False
             resetPause = self.set_charge_window or self.set_export_window
             resetReserve = self.set_charge_window or self.set_export_window
             disabled_charge_window = False
@@ -305,12 +333,16 @@ class Execute:
                         # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
                         max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
                         if abs(new_charge_rate - current_charge_rate) > (0.1 * max_rate) or (new_charge_rate == max_rate):
-                            inverter.adjust_charge_rate(new_charge_rate)
-                        resetCharge = False
+                            charge_rate = new_charge_rate
+                        else:
+                            # Inside the low-power deadband: intend the rate already set, so the apply
+                            # pass is a no-op rather than a reset to max. Reconciled to the global 5%
+                            # deadband in a later change.
+                            charge_rate = current_charge_rate
+                        rate_owner = "charge"
 
                         if inverter.inv_charge_discharge_with_rate:
-                            inverter.adjust_discharge_rate(0)
-                            resetDischarge = False
+                            discharge_rate = 0
 
                         # Can only freeze charge for this inverter if its SoC is above reserve and it can hold via reserve/pause
                         can_freeze_charge = True
@@ -330,10 +362,10 @@ class Execute:
 
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_discharge=True)
+                                pause_discharge_requested = True
                                 resetPause = False
                             else:
-                                inverter.adjust_discharge_rate(0)
-                                resetDischarge = False
+                                discharge_rate = 0
 
                             status = "Freeze charging"
                             status_per_inverter[inverter.id] = status
@@ -369,10 +401,10 @@ class Execute:
                                     if inverter.soc_percent <= inv_target_soc_percent:
                                         if inverter.inv_has_timed_pause:
                                             inverter.adjust_pause_mode(pause_discharge=True)
+                                            pause_discharge_requested = True
                                             resetPause = False
                                         else:
-                                            inverter.adjust_discharge_rate(0)
-                                            resetDischarge = False
+                                            discharge_rate = 0
                                     # Else we will be holding on reserve
                                 else:
                                     # Still charging or we have no way to hold on either reserve or pause the discharge
@@ -388,10 +420,10 @@ class Execute:
                             # Do we discharge discharge during charge
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_discharge=True)
+                                pause_discharge_requested = True
                                 resetPause = False
                             else:
-                                inverter.adjust_discharge_rate(0)
-                                resetDischarge = False
+                                discharge_rate = 0
                             self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
 
                         isCharging = True
@@ -506,12 +538,11 @@ class Execute:
 
                         self.log("Exporting now - current SoC {}kWh and target {}kWh and power adjust {}".format(self.soc_kw, dp2(discharge_soc), export_rate_adjust))
 
-                        inverter.adjust_discharge_rate(inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
-                        resetDischarge = False
+                        discharge_rate = inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT
+                        rate_owner = "export"
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
-                            inverter.adjust_charge_rate(0)
-                            resetCharge = False
+                            charge_rate = 0
                         isExporting = True
                         # The window carries a plain-number target once clipped; fall back to the
                         # instruction's own target rather than to the instruction itself
@@ -530,14 +561,13 @@ class Execute:
                         if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                             # In export freeze mode we disable charging during export slots
                             if inverter.inv_charge_discharge_with_rate:
-                                inverter.adjust_charge_rate(0)
-                                resetCharge = False
+                                charge_rate = 0
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_charge=True)
+                                pause_charge_requested = True
                                 resetPause = False
                             else:
-                                inverter.adjust_charge_rate(0)
-                                resetCharge = False
+                                charge_rate = 0
 
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
@@ -577,14 +607,13 @@ class Execute:
 
                 # In export freeze mode we disable charging
                 if inverter.inv_charge_discharge_with_rate:
-                    inverter.adjust_charge_rate(0)
-                    resetCharge = False
+                    charge_rate = 0
                 if inverter.inv_has_timed_pause:
                     inverter.adjust_pause_mode(pause_charge=True)
+                    pause_charge_requested = True
                     resetPause = False
                 else:
-                    inverter.adjust_charge_rate(0)
-                    resetCharge = False
+                    charge_rate = 0
 
                 status_freeze_export = " [Freeze exporting]"
 
@@ -606,11 +635,11 @@ class Execute:
                                 if inverter.inv_has_timed_pause:
                                     if resetPause:
                                         inverter.adjust_pause_mode(pause_discharge=True)
+                                        pause_discharge_requested = True
                                         resetPause = False
                                 else:
-                                    if resetDischarge:
-                                        inverter.adjust_discharge_rate(0)
-                                        resetDischarge = False
+                                    if discharge_rate is None:
+                                        discharge_rate = 0
                                     # Not while actually charging: the battery is being filled from the grid, so it
                                     # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
                                     # write for every 1% of the climb (#3899). Left to reset below for the duration,
@@ -639,11 +668,11 @@ class Execute:
                     if inverter.inv_has_timed_pause:
                         if resetPause:
                             inverter.adjust_pause_mode(pause_discharge=True)
+                            pause_discharge_requested = True
                             resetPause = False
                     else:
-                        if resetDischarge:
-                            inverter.adjust_discharge_rate(0)
-                            resetDischarge = False
+                        if discharge_rate is None:
+                            discharge_rate = 0
                         if self.set_reserve_enable:
                             inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                             resetReserve = False
@@ -655,13 +684,17 @@ class Execute:
                         else:
                             status_hold_iboost = ", Hold for iBoost"
 
-            # Reset charge/discharge rate
+            # Reset pause mode; rates are resolved once by the apply pass after the loop
             if resetPause:
                 inverter.adjust_pause_mode()
-            if resetDischarge:
-                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
-            if resetCharge:
-                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+
+            intent[inverter.id] = {
+                "charge_rate": charge_rate,
+                "discharge_rate": discharge_rate,
+                "pause_charge": pause_charge_requested,
+                "pause_discharge": pause_discharge_requested,
+                "owner": rate_owner,
+            }
 
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
@@ -780,7 +813,16 @@ class Execute:
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
 
-            # Count register writes
+        # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
+        # the whole fleet before anything is written. Inverters that were skipped by the read-only
+        # branch (continue) or the calibration branch (break) recorded no intent and are not written.
+        for inverter in self.inverters:
+            if inverter.id in intent:
+                self.apply_inverter_rates(inverter, intent[inverter.id])
+        self.inverter_rate_intent = intent
+
+        # Count register writes - after the apply pass so the rate writes land in this cycle's count
+        for inverter in self.inverters:
             self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
             if inverter.count_register_writes > 0:
                 metrics().inverter_register_writes_total.inc(inverter.count_register_writes)
