@@ -2427,3 +2427,113 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
     if mallopt is None:
         return False
     return bool(mallopt(M_ARENA_MAX, max_arenas))
+
+
+def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
+    """
+    Mutate the executor's per-inverter rate intent to correct fleet imbalance.
+
+    Ported from the old Execute.balance_inverters() timer loop, with the actuator changed: instead
+    of writing rate 0 and later resetting to max, this adjusts the intent that execute_plan built,
+    which is then applied once. Convergence therefore returns to the executor's value rather than
+    the register ceiling, so a deliberate hold can no longer be overwritten (F5 / GH#829).
+
+    The (this_inverter + 1) % num_inverters partner ring is retained verbatim from the original.
+    It is correct for two inverters and arbitrary for three or more - deliberately left alone here
+    so this change stays behaviour-preserving (F7 in GH#4856).
+
+    Args:
+        intent (dict): inverter id -> rate intent, mutated in place
+        snapshot (list): per-inverter plain readings, indexed by inverter id
+        balance_charge (bool): balance SoC while the fleet is charging
+        balance_discharge (bool): balance SoC while the fleet is discharging
+        balance_crosscharge (bool): stop one inverter charging from another
+        threshold_charge (float): minimum SoC% divergence to act on during charge
+        threshold_discharge (float): minimum SoC% divergence to act on during discharge
+        log_to (callable): optional logger, called with a single string
+    """
+    num_inverters = len(snapshot)
+    if num_inverters < 2:
+        return
+    for entry in snapshot:
+        if entry["in_calibration"]:
+            if log_to:
+                log_to("BALANCE: an inverter is in calibration, not balancing")
+            return
+
+    socs = [entry["soc_percent"] for entry in snapshot]
+    reserves = [entry["reserve_percent"] for entry in snapshot]
+    battery_powers = [entry["battery_power"] for entry in snapshot]
+    pv_powers = [entry["pv_power"] for entry in snapshot]
+    charge_rates = [entry["charge_rate_now"] for entry in snapshot]
+    discharge_rates = [entry["discharge_rate_now"] for entry in snapshot]
+
+    total_battery_power = sum(battery_powers)
+    total_pv_power = sum(pv_powers)
+    total_charge_rates = sum(charge_rates)
+    total_discharge_rates = sum(discharge_rates)
+
+    out_of_balance = any(soc != socs[0] for soc in socs)
+    during_discharge = total_battery_power >= 0.0
+    during_charge = total_battery_power < 0.0
+    soc_min = min(socs)
+    soc_max = max(socs)
+
+    soc_low = [(soc < soc_max) and (abs(soc - soc_max) >= threshold_discharge) for soc in socs]
+    soc_high = [(soc > soc_min) and (abs(soc - soc_min) >= threshold_charge) for soc in socs]
+
+    above_reserve = [(socs[id] - reserves[id]) >= 4.0 for id in range(num_inverters)]
+    below_full = [socs[id] < 100.0 for id in range(num_inverters)]
+    can_power_house = [(total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power for id in range(num_inverters)]
+    can_store_pv = [total_pv_power <= (total_charge_rates - charge_rates[id]) for id in range(num_inverters)]
+    power_enough_discharge = [battery_powers[id] >= 50.0 for id in range(num_inverters)]
+    power_enough_charge = [battery_powers[id] <= -50.0 for id in range(num_inverters)]
+
+    if log_to:
+        log_to(
+            "BALANCE: socs {}% reserves {}% battery_powers {}W total {}W charge_rates {}W discharge_rates {}W out_of_balance {} soc_low {} soc_high {}".format(
+                socs, reserves, battery_powers, total_battery_power, charge_rates, discharge_rates, out_of_balance, soc_low, soc_high
+            )
+        )
+
+    for this_inverter in range(num_inverters):
+        other_inverter = (this_inverter + 1) % num_inverters
+        if this_inverter not in intent:
+            continue
+        if (
+            balance_discharge
+            and total_discharge_rates > 0
+            and out_of_balance
+            and during_discharge
+            and soc_low[this_inverter]
+            and above_reserve[other_inverter]
+            and can_power_house[this_inverter]
+            and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0)
+        ):
+            if log_to:
+                log_to("BALANCE: Inverter {} is out of balance low - during discharge, holding it using inverter {}".format(this_inverter, other_inverter))
+            intent[this_inverter]["discharge_rate"] = 0
+        elif (
+            balance_charge
+            and total_charge_rates > 0
+            and out_of_balance
+            and during_charge
+            and soc_high[this_inverter]
+            and below_full[other_inverter]
+            and can_store_pv[this_inverter]
+            and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0)
+        ):
+            if log_to:
+                log_to("BALANCE: Inverter {} is out of balance high - during charge, holding it".format(this_inverter))
+            intent[this_inverter]["charge_rate"] = 0
+        elif balance_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
+            if log_to:
+                log_to("BALANCE: Inverter {} is cross charging during discharge, holding it".format(this_inverter))
+            if soc_low[this_inverter] and can_power_house[other_inverter]:
+                intent[this_inverter]["charge_rate"] = 0
+            elif can_power_house[this_inverter] and other_inverter in intent:
+                intent[other_inverter]["discharge_rate"] = 0
+        elif balance_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
+            if log_to:
+                log_to("BALANCE: Inverter {} is cross discharging during charge, holding it".format(this_inverter))
+            intent[this_inverter]["discharge_rate"] = 0

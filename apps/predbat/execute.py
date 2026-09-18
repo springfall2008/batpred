@@ -17,7 +17,7 @@ reserve level adjustments, and multi-inverter balancing.
 
 from datetime import timedelta, datetime
 from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, export_mode_of, export_power_of, export_target_of
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, export_mode_of, export_power_of, export_target_of
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -138,6 +138,55 @@ class Execute:
         if self.control_ledger.records:
             self.log("Control ledger: dropping ownership of {} control(s) - {}".format(len(self.control_ledger.records), reason))
         self.control_ledger.clear()
+
+    def build_inverter_snapshot(self):
+        """
+        Build the plain per-inverter readings that balance_inverters() consumes.
+
+        Keeping the readings as plain scalars is what lets the balancing algorithm live in utils as
+        a pure function, testable without a PredBat instance or a mock Home Assistant.
+
+        Returns:
+        - list: one dict per inverter, indexed by inverter id
+        """
+        snapshot = []
+        for inverter in self.inverters:
+            snapshot.append(
+                {
+                    "soc_percent": inverter.soc_percent,
+                    "reserve_percent": inverter.reserve_current,
+                    "battery_power": inverter.battery_power,
+                    "pv_power": inverter.pv_power,
+                    "charge_rate_now": inverter.charge_rate_now * MINUTE_WATT,
+                    "discharge_rate_now": inverter.discharge_rate_now * MINUTE_WATT,
+                    "battery_rate_max_charge": inverter.battery_rate_max_charge * MINUTE_WATT,
+                    "battery_rate_max_discharge": inverter.battery_rate_max_discharge * MINUTE_WATT,
+                    "in_calibration": inverter.in_calibration,
+                }
+            )
+        return snapshot
+
+    def balance_inverter_rates(self, intent):
+        """
+        Apply fleet balancing to the executor's rate intent, if it is enabled.
+
+        Args:
+            intent (dict): inverter id -> rate intent, mutated in place
+        """
+        if not self.balance_inverters_enable or self.set_read_only:
+            return
+        if len(self.inverters) < 2:
+            return
+        balance_inverters(
+            intent,
+            self.build_inverter_snapshot(),
+            self.balance_inverters_charge,
+            self.balance_inverters_discharge,
+            self.balance_inverters_crosscharge,
+            self.balance_inverters_threshold_charge,
+            self.balance_inverters_threshold_discharge,
+            log_to=self.log,
+        )
 
     def apply_inverter_rates(self, inverter, intent):
         """
@@ -813,6 +862,8 @@ class Execute:
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
 
+        self.balance_inverter_rates(intent)
+
         # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
         # branch (continue) or the calibration branch (break) recorded no intent and are not written.
@@ -1319,170 +1370,3 @@ class Execute:
                 "plan_interval_minutes": self.plan_interval_minutes,
             },
         )
-
-    def balance_inverters(self, test_mode=False):
-        """
-        Attempt to balance multiple inverters
-        """
-        # Charge rate resets
-        balance_reset_charge = {}
-        balance_reset_discharge = {}
-
-        self.log(
-            "BALANCE: Enabled balance charge {} discharge {} crosscharge {} threshold charge {} discharge {}".format(
-                self.balance_inverters_charge,
-                self.balance_inverters_discharge,
-                self.balance_inverters_crosscharge,
-                self.balance_inverters_threshold_charge,
-                self.balance_inverters_threshold_discharge,
-            )
-        )
-        self.update_time(print=False)
-
-        # For each inverter get the details
-        num_inverters = int(self.get_arg("num_inverters", 1))
-
-        inverters = []
-        for id in range(num_inverters):
-            if test_mode:
-                inverter = self.inverters[id]
-            else:
-                inverter = Inverter(self, id, quiet=True)
-                inverter.update_status(self.minutes_now, quiet=True)
-            if inverter.in_calibration:
-                self.log("Inverter {} is in calibration mode, not balancing".format(id))
-                return False
-            inverters.append(inverter)
-
-        out_of_balance = False  # Are all the SoC % the same
-        total_battery_power = 0  # Total battery power across inverters
-        total_max_rate = 0  # Total battery max rate across inverters
-        total_charge_rates = 0  # Current total charge rates
-        total_discharge_rates = 0  # Current total discharge rates
-        total_pv_power = 0  # Current total PV power
-        total_load_power = 0  # Current load power
-        socs = []
-        reserves = []
-        battery_powers = []
-        pv_powers = []
-        battery_max_rates = []
-        charge_rates = []
-        discharge_rates = []
-        load_powers = []
-        for inverter in inverters:
-            socs.append(inverter.soc_percent)
-            reserves.append(inverter.reserve_current)
-            if inverter.soc_percent != inverters[0].soc_percent:
-                out_of_balance = True
-            battery_powers.append(inverter.battery_power)
-            pv_powers.append(inverter.pv_power)
-            load_powers.append(inverter.load_power)
-            total_battery_power += inverter.battery_power
-            total_pv_power += inverter.pv_power
-            total_load_power += inverter.load_power
-            battery_max_rates.append(inverter.battery_rate_max_discharge * MINUTE_WATT)
-            total_max_rate += inverter.battery_rate_max_discharge * MINUTE_WATT
-            charge_rates.append(inverter.charge_rate_now * MINUTE_WATT)
-            total_charge_rates += inverter.charge_rate_now * MINUTE_WATT
-            discharge_rates.append(inverter.discharge_rate_now * MINUTE_WATT)
-            total_discharge_rates += inverter.discharge_rate_now * MINUTE_WATT
-        self.log(
-            "BALANCE: SoCs {}% reserves {}% battery_powers {}W total {}W battery_max_rates {}W charge_rates {}W pv_power {}W load_power {}W total {}W discharge_rates {}W total {}W".format(
-                socs,
-                reserves,
-                battery_powers,
-                total_battery_power,
-                [dp0(x) for x in battery_max_rates],
-                [dp0(x) for x in charge_rates],
-                [dp0(x) for x in pv_powers],
-                [dp0(x) for x in load_powers],
-                dp0(total_charge_rates),
-                [dp0(x) for x in discharge_rates],
-                dp0(total_discharge_rates),
-            )
-        )
-
-        # Are we discharging
-        during_discharge = total_battery_power >= 0.0
-        during_charge = total_battery_power < 0.0
-
-        # Work out min and max socs
-        soc_min = min(socs)
-        soc_max = max(socs)
-
-        # Work out which inverters have low and high Soc
-        soc_low = []
-        soc_high = []
-        for inverter in inverters:
-            soc_low.append(inverter.soc_percent < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_threshold_discharge))
-            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_threshold_charge))
-
-        above_reserve = []  # Is the battery above reserve?
-        below_full = []  # Is the battery below full?
-        can_power_house = []  # Could this inverter power the house alone?
-        can_store_pv = []  # Can store the PV for the house alone?
-        power_enough_discharge = []  # Inverter drawing enough power to be worth balancing
-        power_enough_charge = []  # Inverter drawing enough power to be worth balancing
-        for id in range(num_inverters):
-            above_reserve.append((socs[id] - reserves[id]) >= 4.0)
-            below_full.append(socs[id] < 100.0)
-            can_power_house.append((total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power)
-            can_store_pv.append(total_pv_power <= (total_charge_rates - charge_rates[id]))
-            power_enough_discharge.append(battery_powers[id] >= 50.0)
-            power_enough_charge.append(inverters[id].battery_power <= -50.0)
-
-        self.log(
-            "BALANCE: out_of_balance {} above_reserve {} below_full {} can_power_house {} can_store_pv {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(
-                out_of_balance, above_reserve, below_full, can_power_house, can_store_pv, power_enough_discharge, power_enough_charge, soc_low, soc_high
-            )
-        )
-        for this_inverter in range(num_inverters):
-            other_inverter = (this_inverter + 1) % num_inverters
-            if (
-                self.balance_inverters_discharge
-                and total_discharge_rates > 0
-                and out_of_balance
-                and during_discharge
-                and soc_low[this_inverter]
-                and above_reserve[other_inverter]
-                and can_power_house[this_inverter]
-                and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0)
-            ):
-                self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
-                balance_reset_discharge[this_inverter] = True
-                inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-            elif (
-                self.balance_inverters_charge
-                and total_charge_rates > 0
-                and out_of_balance
-                and during_charge
-                and soc_high[this_inverter]
-                and below_full[other_inverter]
-                and can_store_pv[this_inverter]
-                and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0)
-            ):
-                self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
-                balance_reset_charge[this_inverter] = True
-                inverters[this_inverter].adjust_charge_rate(0, notify=False)
-            elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
-                self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
-                if soc_low[this_inverter] and can_power_house[other_inverter]:
-                    balance_reset_charge[this_inverter] = True
-                    inverters[this_inverter].adjust_charge_rate(0, notify=False)
-                elif can_power_house[this_inverter]:
-                    balance_reset_discharge[other_inverter] = True
-                    inverters[other_inverter].adjust_discharge_rate(0, notify=False)
-            elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
-                self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
-                balance_reset_discharge[this_inverter] = True
-                inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-
-        for id in range(num_inverters):
-            if not balance_reset_charge.get(id, False) and total_charge_rates > 0 and charge_rates[id] == 0:
-                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverters[id].battery_rate_max_charge * MINUTE_WATT))
-                inverters[id].adjust_charge_rate(inverters[id].battery_rate_max_charge * MINUTE_WATT, notify=False)
-            if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id] == 0:
-                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverters[id].battery_rate_max_discharge * MINUTE_WATT))
-                inverters[id].adjust_discharge_rate(inverters[id].battery_rate_max_discharge * MINUTE_WATT, notify=False)
-
-        self.log("BALANCE: Completed this run")

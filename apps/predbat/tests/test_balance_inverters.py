@@ -18,6 +18,24 @@ def dummy_sleep(seconds):
     pass
 
 
+def run_balance(my_predbat):
+    """
+    Drive the balance path the way execute_plan does: build a default intent where nothing has
+    been claimed, let balancing mutate it, then apply it through the single write point.
+
+    Replaces the old balance_inverters(test_mode=True) entry point, which built its own Inverter
+    objects and wrote rates directly.
+    """
+    my_predbat.balance_inverters_enable = True
+    my_predbat.set_read_only = False
+    intent = {}
+    for inverter in my_predbat.inverters:
+        intent[inverter.id] = {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"}
+    my_predbat.balance_inverter_rates(intent)
+    for inverter in my_predbat.inverters:
+        my_predbat.apply_inverter_rates(inverter, intent[inverter.id])
+
+
 def run_balance_inverters_tests(my_predbat):
     """
     Test the balance_inverters function with various scenarios
@@ -222,18 +240,18 @@ def test_balance_discharge_low_soc(my_predbat):
     ha = my_predbat.ha_interface
 
     # Enable balance
-    my_predbat.args["balance_inverters_discharge"] = True
-    my_predbat.args["balance_inverters_charge"] = False
-    my_predbat.args["balance_inverters_crosscharge"] = False
-    my_predbat.args["balance_inverters_threshold_charge"] = 5
-    my_predbat.args["balance_inverters_threshold_discharge"] = 5
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = False
+    my_predbat.balance_inverters_crosscharge = False
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
 
     # Clear service store
     ha.service_store_enable = True
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -284,7 +302,7 @@ def test_balance_charge_high_soc(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -334,7 +352,7 @@ def test_balance_cross_charging1(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -384,7 +402,7 @@ def test_balance_cross_charging2(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -434,7 +452,7 @@ def test_balance_cross_discharging(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -481,7 +499,7 @@ def test_balance_already_balanced(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -531,7 +549,7 @@ def test_balance_reset_balanced_charge(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -581,7 +599,7 @@ def test_balance_reset_balanced_discharge(my_predbat):
     ha.get_service_store()
 
     # Run balance
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -627,7 +645,7 @@ def test_balance_below_threshold(my_predbat):
     ha.service_store_enable = True
     ha.get_service_store()
 
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -675,7 +693,7 @@ def test_balance_at_reserve(my_predbat):
     ha.service_store_enable = True
     ha.get_service_store()
 
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -721,7 +739,7 @@ def test_balance_disabled(my_predbat):
     ha.service_store_enable = True
     ha.get_service_store()
 
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -771,7 +789,7 @@ def test_balance_calibration_mode(my_predbat):
     ha.service_store_enable = True
     ha.get_service_store()
 
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
@@ -813,17 +831,17 @@ def test_balance_insufficient_power(my_predbat):
     ha = my_predbat.ha_interface
 
     # Enable balance
-    my_predbat.args["balance_inverters_discharge"] = True
-    my_predbat.args["balance_inverters_charge"] = False
-    my_predbat.args["balance_inverters_crosscharge"] = False
-    my_predbat.args["balance_inverters_threshold_charge"] = 5
-    my_predbat.args["balance_inverters_threshold_discharge"] = 5
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = False
+    my_predbat.balance_inverters_crosscharge = False
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
 
     # Clear service store
     ha.service_store_enable = True
     ha.get_service_store()
 
-    my_predbat.balance_inverters(test_mode=True)
+    run_balance(my_predbat)
 
     # Check services called
     services = ha.get_service_store()
