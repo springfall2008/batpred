@@ -33,6 +33,7 @@ REASON_TEMPLATES = {
     "demand_rising": "Demand — battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
     "demand_falling": "Demand — the battery is expected to discharge to cover house load; no charging or exporting is scheduled this slot.",
     "demand_steady": "Demand — battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
+    "hold_for_car": "Hold for car — the battery is prevented from discharging while the car charges; house load beyond what solar covers comes from the grid instead.",
     # Used for the first half of a split slot where the export window only starts partway through -
     # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
     # reasons above, which would contradict the export reason sitting alongside it in the same slot.
@@ -1318,13 +1319,21 @@ class Output:
             else:
                 soc_sym = "&searr;"
 
-            state = soc_sym
+            # Mirrors the discharge hold execute.py applies for a live "Hold for car" status and
+            # prediction.py enforces during the plan itself (car charging slot active, car not
+            # allowed to draw from the battery, charge windows in use) - so the plan explains the
+            # same held SoC that a non-read-only user would see labelled "Hold for car" live.
+            holding_for_car = self.set_charge_window and (not self.car_charging_from_battery) and (self.car_charge_slot_kwh(minute_start, minute_end) > 0.0)
+
+            state = "&#128663;" if holding_for_car else soc_sym
             state_color = "#FFFFFF"
             if minute in self.manual_demand_times:
                 state += " &#8526;"
                 raw_state_override = "Manual demand"
 
-            if soc_sym == "&nearr;":
+            if holding_for_car:
+                demand_reason = {"code": "hold_for_car", "params": {}}
+            elif soc_sym == "&nearr;":
                 demand_reason = {"code": "demand_rising", "params": {}}
             elif soc_sym == "&searr;":
                 demand_reason = {"code": "demand_falling", "params": {}}
