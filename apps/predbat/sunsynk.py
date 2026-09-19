@@ -21,14 +21,16 @@ The RSA path never downgrades to the plaintext one — see ``fetch_token``.
 
 import argparse
 import asyncio
+import os
 import hashlib
 import json
 import time
 import aiohttp
+import yaml
 from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
-from tou_schedule import TouScheduleMixin
+from tou_schedule import TouScheduleMixin, MINUTES_PER_DAY
 from sunsynk_const import (
     SUNSYNK_REGIONS,
     SUNSYNK_ENDPOINTS,
@@ -56,6 +58,7 @@ from sunsynk_const import (
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
     SUNSYNK_WORKMODE,
     SUNSYNK_WORKMODE_FIELD,
+    SUNSYNK_TOU_TEST_SETTLE,
     SUNSYNK_SOLAR_SELL_FIELD,
     SUNSYNK_TOU_ENABLE_FIELD,
     SUNSYNK_SERIAL_FIELD,
@@ -1659,6 +1662,59 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         await self.save_control()
 
 
+# apps.yaml key -> the SunsynkAPI keyword it supplies. Only what is needed to authenticate
+# and address one inverter; nothing else in the file is read.
+APPS_YAML_CREDENTIAL_KEYS = {
+    "sunsynk_username": "username",
+    "sunsynk_password": "password",
+    "sunsynk_key": "key",
+    "sunsynk_region": "region",
+    "sunsynk_auth_method": "auth_method",
+    "sunsynk_token_expires_at": "token_expires_at",
+    "sunsynk_token_hash": "token_hash",
+    "sunsynk_inverter_sn": "inverter_sn",
+}
+
+
+def load_apps_yaml_credentials(path):
+    """Read Sunsynk credentials out of a real apps.yaml for the standalone CLI.
+
+    Lets the CLI drive a real account without retyping credentials, and in particular
+    without a password at all: an install using the oauth flow has only a bearer token, and
+    --username/--password cannot express that. Returns a kwargs dict for SunsynkAPI, or
+    raises ValueError with the reason when the file cannot supply a usable account - the
+    caller is a CLI, and a precise refusal beats a half-built client failing at login.
+
+    Only the keys in APPS_YAML_CREDENTIAL_KEYS are read, and none of their values are ever
+    printed: the CLI reports the serial and the region, never the token.
+    """
+    try:
+        with open(path, "r") as handle:
+            config = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"could not read {path}: {error}")
+    if not isinstance(config, dict):
+        raise ValueError(f"{path} is not a YAML mapping")
+    # A real apps.yaml nests everything under pred_bat; accept a bare mapping too, so a
+    # hand-trimmed file holding just the sunsynk keys works.
+    config = config.get("pred_bat", config) or {}
+    credentials = {name: config[key] for key, name in APPS_YAML_CREDENTIAL_KEYS.items() if config.get(key) not in (None, "")}
+
+    serials = credentials.get("inverter_sn")
+    if not serials:
+        raise ValueError(f"{path} has no sunsynk_inverter_sn, so there is no inverter to address")
+    credentials["inverter_sn"] = [str(serial) for serial in (serials if isinstance(serials, list) else [serials])]
+    if credentials.get("token_expires_at") is not None:
+        # yaml parses an ISO timestamp into a datetime; _parse_expiry wants the string back.
+        credentials["token_expires_at"] = str(credentials["token_expires_at"])
+    if credentials.get("auth_method") == "oauth":
+        if not credentials.get("key"):
+            raise ValueError(f"{path} selects the oauth flow but carries no sunsynk_key token")
+    elif not (credentials.get("username") and credentials.get("password")):
+        raise ValueError(f"{path} has neither an oauth token nor a sunsynk_username/sunsynk_password pair")
+    return credentials
+
+
 def _build_sunsynk(mock_base, args):  # pragma: no cover
     """Construct a SunsynkAPI around a MockBase for standalone command-line use.
 
@@ -1672,13 +1728,21 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
     _build_deye does, so a serial restricts discovery itself (run() -> refresh_static() ->
     get_device_list()) rather than being trusted unverified after the fact.
     """
+    credentials = dict(getattr(args, "credentials", None) or {})
+    # --serial still wins over the file, so one inverter of a multi-inverter account can be
+    # singled out without editing apps.yaml.
+    if args.serial:
+        credentials["inverter_sn"] = args.serial
     return SunsynkAPI(
         mock_base,
-        username=args.username,
-        password=args.password,
-        region=args.region,
-        auth_method=args.auth_method,
-        inverter_sn=args.serial,
+        username=credentials.pop("username", args.username),
+        password=credentials.pop("password", args.password),
+        region=credentials.pop("region", args.region),
+        auth_method=credentials.pop("auth_method", args.auth_method),
+        inverter_sn=credentials.pop("inverter_sn", None),
+        key=credentials.pop("key", ""),
+        token_expires_at=credentials.pop("token_expires_at", None),
+        token_hash=credentials.pop("token_hash", ""),
         # The CLI is the verification tool, so control is on - but test_sunsynk_api still
         # asks before it sends anything to a real inverter, and run() only ever calls
         # apply_settings/apply_schedule for a serial already in control_active, which
@@ -1686,6 +1750,123 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
         control_enable=True,
         automatic=False,
     )
+
+
+def _tou_test_window(now_minutes, lead_minutes=240, length_minutes=180):
+    """Return an HH:MM charge window placed clear of the current time.
+
+    The programme --tou-test writes exists only to be read back and removed, so it must
+    never be one the inverter acts on. Starting a few hours ahead and running for a few
+    more keeps the current minute outside it however the window wraps past midnight, so
+    the battery cannot enter the window during the seconds it is live.
+    """
+    start = (now_minutes + lead_minutes) % MINUTES_PER_DAY
+    end = (start + length_minutes) % MINUTES_PER_DAY
+    return f"{start // 60:02d}:{start % 60:02d}", f"{end // 60:02d}:{end % 60:02d}"
+
+
+def _tou_snapshot(settings):
+    """Take the System Mode subset of a settings read - everything a restore needs."""
+    return {key: value for key, value in (settings or {}).items() if key in SUNSYNK_SYSTEM_MODE_FIELDS}
+
+
+def _tou_slot_times(settings):
+    """Return the six slot start times from a settings object, for printing."""
+    return [(settings or {}).get(TOU_FIELD["time"].format(n=n)) for n in range(1, TOU_SLOT_COUNT + 1)]
+
+
+async def _tou_round_trip(client, sn):  # pragma: no cover
+    """Write a padded TOU programme to a real inverter, verify it, then restore the original.
+
+    This is the only thing in the tree that proves the slot builder against real firmware
+    rather than a double. The mocked tests can say what build_tou_slots produces; only this
+    says the inverter stored it.
+
+    The original programme is written to a JSON file BEFORE anything is sent, the restore
+    runs from a finally, and the restore is itself verified by reading back - so a failure
+    anywhere still leaves the inverter as it was found, or names the file that will put it
+    back by hand.
+    """
+    original = await client.fetch_settings(sn)
+    snapshot = _tou_snapshot(original)
+    if len(snapshot) < TOU_SLOT_COUNT:
+        print(f"\nNo System Mode programme read back for {sn} ({len(snapshot)} owned keys), refusing to write.")
+        return False
+    snapshot_path = f"sunsynk_tou_restore_{sn}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(snapshot_path, "w") as handle:
+        json.dump(snapshot, handle, indent=2, sort_keys=True, default=str)
+    print(f"\n--- {sn} TOU round trip ---")
+    print(f"Current programme: {_tou_slot_times(original)}")
+    print(f"Restore snapshot saved to {os.path.abspath(snapshot_path)}")
+
+    now_minutes = client._now_minutes()
+    start, end = _tou_test_window(now_minutes)
+    schedule = {
+        "reserve": max(client.battery_reserve_min(sn), 10),
+        "charge": {"enable": True, "soc": 95, "power": int(client.battery_rate_max(sn)) or 3000, "start": start, "end": end},
+        "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+    }
+    self_use_power = int(client.inverter_limit(sn)) or client._existing_slot_power(sn)
+    expected = client.build_tou_slots(schedule, current_soc=50, self_use_power=self_use_power)
+    print(f"Writing charge {start}-{end} (now {now_minutes // 60:02d}:{now_minutes % 60:02d}, deliberately outside the window)")
+    print(f"Expected programme: {[(slot['time'], 'charge' if slot['grid_charge'] else 'self-use') for slot in expected]}")
+    print("  (the slots after the window are padding - they must carry the state they follow, not end it)")
+    try:
+        confirm = input("Send this to the inverter and then restore the original? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo input available, nothing sent.")
+        os.remove(snapshot_path)
+        return False
+    if confirm.strip().lower() != "y":
+        print("Nothing sent.")
+        os.remove(snapshot_path)
+        return False
+
+    failed = False
+    try:
+        if not await client.apply_settings(sn, schedule, current_soc=50, force=True):
+            print("FAILED: apply_settings reported no write - the programme did not reach the inverter.")
+            return True
+        # Read back rather than trusting the write's own success: this API accepts an
+        # oversized object and silently discards it, and has been seen to drop individual
+        # fields while persisting the rest (see SUNSYNK_BOOL_FIELDS), so only a read proves
+        # the programme landed.
+        print(f"Written, re-reading in {SUNSYNK_TOU_TEST_SETTLE}s to let the dongle collect it...")
+        await asyncio.sleep(SUNSYNK_TOU_TEST_SETTLE)
+        readback = await client.fetch_settings(sn)
+        if not readback:
+            print("FAILED: could not read the settings back after writing.")
+            return True
+        sent = client.applied_payload.get(sn, {})
+        asserted = [TOU_FIELD[field].format(n=index) for index in range(1, TOU_SLOT_COUNT + 1) for field in ("time", "grid_charge", "sell")]
+        for key in asserted:
+            if str(readback.get(key)) != str(sent.get(key)):
+                print(f"FAILED: {key} read back as {readback.get(key)!r}, wrote {sent.get(key)!r}")
+                failed = True
+        for key, value in sent.items():
+            # Reported, not failed: the inverter may normalise a power or a voltage, and
+            # that is not what this test is about.
+            if key not in asserted and key != SUNSYNK_SERIAL_FIELD and str(readback.get(key)) != str(value):
+                print(f"  note: {key} read back as {readback.get(key)!r}, wrote {value!r}")
+        if not failed:
+            print(f"VERIFIED: the inverter stored {_tou_slot_times(readback)} - the window runs unbroken through its padding.")
+    finally:
+        print("Restoring the original programme...")
+        if await client._post("settings_set", sn=sn, body=snapshot) is None:
+            print(f"RESTORE FAILED - the inverter is still on the test programme. Restore by hand from {os.path.abspath(snapshot_path)}")
+            failed = True
+        else:
+            await asyncio.sleep(SUNSYNK_TOU_TEST_SETTLE)
+            after = await client.fetch_settings(sn)
+            differing = [key for key, value in snapshot.items() if str((after or {}).get(key)) != str(value)]
+            if differing:
+                print(f"RESTORE INCOMPLETE - {len(differing)} field(s) still differ: {differing[:10]}")
+                print(f"  the original is saved at {os.path.abspath(snapshot_path)}")
+                failed = True
+            else:
+                print(f"Restored: {_tou_slot_times(after)}")
+                os.remove(snapshot_path)
+    return failed
 
 
 async def test_sunsynk_api(args):  # pragma: no cover
@@ -1712,13 +1893,17 @@ async def test_sunsynk_api(args):  # pragma: no cover
       - a token but no device_list -> login worked, discovery found nothing (or failed -
         see self.discovery_ok, Fix 3).
       - a device_list but run() still failed -> the first telemetry poll came back empty.
-    These three are exhaustive for the auth methods this CLI exposes (password,
-    password_legacy): check_and_refresh_oauth_token() only ever returns False for the
-    oauth flow, which --auth-method cannot select.
+    These three are exhaustive for the password flows (--auth-method password,
+    password_legacy). --apps-yaml can additionally supply an oauth account, where
+    check_and_refresh_oauth_token() can itself return False - an expired token with no
+    usable refresh reports as the no-access-token case above, which is the right diagnosis:
+    the fix is a fresh sunsynk_key in apps.yaml.
     """
     mock_base = MockBase()
     client = _build_sunsynk(mock_base, args)
-    print(f"Region {args.region} -> {client.base_url} (source={client.source}), auth={args.auth_method}")
+    # client.auth_method, not args.auth_method: --apps-yaml can override it, and reporting
+    # the CLI default while running an oauth account makes a login failure undiagnosable.
+    print(f"Region {client.region} -> {client.base_url} (source={client.source}), auth={client.auth_method}")
 
     print("Calling run() once (read-only: login, discover, poll config/telemetry, publish)...")
     ok = await client.run(seconds=0, first=True)
@@ -1744,6 +1929,7 @@ async def test_sunsynk_api(args):  # pragma: no cover
         return
 
     serials = client.device_list
+    failures = []
     print(f"Inverters: {serials}")
     for sn in serials:
         print(f"\n--- {sn} detail ---")
@@ -1781,7 +1967,12 @@ async def test_sunsynk_api(args):  # pragma: no cover
             if confirm.strip().lower() == "y":
                 await client.apply_settings(sn, schedule, current_soc=50, force=True)
                 print("Written. Re-reading in 60 seconds is the only way to confirm the dongle collected it.")
+        if args.tou_test:
+            if await _tou_round_trip(client, sn):
+                failures.append(sn)
 
+    if failures:
+        print(f"\nTOU round trip FAILED for {failures}")
     await client.final()
     print("Done")
 
@@ -1789,14 +1980,26 @@ async def test_sunsynk_api(args):  # pragma: no cover
 def main():  # pragma: no cover
     """Command-line entry point for Sunsynk diagnostics."""
     parser = argparse.ArgumentParser(description="Sunsynk Cloud API diagnostics")
-    parser.add_argument("--username", required=True, help="Sunsynk Connect account e-mail")
-    parser.add_argument("--password", required=True, help="Sunsynk Connect account password")
+    parser.add_argument("--apps-yaml", default=None, help="Read credentials from a real apps.yaml instead of --username/--password (the only way to use an oauth-token account)")
+    parser.add_argument("--username", default=None, help="Sunsynk Connect account e-mail (not needed with --apps-yaml)")
+    parser.add_argument("--password", default=None, help="Sunsynk Connect account password (not needed with --apps-yaml)")
     parser.add_argument("--region", default="sunsynk", choices=sorted(SUNSYNK_REGIONS), help="API region")
     parser.add_argument("--auth-method", default="password", choices=["password", "password_legacy"], help="Login flow: RSA-encrypted (default) or the pre-2025 plaintext one")
     parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
     parser.add_argument("--dump-settings", action="store_true", help="Print the full settings object")
     parser.add_argument("--write-test", action="store_true", help="Build a harmless self-use payload and offer to send it")
-    asyncio.run(test_sunsynk_api(parser.parse_args()))
+    parser.add_argument("--tou-test", action="store_true", help="Write a padded TOU programme to the inverter, verify the read-back, then restore the original (asks first)")
+    args = parser.parse_args()
+    args.credentials = None
+    if args.apps_yaml:
+        try:
+            args.credentials = load_apps_yaml_credentials(args.apps_yaml)
+        except ValueError as error:
+            parser.error(str(error))
+        print(f"Credentials loaded from {args.apps_yaml} for inverter(s) {args.credentials['inverter_sn']}")
+    elif not (args.username and args.password):
+        parser.error("--username and --password are required unless --apps-yaml is given")
+    asyncio.run(test_sunsynk_api(args))
 
 
 if __name__ == "__main__":

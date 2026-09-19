@@ -125,6 +125,12 @@ SUNSYNK_SYSTEM_MODE_FIELDS = frozenset(
 )
 
 # Top-level settings keys Predbat owns.
+# Seconds the standalone CLI's --tou-test waits between writing the settings object and
+# reading it back. A settings write is collected by the dongle rather than applied
+# synchronously, so an immediate read shows the PREVIOUS programme and would report a
+# perfectly good write as a failure.
+SUNSYNK_TOU_TEST_SETTLE = 20
+
 SUNSYNK_WORKMODE_FIELD = "sysWorkMode"
 SUNSYNK_SOLAR_SELL_FIELD = "solarSell"
 SUNSYNK_TOU_ENABLE_FIELD = "peakAndVallery"
