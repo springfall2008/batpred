@@ -1095,6 +1095,18 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "battery_soc_full_hysteresis",
+        "friendly_name": "Battery SoC Full Hysteresis",
+        "type": "input_number",
+        "min": 0,
+        "max": 20,
+        "step": 0.5,
+        "unit": "%",
+        "icon": "mdi:battery-alert-variant-outline",
+        "enable": "expert_mode",
+        "default": 0,
+    },
+    {
         "name": "set_reserve_enable",
         "friendly_name": "Set Reserve Enable",
         "type": "switch",
