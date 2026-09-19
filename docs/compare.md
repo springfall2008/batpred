@@ -168,12 +168,13 @@ starts from the same point, and yesterday's ending SoC carries into today.
 You do not need to edit this file, and nothing is lost by deleting it - the next comparison run simply recreates it, though the Compare page will
 be empty until then. Predbat discards stored results whose tariff ID is no longer listed in `compare_list`, so when you rename or remove a tariff in
 `apps.yaml` its old result stops being published as soon as Predbat restarts, and drops out of the file the next time a comparison is run.
-Renaming an ID in a way that does not change the sensor name (for example only changing its capitalisation) keeps the stored result, since it is still
-the same sensor being published.
+Renaming an ID in a way that does not change the sensor name (for example only changing its capitalisation) moves the stored result to the new ID
+rather than discarding it, since it is still the same sensor being published, and yesterday's ending SoC still carries into today's comparison.
 
 Removing or commenting out the whole `compare_list` block is treated as compare not being configured rather than as every tariff having been removed,
 so the stored results are kept in that case and are published once more each time Predbat starts. Delete `comparisons.yaml` as well if you want those
-sensors to stop being written altogether.
+sensors to stop being written altogether. Stored results are likewise kept, rather than all discarded, while no entry in `compare_list` has an ID that
+can be used (every ID missing, or like `///`).
 
 ## Overriding Predbat configuration per tariff
 

@@ -489,26 +489,39 @@ class Compare:
 
         The results are persisted in comparisons.yaml and reloaded at startup, so without this a
         tariff id removed or renamed in apps.yaml keeps being republished to HA forever (GH#5133).
-        Staleness is keyed on the entity slug rather than the raw id so that it agrees with what
-        publish_data writes: re-capitalising an id publishes to the very same entity, so its stored
-        result - and the soc_start run_all carries forward from it - has to survive that rename.
-        An empty compare_list, or one where no entry has a usable id, means compare is not
-        configured at all rather than that every tariff was removed, so nothing is dropped then.
+        A stored id that is no longer configured but publishes to the same entity as one that is
+        (re-capitalising 'Agile' to 'agile') is moved to the configured id rather than dropped:
+        run_all looks up the prior result - and the soc_start it carries forward - by the id in
+        compare_list, and so does the web Compare page, so keeping it under the old id loses both.
+        An empty compare_list, or one where no entry has an id usable in an entity id, means
+        compare is not configured at all rather than that every tariff was removed, so nothing is
+        dropped then.
         """
         compare_list = self.pb.get_arg("compare_list", [])
         if not compare_list:
             return
 
-        # An entry with a missing or null id would otherwise contribute "" or None to the wanted set,
-        # leaving every real stored result looking stale and wiping the lot on the first publish
-        wanted_slugs = {tariff_entity_slug(compare["id"]) for compare in compare_list if isinstance(compare, dict) and compare.get("id")}
-        if not wanted_slugs:
+        # A missing or null id, or one such as '///' that reduces to an empty slug, matches no real tariff;
+        # letting it into the wanted set would leave every genuine stored result looking stale and wipe the lot
+        configured_ids = [compare["id"] for compare in compare_list if isinstance(compare, dict) and compare.get("id")]
+        configured_id_by_slug = {}
+        for tariff_id in configured_ids:
+            slug = tariff_entity_slug(tariff_id)
+            if slug:
+                configured_id_by_slug.setdefault(slug, tariff_id)
+        if not configured_id_by_slug:
             return
 
-        stale_ids = [tariff_id for tariff_id in self.comparisons if tariff_entity_slug(tariff_id) not in wanted_slugs]
-        for tariff_id in stale_ids:
-            self.log("Compare, discarding stored result for tariff {} which is no longer in compare_list".format(tariff_id))
-            del self.comparisons[tariff_id]
+        for tariff_id in list(self.comparisons):
+            if tariff_id in configured_ids:
+                continue
+            configured_id = configured_id_by_slug.get(tariff_entity_slug(tariff_id))
+            if configured_id is not None and configured_id not in self.comparisons:
+                self.log("Compare, tariff {} is now configured as {}, keeping its stored result".format(tariff_id, configured_id))
+                self.comparisons[configured_id] = self.comparisons.pop(tariff_id)
+            else:
+                self.log("Compare, discarding stored result for tariff {} which is no longer in compare_list".format(tariff_id))
+                del self.comparisons[tariff_id]
 
     def publish_data(self):
         """
@@ -626,6 +639,8 @@ class Compare:
         if not compare_list:
             return
 
+        # Move renamed tariffs' results to their current id before the prior-SoC lookup below reads them by it
+        self.prune_comparisons()
         results = self.comparisons
 
         my_predbat = self.pb
