@@ -8,7 +8,9 @@ allowed-tools: You can read anything in this repo and the queue directory, but y
 
 You maintain `tools/debug-journal.md` — the file every triage, PR-review and PR-cleanup run reads before forming a hypothesis. Each of those runs can leave a finding in a queue directory; once a day you fold the queue in and open a PR.
 
-Arguments: `queue=<dir>`. Every `*.md` directly in that directory is one candidate. `<queue>/processed/` is the archive of candidates already folded in — read it for context if you like, but never treat it as new input.
+Arguments: `queue=<dir> limit=<n>`. Every `*.md` directly in that directory is one candidate. `<queue>/processed/` is the archive of candidates already folded in — read it for context if you like, but never treat it as new input.
+
+**Take only the first `limit` candidates, in plain filename sort order, and leave the rest alone.** The daemon archives exactly that slice once your PR is open, so folding in a different set means the ones you skipped get archived unread while the ones you added get offered again tomorrow. A backlog is normal and drains a slice per day; it is not a reason to reach past the limit. Say in the PR body how many were left queued.
 
 **The journal being wrong is worse than it being stale.** Every later run trusts it, so a confidently wrong entry propagates into comments posted to real reporters. One entry recently asserted a credential leak that had already been fixed; left alone it would have had a triage run tell a reporter to rotate keys that never leaked. Your job is as much deleting and correcting as adding.
 

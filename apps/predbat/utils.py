@@ -1022,6 +1022,24 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
     return [mdata, max_days]
 
 
+def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
+    """
+    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+
+    The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
+    same validity window. minute_data() writes each row over its range, so whichever row comes last
+    in the response wins, and that order is not stable across periods. Rows with no payment_method
+    (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
+    method, which keeps single-variant tariffs behaving exactly as before.
+    """
+    if not rates:
+        return rates
+    methods = {rate.get("payment_method") for rate in rates if isinstance(rate, dict)}
+    if preferred not in methods:
+        return rates
+    return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
+
+
 def minute_data(
     history,
     days,
@@ -2435,3 +2453,279 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
     if mallopt is None:
         return False
     return bool(mallopt(M_ARENA_MAX, max_arenas))
+
+
+# Spare PV below this (W) is noise rather than a surplus worth keeping the fleet charging for.
+# Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
+PV_SURPLUS_THRESHOLD = 50.0
+
+
+def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
+    """
+    Mutate the executor's per-inverter rate intent to correct fleet imbalance.
+
+    Ported from the old Execute.balance_inverters() timer loop, with the actuator changed: instead
+    of writing rate 0 and later resetting to max, this adjusts the intent that execute_plan built,
+    which is then applied once. Convergence therefore returns to the executor's value rather than
+    the register ceiling, so a deliberate hold can no longer be overwritten (F5 / GH#829).
+
+    Partner selection no longer uses the original's fixed (this_inverter + 1) % num_inverters ring,
+    which judged each inverter against its index neighbour and so gave different answers for the
+    same fleet depending on configuration order (F7 in GH#4856). The energy guards now ask whether
+    ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
+    as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
+
+    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
+    and a discharger together leaves the remaining units absorbing or supplying the difference,
+    against guards that were each evaluated as though its own hold were the only change. Holds
+    within the chosen direction are therefore applied cumulatively as well.
+
+    Args:
+        intent (dict): inverter id -> rate intent, mutated in place
+        snapshot (list): per-inverter plain readings, indexed by inverter id
+        balance_charge (bool): balance SoC while the fleet is charging
+        balance_discharge (bool): balance SoC while the fleet is discharging
+        balance_crosscharge (bool): stop one inverter charging from another
+        threshold_charge (float): minimum SoC% divergence to act on during charge
+        threshold_discharge (float): minimum SoC% divergence to act on during discharge
+        log_to (callable): optional logger, called with a single string
+    """
+    num_inverters = len(snapshot)
+    if num_inverters < 2:
+        return
+    for entry in snapshot:
+        if entry["in_calibration"]:
+            if log_to:
+                log_to("BALANCE: an inverter is in calibration, not balancing")
+            return
+
+    socs = [entry["soc_percent"] for entry in snapshot]
+    reserves = [entry["reserve_percent"] for entry in snapshot]
+    battery_powers = [entry["battery_power"] for entry in snapshot]
+    grid_powers = [entry.get("grid_power", 0.0) for entry in snapshot]
+    charge_rates = [entry["charge_rate_now"] for entry in snapshot]
+    discharge_rates = [entry["discharge_rate_now"] for entry in snapshot]
+
+    # The rates that will actually be in force after this pass. Balancing runs BEFORE the apply
+    # pass, so the measured rates above can overstate what the fleet is about to be able to do -
+    # an export allocation stepping down, for instance. The capacity guards below reason about
+    # these; the measured rates are kept for spotting an inverter that is already held at zero.
+    effective_charge_rates = []
+    effective_discharge_rates = []
+    for id in range(num_inverters):
+        if id in intent:
+            claimed_charge = intent[id].get("charge_rate", None)
+            claimed_discharge = intent[id].get("discharge_rate", None)
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+        else:
+            # Not being written this pass (read-only, or skipped for calibration), so whatever it
+            # reads now is what it will keep
+            effective_charge_rates.append(charge_rates[id])
+            effective_discharge_rates.append(discharge_rates[id])
+    total_effective_charge_rates = sum(effective_charge_rates)
+    total_effective_discharge_rates = sum(effective_discharge_rates)
+
+    total_battery_power = sum(battery_powers)
+    total_grid_power = sum(grid_powers)
+    total_charge_rates = sum(charge_rates)
+    total_discharge_rates = sum(discharge_rates)
+
+    out_of_balance = any(soc != socs[0] for soc in socs)
+    during_discharge = total_battery_power >= 0.0
+    during_charge = total_battery_power < 0.0
+    soc_min = min(socs)
+    soc_max = max(socs)
+
+    soc_low = [(soc < soc_max) and (abs(soc - soc_max) >= threshold_discharge) for soc in socs]
+    soc_high = [(soc > soc_min) and (abs(soc - soc_min) >= threshold_charge) for soc in socs]
+
+    above_reserve = [(socs[id] - reserves[id]) >= 4.0 for id in range(num_inverters)]
+    # Not an existence test - that form was unreachable, since soc_high[id] already implies some
+    # peer is below full. This is a per-peer filter on who can actually absorb charge.
+    below_full = [socs[id] < 100.0 for id in range(num_inverters)]
+    power_enough_discharge = [battery_powers[id] >= 50.0 for id in range(num_inverters)]
+    power_enough_charge = [battery_powers[id] <= -50.0 for id in range(num_inverters)]
+
+    if log_to:
+        log_to(
+            "BALANCE: socs {}% reserves {}% battery_powers {}W total {}W charge_rates {}W discharge_rates {}W out_of_balance {} soc_low {} soc_high {}".format(
+                socs, reserves, battery_powers, total_battery_power, charge_rates, discharge_rates, out_of_balance, soc_low, soc_high
+            )
+        )
+
+    # An inverter working against the fleet direction is the wasteful case: energy makes a round
+    # trip through two batteries for no benefit. Correct that first and EXCLUSIVELY - a pass must
+    # never pause in both directions, because the inverters share an AC bus and the remaining units
+    # simply absorb or supply whatever the paused pair stopped doing. Stopping an against-direction
+    # inverter needs no rate guard: it only removes load (fleet discharging) or removes draw (fleet
+    # charging), so it can never leave the house short.
+    # Which direction the fleet SHOULD be going is a question about the whole site's energy
+    # balance, not about the sign of the battery power. Per-inverter readings cannot answer it:
+    # one inverter discharging looks like less load to another, the PV wiring is not declared, and
+    # an AC-coupled unit has no PV of its own. The fleet totals can, and they are trustworthy.
+    #
+    # Predbat's grid convention is +ve EXPORT, -ve import (apps-yaml.md, grid_power_invert), and
+    # battery_power is +ve discharging, so conservation at the house gives:
+    #
+    #     PV + battery = load + grid  =>  load  = total_pv + total_battery_power - total_grid
+    #                                     spare = total_pv - load = total_grid - total_battery_power
+    #
+    # Spare PV therefore falls out of grid and battery alone, with no PV attribution needed. That
+    # grid sign is load-bearing - inverting it inverts every decision below - which is why it is
+    # spelled out here and pinned by the random-fleet property test.
+    #
+    # With spare PV the fleet should be soaking it up, so an inverter DISCHARGING into the surplus
+    # is the anomaly; blaming the chargers there drops PV absorption to zero during an export
+    # window. Only when the batteries are net discharging with no surplus is a charging inverter
+    # being fed by import or by another battery - the cross-charge worth stopping.
+    spare_pv = total_grid_power - total_battery_power
+
+    # Where the executor has claimed rates it already knows what the fleet is meant to be doing,
+    # and that beats anything inferred from the meters. Without this a planned export on a sunny
+    # day reads as "the fleet should be charging" - grid export exceeds what the batteries supply,
+    # so spare_pv is positive - and every inverter carrying out that export looks like an anomaly
+    # and gets held, cancelling it until the next plan run. The energy balance is the fallback for
+    # demand and idle, where nothing has been claimed and the meters are all there is to go on.
+    claimed = {intent[id].get("owner", "demand") for id in intent}
+    if "export" in claimed:
+        fleet_should_discharge = True
+    elif "charge" in claimed:
+        fleet_should_discharge = False
+    else:
+        fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
+
+    if fleet_should_discharge:
+        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+    else:
+        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+
+    if against_fleet and balance_crosscharge:
+        for id in against_fleet:
+            if log_to:
+                log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
+            if fleet_should_discharge:
+                intent[id]["charge_rate"] = 0
+            else:
+                intent[id]["discharge_rate"] = 0
+        # This pass is done: SoC balancing on top would be the second direction of hold that the
+        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
+        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
+        return
+
+    if not out_of_balance:
+        return
+
+    # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
+    # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
+    # ones already taken this pass or two holds each pass a check computed for one.
+    if during_discharge and balance_discharge and total_discharge_rates > 0:
+        held = set()
+        for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
+            if not soc_low[id]:
+                continue
+            if not (power_enough_discharge[id] or discharge_rates[id] == 0):
+                continue
+            # Somebody else has to have the energy to take over - any of them, not an arbitrary
+            # index neighbour, which is what the (i + 1) % n ring used to ask (F7).
+            # Count only the peers that could actually take over: above their reserve, and not
+            # already held this pass. Asking "somebody is above reserve" and "the fleet has rate
+            # headroom" separately lets two different inverters answer them - a peer with energy
+            # but no rate, and a peer with rate but sitting on its reserve - and holding this one
+            # then leaves only unusable capacity behind, with the shortfall coming off the grid.
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
+            if (usable - 200) < total_battery_power:
+                continue
+            if log_to:
+                log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
+            intent[id]["discharge_rate"] = 0
+            held.add(id)
+    elif during_charge and balance_charge and total_charge_rates > 0:
+        held = set()
+        for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: -socs[id]):
+            if not soc_high[id]:
+                continue
+            if not (power_enough_charge[id] or charge_rates[id] == 0):
+                continue
+            # No "somebody else has room" check is needed here, unlike above_reserve on the
+            # discharge side: soc_high[id] already requires socs[id] > soc_min, so the inverter
+            # holding the minimum is strictly below this one and therefore below 100%. The
+            # original's below_full[other_inverter] asked this of one arbitrary neighbour; asked
+            # of the fleet it is implied, so it is not restated.
+            # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
+            # not be counted towards what is left to soak up the surplus.
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            if spare_pv > usable:
+                continue
+            if log_to:
+                log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
+            intent[id]["charge_rate"] = 0
+            held.add(id)
+
+
+def allocate_export_rates(needs, max_rates, p_fleet):
+    """
+    Split the planned fleet export power across inverters by how much each still has to shed.
+
+    The planner costs a specific fleet export power (the low power ladder in plan.py), so the sum
+    of the allocation is pinned to it and only the split varies. An inverter already at its target
+    takes none of the budget and its share spills to inverters that can still deliver, which is
+    what stops fleet export power sagging below plan as inverters finish one by one.
+
+    At full rate p_fleet equals the sum of the ceilings, so every inverter clamps at its own
+    maximum and this reduces to exactly today's uniform scaling.
+
+    Args:
+        needs (list): kWh each inverter still has to shed before reaching its own target
+        max_rates (list): per-inverter export ceiling in W
+        p_fleet (float): planned fleet export power in W
+
+    Returns:
+    - list: export rate in W per inverter, summing to min(p_fleet, sum(max_rates))
+    """
+    count = len(max_rates)
+    if count == 0:
+        return []
+
+    remaining = min(p_fleet, sum(max_rates))
+    if remaining <= 0:
+        return [0.0] * count
+
+    # At or above full fleet power there is nothing to ration, so every inverter takes its own
+    # maximum - the documented no-op outside low power mode. Handled before zero-need entries are
+    # filtered out below, or their share would have nowhere to go and the sum would come up short
+    # of the power the planner costed. An inverter already at its export target is stopped by that
+    # target, not by having its rate held down.
+    if p_fleet >= sum(max_rates):
+        return list(max_rates)
+
+    shares = [need if need > 0 else 0.0 for need in needs]
+    if sum(shares) <= 0:
+        # Nothing to shed anywhere - fall back to the uniform split rather than dividing by zero
+        shares = [1.0] * count
+
+    alloc = [0.0] * count
+    open_set = [id for id in range(count) if shares[id] > 0]
+
+    # Water-fill: hand out the budget in proportion to need, clamp anyone who hits their ceiling,
+    # then redistribute what they could not take among those still open. Terminates because each
+    # pass either closes at least one inverter or places the whole remainder.
+    while remaining > 0.01 and open_set:
+        share_total = sum(shares[id] for id in open_set)
+        if share_total <= 0:
+            break
+        clamped_any = False
+        budget = remaining
+        for id in list(open_set):
+            want = alloc[id] + budget * (shares[id] / share_total)
+            if want >= max_rates[id]:
+                remaining -= max_rates[id] - alloc[id]
+                alloc[id] = max_rates[id]
+                open_set.remove(id)
+                clamped_any = True
+        if not clamped_any:
+            for id in open_set:
+                alloc[id] += remaining * (shares[id] / share_total)
+            remaining = 0.0
+
+    return alloc
