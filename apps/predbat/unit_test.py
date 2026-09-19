@@ -66,6 +66,7 @@ from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_battery_accuracy import run_battery_accuracy_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
+from tests.test_time_loop_guard import test_time_loop_guard
 from tests.test_component_health_status import test_component_health_status, test_record_status_state_clamped
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
@@ -236,6 +237,8 @@ from tests.test_dispatch_timeline import run_dispatch_timeline_tests
 from tests.test_log_rotation import run_log_rotation_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
+from tests.test_balance_pure import run_balance_pure_tests
+from tests.test_utils_allocate import run_allocate_export_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import (
     test_integer_config_entities,
@@ -503,6 +506,7 @@ def main():
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
+        ("time_loop_guard", test_time_loop_guard, "Run-loop guard reports a missing HA interface and sets fatal_error (#5135)", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
         ("record_status_state_clamped", test_record_status_state_clamped, "Status sensor state is clamped at the 255 characters Home Assistant accepts", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
@@ -631,6 +635,8 @@ def main():
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
+        ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
+        ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
         ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
