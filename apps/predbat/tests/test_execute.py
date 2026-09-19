@@ -960,6 +960,42 @@ def test_charge_balancing_through_execute_plan(my_predbat):
     return failed
 
 
+def test_read_only_mode_writes_no_rates(my_predbat):
+    """
+    In read-only mode Predbat must not write a rate at all.
+
+    The read-only branch continues before recording any intent, so the apply pass skips those
+    inverters on "id in intent". Drop that guard and every inverter gets written - and because an
+    absent intent resolves to max, it writes the maximum rate. Existing read-only scenarios cannot
+    see this: they leave the rates at max anyway, so writing max looks identical to not writing.
+    A deliberately non-max rate is set first so the two are distinguishable.
+    """
+    failed = balance_fixture(my_predbat, "read_only_setup")
+    if failed:
+        return failed
+    saved_read_only = my_predbat.set_read_only
+    try:
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(500)
+            inverter.adjust_discharge_rate(500)
+        my_predbat.set_read_only = True
+        my_predbat.execute_plan()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate != 500:
+                print("ERROR: read-only mode wrote inverter {} charge rate, got {} (2600 means it was reset to max)".format(inverter.id, inverter.charge_rate))
+                failed = True
+            if inverter.discharge_rate != 500:
+                print("ERROR: read-only mode wrote inverter {} discharge rate, got {}".format(inverter.id, inverter.discharge_rate))
+                failed = True
+    finally:
+        my_predbat.set_read_only = saved_read_only
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
 def test_stored_intent_is_the_executor_baseline(my_predbat):
     """
     The baseline the inverter poll re-applies must be the EXECUTOR's intent, not the balanced one.
@@ -3625,6 +3661,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_stored_intent_is_the_executor_baseline(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_read_only_mode_writes_no_rates(my_predbat)
     if failed:
         return failed
 

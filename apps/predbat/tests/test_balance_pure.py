@@ -408,6 +408,49 @@ def test_the_soc_switches_gate_independently():
     assert intent == before, "discharge balancing must not act while the fleet is charging"
 
 
+def test_charge_threshold_suppresses_a_small_divergence():
+    """
+    The charge-side mirror of test_threshold_suppresses_a_small_divergence, which only ever
+    exercised threshold_discharge because its fleet was discharging.
+
+    balance_inverters_threshold_charge is a user-facing setting that could have been ignored
+    entirely with every test still green. The thresholds are deliberately different here so it is
+    unambiguous which one is under test.
+    """
+    intent = make_intent(2)
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [make_snapshot(50.0, -1000.0), make_snapshot(51.0, -1000.0)]
+    balance_inverters(intent, snapshot, True, False, False, 5.0, 1.0)
+    assert intent == before, "a 1% divergence under a 5% charge threshold must be ignored"
+
+    # The same fleet with the threshold lowered does act, so the test cannot pass by inaction
+    intent = make_intent(2)
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 0, "the fuller inverter must be held once the divergence clears the threshold"
+
+
+def test_discharge_hold_needs_another_inverter_above_reserve():
+    """
+    Holding a low inverter's discharge only makes sense if somebody else has the energy to take
+    over the house. If every other inverter is down at its reserve, holding this one just moves
+    the shortfall onto the grid.
+
+    Deleting that guard changed nothing in the suite before this test existed.
+    """
+    # Inverter 1 is the fuller one but sits on its reserve, so it cannot take over
+    intent = make_intent(2)
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [make_snapshot(20.0, 1000.0, reserve_percent=4.0), make_snapshot(80.0, 1000.0, reserve_percent=78.0)]
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent == before, "nothing may be held when no other inverter is above its reserve"
+
+    # Same fleet, but the fuller inverter now has energy to spare - the hold goes ahead
+    intent = make_intent(2)
+    snapshot = [make_snapshot(20.0, 1000.0, reserve_percent=4.0), make_snapshot(80.0, 1000.0, reserve_percent=4.0)]
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent[0]["discharge_rate"] == 0, "the low inverter must be held once another can carry the house"
+
+
 def test_random_fleets_hold_the_physical_invariants():
     """
     Property test over random fleets of 2-6 inverters in random charge/discharge states, with
