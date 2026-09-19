@@ -2429,6 +2429,11 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
     return bool(mallopt(M_ARENA_MAX, max_arenas))
 
 
+# Spare PV below this (W) is noise rather than a surplus worth keeping the fleet charging for.
+# Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
+PV_SURPLUS_THRESHOLD = 50.0
+
+
 def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
     """
     Mutate the executor's per-inverter rate intent to correct fleet imbalance.
@@ -2464,12 +2469,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     socs = [entry["soc_percent"] for entry in snapshot]
     reserves = [entry["reserve_percent"] for entry in snapshot]
     battery_powers = [entry["battery_power"] for entry in snapshot]
-    pv_powers = [entry["pv_power"] for entry in snapshot]
+    grid_powers = [entry.get("grid_power", 0.0) for entry in snapshot]
     charge_rates = [entry["charge_rate_now"] for entry in snapshot]
     discharge_rates = [entry["discharge_rate_now"] for entry in snapshot]
 
     total_battery_power = sum(battery_powers)
-    total_pv_power = sum(pv_powers)
+    total_grid_power = sum(grid_powers)
     total_charge_rates = sum(charge_rates)
     total_discharge_rates = sum(discharge_rates)
 
@@ -2500,7 +2505,29 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     # simply absorb or supply whatever the paused pair stopped doing. Stopping an against-direction
     # inverter needs no rate guard: it only removes load (fleet discharging) or removes draw (fleet
     # charging), so it can never leave the house short.
-    if during_discharge:
+    # Which direction the fleet SHOULD be going is a question about the whole site's energy
+    # balance, not about the sign of the battery power. Per-inverter readings cannot answer it:
+    # one inverter discharging looks like less load to another, the PV wiring is not declared, and
+    # an AC-coupled unit has no PV of its own. The fleet totals can, and they are trustworthy.
+    #
+    # Predbat's grid convention is +ve EXPORT, -ve import (apps-yaml.md, grid_power_invert), and
+    # battery_power is +ve discharging, so conservation at the house gives:
+    #
+    #     PV + battery = load + grid  =>  load  = total_pv + total_battery_power - total_grid
+    #                                     spare = total_pv - load = total_grid - total_battery_power
+    #
+    # Spare PV therefore falls out of grid and battery alone, with no PV attribution needed. That
+    # grid sign is load-bearing - inverting it inverts every decision below - which is why it is
+    # spelled out here and pinned by the random-fleet property test.
+    #
+    # With spare PV the fleet should be soaking it up, so an inverter DISCHARGING into the surplus
+    # is the anomaly; blaming the chargers there drops PV absorption to zero during an export
+    # window. Only when the batteries are net discharging with no surplus is a charging inverter
+    # being fed by import or by another battery - the cross-charge worth stopping.
+    spare_pv = total_grid_power - total_battery_power
+    fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
+
+    if fleet_should_discharge:
         against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
     else:
         against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
@@ -2510,7 +2537,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             for id in against_fleet:
                 if log_to:
                     log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
-                if during_discharge:
+                if fleet_should_discharge:
                     intent[id]["charge_rate"] = 0
                 else:
                     intent[id]["discharge_rate"] = 0
@@ -2550,7 +2577,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
                 continue
             if not any(below_full[other] for other in range(num_inverters) if other != id):
                 continue
-            if total_pv_power > (total_charge_rates - held_rate - charge_rates[id]):
+            if spare_pv > (total_charge_rates - held_rate - charge_rates[id]):
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))

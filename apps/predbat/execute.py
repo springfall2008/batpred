@@ -157,6 +157,7 @@ class Execute:
                     "reserve_percent": inverter.reserve_current,
                     "battery_power": inverter.battery_power,
                     "pv_power": inverter.pv_power,
+                    "grid_power": inverter.grid_power,
                     "charge_rate_now": inverter.charge_rate_now * MINUTE_WATT,
                     "discharge_rate_now": inverter.discharge_rate_now * MINUTE_WATT,
                     "battery_rate_max_charge": inverter.battery_rate_max_charge * MINUTE_WATT,
