@@ -197,6 +197,7 @@ from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
 from tests.test_load_free_slot import test_load_free_slot
 from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
+from tests.test_car_charging_now_confirmed_slots import test_car_charging_now_confirmed_slots, test_car_charging_now_confirmed_slots_midnight_rollover
 from tests.test_octopus_slots_change import test_octopus_slots_change
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
 from tests.test_fox_api import run_fox_api_tests
@@ -499,6 +500,8 @@ def main():
         ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
+        ("car_charging_now_confirmed_slots", test_car_charging_now_confirmed_slots, "Car charging now trusted-streak confirmation tests", False),
+        ("car_charging_now_confirmed_slots_midnight_rollover", test_car_charging_now_confirmed_slots_midnight_rollover, "Car charging now confirmed-slots survive a real midnight_utc rollover without leaking stale slot numbers", False),
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),

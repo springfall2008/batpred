@@ -96,6 +96,31 @@ def test_octopus_slots_change(my_predbat):
         else:
             print("Test 5 passed - future to active transition forces a replan")
 
+        # Test 5b: planned -> completed is a real change, even with every other field identical.
+        # trust_future_dynamic_iog_slots prices a dynamic slot differently once Octopus moves it into
+        # completed_dispatches (#4516), so the plan has to be recomputed against the new rate map.
+        # Every other field can survive that transition unchanged, so _confirmed is the only thing
+        # that distinguishes them.
+        print("*** Test 5b: planned to completed transition produces different signature ***")
+        planned_slot = [[dict(_slot("2025-01-15T14:00:00+00:00", "2025-01-15T14:30:00+00:00", 3.0), _confirmed=False)]]
+        completed_slot = [[dict(_slot("2025-01-15T14:00:00+00:00", "2025-01-15T14:30:00+00:00", 3.0), _confirmed=True)]]
+        if my_predbat.octopus_slots_signature(planned_slot) == my_predbat.octopus_slots_signature(completed_slot):
+            print("ERROR: Planned to completed transition not detected - the plan would be reused against a changed rate map")
+            failed = True
+        else:
+            print("Test 5b passed - planned to completed transition forces a replan")
+
+        # Test 5c: the same, for a slot that is currently in progress - the active branch keeps only
+        # the stable fields, so _confirmed has to be among them or a mid-slot confirmation is missed.
+        print("*** Test 5c: planned to completed while in progress produces different signature ***")
+        active_planned = [[dict(_slot("2025-01-15T10:00:00+00:00", "2025-01-15T11:00:00+00:00", 3.0), _confirmed=False)]]
+        active_completed = [[dict(_slot("2025-01-15T10:00:00+00:00", "2025-01-15T11:00:00+00:00", 3.0), _confirmed=True)]]
+        if my_predbat.octopus_slots_signature(active_planned) == my_predbat.octopus_slots_signature(active_completed):
+            print("ERROR: In-progress planned to completed transition not detected")
+            failed = True
+        else:
+            print("Test 5c passed - in-progress confirmation forces a replan")
+
         # Test 6: the same instant expressed with different offset formatting must NOT look changed
         print("*** Test 6: equivalent timestamps in different formats produce same signature ***")
         colon_offset = [[_slot("2025-01-15T13:00:00+00:00", "2025-01-15T14:00:00+00:00", 5.0)]]

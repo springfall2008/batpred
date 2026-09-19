@@ -32,6 +32,8 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    CAR_CHARGING_NOW_CONFIRM_GUARD_MINUTES,
+    CAR_CHARGING_NOW_STREAK_MAX_ROLLOVER_SLOTS,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -978,6 +980,13 @@ class Fetch:
         self.rate_export_replicated = {}
         self.rate_slots = []
         self.io_adjusted = {}
+        # Built up by rate_add_io_slots() (per car) as it decides which dynamic (out-of-window) IOG
+        # dispatch minutes trust_future_dynamic_iog_slots trusts; consumed by
+        # exclude_dynamic_io_slots() afterwards so both agree on the same trust decisions (#4516).
+        # Cleared here, beside self.io_adjusted which it is compared against, so the two can never
+        # desync: a minute trusted on a previous cycle must not keep protecting its io_adjusted
+        # discount on this one, after the dispatch behind it may have been withdrawn.
+        self.trusted_dynamic_minutes = set()
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
@@ -1241,6 +1250,10 @@ class Fetch:
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
+            # #4516: undo any dynamic (out-of-window) IOG dispatch discount that arrived via the
+            # rate feed itself (self.io_adjusted) rather than rate_add_io_slots()'s own overlay -
+            # see exclude_dynamic_io_slots()'s docstring for why both sources need handling.
+            import_rates = self.exclude_dynamic_io_slots(import_rates)
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -1500,12 +1513,14 @@ class Fetch:
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-                # Completed and planned slots - merge from all cars
+                # Completed and planned slots - merge from all cars, tagging which record each came
+                # from for trust_future_dynamic_iog_slots. Copies rather than in-place mutation,
+                # since get_state_wrapper() may return a cached or shared list.
                 if completed:
-                    self.octopus_slots[car_n] += completed
+                    self.octopus_slots[car_n] += [dict(slot, _confirmed=True) for slot in completed]
                 if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
-                    self.octopus_slots[car_n] += planned
+                    self.octopus_slots[car_n] += [dict(slot, _confirmed=False) for slot in planned]
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
@@ -2552,6 +2567,31 @@ class Fetch:
             return None
         return self.car_charging_now[car_n]
 
+    def has_car_charging_now_sensor(self, car_n):
+        """
+        True if car_n has a real car_charging_now sensor configured in apps.yaml.
+
+        Deliberately reads raw config presence (self.args) rather than the resolved
+        self.car_charging_now list: the resolved list defaults every car to False, so it can't
+        distinguish "configured, and the car isn't charging" from "never configured at all", and
+        fetch_sensor_data_cars() needs this answer before get_car_charging_planned() has built it.
+
+        Single source of truth for the trust_future_dynamic_iog_slots "started" sensor gate, called
+        from both the startup warning (fetch_sensor_data_cars()) and the actual per-car gate
+        (rate_add_io_slots(), octopus.py) so the two can never drift apart (#4516, #4885 review).
+        """
+        configured = self.args.get("car_charging_now", None)
+        if configured is None:
+            return False
+        if not isinstance(configured, list):
+            # A scalar (un-indexed) value applies to every car, not just car 0: resolve_arg() only
+            # indexes when the configured value is itself a list (userinterface.py - "isinstance(
+            # value, list) and index is not None"), so a single sensor resolves identically for
+            # every car_n. Returning car_n == 0 here would wrongly degrade car 1+ to "none" on
+            # a single-sensor multi-car install whose sensor does in fact cover them.
+            return True
+        return car_n < len(configured) and configured[car_n] not in (None, "")
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -2570,6 +2610,21 @@ class Fetch:
         self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
         self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
+
+        # car_charging_now_confirmed_slots/streak_last_read store minutes-since-midnight_utc, so a
+        # slot number only means anything alongside the midnight_utc it was recorded against. Rebase
+        # both onto the current midnight_utc before reading or writing them below: without this, a
+        # slot confirmed yesterday (e.g. 840 for 14:00) survives the 24h prune unchanged and is then
+        # indistinguishable from today's 14:00, letting "started" trust a future slot on the strength
+        # of a sensor reading from the day before.
+        if self.car_charging_now_confirmed_midnight_utc != self.midnight_utc:
+            if self.car_charging_now_confirmed_midnight_utc is not None:
+                day_shift_minutes = int((self.midnight_utc - self.car_charging_now_confirmed_midnight_utc).total_seconds() / 60)
+                for car_n in range(PREDBAT_MAX_CARS):
+                    self.car_charging_now_confirmed_slots[car_n] = {s - day_shift_minutes for s in self.car_charging_now_confirmed_slots[car_n]}
+                    if self.car_charging_now_streak_last_read[car_n] is not None:
+                        self.car_charging_now_streak_last_read[car_n] -= day_shift_minutes
+            self.car_charging_now_confirmed_midnight_utc = self.midnight_utc
 
         # Car charging planned sensor
         for car_n in range(self.num_cars):
@@ -2594,6 +2649,87 @@ class Fetch:
             elif not isinstance(charging_now, bool):
                 charging_now = False
             self.car_charging_now[car_n] = charging_now
+
+            # Record which 30-min IOG settlement slots car_charging_now corroborates, as a "trusted
+            # streak". rate_add_io_slots()'s "started" trust level reads the resulting
+            # car_charging_now_confirmed_slots rather than car_charging_now directly, because
+            # get_arg() re-samples live state on each replan instead of consuming the edge that woke
+            # it: a charging pulse shorter than the ~15-40s wakeup-to-read latency can revert before
+            # any replan reads it, and so be missed entirely rather than merely seen late.
+            #
+            # Per read, given a streak's anchor (the slot of its last guard-passing True read):
+            #
+            #   True,  >guard left in its slot  -> confirm this slot, re-anchor here
+            #   True,  <=guard left             -> no change; an active streak rolls on below
+            #   False                           -> end the streak immediately
+            #
+            # then backfill anchor..current (capped) so slots no replan landed in are still covered.
+            #
+            # Rolling forward rather than demanding a fresh read per slot tolerates a charger toggling
+            # at a settlement boundary (seen live: a readiness sensor flipping Charging->Ready->Charging
+            # within two minutes, negotiation noise rather than a real stop), which would otherwise
+            # leave a mid-dispatch slot unconfirmed.
+            #
+            # The guard is deliberately asymmetric - it gates streak starts but not ends. A False
+            # reading ends a streak wherever in the slot it lands, because a momentary False-then-True
+            # flip costs only the minutes between the two reads (the True half starts a fresh streak),
+            # whereas guarding the end would delay noticing a real stop. The rollover cap, not a
+            # closing-minutes guard, is what bounds a missed negative edge.
+            # State is pre-sized for PREDBAT_MAX_CARS in PredBat.__init__, and num_cars is clamped to
+            # that (#4533), so it never needs growing here.
+            current_slot_start = (self.minutes_now // 30) * 30
+            current_slot_end = current_slot_start + 30
+            slot_reading_confirms = charging_now and (current_slot_end - self.minutes_now) > CAR_CHARGING_NOW_CONFIRM_GUARD_MINUTES
+
+            # Read the anchor before this cycle's reading moves it, so the backfill spans from the
+            # streak's original evidence rather than collapsing onto the slot just confirmed.
+            streak_anchor = self.car_charging_now_streak_last_read[car_n]
+
+            # A transient HA "unknown"/"unavailable" reading (tristate None) is no evidence either
+            # way, not a confirmed stop - ending the streak on it would drop confirmation after a
+            # sensor hiccup or restart even though the car may still be charging throughout. Only a
+            # real negative reading (tristate False) ends the streak; None falls through the same as
+            # a True read inside the guard window.
+            charging_now_tristate = self.get_car_charging_now_tristate(car_n)
+
+            if slot_reading_confirms:
+                self.car_charging_now_confirmed_slots[car_n].add(current_slot_start)
+                self.car_charging_now_streak_last_read[car_n] = current_slot_start
+            elif charging_now_tristate is False:
+                # Clearing the anchor too skips the backfill, so nothing is confirmed on the strength
+                # of a streak this read just ended.
+                streak_anchor = None
+                self.car_charging_now_streak_last_read[car_n] = None
+            # The remaining cases (True inside the guard window, or an unknown/unavailable reading)
+            # intentionally fall through untouched.
+            # Corollary worth knowing: if a streak has lapsed and every subsequent positive read lands
+            # inside the guard window, no new streak starts and "started" silently behaves as
+            # "none" for that car. It needs replans to have all but stopped for a whole slot, so
+            # it is unlikely at the ~15s poll cadence, and it fails safe (under-trusting, not over-).
+
+            # Confirm every slot from the anchor to now, so slots no replan happened to land in are
+            # still covered. Idempotent. streak_anchor here is deliberately the *previous* cycle's
+            # anchor (read above, before slot_reading_confirms could reassign it) - a fresh read this
+            # cycle still wants the gap since that old anchor backfilled (Test 3: resuming a streak at
+            # slot 4 must retroactively confirm slots 2 and 3 too). What must NOT happen is the
+            # cap-exceeded branch clobbering an anchor this cycle just (re-)set: a streak that had
+            # already lapsed past the rollover cap, followed by a fresh confirming read this cycle,
+            # would otherwise immediately wipe the anchor slot_reading_confirms just wrote, discarding
+            # the fresh confirm it was supposed to record (Copilot review on #5110).
+            if streak_anchor is not None:
+                slots_since_anchor = (current_slot_start - streak_anchor) // 30
+                if 0 <= slots_since_anchor <= CAR_CHARGING_NOW_STREAK_MAX_ROLLOVER_SLOTS:
+                    # + 30 rather than + 1: range()'s stop is exclusive and a step is a whole slot.
+                    for backfill_slot in range(streak_anchor, current_slot_start + 30, 30):
+                        self.car_charging_now_confirmed_slots[car_n].add(backfill_slot)
+                elif not slot_reading_confirms:
+                    # Cap exceeded with no fresh evidence - lapse the streak, but leave slots already
+                    # confirmed while it was valid alone.
+                    self.car_charging_now_streak_last_read[car_n] = None
+
+            # Prune old slots so this can never grow unbounded over a long-running install - anything
+            # more than a day behind the current slot is of no further use to rate_add_io_slots().
+            self.car_charging_now_confirmed_slots[car_n] = {s for s in self.car_charging_now_confirmed_slots[car_n] if s >= current_slot_start - 24 * 60}
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
@@ -3177,6 +3313,48 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.octopus_intelligent_limit_future_slots = self.get_arg("octopus_intelligent_limit_future_slots")
+        if self.octopus_intelligent_limit_future_slots and self.octopus_intelligent_charging and not self.octopus_intelligent_consider_full:
+            self.log(
+                "Warn: switch.predbat_octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - "
+                "load_octopus_slots() never zeroes out the slots beyond what the car's real SoC/limit still needs, so this switch "
+                "has nothing to act on and future daytime IOG slots will be treated as low rate exactly as before. Turn "
+                "octopus_intelligent_consider_full On too for this to have any effect."
+            )
+            self.record_status(
+                "Warn: octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - has no effect",
+                had_errors=True,
+            )
+        self.trust_future_dynamic_iog_slots = self.get_arg("trust_future_dynamic_iog_slots")
+        if self.trust_future_dynamic_iog_slots == "started":
+            # "started" needs a genuine car-reported sensor behind it (see rate_add_io_slots()).
+            # Without one it falls back to "none" for that car (checked again, from scratch, inside
+            # rate_add_io_slots() itself - this block is only the one-time startup warning, not the
+            # actual gate) rather than guessing "is the car charging" from some other live signal
+            # (e.g. inferring it from a load-power jump), which is exactly the false-positive risk
+            # (a kettle mistaken for the car) that blocked this feature in review (#4885) -
+            # car_charging_now is deliberately a distinct, charger/car-reported sensor
+            # (docs/car-charging.md), not a load-signature guess.
+            # Checked here, ahead of get_car_charging_planned() below, against raw config presence
+            # rather than the resolved self.car_charging_now list, which get_car_charging_planned()
+            # hasn't built yet this cycle. Per-car: a multi-car install may have the sensor for some
+            # cars and not others, so each car's warning (and its actual fallback, in
+            # rate_add_io_slots()) is independent rather than the whole install falling back together.
+            for car_n in range(max(self.num_cars, 1)):
+                if not self.has_car_charging_now_sensor(car_n):
+                    if car_n not in self.trust_iog_no_sensor_warned:
+                        self.log(
+                            "Warn: select.predbat_trust_future_dynamic_iog_slots is 'started' for car {} but car_charging_now is not configured for it in apps.yaml - "
+                            "'started' needs a real charger/car-reported sensor to trust the current dispatch slot early, so this car will behave as 'none' "
+                            "(no daytime dispatch slot trusted) until car_charging_now is set for it.".format(car_n)
+                        )
+                        self.record_status(
+                            "Warn: trust_future_dynamic_iog_slots is 'started' for car {} but car_charging_now is not configured - behaves as 'none'".format(car_n),
+                            had_errors=True,
+                        )
+                    self.trust_iog_no_sensor_warned.add(car_n)
+                else:
+                    self.trust_iog_no_sensor_warned.discard(car_n)
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
