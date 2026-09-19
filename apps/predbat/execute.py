@@ -226,7 +226,7 @@ class Execute:
         self.log("Export allocation: needs {}kWh ceilings {}W adjust {} -> {}W".format([dp2(need) for need in needs], [dp0(rate) for rate in max_rates], export_rate_adjust, [dp0(rate) for rate in allocation]))
         return result
 
-    def apply_inverter_rates(self, inverter, intent):
+    def apply_inverter_rates(self, inverter, intent, baseline=None):
         """
         Write one inverter's charge and discharge rates from its intent.
 
@@ -240,15 +240,22 @@ class Execute:
         Args:
             inverter: the Inverter to write to
             intent (dict): keys charge_rate and discharge_rate (W, or None for max)
+            baseline (dict): the executor's intent before balancing, when there was one. A rate
+                that balancing changed is written silently - the old timer-based balancer passed
+                notify=False for exactly this reason, since it runs on a minute cadence and would
+                otherwise notify every time the fleet drifted in and out of balance. The
+                executor's own rate changes still notify.
         """
         charge_rate = intent.get("charge_rate", None)
         discharge_rate = intent.get("discharge_rate", None)
+        notify_charge = baseline is None or charge_rate == baseline.get("charge_rate", None)
+        notify_discharge = baseline is None or discharge_rate == baseline.get("discharge_rate", None)
         if charge_rate is None:
             charge_rate = inverter.battery_rate_max_charge * MINUTE_WATT
         if discharge_rate is None:
             discharge_rate = inverter.battery_rate_max_discharge * MINUTE_WATT
-        inverter.adjust_charge_rate(int(charge_rate))
-        inverter.adjust_discharge_rate(int(discharge_rate))
+        inverter.adjust_charge_rate(int(charge_rate), notify=notify_charge)
+        inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
 
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
@@ -926,7 +933,7 @@ class Execute:
         # branch (continue) or the calibration branch (break) recorded no intent and are not written.
         for inverter in self.inverters:
             if inverter.id in intent:
-                self.apply_inverter_rates(inverter, intent[inverter.id])
+                self.apply_inverter_rates(inverter, intent[inverter.id], baseline=self.inverter_rate_intent.get(inverter.id))
 
         # Count register writes - after the apply pass so the rate writes land in this cycle's count
         for inverter in self.inverters:
@@ -1295,10 +1302,25 @@ class Execute:
         if not self.balance_inverters_enable or self.set_read_only:
             return
         intent = {inverter_id: dict(value) for inverter_id, value in self.inverter_rate_intent.items()}
+
+        # The stored intent carries explicit watt targets from the last plan run, but the limits
+        # were just re-read - some configurations source inverter_limit_charge/_discharge from
+        # live BMS sensors, so a ceiling can drop between plan runs. Clamp before balancing, or
+        # the poll re-applies an above-ceiling rate and the capacity guard overestimates what the
+        # fleet can deliver on top of it.
+        for inverter in self.inverters:
+            entry = intent.get(inverter.id)
+            if not entry:
+                continue
+            if entry.get("charge_rate") is not None:
+                entry["charge_rate"] = min(entry["charge_rate"], inverter.battery_rate_max_charge * MINUTE_WATT)
+            if entry.get("discharge_rate") is not None:
+                entry["discharge_rate"] = min(entry["discharge_rate"], inverter.battery_rate_max_discharge * MINUTE_WATT)
+
         self.balance_inverter_rates(intent)
         for inverter in self.inverters:
             if inverter.id in intent:
-                self.apply_inverter_rates(inverter, intent[inverter.id])
+                self.apply_inverter_rates(inverter, intent[inverter.id], baseline=self.inverter_rate_intent.get(inverter.id))
 
     def update_car_charging_power(self):
         """

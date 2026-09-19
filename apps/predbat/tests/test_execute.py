@@ -148,13 +148,16 @@ class ActiveTestInverter:
         self.isCharging = isCharging
         self.isExporting = isExporting
 
-    def adjust_charge_rate(self, charge_rate):
+    def adjust_charge_rate(self, charge_rate, notify=True):
         self.charge_rate = charge_rate
         self.charge_rate_now = charge_rate
+        # Mirrors the real signature so tests can assert that balancing writes stay silent
+        self.charge_rate_notify = notify
 
-    def adjust_discharge_rate(self, discharge_rate):
+    def adjust_discharge_rate(self, discharge_rate, notify=True):
         self.discharge_rate = discharge_rate
         self.discharge_rate_now = discharge_rate
+        self.discharge_rate_notify = notify
 
 
 def run_execute_test(
@@ -1040,6 +1043,85 @@ def test_read_only_mode_writes_no_rates(my_predbat):
         for inverter in my_predbat.inverters:
             inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
             inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
+def test_balance_holds_do_not_raise_notifications(my_predbat):
+    """
+    A balancing hold must not notify the user.
+
+    The old timer-based balancer passed notify=False on every rate it wrote, precisely because it
+    runs on a minute cadence and would otherwise spam anyone with set_inverter_notify on. Routing
+    those writes through the shared apply pass lost that, so a hold and its release each raised a
+    notification every time the fleet drifted in and out of balance.
+
+    The executor's own rate changes must still notify - only the balancer's mutations are silent.
+    """
+    failed = balance_fixture(my_predbat, "balance_notify_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0)
+        my_predbat.execute_plan()
+
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: balancing did not hold the cross-charger, so this test proves nothing")
+            failed = True
+        if my_predbat.inverters[1].charge_rate_notify:
+            print("ERROR: the balancing hold on inverter 1 was written with notify on")
+            failed = True
+        # The executor's own rates are unchanged by balancing here, so they keep notifying
+        if not my_predbat.inverters[0].charge_rate_notify:
+            print("ERROR: inverter 0 was not touched by balancing and must still notify")
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_poll_clamps_stored_rates_to_refreshed_ceilings(my_predbat):
+    """
+    The poll's stored intent carries explicit watt targets from the last plan run, but the poll
+    has just re-read each inverter's limits. Some configurations source inverter_limit_charge and
+    _discharge from live BMS sensors, so a ceiling can drop between plan runs - and the poll would
+    then keep re-applying a rate above it, with the balance capacity guard overestimating what the
+    fleet can deliver on top.
+    """
+    failed = balance_fixture(my_predbat, "ceiling_clamp_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    saved_ceilings = [(inverter.battery_rate_max_charge, inverter.battery_rate_max_discharge) for inverter in my_predbat.inverters]
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = False
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        force_fleet(my_predbat, {0: 0.0, 1: 0.0}, grid=0.0)
+        # The last plan asked for 2400W; the BMS has since dropped the ceiling to 1000W
+        my_predbat.inverter_rate_intent = {inverter.id: {"charge_rate": 2400, "discharge_rate": 2400, "pause_charge": False, "pause_discharge": False, "owner": "charge"} for inverter in my_predbat.inverters}
+        for inverter in my_predbat.inverters:
+            inverter.battery_rate_max_charge = 1000 / MINUTE_WATT
+            inverter.battery_rate_max_discharge = 1000 / MINUTE_WATT
+        my_predbat.rebalance_inverter_rates()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate > 1000:
+                print("ERROR: inverter {} was written {}W of charge above its {}W ceiling".format(inverter.id, inverter.charge_rate, 1000))
+                failed = True
+            if inverter.discharge_rate > 1000:
+                print("ERROR: inverter {} was written {}W of discharge above its {}W ceiling".format(inverter.id, inverter.discharge_rate, 1000))
+                failed = True
+    finally:
+        for inverter, (max_charge, max_discharge) in zip(my_predbat.inverters, saved_ceilings):
+            inverter.battery_rate_max_charge = max_charge
+            inverter.battery_rate_max_discharge = max_discharge
+        restore_balance_state(my_predbat, saved)
     return failed
 
 
@@ -3708,6 +3790,14 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_stored_intent_is_the_executor_baseline(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_balance_holds_do_not_raise_notifications(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_poll_clamps_stored_rates_to_refreshed_ceilings(my_predbat)
     if failed:
         return failed
 

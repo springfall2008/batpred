@@ -2551,7 +2551,20 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     # window. Only when the batteries are net discharging with no surplus is a charging inverter
     # being fed by import or by another battery - the cross-charge worth stopping.
     spare_pv = total_grid_power - total_battery_power
-    fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
+
+    # Where the executor has claimed rates it already knows what the fleet is meant to be doing,
+    # and that beats anything inferred from the meters. Without this a planned export on a sunny
+    # day reads as "the fleet should be charging" - grid export exceeds what the batteries supply,
+    # so spare_pv is positive - and every inverter carrying out that export looks like an anomaly
+    # and gets held, cancelling it until the next plan run. The energy balance is the fallback for
+    # demand and idle, where nothing has been claimed and the meters are all there is to go on.
+    claimed = {intent[id].get("owner", "demand") for id in intent}
+    if "export" in claimed:
+        fleet_should_discharge = True
+    elif "charge" in claimed:
+        fleet_should_discharge = False
+    else:
+        fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
 
     if fleet_should_discharge:
         against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]

@@ -480,6 +480,43 @@ def test_capacity_guard_uses_the_rates_about_to_be_applied():
     assert intent[0]["discharge_rate"] == 0, "with max rates in force the hold is within capacity"
 
 
+def test_a_planned_export_is_not_cancelled_by_its_own_pv_surplus():
+    """
+    A planned export must survive the PV surplus it is exporting into.
+
+    Deciding direction from the site energy balance alone reads a sunny export window as "the
+    fleet should be charging", because grid export exceeds what the batteries are supplying. Every
+    inverter carrying out the planned export then looks like an anomaly and gets held - cancelling
+    the export, and the 60s poll repeats that until the next plan run.
+
+    The executor already knows what the fleet is meant to be doing. Where it has claimed rates the
+    owner is authoritative; the energy balance is only a fallback for demand and idle.
+    """
+    intent = {id: {"charge_rate": 0, "discharge_rate": 2600, "pause_charge": False, "pause_discharge": False, "owner": "export"} for id in range(2)}
+    snapshot = [
+        make_snapshot(90.0, 1500.0, grid_power=9500.0),
+        make_snapshot(90.0, 1500.0),
+    ]
+    balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
+    for inverter_id in (0, 1):
+        assert intent[inverter_id]["discharge_rate"] == 2600, "inverter {} is carrying out a planned export and must not be held".format(inverter_id)
+
+
+def test_a_planned_charge_is_not_cancelled_by_the_energy_balance():
+    """
+    The mirror: during a planned charge an inverter that is charging is doing what it was told,
+    whatever the site balance happens to read.
+    """
+    intent = {id: {"charge_rate": 2600, "discharge_rate": 0, "pause_charge": False, "pause_discharge": False, "owner": "charge"} for id in range(2)}
+    snapshot = [
+        make_snapshot(30.0, -1500.0, grid_power=-3500.0),
+        make_snapshot(30.0, -1500.0),
+    ]
+    balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
+    for inverter_id in (0, 1):
+        assert intent[inverter_id]["charge_rate"] == 2600, "inverter {} is carrying out a planned charge and must not be held".format(inverter_id)
+
+
 def test_random_fleets_hold_the_physical_invariants():
     """
     Property test over random fleets of 2-6 inverters in random charge/discharge states, with
