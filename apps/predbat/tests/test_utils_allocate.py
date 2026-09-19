@@ -107,6 +107,28 @@ def test_zero_fleet_power():
     assert abs(sum(alloc)) < 0.01, alloc
 
 
+def test_full_rate_is_a_no_op_even_with_a_zero_need():
+    """
+    The full-rate no-op has to hold whatever the needs are.
+
+    Zero-need inverters are filtered out of the water-fill, so at full fleet power their share had
+    nowhere to go and the result broke both the documented no-op and the return contract that the
+    sum is min(p_fleet, sum(max_rates)). An inverter already at its export target is stopped by
+    its own target, not by having its rate zeroed, so at full power it still gets its maximum.
+    """
+    alloc = allocate_export_rates([0.0, 2.0], [2600.0, 2600.0], 5200.0)
+    assert alloc == [2600.0, 2600.0], alloc
+    assert abs(sum(alloc) - 5200.0) < 0.01, alloc
+
+
+def test_sum_contract_holds_when_every_need_is_zero():
+    """
+    Nothing to shed anywhere at full power is still the full-power no-op.
+    """
+    alloc = allocate_export_rates([0.0, 0.0], [2600.0, 1000.0], 3600.0)
+    assert abs(sum(alloc) - 3600.0) < 0.01, alloc
+
+
 def run_allocate_export_tests(my_predbat):
     """
     Run the export rate allocator tests.

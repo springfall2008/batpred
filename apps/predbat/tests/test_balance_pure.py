@@ -517,6 +517,49 @@ def test_a_planned_charge_is_not_cancelled_by_the_energy_balance():
         assert intent[inverter_id]["charge_rate"] == 2600, "inverter {} is carrying out a planned charge and must not be held".format(inverter_id)
 
 
+def test_discharge_capacity_counts_only_peers_above_reserve():
+    """
+    The energy check and the capacity sum must be about the SAME peers.
+
+    "somebody is above reserve" and "the fleet has rate headroom" can be satisfied by two different
+    inverters: one peer holds energy but almost no discharge rate, while the peer supplying the
+    counted rate is sitting on its reserve and has nothing to give. Holding the low inverter then
+    leaves only unusable capacity behind and the shortfall comes off the grid.
+
+    Peer 1 is above reserve but can only manage 100W; peer 2 has 2600W of rate but is at reserve.
+    """
+    intent = make_intent(3)
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [
+        make_snapshot(20.0, 500.0, discharge_rate_now=2600.0, reserve_percent=4.0),
+        make_snapshot(80.0, 100.0, discharge_rate_now=100.0, reserve_percent=4.0, rate_max=100.0),
+        # High SoC so it is not itself a candidate, but sitting on its reserve so it has nothing
+        # to give - its 2600W of rate must not count as capacity that could take over
+        make_snapshot(80.0, 500.0, discharge_rate_now=2600.0, reserve_percent=78.0),
+    ]
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent == before, "the only peer above reserve cannot carry the load, so nothing may be held"
+
+
+def test_charge_capacity_counts_only_peers_below_full():
+    """
+    The charge-side counterpart: a battery already at 100% contributes no usable absorption, so
+    its rate must not be counted towards the capacity left to soak up the PV surplus.
+
+    Peer 1 is below full but tiny; peer 2 has the capacity but is full.
+    """
+    intent = make_intent(3)
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [
+        make_snapshot(80.0, -500.0, charge_rate_now=2600.0),
+        make_snapshot(20.0, -100.0, charge_rate_now=100.0, rate_max=100.0),
+        # Full, and idle so it is not itself a candidate - its 2600W of rate absorbs nothing
+        make_snapshot(100.0, 0.0, charge_rate_now=2600.0),
+    ]
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    assert intent == before, "the only peer below full cannot absorb the surplus, so nothing may be held"
+
+
 def test_random_fleets_hold_the_physical_invariants():
     """
     Property test over random fleets of 2-6 inverters in random charge/discharge states, with

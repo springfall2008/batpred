@@ -1285,6 +1285,45 @@ def test_control_soc_only_sets_targets_without_writing_rates(my_predbat):
     return failed
 
 
+def test_balance_release_is_also_silent(my_predbat):
+    """
+    Both edges of a balancing override must be silent, not just the one that applies it.
+
+    On release the fresh intent matches the executor baseline again - None == None - so comparing
+    the two says "nothing changed" and the write that takes the rate back off zero notifies. The
+    old balancer passed notify=False on its restore loop as well as on the hold.
+    """
+    failed = balance_fixture(my_predbat, "balance_release_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+
+        # Cycle one: cross-charging, so inverter 1 is held
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: the hold was not applied, so the release cannot be tested")
+            failed = True
+
+        # Cycle two: the fleet is no longer fighting itself, so the hold is released
+        force_fleet(my_predbat, {0: 1000.0, 1: 1000.0}, grid=0.0)
+        my_predbat.execute_plan()
+        if my_predbat.inverters[1].charge_rate == 0:
+            print("ERROR: the hold was not released, so the release cannot be tested")
+            failed = True
+        if my_predbat.inverters[1].charge_rate_notify:
+            print("ERROR: releasing the balancing hold on inverter 1 notified the user")
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
 def test_stored_intent_is_the_executor_baseline(my_predbat):
     """
     The baseline the inverter poll re-applies must be the EXECUTOR's intent, not the balanced one.
@@ -3954,6 +3993,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_balance_holds_do_not_raise_notifications(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_balance_release_is_also_silent(my_predbat)
     if failed:
         return failed
 

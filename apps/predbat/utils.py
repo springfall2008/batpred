@@ -2515,6 +2515,9 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     soc_high = [(soc > soc_min) and (abs(soc - soc_min) >= threshold_charge) for soc in socs]
 
     above_reserve = [(socs[id] - reserves[id]) >= 4.0 for id in range(num_inverters)]
+    # Not an existence test - that form was unreachable, since soc_high[id] already implies some
+    # peer is below full. This is a per-peer filter on who can actually absorb charge.
+    below_full = [socs[id] < 100.0 for id in range(num_inverters)]
     power_enough_discharge = [battery_powers[id] >= 50.0 for id in range(num_inverters)]
     power_enough_charge = [battery_powers[id] <= -50.0 for id in range(num_inverters)]
 
@@ -2591,7 +2594,7 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
     # ones already taken this pass or two holds each pass a check computed for one.
     if during_discharge and balance_discharge and total_discharge_rates > 0:
-        held_rate = 0.0
+        held = set()
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
             if not soc_low[id]:
                 continue
@@ -2599,16 +2602,20 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
                 continue
             # Somebody else has to have the energy to take over - any of them, not an arbitrary
             # index neighbour, which is what the (i + 1) % n ring used to ask (F7).
-            if not any(above_reserve[other] for other in range(num_inverters) if other != id):
-                continue
-            if (total_effective_discharge_rates - held_rate - effective_discharge_rates[id] - 200) < total_battery_power:
+            # Count only the peers that could actually take over: above their reserve, and not
+            # already held this pass. Asking "somebody is above reserve" and "the fleet has rate
+            # headroom" separately lets two different inverters answer them - a peer with energy
+            # but no rate, and a peer with rate but sitting on its reserve - and holding this one
+            # then leaves only unusable capacity behind, with the shortfall coming off the grid.
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
+            if (usable - 200) < total_battery_power:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
             intent[id]["discharge_rate"] = 0
-            held_rate += effective_discharge_rates[id]
+            held.add(id)
     elif during_charge and balance_charge and total_charge_rates > 0:
-        held_rate = 0.0
+        held = set()
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: -socs[id]):
             if not soc_high[id]:
                 continue
@@ -2619,12 +2626,15 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # holding the minimum is strictly below this one and therefore below 100%. The
             # original's below_full[other_inverter] asked this of one arbitrary neighbour; asked
             # of the fleet it is implied, so it is not restated.
-            if spare_pv > (total_effective_charge_rates - held_rate - effective_charge_rates[id]):
+            # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
+            # not be counted towards what is left to soak up the surplus.
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            if spare_pv > usable:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
-            held_rate += effective_charge_rates[id]
+            held.add(id)
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):
@@ -2654,6 +2664,14 @@ def allocate_export_rates(needs, max_rates, p_fleet):
     remaining = min(p_fleet, sum(max_rates))
     if remaining <= 0:
         return [0.0] * count
+
+    # At or above full fleet power there is nothing to ration, so every inverter takes its own
+    # maximum - the documented no-op outside low power mode. Handled before zero-need entries are
+    # filtered out below, or their share would have nowhere to go and the sum would come up short
+    # of the power the planner costed. An inverter already at its export target is stopped by that
+    # target, not by having its rate held down.
+    if p_fleet >= sum(max_rates):
+        return list(max_rates)
 
     shares = [need if need > 0 else 0.0 for need in needs]
     if sum(shares) <= 0:

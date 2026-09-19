@@ -226,7 +226,38 @@ class Execute:
         self.log("Export allocation: needs {}kWh ceilings {}W adjust {} -> {}W".format([dp2(need) for need in needs], [dp0(rate) for rate in max_rates], export_rate_adjust, [dp0(rate) for rate in allocation]))
         return result
 
-    def apply_inverter_rates(self, inverter, intent, baseline=None):
+    def apply_rate_intent(self, intent):
+        """
+        Apply a balanced intent across the fleet, keeping balancing's own changes silent.
+
+        A rate balancing overrides is written without notifying, and so is the write that takes it
+        back off again - the release edge matters as much as the hold, or a fleet drifting in and
+        out of balance notifies on every transition. Which rates were overridden last pass is
+        remembered for exactly that reason.
+
+        Args:
+            intent (dict): inverter id -> rate intent, already balanced
+        """
+        baseline = self.inverter_rate_intent
+        overridden_now = {}
+        for inverter in self.inverters:
+            if inverter.id not in intent:
+                continue
+            entry = intent[inverter.id]
+            base = baseline.get(inverter.id, {})
+            previously = self.inverter_balance_overridden.get(inverter.id, ())
+            charge_overridden = entry.get("charge_rate", None) != base.get("charge_rate", None)
+            discharge_overridden = entry.get("discharge_rate", None) != base.get("discharge_rate", None)
+            overridden_now[inverter.id] = {direction for direction, flag in (("charge", charge_overridden), ("discharge", discharge_overridden)) if flag}
+            self.apply_inverter_rates(
+                inverter,
+                entry,
+                notify_charge=not (charge_overridden or "charge" in previously),
+                notify_discharge=not (discharge_overridden or "discharge" in previously),
+            )
+        self.inverter_balance_overridden = overridden_now
+
+    def apply_inverter_rates(self, inverter, intent, notify_charge=True, notify_discharge=True):
         """
         Write one inverter's charge and discharge rates from its intent.
 
@@ -240,16 +271,13 @@ class Execute:
         Args:
             inverter: the Inverter to write to
             intent (dict): keys charge_rate and discharge_rate (W, or None for max)
-            baseline (dict): the executor's intent before balancing, when there was one. A rate
-                that balancing changed is written silently - the old timer-based balancer passed
-                notify=False for exactly this reason, since it runs on a minute cadence and would
-                otherwise notify every time the fleet drifted in and out of balance. The
-                executor's own rate changes still notify.
+            notify_charge (bool): whether a charge rate change should notify the user
+            notify_discharge (bool): likewise for discharge. apply_rate_intent() decides both;
+                balancing's own changes are silent on BOTH edges, as the old timer-based balancer
+                was, since it runs on a minute cadence.
         """
         charge_rate = intent.get("charge_rate", None)
         discharge_rate = intent.get("discharge_rate", None)
-        notify_charge = baseline is None or charge_rate == baseline.get("charge_rate", None)
-        notify_discharge = baseline is None or discharge_rate == baseline.get("discharge_rate", None)
 
         # A rate nobody claimed is only reset to maximum where the executor is actually driving
         # the windows. With both off - Monitor, Control SoC only - an unclaimed rate is left
@@ -946,9 +974,7 @@ class Execute:
         # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
         # the whole fleet before anything is written. Inverters that were skipped by the read-only
         # branch (continue) or the calibration branch (break) recorded no intent and are not written.
-        for inverter in self.inverters:
-            if inverter.id in intent:
-                self.apply_inverter_rates(inverter, intent[inverter.id], baseline=self.inverter_rate_intent.get(inverter.id))
+        self.apply_rate_intent(intent)
 
         # Count register writes - after the apply pass so the rate writes land in this cycle's count
         for inverter in self.inverters:
@@ -1342,9 +1368,7 @@ class Execute:
                 entry["discharge_rate"] = min(entry["discharge_rate"], inverter.battery_rate_max_discharge * MINUTE_WATT)
 
         self.balance_inverter_rates(intent)
-        for inverter in self.inverters:
-            if inverter.id in intent:
-                self.apply_inverter_rates(inverter, intent[inverter.id], baseline=self.inverter_rate_intent.get(inverter.id))
+        self.apply_rate_intent(intent)
 
     def update_car_charging_power(self):
         """
