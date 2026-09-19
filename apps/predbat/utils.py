@@ -2443,9 +2443,16 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     which is then applied once. Convergence therefore returns to the executor's value rather than
     the register ceiling, so a deliberate hold can no longer be overwritten (F5 / GH#829).
 
-    The (this_inverter + 1) % num_inverters partner ring is retained verbatim from the original.
-    It is correct for two inverters and arbitrary for three or more - deliberately left alone here
-    so this change stays behaviour-preserving (F7 in GH#4856).
+    Partner selection no longer uses the original's fixed (this_inverter + 1) % num_inverters ring,
+    which judged each inverter against its index neighbour and so gave different answers for the
+    same fleet depending on configuration order (F7 in GH#4856). The energy guards now ask whether
+    ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
+    as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
+
+    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
+    and a discharger together leaves the remaining units absorbing or supplying the difference,
+    against guards that were each evaluated as though its own hold were the only change. Holds
+    within the chosen direction are therefore applied cumulatively as well.
 
     Args:
         intent (dict): inverter id -> rate intent, mutated in place
@@ -2532,17 +2539,17 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
 
-    if against_fleet:
-        if balance_crosscharge:
-            for id in against_fleet:
-                if log_to:
-                    log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
-                if fleet_should_discharge:
-                    intent[id]["charge_rate"] = 0
-                else:
-                    intent[id]["discharge_rate"] = 0
-        # Either way this pass is done: while the fleet is fighting itself, SoC balancing on top
-        # would be the second direction of pause we just ruled out.
+    if against_fleet and balance_crosscharge:
+        for id in against_fleet:
+            if log_to:
+                log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
+            if fleet_should_discharge:
+                intent[id]["charge_rate"] = 0
+            else:
+                intent[id]["discharge_rate"] = 0
+        # This pass is done: SoC balancing on top would be the second direction of hold that the
+        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
+        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
         return
 
     if not out_of_balance:

@@ -327,6 +327,25 @@ def build_random_fleet(rng):
     return snapshot, make_intent(count), total_pv, total_load, total_grid, net_battery
 
 
+def test_soc_balancing_still_runs_when_crosscharge_correction_is_off():
+    """
+    Turning cross-charge correction off must not silently disable SoC balancing too.
+
+    An inverter working against the fleet is a reason to skip SoC balancing only because holding
+    it is the action we are taking instead. With that switch off we hold nothing in the charge
+    direction, so holding a low discharger is still a single-direction pass and remains allowed.
+    """
+    intent = make_intent(3)
+    snapshot = [
+        make_snapshot(20.0, 1000.0),  # low and discharging - the SoC-balance candidate
+        make_snapshot(80.0, 1000.0),
+        make_snapshot(50.0, -300.0),  # charging against the fleet, but correction is off
+    ]
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent[2]["charge_rate"] is None, "cross-charge correction is off, so the charger must be left alone"
+    assert intent[0]["discharge_rate"] == 0, "SoC balancing was enabled and must still act"
+
+
 def test_random_fleets_hold_the_physical_invariants():
     """
     Property test over random fleets of 2-6 inverters in random charge/discharge states, with

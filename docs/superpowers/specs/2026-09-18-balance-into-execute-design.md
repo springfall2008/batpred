@@ -40,13 +40,46 @@ Explicitly out of scope, each deferred to a follow-up:
 - **F1** — capacity-proportional target split in `adjust_battery_target_multi()`. The rate-share
   split stays. Consequence: the export allocator tracks targets that do not converge SoC. This
   is accepted, not overlooked.
-- **F7** — the `(i + 1) % n` partner ring stays arbitrary for 3+ inverters. It moves verbatim.
 - **F2** — fleet undershoot on charge above ~90%.
-- A PV-aware cross-charge rule. Today's power-sign rule moves unchanged, including its inability
-  to distinguish a hybrid absorbing its own DC-coupled PV from one pulling off the other inverter.
+- A *per-inverter* PV-aware cross-charge rule — see "Amended during implementation" below for what
+  was done instead, and what remains undone.
 - Proportional balancing actuators. The actuator stays rate 0, as today.
 - `inverter_limit` / `export_limit` (AC-side caps) in the export allocation.
 - Making pause mode part of the mutable intent.
+
+## Amended during implementation
+
+Two items listed above as deferred were fixed after all, because moving the algorithm into a pure
+function made faults visible that could not responsibly be left in place. Recorded here so a later
+reader does not treat them as outstanding work.
+
+**F7 — the partner ring (was: "moves verbatim").** Fixed. Reviewing the relocated algorithm on a
+3+ inverter fleet showed the same logical fleet giving different answers depending on the order
+the inverters happened to be configured in. Two coupled faults came with it:
+
+- A pass could hold a charger and a discharger at once — the `elif` chain limits each *inverter*
+  to one action, but the loop runs over every inverter. The units share an AC bus, so the rest
+  simply absorb or supply whatever the held pair stopped doing.
+- `can_power_house` asks "if I stop this one, can the rest cover?", so two holds in one pass each
+  passed a check computed for one.
+
+A pass now commits to a single direction, holds within it are applied cumulatively, the energy
+guards ask whether *any* other inverter qualifies, and the rate guards consult no partner at all.
+
+**Cross-charge detection (was: "today's power-sign rule moves unchanged").** Changed. The
+power-sign rule chose direction from `sign(total_battery_power)`, a battery-side proxy for a
+whole-site question. On an export window with a large PV surplus it held every inverter that was
+correctly absorbing that surplus, because one inverter discharging into it made the batteries net
+out as discharging.
+
+Direction now comes from the site energy balance. Per-inverter load and PV readings cannot settle
+it — one inverter discharging looks like less load to another, PV wiring is not declared, and an
+AC-coupled unit has no PV of its own — but the fleet totals can. With grid +ve export and battery
++ve discharging, `load = pv + battery - grid`, so `spare PV = total_grid - total_battery`, needing
+no PV attribution.
+
+**Still undone:** the per-inverter case. Today's rule still cannot tell a hybrid absorbing its own
+DC-coupled PV from one pulling off the bus; only the fleet aggregate is handled.
 
 ## Architecture
 

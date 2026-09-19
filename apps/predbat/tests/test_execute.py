@@ -684,6 +684,61 @@ def test_quick_poll_rebalance_guards(my_predbat):
     return failed
 
 
+def test_stored_intent_is_the_executor_baseline(my_predbat):
+    """
+    The baseline the inverter poll re-applies must be the EXECUTOR's intent, not the balanced one.
+
+    execute_plan mutates intent in place when it balances, so storing it afterwards saves the
+    holds too. The poll then re-applies those holds every cycle, and once the fleet comes back
+    into balance the balancer returns without touching them - so a temporary hold sticks until the
+    next full plan run, up to five minutes later. That is the F5 failure this design is supposed
+    to make unrepresentable, reintroduced through the back door.
+    """
+    failed = run_execute_test(
+        my_predbat,
+        "baseline_setup",
+        soc_kw=7.35,
+        soc_kw_array=[4.75, 2.6],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        assert_charge_rate_array=[2600, 2600],
+        assert_discharge_rate_array=[2600, 2600],
+    )
+    if failed:
+        return failed
+
+    saved = [(inverter.battery_power, inverter.grid_power, inverter.soc_percent) for inverter in my_predbat.inverters]
+    saved_enable = my_predbat.balance_inverters_enable
+    saved_cross = my_predbat.balance_inverters_crosscharge
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        # Inverter 1 charging while the fleet is net discharging, with no PV surplus behind it
+        for inverter in my_predbat.inverters:
+            inverter.grid_power = 0
+            inverter.battery_power = 2000 if inverter.id == 0 else -500
+        my_predbat.execute_plan()
+
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: balancing did not hold the cross-charger, so this test proves nothing (got {})".format(my_predbat.inverters[1].charge_rate))
+            failed = True
+        if my_predbat.inverter_rate_intent.get(1, {}).get("charge_rate") is not None:
+            print("ERROR: the stored baseline contains the balance hold - the poll would re-apply it until the next plan run")
+            failed = True
+    finally:
+        my_predbat.balance_inverters_enable = saved_enable
+        my_predbat.balance_inverters_crosscharge = saved_cross
+        for inverter, (power, grid, soc) in zip(my_predbat.inverters, saved):
+            inverter.battery_power = power
+            inverter.grid_power = grid
+            inverter.soc_percent = soc
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -3290,6 +3345,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_quick_poll_rebalance_guards(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_stored_intent_is_the_executor_baseline(my_predbat)
     if failed:
         return failed
 

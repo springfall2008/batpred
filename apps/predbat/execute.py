@@ -900,6 +900,12 @@ class Execute:
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
 
+        # Keep the EXECUTOR's intent as the poll's baseline, captured before balancing mutates it.
+        # Storing the balanced intent instead would bake temporary holds into the baseline, and the
+        # poll would re-apply them every cycle - the balancer returns without touching a rate once
+        # the fleet is back in balance, so the hold would stick until the next plan run.
+        self.inverter_rate_intent = {inverter_id: dict(value) for inverter_id, value in intent.items()}
+
         self.balance_inverter_rates(intent)
 
         # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
@@ -908,7 +914,6 @@ class Execute:
         for inverter in self.inverters:
             if inverter.id in intent:
                 self.apply_inverter_rates(inverter, intent[inverter.id])
-        self.inverter_rate_intent = intent
 
         # Count register writes - after the apply pass so the rate writes land in this cycle's count
         for inverter in self.inverters:
