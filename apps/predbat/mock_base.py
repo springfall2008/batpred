@@ -143,6 +143,10 @@ class MockBase:
         """Return None - a standalone run has no Home Assistant recorder, matching PredBat's no-interface path."""
         return None
 
+    def set_history_alias(self, entity_id, legacy_entity_ids):
+        """Ignore a history alias - a standalone run has no recorder history to fill in."""
+        return None
+
     def call_notify(self, message):
         """Print a notification message."""
         print(f"NOTIFY: {message}")

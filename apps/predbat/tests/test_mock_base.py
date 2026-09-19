@@ -92,6 +92,7 @@ def test_mock_base_covers_component_base_contract(my_predbat):
     component.set_state_wrapper("sensor.predbat_probe2", "off")
     assert component.get_state_wrapper("sensor.predbat_probe2") == "off", "set_state_wrapper delegate failed"
     assert component.get_history_wrapper("sensor.predbat_probe") is None, "get_history_wrapper delegate failed"
+    component.set_history_alias("sensor.predbat_probe", ["sensor.predbat_old_probe"])
     component.call_notify("probe notification")
     component.log("probe log message")
 
