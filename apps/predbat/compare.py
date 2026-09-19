@@ -70,6 +70,12 @@ class Compare:
         pb.rate_import = copy.deepcopy(rate_import_base)
         pb.rate_export = copy.deepcopy(rate_export_base)
 
+        # A prior live cycle's saving-session minutes are absolute offsets into that cycle's own
+        # rate tables - stale and meaningless against this simulated tariff, and set_rate_thresholds()
+        # would otherwise exclude whatever unrelated minutes happen to sit at the same positions here.
+        pb.rate_import_saving_minutes = set()
+        pb.rate_export_saving_minutes = set()
+
         # Fetch rates from Octopus Energy API
         if "rates_import_octopus_url" in tariff:
             # Fixed URL for rate import
