@@ -1089,9 +1089,14 @@ def update_nested_yaml_value(data, path, value):
             raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
 
-def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
+def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True, fallback_to_state=False):
     """
     Get historical data for an attribute
+
+    fallback_to_state: when attributes=True and a point's attributes don't carry state_key
+    (e.g. history recorded before the attribute existed), fall back to that point's own
+    "state" field instead of dropping the point. Keeps a window that mixes pre/post-upgrade
+    points from being silently truncated to only the post-upgrade tail.
     """
     results = {}
     last_updated_time = None
@@ -1113,8 +1118,11 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
 
         if attributes:
             if state_key not in item.get("attributes", {}):
-                continue
-            state = item["attributes"][state_key]
+                if not fallback_to_state or "state" not in item or item["state"] in ("unavailable", "unknown"):
+                    continue
+                state = item["state"]
+            else:
+                state = item["attributes"][state_key]
         else:
             # Ignore data without correct keys
             if state_key not in item:
