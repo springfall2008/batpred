@@ -16,9 +16,17 @@ Covers:
   - hardware isolation between tariffs: overrides applied for tariff N must not
     bleed into tariff N+1 in run_all() (regression for the bug where agile_fixed
     reported a final SOC larger than the normal battery size)
+  - publish_data: the published entity id is a valid Home Assistant one whatever the
+    tariff id contains, and stored results for tariffs dropped from compare_list are
+    not republished forever (#5133)
+  - prune_comparisons: a rename that publishes to the same entity moves its stored result
+    to the new id, a compare_list entry with no id usable in an entity id doesn't wipe
+    every stored result, and two ids that slug alike publish once with a warning rather
+    than merging into one history (#5133)
 """
 
 import inspect
+import re
 
 from compare import Compare
 from const import MINUTE_WATT
@@ -43,14 +51,21 @@ class _FakePredbat:
         self.prefix = "predbat"
         self.currency_symbols = ["£", "p"]
         self.comparisons = {}
+        self.args = {}
+        self.published = []
+        self.logs = []
 
     def log(self, msg):
-        """Discard log messages."""
-        pass
+        """Record log messages so tests can assert on the warnings compare emits."""
+        self.logs.append(msg)
 
-    def dashboard_item(self, *args, **kwargs):
-        """Stub."""
-        pass
+    def get_arg(self, name, default=None, **kwargs):
+        """Return a stubbed apps.yaml argument."""
+        return self.args.get(name, default)
+
+    def dashboard_item(self, entity, state=None, attributes=None, app=None):
+        """Record what would have been published to HA."""
+        self.published.append({"entity": entity, "state": state, "attributes": attributes})
 
 
 def _make_compare():
@@ -64,6 +79,7 @@ def _make_compare():
     cmp.currency_symbols = pb.currency_symbols
     cmp.prefix = pb.prefix
     cmp.comparisons = {}
+    cmp.warnings_logged = set()
     return cmp, pb
 
 
@@ -634,6 +650,345 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T23: non-finite override values are skipped")
+
+    # ------------------------------------------------------------------
+    # T24: publish_data - the entity id published for a tariff is always a
+    #      valid Home Assistant one. An id containing a slash used to be
+    #      published verbatim, so /api/states/predbat.compare_tariff_IGO/Prime
+    #      matched no route and logged a 404 warning twice per cycle (#5133)
+    # ------------------------------------------------------------------
+    # Home Assistant's own entity id rule: lowercase/digits/single underscores, no leading
+    # or trailing underscore in either the domain or the object id
+    valid_entity_id = re.compile(r"^(?!.+__)(?!_)[\da-z_]+(?<!_)\.(?!_)[\da-z_]+(?<!_)$")
+    for tariff_id, expected_entity in [
+        ("IGO/Prime", "predbat.compare_tariff_igo_prime"),
+        ("igo_prime", "predbat.compare_tariff_igo_prime"),
+        ("Agile - Fixed", "predbat.compare_tariff_agile_fixed"),
+        ("flux ", "predbat.compare_tariff_flux"),
+    ]:
+        cmp, pb = _make_compare()
+        pb.args["compare_list"] = [{"id": tariff_id, "name": "Test tariff"}]
+        cmp.comparisons = {tariff_id: {"cost": 12.3, "name": "Test tariff"}}
+        cmp.publish_data()
+
+        published = [item["entity"] for item in pb.published]
+        if published != [expected_entity]:
+            print("ERROR T24: tariff id '{}' should publish to [{}], got {}".format(tariff_id, expected_entity, published))
+            failed += 1
+        elif not valid_entity_id.match(published[0]):
+            print("ERROR T24: tariff id '{}' published invalid entity id {}".format(tariff_id, published[0]))
+            failed += 1
+        elif cmp.comparisons[tariff_id].get("entity_id") != expected_entity:
+            print("ERROR T24: stored entity_id should be {}, got {} (the web Compare page reads history from it)".format(expected_entity, cmp.comparisons[tariff_id].get("entity_id")))
+            failed += 1
+        else:
+            print("PASS T24: tariff id '{}' publishes to {}".format(tariff_id, expected_entity))
+
+    # ------------------------------------------------------------------
+    # T25: publish_data - a stored result whose tariff id is no longer in
+    #      compare_list is dropped rather than republished every cycle.
+    #      comparisons.yaml is reloaded at startup, so before this a renamed
+    #      id kept being published for as long as the file survived (#5133)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "igo_prime", "name": "Current tariff"}]
+    cmp.comparisons = {
+        "igo_prime": {"cost": 10.0, "name": "Current tariff"},
+        "old_renamed_id": {"cost": 11.0, "name": "Tariff removed from apps.yaml"},
+    }
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if "old_renamed_id" in cmp.comparisons:
+        print("ERROR T25: stored result for a tariff no longer in compare_list should be discarded, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif "igo_prime" not in cmp.comparisons:
+        print("ERROR T25: the tariff still in compare_list was discarded, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif published != ["predbat.compare_tariff_igo_prime"]:
+        print("ERROR T25: only the tariff still in compare_list should be published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T25: stored results for tariffs dropped from compare_list are not republished")
+
+    # ------------------------------------------------------------------
+    # T26: publish_data - an empty compare_list means compare is not
+    #      configured, not that every tariff was removed, so stored results
+    #      must survive it (otherwise commenting out compare_list for a run
+    #      would throw away the history behind the Compare page)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = []
+    cmp.comparisons = {"igo_prime": {"cost": 10.0, "name": "Current tariff"}}
+    cmp.publish_data()
+
+    if "igo_prime" not in cmp.comparisons:
+        print("ERROR T26: an empty compare_list should not discard stored comparisons")
+        failed += 1
+    else:
+        print("PASS T26: an empty compare_list leaves stored comparisons alone")
+
+    # ------------------------------------------------------------------
+    # T27: publish_data - an id with no characters usable in an entity id is
+    #      skipped rather than publishing predbat.compare_tariff_ (a trailing
+    #      underscore, which Home Assistant rejects just as it does a slash)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "///", "name": "Broken id"}, {"id": "igo_prime", "name": "Current tariff"}]
+    cmp.comparisons = {"///": {"cost": 10.0, "name": "Broken id"}, "igo_prime": {"cost": 11.0, "name": "Current tariff"}}
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if published != ["predbat.compare_tariff_igo_prime"]:
+        print("ERROR T27: an unusable tariff id should be skipped and the rest still published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T27: a tariff id with no usable characters is skipped without blocking the others")
+
+    # ------------------------------------------------------------------
+    # T28: prune_comparisons - a compare_list entry with an explicit null id
+    #      is not something to keep results for. run_all stores that entry's
+    #      result under the key None, and 'None' slugs to a real entity name,
+    #      so without skipping it predbat.compare_tariff_none gets published
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "igo_prime", "name": "Current tariff"}, {"id": None, "name": "Half typed entry"}]
+    cmp.comparisons = {
+        "igo_prime": {"cost": 10.0, "name": "Current tariff", "soc_start": 4.0},
+        None: {"cost": 11.0, "name": "Half typed entry"},
+    }
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if "igo_prime" not in cmp.comparisons or cmp.comparisons["igo_prime"].get("soc_start") != 4.0:
+        print("ERROR T28: a half typed compare_list entry should not cost the other tariffs their stored results, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif None in cmp.comparisons:
+        print("ERROR T28: the result stored under a null id should be discarded, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif published != ["predbat.compare_tariff_igo_prime"]:
+        print("ERROR T28: a null id must not publish a sensor of its own, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T28: a compare_list entry with a null id neither publishes nor keeps a stored result")
+
+    # ------------------------------------------------------------------
+    # T28b: prune_comparisons - a compare_list where no entry has a usable
+    #       id is treated like an empty one, rather than wiping everything.
+    #       get("id", "") returns the key's real value, so a missing id put
+    #       "" in the wanted set and made every genuine result look stale
+    # ------------------------------------------------------------------
+    for broken_entry, description in [({"name": "No id at all"}, "missing id"), ({"id": None, "name": "Half typed entry"}, "null id")]:
+        cmp, pb = _make_compare()
+        pb.args["compare_list"] = [broken_entry]
+        cmp.comparisons = {"igo_prime": {"cost": 10.0, "name": "Current tariff"}}
+        cmp.publish_data()
+
+        if "igo_prime" not in cmp.comparisons:
+            print("ERROR T28b: a compare_list holding only a {} entry should not discard stored comparisons".format(description))
+            failed += 1
+        else:
+            print("PASS T28b: a compare_list holding only a {} entry leaves stored comparisons alone".format(description))
+
+    # ------------------------------------------------------------------
+    # T28c: prune_comparisons - an id that is present but reduces to an
+    #       empty slug ('///') matches no real tariff any more than a null
+    #       one does, so a compare_list holding only such ids leaves stored
+    #       results alone. Alongside real tariffs, a configured '///' keeps
+    #       its own result while a removed one ('!!!') is still discarded
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "///", "name": "Broken id"}]
+    cmp.comparisons = {"igo_prime": {"cost": 10.0, "name": "Current tariff"}}
+    cmp.publish_data()
+
+    if "igo_prime" not in cmp.comparisons:
+        print("ERROR T28c: a compare_list holding only an id with no usable characters should not discard stored comparisons")
+        failed += 1
+    else:
+        print("PASS T28c: a compare_list holding only an id with no usable characters leaves stored comparisons alone")
+
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "///", "name": "Broken id"}, {"id": "igo_prime", "name": "Current tariff"}]
+    cmp.comparisons = {
+        "///": {"cost": 10.0, "name": "Broken id"},
+        "igo_prime": {"cost": 11.0, "name": "Current tariff"},
+        "!!!": {"cost": 12.0, "name": "Removed broken id"},
+    }
+    cmp.publish_data()
+
+    if sorted(cmp.comparisons) != ["///", "igo_prime"]:
+        print("ERROR T28c: a configured '///' should keep its result and a removed '!!!' lose it, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    else:
+        print("PASS T28c: ids with no usable characters are kept or discarded by whether they are still configured")
+
+    # ------------------------------------------------------------------
+    # T29: prune_comparisons - a rename that publishes to the same sensor
+    #      ('Agile' -> 'agile') moves the stored result to the new id. Both
+    #      run_all's prior-SoC lookup and the web Compare page read results
+    #      by the id in compare_list, so leaving it under 'Agile' lost both
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "agile", "name": "Agile"}]
+    cmp.comparisons = {"Agile": {"cost": 10.0, "name": "Agile", "soc_start": 4.0}}
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if "Agile" in cmp.comparisons or cmp.get_comparison("agile").get("soc_start") != 4.0:
+        print("ERROR T29: a rename that publishes to the same entity should move its stored result to the new id, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif published != ["predbat.compare_tariff_agile"]:
+        print("ERROR T29: the renamed tariff should still publish to predbat.compare_tariff_agile, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T29: a case-only rename keeps its stored result under the id compare_list now uses")
+
+    # ------------------------------------------------------------------
+    # T29b: prune_comparisons - once the new id has a result of its own the
+    #       old one is discarded rather than kept beside it. The two slug
+    #       alike, so the old result would win the collision in publish_data
+    #       and its figures be published in place of every new run's
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "agile", "name": "Agile"}]
+    cmp.comparisons = {"Agile": {"cost": 10.0, "name": "Agile"}, "agile": {"cost": 12.0, "name": "Agile"}}
+    cmp.publish_data()
+
+    published = [(item["entity"], item["state"]) for item in pb.published]
+    if list(cmp.comparisons) != ["agile"]:
+        print("ERROR T29b: the result under the old id should be discarded once the new id has its own, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    elif published != [("predbat.compare_tariff_agile", 12.0)]:
+        print("ERROR T29b: the new id's own result should be the one published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T29b: a renamed tariff's old result gives way to the new id's own")
+
+    # ------------------------------------------------------------------
+    # T30: publish_data - two ids that reduce to the same entity id would
+    #      otherwise take turns overwriting one sensor, so both rows of the
+    #      Compare page read one merged history. Publish the first, warn
+    #      about the pair and leave the second without an entity_id
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "IGO/Prime", "name": "A"}, {"id": "IGO Prime", "name": "B"}]
+    cmp.comparisons = {
+        "IGO/Prime": {"cost": 10.0, "name": "A"},
+        "IGO Prime": {"cost": 11.0, "name": "B", "entity_id": "predbat.compare_tariff_igo_prime"},
+    }
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    collision_warnings = [msg for msg in pb.logs if "both publish to" in msg]
+    if published != ["predbat.compare_tariff_igo_prime"]:
+        print("ERROR T30: colliding ids should publish one sensor only, got {}".format(published))
+        failed += 1
+    elif cmp.comparisons["IGO Prime"].get("entity_id"):
+        print("ERROR T30: the tariff that lost the collision should hold no entity_id, got {}".format(cmp.comparisons["IGO Prime"].get("entity_id")))
+        failed += 1
+    elif len(collision_warnings) != 1 or "IGO Prime" not in collision_warnings[0] or "IGO/Prime" not in collision_warnings[0]:
+        print("ERROR T30: expected one warning naming both colliding ids, got {}".format(collision_warnings))
+        failed += 1
+    else:
+        print("PASS T30: colliding tariff ids publish once and warn naming both ids")
+
+    # ------------------------------------------------------------------
+    # T31: publish_data - the skip path clears any entity_id left in the
+    #      stored result, so the web Compare page stops fetching history
+    #      for a sensor nothing writes to any more
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "///", "name": "Broken id"}]
+    cmp.comparisons = {"///": {"cost": 10.0, "name": "Broken id", "entity_id": "predbat.compare_tariff_///"}}
+    cmp.publish_data()
+
+    published = [item["entity"] for item in pb.published]
+    if published:
+        print("ERROR T31: an unusable tariff id should publish nothing, got {}".format(published))
+        failed += 1
+    elif "entity_id" in cmp.comparisons["///"]:
+        print("ERROR T31: a stale entity_id should be dropped when the tariff is skipped, got {}".format(cmp.comparisons["///"]["entity_id"]))
+        failed += 1
+    else:
+        print("PASS T31: skipping a tariff drops the stale entity_id from its stored result")
+
+    # ------------------------------------------------------------------
+    # T32: publish_data runs every 5 minutes, so a warning about a static
+    #      config problem must be logged once rather than on every cycle
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.args["compare_list"] = [{"id": "///", "name": "Broken id"}]
+    cmp.comparisons = {"///": {"cost": 10.0, "name": "Broken id"}}
+    cmp.publish_data()
+    cmp.publish_data()
+
+    unusable_warnings = [msg for msg in pb.logs if "no characters usable" in msg]
+    if len(unusable_warnings) != 1:
+        print("ERROR T32: the unusable id warning should be logged once, got {} of them".format(len(unusable_warnings)))
+        failed += 1
+    else:
+        print("PASS T32: a static config warning is logged once, not on every publish cycle")
+
+    # ------------------------------------------------------------------
+    # T33: run_all() publishes before saving, otherwise comparisons.yaml is
+    #      written before prune_comparisons has run and keeps a removed
+    #      tariff (and a missing entity_id) for an extra run (#5133)
+    # ------------------------------------------------------------------
+    run_all_source = inspect.getsource(Compare.run_all)
+    publish_data_idx = run_all_source.find("self.publish_data()")
+    save_yaml_idx = run_all_source.find("self.save_yaml()")
+    if publish_data_idx < 0 or save_yaml_idx < 0:
+        print("ERROR T33: could not locate the publish/save calls in run_all() source - test may need updating")
+        failed += 1
+    elif publish_data_idx > save_yaml_idx:
+        print("ERROR T33: run_all() must call publish_data() before save_yaml() so the saved file reflects the prune")
+        failed += 1
+    else:
+        print("PASS T33: run_all() publishes (and prunes) before saving comparisons.yaml")
+
+    # ------------------------------------------------------------------
+    # T34: run_all() starts a renamed tariff ('Agile' -> 'agile') from the
+    #      SoC carried forward in its stored result. The prior result is
+    #      looked up by the id in compare_list, so without the rename being
+    #      resolved first the tariff fell back to the midnight SoC
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    for name in [
+        "forecast_plan_hours", "forecast_minutes", "forecast_days", "manual_charge_times", "manual_export_times", "manual_freeze_charge_times",
+        "manual_freeze_export_times", "manual_demand_times", "manual_all_times", "charge_window_best", "export_window_best", "export_limits_best",
+        "charge_limit_best", "cost_today_sofar", "carbon_today_sofar", "iboost_today", "iboost_plan", "import_today_now", "export_today_now",
+        "octopus_intelligent_charging", "car_charging_plan_smart", "car_charging_limit", "car_charging_limit_model", "car_charging_soc",
+        "car_charging_battery_size", "car_charging_slots",
+    ]:
+        setattr(pb, name, None)
+    pb.minutes_now = 0
+    pb.soc_kwh_history = {}
+    pb.rate_import = {}
+    pb.rate_export = {}
+    pb.config_index = {}
+    pb.args["compare_list"] = [{"id": "agile", "name": "Agile"}]
+    # Dated an earlier day, so run_all carries its predicted end SoC forward as today's start
+    cmp.comparisons = {"Agile": {"cost": 10.0, "metric": 10.0, "name": "Agile", "date": "2000-01-01 00:00:00", "soc": 3.0}}
+    start_socs = []
+
+    def _fake_run_single(tariff, *args, start_soc=None, **kwargs):
+        """Record the start SoC run_all chose for the tariff instead of running a plan."""
+        start_socs.append(start_soc)
+        return {"cost": 9.0, "metric": 9.0, "name": tariff["name"]}
+
+    cmp.run_single = _fake_run_single
+    cmp.save_yaml = lambda: None
+    cmp.run_all()
+
+    if start_socs != [3.0]:
+        print("ERROR T34: a renamed tariff should start from the SoC carried forward in its stored result (3.0), got {}".format(start_socs))
+        failed += 1
+    elif list(cmp.comparisons) != ["agile"]:
+        print("ERROR T34: the new run should be stored under the configured id only, comparisons are {}".format(list(cmp.comparisons)))
+        failed += 1
+    else:
+        print("PASS T34: run_all() carries the start SoC forward across a case-only rename")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
