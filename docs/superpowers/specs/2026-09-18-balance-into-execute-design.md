@@ -81,6 +81,50 @@ no PV attribution.
 **Still undone:** the per-inverter case. Today's rule still cannot tell a hybrid absorbing its own
 DC-coupled PV from one pulling off the bus; only the fleet aggregate is handled.
 
+## Mode audit
+
+The refactor collapsed several distinct "should we write a rate at all?" conditions into one
+`None` sentinel meaning "reset to maximum". Each mode that needed a different answer had to be
+restored individually as review found it, so this is the systematic pass over all of them.
+
+**The rule the original encoded**, and the one the code now implements:
+
+> A rate that something claimed — executor branch or balancer — is **always** written.
+> A rate nobody claimed is reset to maximum **only** where the executor is driving the windows.
+
+`reset_rates` in the intent carries that second condition; it is what
+`resetCharge` / `resetDischarge` used to hold, initialised from
+`set_charge_window or set_export_window`.
+
+| Mode | charge_window | export_window | soc_enable | unclaimed rates | covered by |
+|---|---|---|---|---|---|
+| Monitor | off | off | off | **not written** | `test_monitor_mode_writes_no_rates` |
+| Control SoC only | off | off | on | **not written**, target still set | `test_control_soc_only_sets_targets_without_writing_rates` |
+| Control charge | on | off | on | reset to max | existing scenarios |
+| Control charge & discharge | on | on | on | reset to max | existing scenarios |
+| Read-only (incl. Axle) | — | — | — | loop `continue`s, nothing written | `test_read_only_mode_writes_no_rates` |
+| Calibration | — | — | — | fleet set to max, intent discarded | `test_calibration_discards_intent_collected_so_far` |
+| Calibration, seen by the poll | — | — | — | stored intent discarded | `test_poll_does_not_apply_stale_intent_during_calibration` |
+| Template | — | — | — | `execute_plan` is not reached | pre-existing |
+
+**Branches that can claim a rate while `reset_rates` is false.** Everything inside the loop is
+gated on a window except two: the `else` after the charge-window checks, which only logs, and
+`set_freeze_export_during_demand`, which claims `charge_rate = 0`. The original wrote that claim
+regardless of the reset flags, so it must still be written — that is the first half of the rule
+above, covered by `test_a_claimed_rate_is_written_even_when_rates_are_not_reset`.
+
+**Unchanged by the refactor:** `resetPause` and `resetReserve` keep their original semantics and
+application sites exactly (7 and 4 assignments respectively, same as before).
+
+**Balancing is not gated on mode**, only on `balance_inverters_enable` and `set_read_only`. That
+matches the deleted timer, which also ran in Monitor mode. Preserved deliberately rather than
+tightened, since changing it is a behaviour decision rather than a refactor.
+
+**Known behaviour change, accepted:** entering an export window, force export is now enabled
+before the rate is written, where it used to be the other way round. In steady state neither call
+rewrites, so this only bites on the transition cycle. It cannot be observed in the test harness,
+which applies both within one synchronous pass - noted rather than pinned.
+
 ## Architecture
 
 ### Today

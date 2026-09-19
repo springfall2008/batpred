@@ -1202,6 +1202,89 @@ def test_poll_does_not_apply_stale_intent_during_calibration(my_predbat):
     return failed
 
 
+def test_a_claimed_rate_is_written_even_when_rates_are_not_reset(my_predbat):
+    """
+    Both halves of the write rule, in one scenario.
+
+    set_freeze_export_during_demand is not gated on the charge/export windows, so it can claim a
+    rate while reset_rates is false. The original wrote that claim regardless of the reset flags,
+    and so must this: a rate something claimed is always written, while a rate nobody claimed is
+    left alone when the executor is not driving the windows.
+    """
+    failed = balance_fixture(my_predbat, "claimed_rate_setup")
+    if failed:
+        return failed
+    saved_charge_window = my_predbat.set_charge_window
+    saved_export_window = my_predbat.set_export_window
+    saved_freeze_demand = my_predbat.set_freeze_export_during_demand
+    try:
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(500)
+            inverter.adjust_discharge_rate(500)
+            inverter.inv_charge_discharge_with_rate = False
+            inverter.inv_has_timed_pause = False
+        my_predbat.set_charge_window = False
+        my_predbat.set_export_window = False
+        my_predbat.set_freeze_export_during_demand = True
+        my_predbat.execute_plan()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate != 0:
+                print("ERROR: inverter {} claimed charge rate 0 was not written, got {}".format(inverter.id, inverter.charge_rate))
+                failed = True
+            if inverter.discharge_rate != 500:
+                print("ERROR: inverter {} discharge was unclaimed and must be left alone, got {}".format(inverter.id, inverter.discharge_rate))
+                failed = True
+    finally:
+        my_predbat.set_charge_window = saved_charge_window
+        my_predbat.set_export_window = saved_export_window
+        my_predbat.set_freeze_export_during_demand = saved_freeze_demand
+        for inverter in my_predbat.inverters:
+            inverter.inv_has_timed_pause = True
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
+def test_control_soc_only_sets_targets_without_writing_rates(my_predbat):
+    """
+    Control SoC only is the other mode where both windows are off, and it differs from Monitor in
+    that set_soc_enable stays true: it still sets the battery target, it just never touches the
+    rate registers. Monitor leaves both off.
+    """
+    failed = balance_fixture(my_predbat, "control_soc_only_setup")
+    if failed:
+        return failed
+    saved_charge_window = my_predbat.set_charge_window
+    saved_export_window = my_predbat.set_export_window
+    saved_soc_enable = my_predbat.set_soc_enable
+    try:
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(500)
+            inverter.adjust_discharge_rate(500)
+            inverter.soc_target = -1
+        my_predbat.set_charge_window = False
+        my_predbat.set_export_window = False
+        my_predbat.set_soc_enable = True
+        my_predbat.execute_plan()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate != 500 or inverter.discharge_rate != 500:
+                print("ERROR: Control SoC only wrote rates on inverter {}: charge {} discharge {}".format(inverter.id, inverter.charge_rate, inverter.discharge_rate))
+                failed = True
+            if inverter.soc_target == -1:
+                print("ERROR: Control SoC only must still set the battery target on inverter {}".format(inverter.id))
+                failed = True
+    finally:
+        my_predbat.set_charge_window = saved_charge_window
+        my_predbat.set_export_window = saved_export_window
+        my_predbat.set_soc_enable = saved_soc_enable
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
 def test_stored_intent_is_the_executor_baseline(my_predbat):
     """
     The baseline the inverter poll re-applies must be the EXECUTOR's intent, not the balanced one.
@@ -3883,6 +3966,14 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_monitor_mode_writes_no_rates(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_a_claimed_rate_is_written_even_when_rates_are_not_reset(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_control_soc_only_sets_targets_without_writing_rates(my_predbat)
     if failed:
         return failed
 
