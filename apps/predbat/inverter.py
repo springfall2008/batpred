@@ -3359,6 +3359,11 @@ class Inverter:
         state = self.base.get_state_wrapper(entity_id=entity_id)
         if result or (isinstance(state, str) and state.lower() in ["on", "enable", "true"]) or (state is True):
             self.log(f"Inverter {self.id} pressed toggle button {entity_id}")
+            # A commit button press is a real write to the inverter - on Solis a non-volatile one -
+            # so it must be counted like any other. It was invisible to the register-write counter,
+            # so a cycle that pressed the button could still report "count register writes 0",
+            # hiding repeated presses from users entirely (batpred#4712).
+            self.count_register_writes += 1
             return True
         self.base.log(f"Warn: Inverter {self.id} Trying to press toggle button {entity_id} failed")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press toggle button {entity_id} failed", had_errors=True)
@@ -3384,6 +3389,8 @@ class Inverter:
             now_local = datetime.now(local_tz)
             if (now_local - time_pressed).seconds < 10:
                 self.base.log(f"Inverter {self.id} successfully pressed button {entity_id}")
+                # Counted for the same reason as the toggle-button path above (batpred#4712).
+                self.count_register_writes += 1
                 return True
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")

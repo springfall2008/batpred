@@ -24,7 +24,7 @@ import pytz
 from datetime import datetime, timedelta, timezone
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
-from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
+from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today, str2time
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
 from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_temperature  # noqa: F401 - re-exported for tests/test_open_meteo.py parity checks
@@ -824,6 +824,24 @@ class SolarAPI(ComponentBase):
                     },
                     app="solar",
                 )
+                # The provider's forecast for now, before calibration, as a state of its own. It is
+                # the same value as h0's "now" attribute, but calibration reads it back as history and
+                # Home Assistant's history API only returns the rows where an entity's *state* changed
+                # (significant_changes_only), so an attribute moving under a flat calibrated state is
+                # lost. It is published whether or not calibration is on, so the history is there when
+                # calibration is switched on, and it is not scaled by pv_scaling - see pv_forecast_history.
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_forecast_h0_uncalibrated",
+                    state=dp2(power_now),
+                    attributes={
+                        "friendly_name": "PV Forecast Now Uncalibrated",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:solar-power",
+                        "device_class": "power",
+                    },
+                    app="solar",
+                )
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
@@ -846,6 +864,67 @@ class SolarAPI(ComponentBase):
                     },
                     app="solar",
                 )
+
+    def pv_forecast_history(self, days):
+        """
+        Return the past uncalibrated PV forecast in kW, keyed by timestamp and oldest first, on the same
+        pv_scaling basis as pv_forecast_minute.
+
+        Read from the uncalibrated forecast sensor, whose state is the provider's figure. Calibration must
+        not measure against the h0 sensor's state: while calibration is on that is the calibrated forecast,
+        so calibration would learn from its own output while its factors are applied to the uncalibrated
+        series, settling at sqrt(actual / forecast) rather than the true ratio (GH#5116).
+
+        Wherever that sensor's history does not reach back to the start of the window - the first week
+        after upgrading to the version that added it, a fresh install, or a purged recorder - the older
+        points come from the h0 sensor instead: its "now" attribute (the same raw value) and, for a point
+        without one, its state. That has to be done on read, because Home Assistant's recorder cannot be
+        back-dated. "now" was added in the same change that made the state calibrated (c448c9ff), so a
+        point without it recorded the raw forecast as its state. The h0 history is fetched only when it is
+        needed, so once the uncalibrated sensor covers the window this costs nothing.
+
+        The history is scaled by the current pv_scaling rather than stored scaled, so a pv_scaling change
+        takes effect over the whole window at once instead of settling in over the following week.
+        """
+        history = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", days, required=False), scale=self.pv_scaling)
+
+        oldest = None
+        for key in history:
+            try:
+                oldest = str2time(key)
+            except (ValueError, TypeError):
+                continue
+            break
+
+        window_start = self.now_utc_exact - timedelta(days=days)
+        if oldest is None or oldest - window_start > timedelta(hours=1):
+            legacy = history_attribute(
+                self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False),
+                state_key="now",
+                attributes=True,
+                scale=self.pv_scaling,
+                fallback_to_state=True,
+            )
+            # Only the points before the uncalibrated history starts, so it is never double counted
+            # and the result stays oldest first for prune_today.
+            merged = {}
+            for key, value in legacy.items():
+                try:
+                    if oldest is not None and str2time(key) >= oldest:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                merged[key] = value
+            if merged:
+                self.log("SolarAPI: PV Calibration: using {} older forecast history points from sensor.{}_pv_forecast_h0 where sensor.{}_pv_forecast_h0_uncalibrated has no history yet".format(len(merged), self.prefix, self.prefix))
+            merged.update(history)
+            history = merged
+
+        if not history:
+            # Neither sensor had any usable history - e.g. both are excluded from the recorder, or the DB
+            # mirror's stored attributes JSON failed to decode for the whole window (db_engine.py).
+            self.log("Warn: SolarAPI: PV Calibration: could not read any forecast history from sensor.{}_pv_forecast_h0_uncalibrated or sensor.{}_pv_forecast_h0 - calibration will be disabled until history builds up".format(self.prefix, self.prefix))
+        return history
 
     def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
         """
@@ -891,10 +970,8 @@ class SolarAPI(ComponentBase):
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
 
-        # Find the forecast history
-        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
-        )
+        # Find the forecast history - the uncalibrated forecast, never the calibrated h0 state (GH#5116)
+        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 1), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
 
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)
         enabled_calibration = True
@@ -1114,9 +1191,10 @@ class SolarAPI(ComponentBase):
         # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
         # can never fall below observed generation.
         #
-        # max_pv_power_forecast is deliberately NOT used here: it is read back from the
-        # published pv_forecast_h0 sensor, whose state is this same capped output, so including
-        # it made the cap depend on its own previous result.
+        # max_pv_power_forecast is deliberately NOT used here: it is a past forecast read back from
+        # sensor history (pv_forecast_history), not measured generation, so it is no evidence of what the
+        # array can actually produce. Until GH#5116 it was worse than that - it was read from h0's state,
+        # which is the calibrated forecast, so including it made the cap depend on its own previous result.
         observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
         ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
         capped_slots = 0

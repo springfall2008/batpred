@@ -992,6 +992,22 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         cry-wolf failure this docstring already warns about above: a perfectly healthy
         inverter warned about forever because encode_setting(key, None) can never match what
         was actually applied.
+
+        Past the settle window, divergence also clears applied_payload[sn], matching
+        alphaess.py's note_external_change (PR #4664, Task 10b): apply_settings only writes
+        when the owned payload differs from applied_payload, so a write the cloud
+        acknowledged but the dongle never actually collected would otherwise be trusted
+        forever and never retried, with no automatic recovery short of a Predbat restart
+        (which rebuilds applied_payload from a fresh read via restore_state). See #5138,
+        where exactly that left an export slot stuck for 55+ minutes because nothing else
+        happened to change Predbat's intended state in that window. Clearing the cache does
+        not write anything by itself - it just stops the next genuine write from being
+        skipped as a no-op.
+
+        TODO(#5140): this settle_count/applied_payload/clear-on-diverge shape is duplicated
+        between here and alphaess.py with no shared abstraction; deye.py, fox.py and
+        teslemetry.py have no equivalent detection at all. Extract into a ComponentBase
+        helper instead of a third copy next time this needs touching.
         """
         applied = self.applied_payload.get(sn)
         if not applied or not settings:
@@ -1006,6 +1022,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
         if self.settle_count[sn] > SUNSYNK_SETTLE_POLLS:
             self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} settings polls; check the inverter is online in the Sunsynk app")
+            # Clear the recorded intent so the next cycle re-applies rather than deciding
+            # the payload is unchanged and leaving the inverter stuck on whatever it
+            # actually has - see docstring above and #5138.
+            self.applied_payload.pop(sn, None)
 
     def _owned_fields(self):
         """Return every settings key this component writes, so the rest can be watched."""
@@ -1342,8 +1362,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
 
     async def save_control(self):
-        """Persist the applied-payload cache used for write change detection."""
-        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload})
+        """Persist the applied-payload cache used for write change detection, and control_active.
+
+        Without control_active surviving a restart, _reconcile_control() stays
+        gated off for every inverter until a fresh battery_schedule_charge_write event happens to
+        arrive - silently skipping every write, including one meant to stop an export already in
+        progress - until something unrelated re-arms it. alphaess.py's save_control/restore_state
+        already persists control_active for exactly this reason; this mirrors it.
+        """
+        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload, "control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's clock from its file age.
@@ -1392,10 +1419,29 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
 
         # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
         # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
+        # control_active is restored alongside applied_payload, not just it: control_active is
+        # what actually lets _reconcile_control() write at all, so restoring
+        # applied_payload without it would still leave every inverter silently unmanaged after a
+        # restart. Past the age bound both are dropped together, so a stale cache still forces a
+        # fresh write-button press to recommit, rather than trusting old control state indefinitely.
         control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
         if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
             control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
             self.applied_payload = control.get("applied_payload", {}) or {}
+            stored_active = control.get("control_active")
+            if isinstance(stored_active, list):
+                self.control_active = set(stored_active)
+            else:
+                # A cache written before this key existed carries applied_payload alone. Restoring
+                # that half on its own would preserve the very bug this fix is for through the one
+                # restart that installs the fix, so infer the missing half from applied_payload.
+                # Its keys are a safe lower bound and cannot arm an inverter Predbat never drove:
+                # apply_settings is only reached through the write button, which adds to
+                # control_active first, or through _reconcile_control(), which is
+                # already gated on it. The reverse is not true - a press whose write returned False
+                # leaves control_active set with no applied_payload entry - so this restores a
+                # subset, never a superset, and control_enable/read-only still gate every write.
+                self.control_active = set(self.applied_payload.keys())
         elif control_age is not None:
             self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
 
