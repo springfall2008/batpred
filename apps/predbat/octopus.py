@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -65,24 +65,6 @@ INTELLIGENT_DEVICE_SETTING_KEYS = ["suspended", "weekday_target_time", "weekday_
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
-
-
-def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
-    """
-    Keep one payment method variant when Octopus returns overlapping rows for the same window.
-
-    The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
-    same validity window. minute_data() writes each row over its range, so whichever row comes last
-    in the response wins, and that order is not stable across periods. Rows with no payment_method
-    (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
-    method, which keeps single-variant tariffs behaving exactly as before.
-    """
-    if not rates:
-        return rates
-    methods = {rate.get("payment_method") for rate in rates if isinstance(rate, dict)}
-    if preferred not in methods:
-        return rates
-    return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
 
 
 def is_active(now_utc, activeFrom, activeTo):
@@ -1615,8 +1597,11 @@ class OctopusAPI(ComponentBase):
         self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
         url_day = url.replace("standard-unit-rates", "day-unit-rates")
         url_night = url.replace("standard-unit-rates", "night-unit-rates")
-        result_day = await self.fetch_url_cached(url_day)
-        result_night = await self.fetch_url_cached(url_night)
+        # A Flexible dual-register tariff returns both payment method variants of each window here
+        # too, and the schedule built below carries no payment_method of its own, so the filter
+        # applied at get_octopus_rates_direct would never see these rows - resolve them up front.
+        result_day = filter_payment_method(await self.fetch_url_cached(url_day))
+        result_night = filter_payment_method(await self.fetch_url_cached(url_night))
         self.log("Info: OctopusAPI: Day rate entries: {} night rate entries: {}".format(len(result_day) if result_day else 0, len(result_night) if result_night else 0))
         if result_day and result_night:
             # A hand-configured schedule wins outright: it exists precisely for a meter whose real

@@ -63,6 +63,44 @@ def build_current_pattern_rows(days=2, base_rate=9.0, peak_rate=16.0):
     return results
 
 
+def build_payment_method_rows(direct_debit_first, valid_to="2025-03-31T23:00:00Z"):
+    """Build a Flexible tariff payload carrying both payment method variants of the same window.
+
+    Mirrors the live E-1R-VAR-22-11-01-A response for January 2025: the DIRECT_DEBIT and
+    NON_DIRECT_DEBIT rows cover exactly the same validity window, and which of the two the
+    API returns first varies from one window to the next.
+    """
+    rows = [
+        {"value_inc_vat": 25.57485, "valid_from": "2025-01-01T00:00:00Z", "valid_to": valid_to, "payment_method": "DIRECT_DEBIT"},
+        {"value_inc_vat": 26.315625, "valid_from": "2025-01-01T00:00:00Z", "valid_to": valid_to, "payment_method": "NON_DIRECT_DEBIT"},
+    ]
+    if not direct_debit_first:
+        rows.reverse()
+    return rows
+
+
+def build_payment_method_fetch(direct_debit_first):
+    """Build a fetch stub serving a Flexible tariff's overlapping payment method rows for any date range."""
+
+    async def fetch(url):
+        """Serve the overlapping payment method rows as a single page."""
+        return {"results": build_payment_method_rows(direct_debit_first), "next": None}
+
+    return fetch
+
+
+def build_payment_method_fallback_fetch(direct_debit_first):
+    """Build a fetch stub with no historical rates whose bare-URL current-rates snapshot carries both payment method variants."""
+
+    async def fetch(url):
+        """Serve an empty ranged download and an open-ended current-rates snapshot."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        return {"results": build_payment_method_rows(direct_debit_first, valid_to=None), "next": None}
+
+    return fetch
+
+
 def build_month_aware_fetch(rate_by_month):
     """Build a fetch stub whose synthesised page's base rate depends on the requested month.
 
@@ -849,5 +887,37 @@ def test_annual_tariff(my_predbat):
     if zero.unpaid_export_months:
         print("  ERROR: a deliberate zero export must not raise the unpaid-export caveat, got {}".format(zero.unpaid_export_months))
         failed = True
+
+    print("Test: a Flexible tariff's overlapping payment method rows resolve to the direct debit rate, whichever order they arrive in")
+    # Octopus returns a DIRECT_DEBIT and a NON_DIRECT_DEBIT row for the same window under one
+    # tariff code. minute_data writes each row over its range, so without filtering the last row
+    # in the response wins - and the order is not stable from one window to the next.
+    for direct_debit_first in (True, False):
+        order = "direct debit first" if direct_debit_first else "non-direct-debit first"
+        payment_config = {"import_octopus_url": "https://example.com/payment/import/", "standing_charge_p_per_day": 0.0}
+        payment_tariff = AnnualTariff(payment_config, log=print, predbat=my_predbat, fetch_json=build_payment_method_fetch(direct_debit_first), timezone="Europe/London")
+        if not asyncio.run(payment_tariff.fetch_month(2025, 1)):
+            print("  ERROR: {}: fetch_month should succeed for a Flexible tariff payload".format(order))
+            failed = True
+        payment_import, _ = payment_tariff.rates_for(pytz.utc.localize(datetime(2025, 1, 10)), 24 * 60)
+        if abs(payment_import.get(0, -1) - 25.57485) > 0.01:
+            print("  ERROR: {}: expected the direct debit rate 25.57485p, got {}".format(order, payment_import.get(0)))
+            failed = True
+
+    print("Test: the bare-URL current-rates fallback also resolves overlapping payment methods to direct debit")
+    # The fallback builds a local-time daily pattern instead of going through minute_data, and it
+    # resolves an overlap the other way round - the first row with a given valid_from claims the
+    # slot - so it needs its own cover rather than relying on the ranged path's.
+    for direct_debit_first in (True, False):
+        order = "direct debit first" if direct_debit_first else "non-direct-debit first"
+        fallback_payment_config = {"import_octopus_url": "https://example.com/payment/fallback/", "standing_charge_p_per_day": 0.0}
+        fallback_payment_tariff = AnnualTariff(fallback_payment_config, log=print, predbat=my_predbat, fetch_json=build_payment_method_fallback_fetch(direct_debit_first), timezone="Europe/London")
+        if not asyncio.run(fallback_payment_tariff.fetch_month(2025, 1)):
+            print("  ERROR: {}: fetch_month should fall back to the current-rates pattern".format(order))
+            failed = True
+        fallback_import, _ = fallback_payment_tariff.rates_for(pytz.utc.localize(datetime(2025, 1, 10)), 24 * 60)
+        if abs(fallback_import.get(0, -1) - 25.57485) > 0.01:
+            print("  ERROR: {}: expected the direct debit rate 25.57485p from the fallback pattern, got {}".format(order, fallback_import.get(0)))
+            failed = True
 
     return failed

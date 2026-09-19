@@ -1014,6 +1014,24 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
     return [mdata, max_days]
 
 
+def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
+    """
+    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+
+    The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
+    same validity window. minute_data() writes each row over its range, so whichever row comes last
+    in the response wins, and that order is not stable across periods. Rows with no payment_method
+    (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
+    method, which keeps single-variant tariffs behaving exactly as before.
+    """
+    if not rates:
+        return rates
+    methods = {rate.get("payment_method") for rate in rates if isinstance(rate, dict)}
+    if preferred not in methods:
+        return rates
+    return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
+
+
 def minute_data(
     history,
     days,
