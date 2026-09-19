@@ -747,15 +747,29 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         for start_time, state in ordered:
             slots.append(self._slot_for(start_time, state, reserve, self_use_power))
         # Normalise to exactly TOU_SLOT_COUNT slots, each with a DISTINCT ascending
-        # start time (DEYE rejects/mis-applies duplicate slot times). Pad with
-        # self-use slots at filler times not already used by a window boundary,
-        # then sort and trim keeping the earliest (imminent) slots.
+        # start time (DEYE rejects/mis-applies duplicate slot times). Pad at filler
+        # times not already used by a window boundary, then sort and trim keeping the
+        # earliest (imminent) slots.
+        #
+        # Each filler carries the state active AT ITS OWN TIME, not the baseline. DEYE
+        # reads a slot as running from its start until the next slot's start, so a filler
+        # landing INSIDE a window is a real boundary the inverter obeys: given the baseline
+        # it silently ends the window there while Predbat's plan still shows it running to
+        # its end. The filler times are fixed clock hours, so this hit any window strictly
+        # crossing one of 04:00/08:00/12:00 - including the commonest shape of all, an
+        # overnight cheap window crossing 04:00 (GH#5156, reproduced on hardware).
+        #
+        # Deriving per filler rather than picking filler times outside the windows is the
+        # general fix: a schedule whose windows cover most of the day leaves too few free
+        # filler times to pad with. Where no window is active this derives the baseline
+        # anyway, so a freeze export still covers the whole programme.
         used = {slot[TOU_FIELD["time"]] for slot in slots}
         for filler_time in TOU_FILLER_TIMES:
             if len(slots) >= TOU_SLOT_COUNT:
                 break
             if filler_time not in used:
-                slots.append(self._slot_for(filler_time, baseline, reserve, self_use_power))
+                filler_state = self._active_state(schedule, current_soc, self._hm_to_minutes(filler_time))
+                slots.append(self._slot_for(filler_time, filler_state, reserve, self_use_power))
                 used.add(filler_time)
         slots = sorted(slots, key=lambda slot: slot[TOU_FIELD["time"]])[:TOU_SLOT_COUNT]
         return slots
