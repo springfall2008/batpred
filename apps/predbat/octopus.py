@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -1597,8 +1597,11 @@ class OctopusAPI(ComponentBase):
         self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
         url_day = url.replace("standard-unit-rates", "day-unit-rates")
         url_night = url.replace("standard-unit-rates", "night-unit-rates")
-        result_day = await self.fetch_url_cached(url_day)
-        result_night = await self.fetch_url_cached(url_night)
+        # A Flexible dual-register tariff returns both payment method variants of each window here
+        # too, and the schedule built below carries no payment_method of its own, so the filter
+        # applied at get_octopus_rates_direct would never see these rows - resolve them up front.
+        result_day = filter_payment_method(await self.fetch_url_cached(url_day))
+        result_night = filter_payment_method(await self.fetch_url_cached(url_night))
         self.log("Info: OctopusAPI: Day rate entries: {} night rate entries: {}".format(len(result_day) if result_day else 0, len(result_night) if result_night else 0))
         if result_day and result_night:
             # A hand-configured schedule wins outright: it exists precisely for a meter whose real
@@ -1851,6 +1854,7 @@ class OctopusAPI(ComponentBase):
                     if valid_to is None:
                         rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
 
+            tariff_data = filter_payment_method(tariff_data)
             pdata, ignore_io = minute_data(tariff_data, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
             return pdata
         else:
@@ -2759,6 +2763,7 @@ class Octopus:
             url = data.get("next", None)
             pages += 1
 
+        mdata = filter_payment_method(mdata)
         pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
