@@ -4585,6 +4585,57 @@ class TestPublishRawLoopSafety:
         assert observed.get("thread_ident") == owner_thread.ident, "client.publish() ran on the wrong thread/loop"
 
 
+def test_ev_soc_battery_size_through_get_arg(my_predbat):
+    """The SoC estimate reads car_charging_battery_size through the real get_arg, for every form the arg can take.
+
+    TestEvTelemetry stubs get_arg, which hides how the value is resolved and coerced. This runs the
+    gateway against a real PredBat so a per-car list, an entity pointer and a fractional size all
+    reach the estimate intact: 5.25 kWh delivered into a 10.5 kWh battery is 50%, where a size
+    truncated to 10 gives 52.5% and the 100 kWh fallback gives 5.25%.
+    """
+    helper = TestEvTelemetry()
+    gw = helper._make_gateway()
+    del gw.get_arg  # use ComponentBase.get_arg -> PredBat.get_arg
+    gw.base = my_predbat
+    entity_id = "sensor.test_car_battery_size"
+    soc_entity = "sensor.predbat_gateway_ev_3xb749_soc"
+
+    had_arg = "car_charging_battery_size" in my_predbat.args
+    original_arg = my_predbat.args.get("car_charging_battery_size")
+    had_entity = entity_id in my_predbat.ha_interface.dummy_items
+    original_entity = my_predbat.ha_interface.dummy_items.get(entity_id)
+    original_had_errors = my_predbat.had_errors
+    original_status = my_predbat.current_status
+
+    cases = [
+        ("per-car list of numbers", [10.5, 60.0]),
+        ("per-car list of entity pointers", [entity_id] * 8),
+        ("single entity pointer", entity_id),
+        ("single fractional number", 10.5),
+    ]
+    try:
+        my_predbat.ha_interface.dummy_items[entity_id] = "10.5"
+        for label, value in cases:
+            my_predbat.args["car_charging_battery_size"] = value
+            my_predbat.had_errors = False
+            gw._dashboard_calls = {}
+            gw._inject_ev_entities(helper._status_with_ev(soc_percent=0, session_energy_wh=5250))
+            soc = gw._dashboard_calls[soc_entity][0]
+            assert approx_equal(soc, 50.0), "{}: expected SoC 50.0 from a 10.5 kWh battery, got {}".format(label, soc)
+            assert not my_predbat.had_errors, "{}: reading the battery size must not flag an error".format(label)
+    finally:
+        if had_arg:
+            my_predbat.args["car_charging_battery_size"] = original_arg
+        else:
+            my_predbat.args.pop("car_charging_battery_size", None)
+        if had_entity:
+            my_predbat.ha_interface.dummy_items[entity_id] = original_entity
+        else:
+            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+        my_predbat.had_errors = original_had_errors
+        my_predbat.current_status = original_status
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -4638,4 +4689,15 @@ def run_gateway_tests(my_predbat=None):
                 traceback.print_exc()
                 return True
             print(f"  OK: {cls.__name__}.{attr}")
+
+    if my_predbat is not None:
+        try:
+            test_ev_soc_battery_size_through_get_arg(my_predbat)
+        except Exception as e:
+            print(f"  FAIL: test_ev_soc_battery_size_through_get_arg: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return True
+        print("  OK: test_ev_soc_battery_size_through_get_arg")
     return False
