@@ -3686,6 +3686,75 @@ def test_inverter_clock_skew_bands(my_predbat):
     return failed
 
 
+def test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items):
+    """Verify a space-separated inverter time with no offset parses and drives skew detection (#2444).
+
+    A Growatt read through the Solax Modbus integration (inverter_type SA) publishes its rtc sensor
+    as "2025-06-10 15:44:42" - a space separator with no timezone offset. That matched none of the
+    formats Inverter.__init__ tried (T-with-offset, space-with-offset, and the per-type
+    clock_time_format, "%Y-%m-%dT%H:%M:%S" for SA and "%H:%M:%S" for the GE type this fixture
+    normally uses), so inverter_time stayed None: clock-skew detection never ran for that inverter
+    and every 5-minute cycle logged a Warn and asked for an auto-restart. Checked for both the
+    fixture's own type and SA, the type in the report.
+    """
+    failed = False
+    print("**** Running Test: inverter_time_space_no_tz_gh2444 ****")
+
+    saved_time = dummy_items.get("sensor.inverter_time")
+    # Constructing an inverter of another type against this fixture rewrites base.args in place -
+    # create_missing_arg() swaps any entity list the type does not support for a dummy entity, and
+    # that swap outlives the test and silently redirects later inverters' writes. Snapshot the whole
+    # of args (lists copied, they are mutated in place too) and put it back afterwards.
+    saved_args = {key: (list(value) if isinstance(value, list) else value) for key, value in my_predbat.args.items()}
+    saved_sleep = Inverter.sleep
+    Inverter.sleep = lambda self, seconds: None
+    # now_utc is already in the configured timezone, so its wall clock is what a correctly parsed
+    # reading must read back as - comparing wall clocks keeps this independent of the host's own tz.
+    time_str = my_predbat.now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        for inverter_type in ["GE", "SA"]:
+            dummy_items["sensor.inverter_time"] = time_str
+            my_predbat.ha_interface.dummy_items = dummy_items
+            my_predbat.args["inverter_type"] = [inverter_type]
+            my_predbat.current_status = ""
+            my_predbat.restart_active = False
+            try:
+                inv = Inverter(my_predbat, 0)
+            except Exception as error:
+                # An unreadable time asks for an auto-restart, which the fixture's configured
+                # auto_restart raises on - report that rather than aborting the whole module.
+                print("ERROR: inverter type {} raised on time string {}: {}".format(inverter_type, time_str, error))
+                failed = True
+                continue
+            if inv.inverter_time is None:
+                print("ERROR: inverter type {} should parse time string {}, got None".format(inverter_type, time_str))
+                failed = True
+            elif inv.inverter_time.tzinfo is None:
+                print("ERROR: inverter type {} parsed {} as naive, skew detection needs it localized".format(inverter_type, time_str))
+                failed = True
+            elif inv.inverter_time.strftime("%Y-%m-%d %H:%M:%S") != time_str:
+                print("ERROR: inverter type {} parsed {} as {}".format(inverter_type, time_str, inv.inverter_time))
+                failed = True
+            if my_predbat.restart_active:
+                print("ERROR: inverter type {} with a readable time must not trigger an auto-restart".format(inverter_type))
+                failed = True
+            if "skew" in (my_predbat.current_status or "").lower():
+                print("ERROR: inverter type {} with a current time must not report clock skew, status={}".format(inverter_type, my_predbat.current_status))
+                failed = True
+    finally:
+        Inverter.sleep = saved_sleep
+        dummy_items["sensor.inverter_time"] = saved_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+
+    if not failed:
+        print("**** Test inverter_time_space_no_tz_gh2444 PASSED ****")
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -3753,6 +3822,7 @@ def run_inverter_tests(my_predbat_dummy):
 
     failed |= test_inverter_time_handling(my_predbat, dummy_items)
     failed |= test_inverter_clock_skew_bands(my_predbat)
+    failed |= test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items)
 
     failed |= test_inverter_update(
         "update1",
