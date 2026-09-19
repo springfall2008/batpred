@@ -684,6 +684,218 @@ def test_quick_poll_rebalance_guards(my_predbat):
     return failed
 
 
+def balance_fixture(my_predbat, name):
+    """
+    Establish a valid two-inverter demand plan state for the balancing tests to build on.
+
+    Returns:
+    - bool: True if the setup scenario itself failed
+    """
+    return run_execute_test(
+        my_predbat,
+        name,
+        soc_kw=7.35,
+        soc_kw_array=[4.75, 2.6],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        assert_charge_rate_array=[2600, 2600],
+        assert_discharge_rate_array=[2600, 2600],
+    )
+
+
+def save_balance_state(my_predbat):
+    """
+    Capture everything the balancing tests mutate.
+
+    The suite shares one PredBat, so anything forced here has to be put back or it leaks into
+    later tests as an ordering-dependent failure (GH#5079).
+
+    Returns:
+    - dict: the saved state, for restore_balance_state()
+    """
+    return {
+        "readings": [(inverter.battery_power, inverter.grid_power, inverter.soc_percent) for inverter in my_predbat.inverters],
+        "enable": my_predbat.balance_inverters_enable,
+        "charge": my_predbat.balance_inverters_charge,
+        "discharge": my_predbat.balance_inverters_discharge,
+        "crosscharge": my_predbat.balance_inverters_crosscharge,
+        "intent": my_predbat.inverter_rate_intent,
+    }
+
+
+def restore_balance_state(my_predbat, saved):
+    """
+    Put back everything save_balance_state() captured.
+    """
+    my_predbat.balance_inverters_enable = saved["enable"]
+    my_predbat.balance_inverters_charge = saved["charge"]
+    my_predbat.balance_inverters_discharge = saved["discharge"]
+    my_predbat.balance_inverters_crosscharge = saved["crosscharge"]
+    my_predbat.inverter_rate_intent = saved["intent"]
+    for inverter, (power, grid, soc) in zip(my_predbat.inverters, saved["readings"]):
+        inverter.battery_power = power
+        inverter.grid_power = grid
+        inverter.soc_percent = soc
+
+
+def force_fleet(my_predbat, powers, grid=0.0):
+    """
+    Force each inverter's measured battery power, and the fleet's grid power.
+
+    Grid follows Predbat's convention: positive exporting, negative importing. It is put on
+    inverter 0 only, since balance_inverters sums it across the fleet.
+    """
+    for inverter in my_predbat.inverters:
+        inverter.battery_power = powers[inverter.id]
+        inverter.grid_power = grid if inverter.id == 0 else 0.0
+
+
+def clean_intent(my_predbat):
+    """
+    An executor baseline where no branch has claimed any rate.
+
+    Returns:
+    - dict: inverter id -> rate intent
+    """
+    return {inverter.id: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for inverter in my_predbat.inverters}
+
+
+def test_crosscharge_is_prevented_through_execute_plan(my_predbat):
+    """
+    Cross-charge prevention is the behaviour this feature exists for, so it gets its own test
+    rather than riding along as a precondition inside a test about something else.
+
+    Inverter 1 charges while inverter 0 discharges and the fleet imports - no PV surplus behind
+    it, so that charge is coming off the grid or out of the other battery.
+    """
+    failed = balance_fixture(my_predbat, "crosscharge_execute_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0)
+        my_predbat.execute_plan()
+
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: the cross-charging inverter was not held, got charge rate {}".format(my_predbat.inverters[1].charge_rate))
+            failed = True
+        if my_predbat.inverters[0].discharge_rate != 2600:
+            print("ERROR: the discharging inverter must be left carrying the house, got discharge rate {}".format(my_predbat.inverters[0].discharge_rate))
+            failed = True
+        if my_predbat.inverters[0].charge_rate != 2600:
+            print("ERROR: the innocent inverter's charge rate must be untouched, got {}".format(my_predbat.inverters[0].charge_rate))
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_crosscharge_is_prevented_through_the_inverter_poll(my_predbat):
+    """
+    The 60s inverter poll is the path that actually does the correcting between plan runs, so it
+    has to be shown reaching the hardware - not just execute_plan.
+    """
+    failed = balance_fixture(my_predbat, "crosscharge_poll_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        force_fleet(my_predbat, {0: 2000.0, 1: -500.0}, grid=0.0)
+        my_predbat.inverter_rate_intent = clean_intent(my_predbat)
+        my_predbat.rebalance_inverter_rates()
+
+        if my_predbat.inverters[1].charge_rate != 0:
+            print("ERROR: the poll did not hold the cross-charger, got charge rate {}".format(my_predbat.inverters[1].charge_rate))
+            failed = True
+        if my_predbat.inverter_rate_intent[1]["charge_rate"] is not None:
+            print("ERROR: the poll mutated its stored baseline, so successive polls would compound")
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_pv_surplus_holds_the_discharger_not_the_chargers(my_predbat):
+    """
+    With spare PV the fleet should be soaking it up, so an inverter DISCHARGING into the surplus
+    is the anomaly - not the one charging.
+
+    This is also the only test that proves grid_power reaches the balance snapshot. Drop that one
+    line from build_inverter_snapshot and spare PV reads as -1000W instead of +4000W, the direction
+    flips, and the charging inverter gets held instead.
+    """
+    failed = balance_fixture(my_predbat, "pv_surplus_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        # Exporting 5000W while the batteries net +1000W discharging: spare PV = 5000 - 1000 = 4000W
+        force_fleet(my_predbat, {0: -1000.0, 1: 2000.0}, grid=5000.0)
+        my_predbat.execute_plan()
+
+        if my_predbat.inverters[0].charge_rate != 2600:
+            print("ERROR: the inverter absorbing surplus PV was held, got charge rate {}".format(my_predbat.inverters[0].charge_rate))
+            failed = True
+        if my_predbat.inverters[1].discharge_rate != 0:
+            print("ERROR: the inverter discharging into a PV surplus was not held, got discharge rate {}".format(my_predbat.inverters[1].discharge_rate))
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_executor_rate_survives_a_balance_hold(my_predbat):
+    """
+    Holding one inverter must not reset another to the register ceiling.
+
+    This is the F5 invariant at execute level: convergence returns to the EXECUTOR's rate, not to
+    max. Inverter 0 is given a deliberately reduced rate, inverter 1 is held for working against
+    the fleet, and inverter 0's reduced rate has to survive the pass.
+    """
+    failed = balance_fixture(my_predbat, "executor_rate_survives_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_discharge = False
+        # Fleet net charging, with inverter 1 discharging against it
+        force_fleet(my_predbat, {0: -2000.0, 1: 500.0}, grid=-1500.0)
+        intent = clean_intent(my_predbat)
+        intent[0]["charge_rate"] = 900
+        intent[0]["owner"] = "charge"
+        my_predbat.inverter_rate_intent = intent
+        my_predbat.rebalance_inverter_rates()
+
+        if my_predbat.inverters[1].discharge_rate != 0:
+            print("ERROR: the inverter working against the fleet was not held, got discharge rate {}".format(my_predbat.inverters[1].discharge_rate))
+            failed = True
+        if my_predbat.inverters[0].charge_rate != 900:
+            print("ERROR: the executor's reduced charge rate was not preserved, got {} (2600 means it was reset to max)".format(my_predbat.inverters[0].charge_rate))
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
 def test_stored_intent_is_the_executor_baseline(my_predbat):
     """
     The baseline the inverter poll re-applies must be the EXECUTOR's intent, not the balanced one.
@@ -3352,6 +3564,22 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    failed |= test_crosscharge_is_prevented_through_execute_plan(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_crosscharge_is_prevented_through_the_inverter_poll(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_pv_surplus_holds_the_discharger_not_the_chargers(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_executor_rate_survives_a_balance_hold(my_predbat)
+    if failed:
+        return failed
+
     # Mixed fleet exporting to empty at 70% of fleet max. With a target of 0 the per-inverter
     # needs are the raw SoCs (9:1), which is NOT proportional to the rate ceilings (2600:1000) -
     # so the allocation genuinely differs from uniform scaling. The fuller inverter does more of
@@ -3379,6 +3607,65 @@ def run_execute_tests(my_predbat):
         # exactly the fleet power the planner costed.
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
         assert_discharge_rate_array=[2268, 252],
+        assert_charge_rate_array=[2600, 1000],
+    )
+    if failed:
+        return failed
+
+    # Same heterogeneous fleet exporting at FULL power. The planned fleet power then equals the sum
+    # of the ceilings, so every inverter clamps at its own maximum and the allocation collapses to
+    # today's uniform scaling exactly. That provable no-op outside low power mode is what lets the
+    # allocator ship without a switch, so it is pinned here rather than left as an argument.
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_export_full_rate_is_a_no_op",
+        export_window_best=export_window_best_alloc,
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0, 1.0)],
+        assert_force_export=True,
+        soc_kw=10.0,
+        soc_kw_array=[9.0, 1.0],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 1000],
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_discharge_rate_array=[2600, 1000],
+        assert_charge_rate_array=[2600, 1000],
+    )
+    if failed:
+        return failed
+
+    # An inverter with nothing left to shed takes none of the budget and its share spills to the
+    # one that can still deliver, so the fleet keeps putting out the power the planner costed
+    # instead of sagging as inverters reach target one by one.
+    failed |= run_execute_test(
+        my_predbat,
+        "mixed_fleet_export_at_target_spills",
+        export_window_best=export_window_best_alloc,
+        export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 0, 0.7)],
+        assert_force_export=True,
+        soc_kw=9.5,
+        soc_kw_array=[9.5, 0.0],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 1000],
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        # Inverter 1 is at its target and takes none of the budget; its share spills to inverter 0,
+        # so the fleet still delivers 2520W = 3600W * 0.7, the power the planner costed. Uniform
+        # scaling would have given [1820, 700] and the fleet would have sagged to 1820W once
+        # inverter 1 hit target.
+        assert_discharge_rate_array=[2520, 0],
         assert_charge_rate_array=[2600, 1000],
     )
     if failed:
