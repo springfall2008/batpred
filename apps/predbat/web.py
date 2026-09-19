@@ -4340,10 +4340,11 @@ chart.render();
             if id and self.base.comparison:
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
-                # entity_id is absent when compare declined to publish the tariff, which it does for an
-                # id with no characters usable in a Home Assistant entity id (GH#5133) - there is then
-                # no sensor to read history from, so the tariff charts with today's figures only
-                entity_id = result.get("entity_id", "") if result else ""
+                # entity_id is absent when compare declined to publish the tariff, which it does for an id
+                # with no characters usable in a Home Assistant entity id and for the second of two ids
+                # that slug alike (GH#5133) - there is then no sensor to read history from, so the tariff
+                # charts with today's figures only. get_comparison() always returns a dict, never None
+                entity_id = result.get("entity_id", "")
                 if entity_id:
                     entity_hist = self.get_history_wrapper(entity_id, 28, required=False)
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)

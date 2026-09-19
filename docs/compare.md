@@ -146,6 +146,10 @@ For example an ID of `IGO/Prime` publishes to **predbat.compare_tariff_igo_prime
 An ID that leaves nothing behind at all (for example `///`) is skipped with a warning in the Predbat log.
 Writing the ID in that form yourself - lowercase, words separated by single underscores - keeps the entity name the same as the ID.
 
+Because the conversion folds several characters into one underscore, two different IDs can end up wanting the same sensor - `IGO/Prime` and `IGO Prime`
+both become **predbat.compare_tariff_igo_prime**. Only the first of them is published, and a warning naming both IDs is written to the Predbat log;
+rename one of them so each tariff gets its own sensor and its own history.
+
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
@@ -164,6 +168,12 @@ starts from the same point, and yesterday's ending SoC carries into today.
 You do not need to edit this file, and nothing is lost by deleting it - the next comparison run simply recreates it, though the Compare page will
 be empty until then. Predbat discards stored results whose tariff ID is no longer listed in `compare_list`, so when you rename or remove a tariff in
 `apps.yaml` its old result stops being published as soon as Predbat restarts, and drops out of the file the next time a comparison is run.
+Renaming an ID in a way that does not change the sensor name (for example only changing its capitalisation) keeps the stored result, since it is still
+the same sensor being published.
+
+Removing or commenting out the whole `compare_list` block is treated as compare not being configured rather than as every tariff having been removed,
+so the stored results are kept in that case and are published once more each time Predbat starts. Delete `comparisons.yaml` as well if you want those
+sensors to stop being written altogether.
 
 ## Overriding Predbat configuration per tariff
 

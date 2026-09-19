@@ -57,7 +57,18 @@ class Compare:
         self.currency_symbols = self.pb.currency_symbols
         self.prefix = self.pb.prefix
         self.comparisons = {}
+        # Keys of static config warnings already logged, see warn_once()
+        self.warnings_logged = set()
         self.load_yaml()
+
+    def warn_once(self, key, message):
+        """
+        Log a warning the first time only, for static config problems that would otherwise repeat on every publish cycle
+        """
+        if key in self.warnings_logged:
+            return
+        self.warnings_logged.add(key)
+        self.log(message)
 
     def fetch_config(self, tariff):
         """
@@ -478,15 +489,23 @@ class Compare:
 
         The results are persisted in comparisons.yaml and reloaded at startup, so without this a
         tariff id removed or renamed in apps.yaml keeps being republished to HA forever (GH#5133).
-        An empty compare_list means compare is not configured at all rather than that every tariff
-        was removed, so nothing is dropped in that case.
+        Staleness is keyed on the entity slug rather than the raw id so that it agrees with what
+        publish_data writes: re-capitalising an id publishes to the very same entity, so its stored
+        result - and the soc_start run_all carries forward from it - has to survive that rename.
+        An empty compare_list, or one where no entry has a usable id, means compare is not
+        configured at all rather than that every tariff was removed, so nothing is dropped then.
         """
         compare_list = self.pb.get_arg("compare_list", [])
         if not compare_list:
             return
 
-        wanted_ids = {compare.get("id", "") for compare in compare_list}
-        stale_ids = [tariff_id for tariff_id in self.comparisons if tariff_id not in wanted_ids]
+        # An entry with a missing or null id would otherwise contribute "" or None to the wanted set,
+        # leaving every real stored result looking stale and wiping the lot on the first publish
+        wanted_slugs = {tariff_entity_slug(compare["id"]) for compare in compare_list if isinstance(compare, dict) and compare.get("id")}
+        if not wanted_slugs:
+            return
+
+        stale_ids = [tariff_id for tariff_id in self.comparisons if tariff_entity_slug(tariff_id) not in wanted_slugs]
         for tariff_id in stale_ids:
             self.log("Compare, discarding stored result for tariff {} which is no longer in compare_list".format(tariff_id))
             del self.comparisons[tariff_id]
@@ -497,6 +516,7 @@ class Compare:
         """
         self.prune_comparisons()
 
+        published_slugs = {}
         for tariff_id in self.comparisons:
             result = self.get_comparison(tariff_id)
 
@@ -519,7 +539,19 @@ class Compare:
 
                 slug = tariff_entity_slug(tariff_id)
                 if not slug:
-                    self.log("Warn: Compare, tariff id '{}' has no characters usable in an entity id, not publishing it".format(tariff_id))
+                    self.warn_once("unusable:{}".format(tariff_id), "Warn: Compare, tariff id '{}' has no characters usable in an entity id, not publishing it".format(tariff_id))
+                    # Drop any entity id stored before this tariff stopped being published, otherwise the
+                    # web Compare page keeps fetching history for a sensor nothing writes to any more
+                    result.pop("entity_id", None)
+                    continue
+
+                if slug in published_slugs:
+                    # Two ids that differ only in characters the slug folds away (IGO/Prime vs IGO Prime)
+                    # would otherwise take turns overwriting one sensor, merging both tariffs into one history
+                    first_id = published_slugs[slug]
+                    message = "Warn: Compare, tariff ids '{}' and '{}' both publish to {}.compare_tariff_{}, only '{}' is published - rename one of them".format(first_id, tariff_id, self.prefix, slug, first_id)
+                    self.warn_once("collision:{}".format(slug), message)
+                    result.pop("entity_id", None)
                     continue
 
                 entity_id = self.prefix + ".compare_tariff_" + slug
@@ -529,6 +561,7 @@ class Compare:
                     attributes=attributes,
                 )
                 result["entity_id"] = entity_id
+                published_slugs[slug] = tariff_id
 
     def publish_only(self):
         """
@@ -694,8 +727,10 @@ class Compare:
                 # Save and update comparisons as we go so it is updated in HA
                 self.select_best(compare_list, results)
                 self.comparisons = results
-                self.save_yaml()
+                # Publish before saving: publish_data prunes tariffs no longer in compare_list and stamps
+                # entity_id, so saving first would write a file that is already a run out of date (GH#5133)
                 self.publish_data()
+                self.save_yaml()
         finally:
             # Restore config values overridden by any tariff's fetch_config() call
             if config_snapshot:
