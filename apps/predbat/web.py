@@ -86,8 +86,9 @@ from utils import (
     classify_log_line,
     log_line_included,
     predbat_log_file_prev,
+    is_secret_key,
 )
-from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -3793,7 +3794,16 @@ chart.render();
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
-        args = self.args
+        # Mask once, here, through the same recursive traversal every other surface uses
+        # (mask_secret_args - see utils.py). A top-level `is_secret_key(arg)` test on the loop
+        # below only covers credentials whose own apps.yaml key names them: a nested one such as
+        # chat.providers.openrouter.api_key or forecast_solar[0].api_key sits under a top-level
+        # key that matches nothing, and render_type() recurses into it - so the value, and the
+        # data-nested-original attribute built from it, both reached the browser in the clear
+        # (#5053 review). Masking the structure instead of the row keeps this route honest as
+        # new nested credentials appear, and deep-copies, so self.args (the live object shared
+        # with self.base.args) is untouched.
+        args = mask_secret_args(self.args)
         row_id = 0
         # Initialise nested values tracking and row counter
         self._nested_values = {}
@@ -3802,8 +3812,6 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
-                value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
 
             # Determine if this value can be edited
@@ -4091,6 +4099,17 @@ chart.render();
                 except ValueError:
                     return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
 
+                # The /apps page serves credentials masked as SECRET_MASK (see html_apps), so the
+                # browser's data-original-value for a secret row is the mask, not the credential.
+                # Saving such a row unchanged would write "xxx" over a live key and destroy it -
+                # the same read-modify-write trap find_redacted_secret_overwrite() already refuses
+                # on the model's write path (chat_tools.py). Refuse it here too rather than trusting
+                # the page not to offer the edit, so the guard holds for any future surface (#5053
+                # review). A deliberate change to a real new value is unaffected.
+                secret_path = any(is_secret_key(segment) for segment in parse_yaml_path(path_or_arg) if not segment.startswith("["))
+                if converted_value == SECRET_MASK and secret_path:
+                    return web.json_response({"success": False, "message": f"Refusing to overwrite the credential {path_or_arg} with the redaction placeholder '{SECRET_MASK}' - edit it in apps.yaml or secrets.yaml directly"})
+
                 # Update the value in the YAML data
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
@@ -4136,6 +4155,12 @@ chart.render();
                 # self.base.args) never reflects a partially applied batch
                 self.args.clear()
                 self.args.update(live_args)
+                # A credential value or the redact_strings/redact_strings_labelled denylists
+                # themselves can change in this batch, so log()'s cached redaction pattern
+                # (hass.py, held on self.base - the PredBat instance, not this web component)
+                # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
+                # the log under the stale pattern until the restart below completes (GH#4770 review).
+                self.base._invalidate_log_secret_pattern()
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")

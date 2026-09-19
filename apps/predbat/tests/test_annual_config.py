@@ -581,7 +581,10 @@ def test_annual_config(my_predbat):
 
     print("Test: scrub_secrets removes API keys without mutating the original")
     config = base_config()
-    config["annual"]["load"]["octopus"] = {"api_key": "sk_live_secret", "account_id": "A-1"}
+    # account_id is itself masked now - it identifies the customer and reached the annual result
+    # and web surface in the clear (#5053 review) - so "survives scrubbing" is asserted with a
+    # genuinely non-credential key instead.
+    config["annual"]["load"]["octopus"] = {"api_key": "sk_live_secret", "account_id": "A-1", "region": "H"}
     scrubbed = scrub_secrets(config)
     if scrubbed["annual"]["load"]["octopus"]["api_key"] != "xxx":
         print("  ERROR: api_key should be scrubbed, got {}".format(scrubbed["annual"]["load"]["octopus"]["api_key"]))
@@ -589,7 +592,10 @@ def test_annual_config(my_predbat):
     if config["annual"]["load"]["octopus"]["api_key"] != "sk_live_secret":
         print("  ERROR: scrub_secrets must not mutate its input")
         failed = True
-    if scrubbed["annual"]["load"]["octopus"]["account_id"] != "A-1":
+    if scrubbed["annual"]["load"]["octopus"]["account_id"] != "xxx":
+        print("  ERROR: account_id should be scrubbed, got {}".format(scrubbed["annual"]["load"]["octopus"]["account_id"]))
+        failed = True
+    if scrubbed["annual"]["load"]["octopus"]["region"] != "H":
         print("  ERROR: non-secret values should survive scrubbing")
         failed = True
 
