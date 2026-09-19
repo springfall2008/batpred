@@ -283,6 +283,7 @@ def test_ohme(my_predbat=None):
         ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
         ("control_windows", _test_ohme_control_window_parsing, "control window parsing"),
         ("control_midnight", _test_ohme_control_window_year_rollover, "control windows across new year"),
+        ("control_long_active", _test_ohme_control_window_long_active_not_shifted, "long active window not mistaken for a rollover"),
         ("control_startup", _test_ohme_control_waits_for_plan, "control waits for a published plan"),
         ("control_edges", _test_ohme_control_edge_triggered, "control only acts on transitions"),
         ("control_drift", _test_ohme_control_reapplies_on_drift, "control re-applies after app changes"),
@@ -1754,6 +1755,28 @@ def _test_ohme_control_window_year_rollover(my_predbat=None):
     assert api.should_charge_now() is True, "Expected to be charging at 23:45 on new year's eve"
 
     print("PASS: new year window handled")
+    return 0
+
+
+def _test_ohme_control_window_long_active_not_shifted(my_predbat=None):
+    """Test a still-active window whose start is over 23 hours old is not mistaken for a New Year rollover (#269)"""
+    print("**** Running test_ohme_control_window_long_active_not_shifted ****")
+
+    tz = pytz.timezone("Europe/London")
+    # A long/flat-rate window starting just after midnight yesterday and still running: at 23:05
+    # the next day its start is nearly 47 hours old, well past the 23 hour rollover heuristic, but
+    # its end is still ahead of now, so it must be read as genuinely active rather than shifted a
+    # year forward and dropped out of should_charge_now().
+    now = tz.localize(datetime.datetime(2026, 6, 15, 23, 5, 0))
+    window = {"start": "06-14 00:10:00", "end": "06-16 02:00:00", "kwh": 40.0}
+    api = _ohme_control_api(windows=[window], now=now)
+
+    api.refresh_car_windows()
+    start, end = api.control_windows[0]
+    assert start.year == now.year, f"Expected the still-active window's start left in the current year, got {start}"
+    assert api.should_charge_now() is True, "Expected to still be charging inside a long active window over 23 hours after its start"
+
+    print("PASS: long active window left unshifted")
     return 0
 
 

@@ -136,4 +136,101 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_slot_integer_test("smart_int2_issue3911", my_predbat, battery_size=11.9, soc=0.0, limit=11.9, rate=7.4, loss=1.0, plan_time="07:00:00")
     failed |= run_car_charging_slot_integer_test("smart_int3_issue3911", my_predbat, battery_size=77.0, soc=74.3, limit=77.0, rate=11.0, loss=0.9, plan_time="07:00:00")
 
+    failed |= run_car_charging_start_stable_test(my_predbat)
+
+    return failed
+
+
+def run_car_charging_start_stable_test(my_predbat):
+    """
+    The published car charge start time must not walk forward once a slot is underway.
+
+    Regression test for issue #269: plan_car_charging() clamps an in-progress window's start
+    to minutes_now so the kWh maths only counts time the car can still charge for. That
+    clamped value was also published as predbat.car_charging_start, so the displayed start
+    time advanced by plan_interval_minutes on every cycle while the car was charging.
+    """
+    failed = False
+    print("**** Running Test: car_charging_start_stable_issue269 ****")
+
+    saved_battery_size = my_predbat.car_charging_battery_size
+    saved_limit = my_predbat.car_charging_limit
+    saved_soc = my_predbat.car_charging_soc
+    saved_soc_next = my_predbat.car_charging_soc_next
+    saved_rate = my_predbat.car_charging_rate
+    saved_loss = my_predbat.car_charging_loss
+    saved_max_price = my_predbat.car_charging_plan_max_price
+    saved_smart = my_predbat.car_charging_plan_smart
+    saved_plan_time = my_predbat.car_charging_plan_time
+    saved_num_cars = my_predbat.num_cars
+    saved_minutes_now = my_predbat.minutes_now
+    saved_slots = my_predbat.car_charging_slots
+
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.car_charging_limit = [100.0]
+    my_predbat.car_charging_soc = [0]
+    my_predbat.car_charging_soc_next = [None]
+    my_predbat.car_charging_rate = [1.0]
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_plan_max_price = [99]
+    my_predbat.car_charging_plan_smart = [False]
+    my_predbat.car_charging_plan_time = ["23:00:00"]
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_slots = [[]]
+
+    # Plan once, then replan from part way through the first window as the real 5 minute
+    # cycle would, and check the published start time did not move.
+    start_times = []
+    plan_starts = []
+    first_window_start = None
+    for step in range(3):
+        if step == 0:
+            my_predbat.minutes_now = saved_minutes_now
+        else:
+            # Step forward a cycle at a time while staying inside the first planned window,
+            # which is what a car charging through the window actually sees
+            my_predbat.minutes_now = first_window_start + step * 5
+
+        my_predbat.car_charging_slots[0] = my_predbat.plan_car_charging(0, my_predbat.low_rates)
+        if not my_predbat.car_charging_slots[0]:
+            print("ERROR: no car charging slots planned at step {}".format(step))
+            failed = True
+            break
+        if first_window_start is None:
+            first_window_start = my_predbat.car_charging_slots[0][0]["start"]
+            first_window_end = my_predbat.car_charging_slots[0][0]["end"]
+            # The drift only shows while one window stays current, so fail loudly rather than
+            # silently passing if the fixture's windows ever get shorter than the steps below
+            if first_window_end - first_window_start < 3 * 5:
+                print("ERROR: test needs a first window at least 15 minutes long, got {}-{}".format(first_window_start, first_window_end))
+                failed = True
+                break
+
+        my_predbat.publish_car_plan()
+        start_times.append(my_predbat.dashboard_values["predbat.car_charging_start"]["state"])
+        plan_starts.append(my_predbat.dashboard_values["binary_sensor.predbat_car_charging_slot"]["attributes"]["planned"][0]["start"])
+
+    if not failed:
+        if len(set(start_times)) != 1:
+            print("ERROR: car_charging_start moved while the slot was underway: {} (issue #269)".format(start_times))
+            failed = True
+        else:
+            print("OK: car_charging_start held at {} across the slot (issue #269)".format(start_times[0]))
+        if len(set(plan_starts)) != 1:
+            print("ERROR: planned window start moved while the slot was underway: {} (issue #269)".format(plan_starts))
+            failed = True
+
+    my_predbat.car_charging_battery_size = saved_battery_size
+    my_predbat.car_charging_limit = saved_limit
+    my_predbat.car_charging_soc = saved_soc
+    my_predbat.car_charging_soc_next = saved_soc_next
+    my_predbat.car_charging_rate = saved_rate
+    my_predbat.car_charging_loss = saved_loss
+    my_predbat.car_charging_plan_max_price = saved_max_price
+    my_predbat.car_charging_plan_smart = saved_smart
+    my_predbat.car_charging_plan_time = saved_plan_time
+    my_predbat.num_cars = saved_num_cars
+    my_predbat.minutes_now = saved_minutes_now
+    my_predbat.car_charging_slots = saved_slots
+
     return failed
