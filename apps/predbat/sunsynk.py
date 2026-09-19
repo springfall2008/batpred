@@ -1344,7 +1344,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     async def save_control(self):
         """Persist the applied-payload cache used for write change detection, and control_active.
 
-        Without control_active surviving a restart, _reconcile_control (sunsynk.py:1346) stays
+        Without control_active surviving a restart, _reconcile_control() stays
         gated off for every inverter until a fresh battery_schedule_charge_write event happens to
         arrive - silently skipping every write, including one meant to stop an export already in
         progress - until something unrelated re-arms it. alphaess.py's save_control/restore_state
