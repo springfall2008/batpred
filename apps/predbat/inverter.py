@@ -306,24 +306,115 @@ class Inverter:
     def __init__(self, base, id=0, quiet=False):
         """
         Inverter class
+
+        Only genuinely persistent state is set here - values this object accumulates over its
+        lifetime and that nothing ever unconditionally overwrites. Everything else is set to None
+        by reset_cycle_state() below: it is about to be replaced with real data by refresh_config()
+        or update_status() before anything reads it, so giving it a real-looking placeholder value
+        (a prior version of this code set reserve_percent = 4.0, battery_rate_max_raw = 2600.0, and
+        so on) is indistinguishable from a deliberately configured one and invites exactly the kind
+        of implicit "is this the placeholder or a real reading" sentinel check that
+        battery_size_tracking() below has to do on nominal_capacity. None cannot be mistaken for a
+        real value.
         """
         self.id = id
         self.base = base
         self.log = self.base.log
-        self.charge_enable_time = False
-        self.charge_start_time_minutes = self.base.forecast_minutes
-        self.charge_start_end_minutes = self.base.forecast_minutes
-        self.charge_window = []
-        self.export_window = []
-        self.export_limits = []
-        self.current_charge_limit = 0.0
-        self.soc_kw = 0
-        self.soc_percent = 0
+
+        # Accumulated across the object's lifetime; never reset while it persists (#4712 - these
+        # used to be reseeded every cycle because the object itself was rebuilt every cycle).
+        self.count_register_writes = 0
+        self.created_attributes = {}
+        # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
+        # None means nothing has been committed yet in this run, so the next call commits once.
+        self.last_export_schedule_committed = None
+        # The charge-side equivalent. #4711 added the export guard only, leaving adjust_charge_window()
+        # able to re-press the commit button on every cycle (#4712).
+        self.last_charge_schedule_committed = None
+        # Set when a charge window's writes or commit button press failed, so the next cycle retries
+        # even though the times now read back as already correct.
+        self.charge_schedule_commit_pending = False
+
+        self.reset_cycle_state()
+
+        # Everything below here is re-read every cycle, not just at construction - see
+        # refresh_config().
+        self.refresh_config(quiet=quiet)
+
+    def reset_cycle_state(self):
+        """
+        Set every attribute that refresh_config()/update_status() are about to overwrite to None.
+
+        Called once from __init__, before the object has any real data to give an attribute a
+        placeholder value that could be mistaken for one. Not called again afterwards: these
+        attributes persist and get reassigned in place by refresh_config()/update_status() every
+        cycle, the same as any other state on a persisted object - this only establishes the
+        starting shape.
+        """
+        # Read every cycle by refresh_config().
         self.soc_max = None
         self.nominal_capacity = None
+        # Not a placeholder like the rest of this group: these are the real standing defaults
+        # (7500W / 99999W), only conditionally overridden if the user configures them - see the
+        # `if "inverter_limit" in self.base.args:` guard in refresh_config(). They also double as
+        # get_arg()'s own fallback when the key exists but the read is unusable, so they must
+        # always hold a real number, never None.
         self.inverter_limit = 7500.0 / MINUTE_WATT
         self.export_limit = 99999.0 / MINUTE_WATT
         self.inverter_time = None
+        self.reserve_percent = None
+        self.reserve_percent_current = None
+        self.battery_scaling = None
+        self.battery_scaling_config = None
+        self.reserve_max = None
+        self.battery_rate_max_raw = None
+        self.battery_rate_max_charge = None
+        self.battery_rate_max_charge_dc = None
+        self.battery_rate_max_discharge = None
+        self.battery_rate_max_export = None
+        self.battery_temperature = None
+        # refresh_config() now does a real two-way read of battery_calibration (see there), so this
+        # is only the starting shape before the first refresh_config() call inside __init__ runs.
+        self.in_calibration = None
+
+        # Read every cycle by update_status().
+        self.charge_enable_time = False
+        self.charge_start_time_minutes = self.base.forecast_minutes
+        self.charge_end_time_minutes = self.base.forecast_minutes
+        self.discharge_start_time_minutes = self.base.forecast_minutes
+        self.discharge_end_time_minutes = self.base.forecast_minutes
+        self.charge_window = []
+        self.export_window = []
+        self.export_limits = []
+        self.current_charge_limit = None
+        self.soc_kw = None
+        self.soc_percent = None
+        # battery_voltage is None, not a guessed default: get_arg() in update_status() already
+        # supplies the real fallback (52.0) whenever the entity is absent, so nothing here is a
+        # second source of truth for it - this seed is only "not read yet", and set_current_from_power()
+        # checks for that explicitly rather than silently dividing by a placeholder.
+        self.battery_power = 0
+        self.battery_voltage = None
+        self.pv_power = 0
+        self.load_power = 0
+        self.track_charge_start = "00:00:00"
+        self.track_charge_end = "00:00:00"
+        self.track_discharge_start = "00:00:00"
+        self.track_discharge_end = "00:00:00"
+        self.idle_start_minutes = 0
+        self.idle_end_minutes = 0
+
+    def refresh_config(self, quiet=False):
+        """
+        Read this inverter's configuration and current limits.
+
+        Split out of __init__ so the Inverter objects can persist across cycles. Everything here is
+        either live config a user can change at runtime (battery_min_soc, battery_scaling, the rate
+        limits, battery_calibration) or a per-cycle side effect (battery size tracking, clock skew
+        detection), so it has to keep running every cycle even though the object no longer does.
+        What stays in __init__ is the identity and the accumulated state that must survive - notably
+        the committed-schedule guard, which was being wiped by the rebuild (#4712).
+        """
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
@@ -340,30 +431,6 @@ class Inverter:
         else:
             self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
-
-        self.reserve_max = 100
-        self.battery_rate_max_raw = 2600.0
-        self.battery_rate_max_charge = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_charge_dc = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_discharge = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_export = 2600.0 / MINUTE_WATT
-        self.battery_temperature = 20
-        self.battery_power = 0
-        self.battery_voltage = 52.0
-        self.pv_power = 0
-        self.load_power = 0
-        self.in_calibration = False
-        self.count_register_writes = 0
-        self.created_attributes = {}
-        self.track_charge_start = "00:00:00"
-        self.track_charge_end = "00:00:00"
-        self.track_discharge_start = "00:00:00"
-        self.track_discharge_end = "00:00:00"
-        self.idle_start_minutes = 0
-        self.idle_end_minutes = 0
-        # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
-        # None means nothing has been committed yet in this run, so the next call commits once.
-        self.last_export_schedule_committed = None
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
         # An assumed type is not a chosen one. The user-facing "source returned no data" warnings
@@ -476,9 +543,15 @@ class Inverter:
         # A calibration cycle deliberately drives the battery outside its normal SoC range, so any
         # plan made during one is wrong - Predbat disables itself for this inverter until it ends.
         # Only inverters that report it configure battery_calibration; absent means never calibrating.
-        if self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True):
-            self.in_calibration = True
+        # A real two-way read, not "only ever set True": with the Inverter object persisting across
+        # cycles (#4712), this has to be the one place that clears it too, or a real device leaving
+        # calibration would leave Predbat stuck thinking it never did.
+        was_in_calibration = self.in_calibration
+        self.in_calibration = self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True)
+        if self.in_calibration and not was_in_calibration:
             self.log("Warn: Inverter {} is in calibration mode, Predbat will not function correctly and will be disabled".format(self.id))
+        elif was_in_calibration and not self.in_calibration:
+            self.log("Info: Inverter {} has left calibration mode".format(self.id))
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -573,7 +646,11 @@ class Inverter:
             self.reserve_percent = min(self.reserve_percent, device_max)
         self.reserve = dp3(self.soc_max * self.reserve_percent / 100.0)
 
-        # Max inverter rate override
+        # Max inverter rate override. Reset to the standing default before the conditional
+        # re-read, or a key removed at runtime (or popped by a test) would leave the previous
+        # cycle's override in place indefinitely instead of reverting.
+        self.inverter_limit = 7500.0 / MINUTE_WATT
+        self.export_limit = 99999.0 / MINUTE_WATT
         if "inverter_limit" in self.base.args:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
@@ -603,45 +680,45 @@ class Inverter:
         # Args are also set for these so that no entries are needed for the dummies in the config file
         if not self.inv_has_charge_enable_time:
             self.create_missing_arg("scheduled_charge_enable", "on")
-            self.base.args["scheduled_charge_enable"][id] = self.create_entity("scheduled_charge_enable", "on")
+            self.base.args["scheduled_charge_enable"][self.id] = self.create_entity("scheduled_charge_enable", "on")
 
         if not self.inv_has_discharge_enable_time:
             self.create_missing_arg("scheduled_discharge_enable", "on")
-            self.base.args["scheduled_discharge_enable"][id] = self.create_entity("scheduled_discharge_enable", "on")
+            self.base.args["scheduled_discharge_enable"][self.id] = self.create_entity("scheduled_discharge_enable", "on")
 
         if not self.inv_has_reserve_soc:
             self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
+            self.base.args["reserve"][self.id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
-            self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class=None, uom="%", icon="mdi:target")
+            self.base.args["charge_limit"][self.id] = self.create_entity("charge_limit", 100, device_class=None, uom="%", icon="mdi:target")
 
         if self.inv_output_charge_control != "power":
             max_charge = self.battery_rate_max_charge * MINUTE_WATT
             max_discharge = self.battery_rate_max_discharge * MINUTE_WATT
             self.create_missing_arg("charge_rate", max_charge)
             self.create_missing_arg("discharge_rate", max_discharge)
-            self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
-            self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
+            self.base.args["charge_rate"][self.id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
+            self.base.args["discharge_rate"][self.id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")
-            self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
+            self.base.args["inverter_mode"][self.id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
                     entity_name = f"{x}_{y}_time"
                     self.create_missing_arg(entity_name, "23:59:00")
-                    self.base.args[entity_name][id] = self.create_entity(entity_name, "23:59:00")
+                    self.base.args[entity_name][self.id] = self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:
             self.create_missing_arg("idle_start_time", "00:00:00")
             self.create_missing_arg("idle_end_time", "00:00:00")
-            self.base.args["idle_start_time"][id] = self.create_entity("idle_start_time", "00:00:00")
-            self.base.args["idle_end_time"][id] = self.create_entity("idle_end_time", "00:00:00")
+            self.base.args["idle_start_time"][self.id] = self.create_entity("idle_start_time", "00:00:00")
+            self.base.args["idle_end_time"][self.id] = self.create_entity("idle_end_time", "00:00:00")
 
     def battery_size_tracking(self):
         # Battery size determination: fused auto-scaling + find_battery_size logic
@@ -2981,6 +3058,13 @@ class Inverter:
         (#4415). write_and_poll_value() already no-ops when the live value already matches, so
         this is cheap when nothing has drifted.
         """
+        if self.battery_voltage is None:
+            # update_status() has not run yet, so there is no real reading - a caller reached the
+            # charge/discharge rate path before the inverter's own state was ever fetched. Skip
+            # rather than divide by a guessed constant; the next cycle's update_status() will supply
+            # a real value (or its own 52.0 fallback if the entity is genuinely absent).
+            self.log("Warn: Inverter {} battery_voltage not yet known, skipping current calculation for {}".format(self.id, direction))
+            return
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
@@ -3221,29 +3305,37 @@ class Inverter:
             self.disable_charge_window(notify=False)
             have_disabled = True
 
+        # Whether every schedule time-register write this cycle actually landed. The commit below is
+        # only recorded as done when this holds, so a failed register write followed by a successful
+        # button press is not cached as applied - later cycles would keep rewriting the registers but
+        # never press again, leaving the new window programmed but uncommitted (the same failure mode
+        # reviewed on the export side in #4711). The scheduled_charge_enable switch is excluded - see
+        # the note at its write below.
+        schedule_write_ok = True
+
         if new_start != old_start or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             if "charge_start_time" in self.base.args:
                 # Always write to this as it is the GE default
                 entity_id_start = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
-                self.write_and_poll_option("charge_start_time", entity_id_start, new_start)
+                schedule_write_ok = self.write_and_poll_option("charge_start_time", entity_id_start, new_start) and schedule_write_ok
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
                     # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
                     start_hour_id = self.base.get_arg("charge_start_hour", indirect=False, index=self.id)
                     if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
-                        self.write_and_poll_option("charge_start_hour", start_hour_id, new_start)
+                        schedule_write_ok = self.write_and_poll_option("charge_start_hour", start_hour_id, new_start) and schedule_write_ok
                     else:
-                        self.write_and_poll_option("charge_start_hour", start_hour_id, int(new_start[:2]))
+                        schedule_write_ok = self.write_and_poll_option("charge_start_hour", start_hour_id, int(new_start[:2])) and schedule_write_ok
                     start_minute_id = self.base.get_arg("charge_start_minute", indirect=False, index=self.id)
                     if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
-                        self.write_and_poll_option("charge_start_minute", start_minute_id, new_start)
+                        schedule_write_ok = self.write_and_poll_option("charge_start_minute", start_minute_id, new_start) and schedule_write_ok
                     else:
-                        self.write_and_poll_option("charge_start_minute", start_minute_id, int(new_start[3:5]))
+                        schedule_write_ok = self.write_and_poll_option("charge_start_minute", start_minute_id, int(new_start[3:5])) and schedule_write_ok
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
                     charge_time = new_start + "-" + new_end
-                    self.write_and_poll_option("charge_time", self.base.get_arg("charge_time", indirect=False, index=self.id), charge_time)
+                    schedule_write_ok = self.write_and_poll_option("charge_time", self.base.get_arg("charge_time", indirect=False, index=self.id), charge_time) and schedule_write_ok
             else:
                 self.log("Warn: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
@@ -3252,20 +3344,20 @@ class Inverter:
             if "charge_end_time" in self.base.args:
                 # Always write to this as it is the GE default
                 entity_id_end = self.base.get_arg("charge_end_time", indirect=False, index=self.id)
-                self.write_and_poll_option("charge_end_time", entity_id_end, new_end)
+                schedule_write_ok = self.write_and_poll_option("charge_end_time", entity_id_end, new_end) and schedule_write_ok
 
                 if self.inv_charge_time_format == "H M":
                     # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
                     end_hour_id = self.base.get_arg("charge_end_hour", indirect=False, index=self.id)
                     if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
-                        self.write_and_poll_option("charge_end_hour", end_hour_id, new_end)
+                        schedule_write_ok = self.write_and_poll_option("charge_end_hour", end_hour_id, new_end) and schedule_write_ok
                     else:
-                        self.write_and_poll_option("charge_end_hour", end_hour_id, int(new_end[:2]))
+                        schedule_write_ok = self.write_and_poll_option("charge_end_hour", end_hour_id, int(new_end[:2])) and schedule_write_ok
                     end_minute_id = self.base.get_arg("charge_end_minute", indirect=False, index=self.id)
                     if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
-                        self.write_and_poll_option("charge_end_minute", end_minute_id, new_end)
+                        schedule_write_ok = self.write_and_poll_option("charge_end_minute", end_minute_id, new_end) and schedule_write_ok
                     else:
-                        self.write_and_poll_option("charge_end_minute", end_minute_id, int(new_end[3:5]))
+                        schedule_write_ok = self.write_and_poll_option("charge_end_minute", end_minute_id, int(new_end[3:5])) and schedule_write_ok
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass
             else:
@@ -3279,6 +3371,11 @@ class Inverter:
         if (old_charge_schedule_enable == "off" or have_disabled) and (new_start != new_end):
             # Enable scheduled charge if not turned on, unless the start and end are the same (disabled)
             if "scheduled_charge_enable" in self.base.args:
+                # Deliberately not folded into schedule_write_ok. On the hardware this issue is
+                # about, the enable switch accepts the write but never reports it back, so this
+                # returns False on every cycle - gating the commit on it would re-press the button
+                # forever, which is the very bug being fixed (#4712). The button commits the time
+                # registers; those are what schedule_write_ok has to cover.
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), True)
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                     if self.inv_charge_control_immediate:
@@ -3295,10 +3392,43 @@ class Inverter:
             if old_charge_schedule_enable == "off":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
-        if (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off"):
+        schedule_changed = (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off")
+
+        # Commit-once safety net, mirroring adjust_force_export(). Each term above can stay true
+        # indefinitely when the inverter does not read the written value back - an enable switch
+        # that never reports "on" pins the third term, and times that never read back pin the first
+        # two - which re-pressed the commit button on every 5 minute cycle for the life of the
+        # window. On Solis each press is a non-volatile write (#2328) and also zeroes the timed
+        # current registers (#4415/#4709), so the repeat is not merely wasteful.
+        #
+        # The observed old state is part of the key so that a window changed underneath us -
+        # externally, or re-presented in a different time format - is still re-committed rather than
+        # mistaken for a repeat of our own last commit.
+        charge_schedule = (new_start, new_end, old_start, old_end, old_charge_schedule_enable)
+
+        if charge_schedule == self.last_charge_schedule_committed:
+            # Already committed this exact schedule; suppress the repeat.
+            schedule_changed = False
+        elif self.charge_schedule_commit_pending:
+            # A previous cycle's writes or button press failed, so this window has never actually
+            # been applied. Those writes have since made old == new, which clears every term of
+            # schedule_changed above - retry instead of leaving the window programmed but
+            # uncommitted until it happens to change again on its own.
+            schedule_changed = True
+
+        if schedule_changed:
             # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
+            button_committed = True
             if self.inv_time_button_press:
-                self.press_and_poll_button(side="charge")
+                button_committed = self.press_and_poll_button(side="charge")
+            # Only remember a commit where both the schedule writes and the button press actually
+            # succeeded. Recording it on the button result alone would cache a schedule whose
+            # register writes failed: later cycles would keep rewriting the registers but never
+            # press again, leaving the window programmed and uncommitted (#4711, export side).
+            committed = schedule_write_ok and button_committed
+            self.charge_schedule_commit_pending = not committed
+            if committed:
+                self.last_charge_schedule_committed = charge_schedule
 
     def press_and_poll_button(self, side="both"):
         """
