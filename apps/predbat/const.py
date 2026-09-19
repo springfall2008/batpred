@@ -69,7 +69,7 @@ INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
-INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
+INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
@@ -96,6 +96,32 @@ INVERTER_TEST = False  # Run inverter control self test
 # revision bump and a rebuild of all platform binaries.
 EXPORT_LIMIT_FREEZE = 99.0  # Hold SoC, export only genuine PV surplus - no forced discharge
 EXPORT_LIMIT_IDLE = 100.0  # Export window disabled entirely
+
+# Export modes - the three states an export window can be in. These name what the packed value
+# above already encodes; they are the vocabulary the rest of the code should ask in, rather than
+# each caller re-deriving intent by comparing against the two sentinels (which several modules
+# currently do, inconsistently). See export_mode_of()/export_target_of()/export_power_of() in
+# utils.py for the accessors that read them.
+EXPORT_MODE_TARGET = 0  # Force export down to a target SoC percentage, optionally at reduced power
+EXPORT_MODE_FREEZE = 1  # Hold SoC, export only genuine PV surplus
+EXPORT_MODE_IDLE = 2  # Window disabled entirely
+
+# Full export power - the power level a target window exports at unless the planner has chosen a
+# reduced rate. 1.0 = the inverter's configured maximum export rate.
+FULL_EXPORT_POWER = 1.0
+
+# Export power levels the planner tries for a low-power target export, as a fraction of full rate.
+# These are the powers themselves, not the packed fractions they used to be written as: the
+# encoding stores 1 - power, so the old ladder's 0.3/0.5/0.7 meant 70%/50%/30% rate and read
+# backwards at the call site.
+LOW_EXPORT_POWER_LEVELS = [0.7, 0.5, 0.3]
+
+# Schema version for the debug yaml dump and the persisted plan. Bump when a field's *shape*
+# changes, not when one is added or removed - a reader can detect those itself, but it cannot tell
+# a new encoding from an old one when both are, say, a list of numbers. Absent means "before
+# versioning", which is any dump written before this was introduced; those are still read, so a
+# bug report from an older release keeps working (see export_limit_from_stored).
+DEBUG_SCHEMA_VERSION = 1
 
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
