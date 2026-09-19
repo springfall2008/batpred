@@ -899,9 +899,17 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
-    def fetch_inverter_data(self):
+    def fetch_inverter_data(self, quiet=False):
         """
         Fetch data about the inverters
+
+        quiet controls the per-cycle inverter diagnostics (clock skew, soc_max, charge windows and
+        settings). It is deliberately a parameter of its own rather than being derived from whether
+        the Inverter objects were just created: those objects now persist, so tying the two together
+        would silence the diagnostics for the life of the process after the first cycle (#5126
+        review). That log is the primary triage evidence for "the plan is wrong" and inverter-write
+        reports. balance_inverters() passes quiet=True because it runs every 120s rather than once
+        per plan cycle, which is the same split that existed before the objects persisted.
         """
         # Find the inverters
         self.num_inverters = int(self.get_arg("num_inverters", 1))
@@ -969,16 +977,12 @@ class Execute:
             else:
                 inverter = self.inverters[id]
                 try:
-                    # Not quiet: the per-cycle diagnostics this logs (clock skew, soc_max, charge
-                    # windows/settings) are the primary triage evidence in predbat.log for "the plan
-                    # is wrong" and inverter-write reports - tying them to object creation would
-                    # silence them for the life of the process after the first cycle (#5126 review).
-                    inverter.refresh_config(quiet=False)
+                    inverter.refresh_config(quiet=quiet)
                 except Exception as e:
                     self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
                     self.inverters = []
                     return False
-            inverter.update_status(self.minutes_now, quiet=False)
+            inverter.update_status(self.minutes_now, quiet=quiet)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
@@ -1151,7 +1155,7 @@ class Execute:
         # entry point that can observe or confirm gets its own cycle.
         if self.control_ledger is not None:
             self.control_ledger.begin_cycle()
-        if self.fetch_inverter_data():
+        if self.fetch_inverter_data(quiet=True):
             self.publish_inverter_data()
             return True
         return False

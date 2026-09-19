@@ -38,6 +38,8 @@ from const import (
     INVERTER_CLOCK_SKEW_RESTART_MINUTES,
     INVERTER_CLOCK_SKEW_WARN_MINUTES,
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
+    INVERTER_LIMIT_DEFAULT_W,
+    EXPORT_LIMIT_DEFAULT_W,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
@@ -354,13 +356,9 @@ class Inverter:
         # Read every cycle by refresh_config().
         self.soc_max = None
         self.nominal_capacity = None
-        # Not a placeholder like the rest of this group: these are the real standing defaults
-        # (7500W / 99999W), only conditionally overridden if the user configures them - see the
-        # `if "inverter_limit" in self.base.args:` guard in refresh_config(). They also double as
-        # get_arg()'s own fallback when the key exists but the read is unusable, so they must
-        # always hold a real number, never None.
-        self.inverter_limit = 7500.0 / MINUTE_WATT
-        self.export_limit = 99999.0 / MINUTE_WATT
+        # inverter_limit/export_limit are deliberately not seeded here: refresh_config() assigns
+        # them their standing defaults unconditionally before anything can read them, so a seed
+        # would be dead code duplicating the same two constants (#5126 review).
         self.inverter_time = None
         self.reserve_percent = None
         self.reserve_percent_current = None
@@ -654,8 +652,8 @@ class Inverter:
         # Max inverter rate override. Reset to the standing default before the conditional
         # re-read, or a key removed at runtime (or popped by a test) would leave the previous
         # cycle's override in place indefinitely instead of reverting.
-        self.inverter_limit = 7500.0 / MINUTE_WATT
-        self.export_limit = 99999.0 / MINUTE_WATT
+        self.inverter_limit = INVERTER_LIMIT_DEFAULT_W / MINUTE_WATT
+        self.export_limit = EXPORT_LIMIT_DEFAULT_W / MINUTE_WATT
         if "inverter_limit" in self.base.args:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:

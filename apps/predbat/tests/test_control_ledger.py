@@ -1848,7 +1848,7 @@ def test_every_entry_point_opens_its_own_cycle():
     # The template-mode guard reads config before anything else; answer with the default (off)
     stub.get_arg = lambda arg, default=None, **kwargs: default
     stub.inverters = []
-    stub.fetch_inverter_data = lambda create=True: False
+    stub.fetch_inverter_data = lambda quiet=False: False
     before = ledger.cycle
     stub.quick_inverter_data_update()
     if ledger.cycle != before + 1:
