@@ -88,7 +88,7 @@ from utils import (
     predbat_log_file_prev,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES, EXPORT_STATUS_NONE, EXPORT_STATUS_TARGET, EXPORT_STATUS_FREEZE
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
@@ -4697,7 +4697,20 @@ chart.render();
         text += str(dp2(percent)) + "%"
 
         if is_exporting:
-            text += '<span class="mdi mdi-transmission-tower-export"></span>'
+            # Colour the export icon by which kind of export is running - both look identical otherwise, so
+            # freeze export (PV surplus only) reads as if stored capacity were being sold (#5125). An
+            # unrecognised/absent mode keeps the original uncoloured icon.
+            export_status = self.get_state_wrapper("binary_sensor." + self.prefix + "_exporting", attribute="export_status", default=EXPORT_STATUS_NONE)
+            if export_status == EXPORT_STATUS_TARGET:
+                export_class = " export-active"
+                export_title = "Active export - discharging stored battery capacity to the grid"
+            elif export_status == EXPORT_STATUS_FREEZE:
+                export_class = " export-freeze"
+                export_title = "Freeze export - exporting solar surplus only, stored battery capacity is held"
+            else:
+                export_class = ""
+                export_title = "Exporting"
+            text += '<span class="mdi mdi-transmission-tower-export{}" title="{}"></span>'.format(export_class, export_title)
         return text
 
     async def html_api_login(self, request):

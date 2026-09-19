@@ -461,6 +461,18 @@ def run_execute_test(
         print("ERROR: isExporting should be {} for status '{}' got {}".format(expected_is_exporting, assert_status, my_predbat.isExporting))
         failed = True
 
+    # Validate the export_status attribute published alongside it: active export (stored capacity being sold)
+    # and freeze export (solar surplus only) are otherwise indistinguishable to the UI (#5125).
+    # Spelt out as literals rather than imported from const: these strings are published on an HA entity,
+    # so a user automation reading them breaks if they are renamed, constant or not.
+    expected_export_status = "none"
+    if expected_is_exporting:
+        expected_export_status = "freeze" if "Freeze exporting" in status_base else "target"
+    published_export_status = my_predbat.dashboard_values.get("binary_sensor." + my_predbat.prefix + "_exporting", {}).get("attributes", {}).get("export_status")
+    if published_export_status != expected_export_status:
+        print("ERROR: export_status should be {} for status '{}' got {}".format(expected_export_status, assert_status, published_export_status))
+        failed = True
+
     my_predbat.minutes_now = 12 * 60
     return failed
 

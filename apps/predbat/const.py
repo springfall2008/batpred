@@ -106,6 +106,14 @@ EXPORT_MODE_TARGET = 0  # Force export down to a target SoC percentage, optional
 EXPORT_MODE_FREEZE = 1  # Hold SoC, export only genuine PV surplus
 EXPORT_MODE_IDLE = 2  # Window disabled entirely
 
+# Export status - which kind of export is actually running right now, published as the export_status
+# attribute of the exporting binary sensor. These describe what the inverters were told to do this
+# cycle (which the planner's window mode above does not, as an export window can be held or
+# disabled), and are what the UI reads to tell the two apart at a glance (#5125).
+EXPORT_STATUS_NONE = "none"  # Not exporting
+EXPORT_STATUS_TARGET = "target"  # Active export - discharging stored capacity to the grid
+EXPORT_STATUS_FREEZE = "freeze"  # Freeze export - exporting PV surplus only, stored capacity held
+
 # Full export power - the power level a target window exports at unless the planner has chosen a
 # reduced rate. 1.0 = the inverter's configured maximum export rate.
 FULL_EXPORT_POWER = 1.0

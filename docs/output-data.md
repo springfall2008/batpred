@@ -424,6 +424,10 @@ The following sensors are set based on what Predbat is currently controlling the
 
 - binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
 - binary_sensor.predbat_exporting - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
+  The `export_status` attribute says which sort of export is running: 'target' for an active export that is discharging stored
+  capacity down to a target SoC, 'freeze' when only solar surplus is being exported and the stored capacity is held, or 'none'
+  when not exporting. The export icon shown next to the SoC in the Predbat Web Interface is coloured from this - green for an
+  active export, amber for a freeze export.
 
 These are useful for automations if for example, you want to turn off car charging when the battery is being exported.
 

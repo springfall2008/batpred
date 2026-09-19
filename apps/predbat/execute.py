@@ -16,7 +16,7 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
-from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE, EXPORT_STATUS_NONE, EXPORT_STATUS_TARGET, EXPORT_STATUS_FREEZE
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, export_mode_of, export_power_of, export_target_of
 from predbat_metrics import metrics
 from inverter import Inverter
@@ -185,6 +185,10 @@ class Execute:
 
         isCharging = False
         isExporting = False
+        # Which kind of export is running, tracked separately from isExporting so the UI can tell
+        # active export (stored capacity going to the grid) from freeze export (PV surplus only) (#5125)
+        exporting_to_target = False
+        exporting_freeze = False
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -513,6 +517,7 @@ class Execute:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
                         isExporting = True
+                        exporting_to_target = True
                         # The window carries a plain-number target once clipped; fall back to the
                         # instruction's own target rather than to the instruction itself
                         target = self.export_window_best[0].get("target")
@@ -545,6 +550,7 @@ class Execute:
                             # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             status_extra_parts.append((inverter.id, "current SoC", status, "{}%".format(inverter.soc_percent)))  # append multi-inverter target SoC's together
                             isExporting = True
+                            exporting_freeze = True
                             target = self.export_window_best[0].get("target")
                             if target is None:
                                 target = export_target_percent_or_zero(self.export_limits_best[0])
@@ -793,7 +799,15 @@ class Execute:
         status_extra = build_status_extra(status_extra_parts)
 
         # Set the charge/discharge status information
-        self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
+        # When inverters disagree, active export wins - stored capacity really is leaving a battery,
+        # which is the state the user needs to be shown (#5125)
+        if exporting_to_target:
+            export_status = EXPORT_STATUS_TARGET
+        elif exporting_freeze:
+            export_status = EXPORT_STATUS_FREEZE
+        else:
+            export_status = EXPORT_STATUS_NONE
+        self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting), export_status=export_status)
         self.isCharging = isCharging
         self.isExporting = isExporting
 
