@@ -1191,10 +1191,10 @@ class SolarAPI(ComponentBase):
         # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
         # can never fall below observed generation.
         #
-        # max_pv_power_forecast is deliberately NOT used here: it is a past forecast read back from the
-        # pv_forecast_h0 sensor, not measured generation, so it is no evidence of what the array can
-        # actually produce. Until GH#5116 it was worse than that - the sensor's state is the calibrated
-        # forecast, so including it made the cap depend on its own previous result.
+        # max_pv_power_forecast is deliberately NOT used here: it is a past forecast read back from
+        # sensor history (pv_forecast_history), not measured generation, so it is no evidence of what the
+        # array can actually produce. Until GH#5116 it was worse than that - it was read from h0's state,
+        # which is the calibrated forecast, so including it made the cap depend on its own previous result.
         observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
         ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
         capped_slots = 0
