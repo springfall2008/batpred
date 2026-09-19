@@ -1304,7 +1304,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
 
         Believed to be the same bug as batpred#5138 (Sunsynk), found by reading this file
         alongside the Sunsynk fix rather than from a reported deye.py incident: without
-        control_active surviving a restart, _reconcile_control (deye.py:1664) stays gated off
+        control_active surviving a restart, _reconcile_control() stays gated off
         for every inverter until a fresh write-button event happens to arrive - silently
         skipping every automatic re-apply, including one meant to stop an export already in
         progress, until something unrelated re-arms it. Fixed the same way as sunsynk.py and
