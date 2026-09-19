@@ -742,9 +742,10 @@ def restore_balance_state(my_predbat, saved):
         inverter.soc_percent = soc
 
 
-def force_fleet(my_predbat, powers, grid=0.0):
+def force_fleet(my_predbat, powers, grid=0.0, socs=None):
     """
-    Force each inverter's measured battery power, and the fleet's grid power.
+    Force each inverter's measured battery power, the fleet's grid power, and optionally each
+    inverter's SoC percentage so a test can create a deliberate imbalance.
 
     Grid follows Predbat's convention: positive exporting, negative importing. It is put on
     inverter 0 only, since balance_inverters sums it across the fleet.
@@ -752,6 +753,8 @@ def force_fleet(my_predbat, powers, grid=0.0):
     for inverter in my_predbat.inverters:
         inverter.battery_power = powers[inverter.id]
         inverter.grid_power = grid if inverter.id == 0 else 0.0
+        if socs:
+            inverter.soc_percent = socs[inverter.id]
 
 
 def clean_intent(my_predbat):
@@ -890,6 +893,67 @@ def test_executor_rate_survives_a_balance_hold(my_predbat):
             failed = True
         if my_predbat.inverters[0].charge_rate != 900:
             print("ERROR: the executor's reduced charge rate was not preserved, got {} (2600 means it was reset to max)".format(my_predbat.inverters[0].charge_rate))
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_discharge_balancing_through_execute_plan(my_predbat):
+    """
+    SoC balancing on discharge, on a heterogeneous fleet, through the real execute path.
+
+    Inverter 0 is well behind inverter 1 while both discharge, so it stops discharging and the
+    fuller one carries the house until they converge.
+    """
+    failed = balance_fixture(my_predbat, "discharge_balance_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_discharge = True
+        my_predbat.balance_inverters_charge = False
+        my_predbat.balance_inverters_crosscharge = False
+        force_fleet(my_predbat, {0: 800.0, 1: 800.0}, grid=-1600.0, socs={0: 20.0, 1: 80.0})
+        my_predbat.execute_plan()
+
+        if my_predbat.inverters[0].discharge_rate != 0:
+            print("ERROR: the inverter behind on SoC was not held, got discharge rate {}".format(my_predbat.inverters[0].discharge_rate))
+            failed = True
+        if my_predbat.inverters[1].discharge_rate != 2600:
+            print("ERROR: the fuller inverter must be left carrying the house, got discharge rate {}".format(my_predbat.inverters[1].discharge_rate))
+            failed = True
+    finally:
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_charge_balancing_through_execute_plan(my_predbat):
+    """
+    SoC balancing on charge, on a heterogeneous fleet, through the real execute path.
+
+    Until this existed the charge branch had no execute-level coverage at all, and no pure test
+    either - the whole branch could be deleted and only one legacy scenario with two identical
+    inverters would notice.
+    """
+    failed = balance_fixture(my_predbat, "charge_balance_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_charge = True
+        my_predbat.balance_inverters_discharge = False
+        my_predbat.balance_inverters_crosscharge = False
+        force_fleet(my_predbat, {0: -800.0, 1: -800.0}, grid=-1600.0, socs={0: 80.0, 1: 20.0})
+        my_predbat.execute_plan()
+
+        if my_predbat.inverters[0].charge_rate != 0:
+            print("ERROR: the inverter ahead on SoC was not held, got charge rate {}".format(my_predbat.inverters[0].charge_rate))
+            failed = True
+        if my_predbat.inverters[1].charge_rate != 2600:
+            print("ERROR: the inverter behind must be left to catch up, got charge rate {}".format(my_predbat.inverters[1].charge_rate))
             failed = True
     finally:
         restore_balance_state(my_predbat, saved)
@@ -3577,6 +3641,14 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_executor_rate_survives_a_balance_hold(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_discharge_balancing_through_execute_plan(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_charge_balancing_through_execute_plan(my_predbat)
     if failed:
         return failed
 

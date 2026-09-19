@@ -2495,7 +2495,6 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     soc_high = [(soc > soc_min) and (abs(soc - soc_min) >= threshold_charge) for soc in socs]
 
     above_reserve = [(socs[id] - reserves[id]) >= 4.0 for id in range(num_inverters)]
-    below_full = [socs[id] < 100.0 for id in range(num_inverters)]
     power_enough_discharge = [battery_powers[id] >= 50.0 for id in range(num_inverters)]
     power_enough_charge = [battery_powers[id] <= -50.0 for id in range(num_inverters)]
 
@@ -2582,8 +2581,11 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
                 continue
             if not (power_enough_charge[id] or charge_rates[id] == 0):
                 continue
-            if not any(below_full[other] for other in range(num_inverters) if other != id):
-                continue
+            # No "somebody else has room" check is needed here, unlike above_reserve on the
+            # discharge side: soc_high[id] already requires socs[id] > soc_min, so the inverter
+            # holding the minimum is strictly below this one and therefore below 100%. The
+            # original's below_full[other_inverter] asked this of one arbitrary neighbour; asked
+            # of the fleet it is implied, so it is not restated.
             if spare_pv > (total_charge_rates - held_rate - charge_rates[id]):
                 continue
             if log_to:

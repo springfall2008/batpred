@@ -346,6 +346,68 @@ def test_soc_balancing_still_runs_when_crosscharge_correction_is_off():
     assert intent[0]["discharge_rate"] == 0, "SoC balancing was enabled and must still act"
 
 
+def test_charge_balance_stops_the_high_inverter():
+    """
+    The charge-side mirror of test_discharge_balance_stops_the_low_inverter.
+
+    While the fleet charges, the inverter that is further ahead stops taking charge so the one
+    behind catches up. Until this test existed the entire charge branch could be deleted without
+    a single pure test noticing.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(80.0, -1000.0), make_snapshot(20.0, -1000.0)]
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    assert intent[0]["charge_rate"] == 0, "the fuller inverter must stop charging"
+    assert intent[1]["charge_rate"] is None, "the inverter behind must be left to catch up"
+
+
+def test_charge_holds_are_applied_cumulatively_against_the_pv_guard():
+    """
+    The charge-side counterpart of the cumulative rate guard.
+
+    The PV check asks "if I stop this one, can the rest still absorb the surplus?", so holding two
+    in one pass can strand PV even though both checks passed individually.
+
+    Three inverters charging at 1000W each with no grid flow, so spare PV is 3000W, against 2600W
+    of charge capacity each (7800W total). Holding one leaves 5200W of capacity, which still
+    covers the surplus; holding a second would leave 2600W, which does not.
+
+    Note the guard reads spare_pv - derived from grid and battery totals - not the per-inverter
+    pv_power field, which cannot be trusted to attribute PV to an inverter.
+    """
+    intent = make_intent(3)
+    snapshot = [
+        make_snapshot(80.0, -1000.0),
+        make_snapshot(80.0, -1000.0),
+        make_snapshot(20.0, -1000.0),
+    ]
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    held = [id for id, value in intent.items() if value["charge_rate"] == 0]
+    assert len(held) == 1, "holding two chargers would strand the PV, got {}".format(held)
+
+
+def test_the_soc_switches_gate_independently():
+    """
+    The charge and discharge switches must gate their own direction only.
+
+    Enabling charge balancing must not act during a discharge, and vice versa - otherwise a user
+    who turned on one would silently get the other.
+    """
+    # Charge balancing on, fleet discharging out of balance - nothing may happen
+    intent = make_intent(2)
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [make_snapshot(20.0, 1000.0), make_snapshot(80.0, 1000.0)]
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    assert intent == before, "charge balancing must not act while the fleet is discharging"
+
+    # Discharge balancing on, fleet charging out of balance - nothing may happen
+    intent = make_intent(2)
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [make_snapshot(80.0, -1000.0), make_snapshot(20.0, -1000.0)]
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent == before, "discharge balancing must not act while the fleet is charging"
+
+
 def test_random_fleets_hold_the_physical_invariants():
     """
     Property test over random fleets of 2-6 inverters in random charge/discharge states, with
