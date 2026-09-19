@@ -1798,7 +1798,7 @@ def test_divergence_without_timing_metadata_must_repeat():
         # clears that floor; cycle count alone is deliberately no longer sufficient, because
         # cycle rate depends on how often Predbat's entry points run.
         ledger.begin_cycle()
-        if ledger.observe("number.reserve", "reserve", 50.0, now=200.0 + MIN_DIVERGENCE_S, generation=read_generation) != EXTERNAL:
+        if ledger.observe("number.reserve", "reserve", 50.0, now=100.0 + MIN_DIVERGENCE_S, generation=read_generation) != EXTERNAL:
             print(f"ERROR: a divergence persisting across cycles ({label}) was not reported")
             failed = True
         if len(ledger.events) != 1:
@@ -1900,7 +1900,7 @@ def test_divergence_needs_elapsed_time_not_just_cycles():
     """
     failed = False
 
-    # Cycles tick quickly (60s apart) - not enough elapsed time to convict.
+    # Cycles tick quickly (60s apart) - not enough time since our write to convict.
     ledger = ControlLedger()
     ledger.begin_cycle()
     ledger.record_write("number.reserve", "reserve", 4.0, now=0.0, generation=None)
@@ -1918,10 +1918,35 @@ def test_divergence_needs_elapsed_time_not_just_cycles():
 
     # Once enough real time has passed, it still convicts - the rule is a floor, not a mute.
     ledger.begin_cycle()
-    if ledger.observe("number.reserve", "reserve", 50.0, now=60.0 + MIN_DIVERGENCE_S, generation=None) != EXTERNAL:
+    if ledger.observe("number.reserve", "reserve", 50.0, now=MIN_DIVERGENCE_S, generation=None) != EXTERNAL:
         print("ERROR: a divergence past the time floor was not reported")
         failed = True
 
+    return failed
+
+
+def test_divergence_floor_matches_the_previous_cadence_behaviour():
+    """The floor must not quietly extend how long a real external change goes unreported.
+
+    The previous cycle-only rule, at the 120s poll cadence in use before this change, held the
+    first divergent read at t=120 pending and reported at t=240. Measuring MIN_DIVERGENCE_S from
+    the confirming write reproduces that exactly, so 240 really is a no-op at that cadence.
+    Measuring it from the first divergent read instead would have pushed this out to t=360.
+    """
+    failed = False
+    ledger = ControlLedger()
+    ledger.begin_cycle()
+    ledger.record_write("number.reserve", "reserve", 4.0, now=0.0, generation=None)
+
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=120.0, generation=None) != PENDING:
+        print("ERROR: the first divergent read at t=120 should still be pending")
+        failed = True
+
+    ledger.begin_cycle()
+    if ledger.observe("number.reserve", "reserve", 50.0, now=240.0, generation=None) != EXTERNAL:
+        print("ERROR: a divergence persisting to t=240 must be reported, as it was before the floor")
+        failed = True
     return failed
 
 
@@ -1969,6 +1994,7 @@ def run_control_ledger_tests(my_predbat):
         ("newest_events_contract", test_newest_events_honours_its_contract),
         ("cycle_per_entry_point", test_every_entry_point_opens_its_own_cycle),
         ("divergence_time_floor", test_divergence_needs_elapsed_time_not_just_cycles),
+        ("divergence_floor_cadence_parity", test_divergence_floor_matches_the_previous_cadence_behaviour),
         ("re_arms_no_write_needed", test_ownership_re_arms_when_no_write_is_needed),
         ("divergence_must_repeat", test_divergence_without_timing_metadata_must_repeat),
         ("restore_string_at_safe", test_restored_event_with_string_at_does_not_raise),

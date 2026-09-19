@@ -1299,8 +1299,13 @@ git push
 
 **Spec coverage** — every section maps to a task: architecture and intent → Task 2; the balance function → Task 3; cadence, poll wiring and `balance_inverters_seconds` → Task 4; export allocator → Task 5; deadband → Task 6; config and docs → Task 7; the testing section's harness arrays → Task 1.
 
-**Deliberately not covered, matching the spec's non-goals:** F1, F7, F2, the PV-aware cross-charge rule, AC limits in the allocator, and pause as mutable intent.
+**Deliberately not covered, matching the spec's non-goals:** F1, F2, AC limits in the allocator, pause as mutable intent, and a *per-inverter* PV-aware cross-charge rule.
 
-**Known gap.** The spec calls out that the quick poll becoming a write path starts conferring control-ledger ownership on a cadence that today only observes, and says this "needs its own test rather than being assumed benign". No task writes that test, because the right shape depends on how `control_ledger` observes a rate write — which needs reading `apps/predbat/control_ledger.py` first. **Resolve this before Task 4 is reviewed**, either by adding a step to Task 4 or by agreeing it is deferred with the risk stated on the PR.
+**Amended while executing.** Two items this section originally listed as deferred were fixed instead, because moving the algorithm into a pure function made faults visible that could not responsibly be left. The spec's "Amended during implementation" section is the record; in short:
+
+- **F7 was fixed**, along with two coupled faults it travelled with — a pass could hold a charger and a discharger at once, and the capacity guards were each evaluated as though its own hold were the only change.
+- **Direction detection was changed** from the battery-sign proxy to the site energy balance, after it was shown holding every inverter that was correctly absorbing a PV surplus. The per-inverter PV case remains unsolved and stays a non-goal.
+
+**The known gap is closed.** The spec called out that the quick poll becoming a write path starts conferring control-ledger ownership on a cadence that today only observes, and said it "needs its own test rather than being assumed benign". Reading `control_ledger.py` showed the rate writes were not the exposure — those controls were already tracked — but the 120s → 60s cadence change was: the tamper ladder counted cycles with no wall-clock floor, so a faster poll convicted a cached read sooner. Fixed by `MIN_DIVERGENCE_S`, measured from the confirming write so the threshold no longer moves with cadence, and covered by `test_divergence_needs_elapsed_time_not_just_cycles` and `test_divergence_floor_matches_the_previous_cadence_behaviour`. The poll's own write path is covered by `test_quick_poll_rebalance_guards`.
 
 **Sequencing note.** Task 2 is the only task whose acceptance test is "nothing changes". Do not fold Task 6 into it — the deadband change moves a real assertion, and mixing the two would destroy the parity signal that makes the HIGH-risk refactor safe to review.

@@ -2480,6 +2480,26 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     charge_rates = [entry["charge_rate_now"] for entry in snapshot]
     discharge_rates = [entry["discharge_rate_now"] for entry in snapshot]
 
+    # The rates that will actually be in force after this pass. Balancing runs BEFORE the apply
+    # pass, so the measured rates above can overstate what the fleet is about to be able to do -
+    # an export allocation stepping down, for instance. The capacity guards below reason about
+    # these; the measured rates are kept for spotting an inverter that is already held at zero.
+    effective_charge_rates = []
+    effective_discharge_rates = []
+    for id in range(num_inverters):
+        if id in intent:
+            claimed_charge = intent[id].get("charge_rate", None)
+            claimed_discharge = intent[id].get("discharge_rate", None)
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+        else:
+            # Not being written this pass (read-only, or skipped for calibration), so whatever it
+            # reads now is what it will keep
+            effective_charge_rates.append(charge_rates[id])
+            effective_discharge_rates.append(discharge_rates[id])
+    total_effective_charge_rates = sum(effective_charge_rates)
+    total_effective_discharge_rates = sum(effective_discharge_rates)
+
     total_battery_power = sum(battery_powers)
     total_grid_power = sum(grid_powers)
     total_charge_rates = sum(charge_rates)
@@ -2568,12 +2588,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # index neighbour, which is what the (i + 1) % n ring used to ask (F7).
             if not any(above_reserve[other] for other in range(num_inverters) if other != id):
                 continue
-            if (total_discharge_rates - held_rate - discharge_rates[id] - 200) < total_battery_power:
+            if (total_effective_discharge_rates - held_rate - effective_discharge_rates[id] - 200) < total_battery_power:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
             intent[id]["discharge_rate"] = 0
-            held_rate += discharge_rates[id]
+            held_rate += effective_discharge_rates[id]
     elif during_charge and balance_charge and total_charge_rates > 0:
         held_rate = 0.0
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: -socs[id]):
@@ -2586,12 +2606,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # holding the minimum is strictly below this one and therefore below 100%. The
             # original's below_full[other_inverter] asked this of one arbitrary neighbour; asked
             # of the fleet it is implied, so it is not restated.
-            if spare_pv > (total_charge_rates - held_rate - charge_rates[id]):
+            if spare_pv > (total_effective_charge_rates - held_rate - effective_charge_rates[id]):
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
-            held_rate += charge_rates[id]
+            held_rate += effective_charge_rates[id]
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):

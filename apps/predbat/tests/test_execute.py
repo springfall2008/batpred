@@ -622,8 +622,7 @@ def test_quick_poll_rebalance_guards(my_predbat):
     their own skew on top of each other.
     """
     failed = False
-    saved_intent = my_predbat.inverter_rate_intent
-    saved_enable = my_predbat.balance_inverters_enable
+    saved = save_balance_state(my_predbat)
     saved_read_only = my_predbat.set_read_only
     try:
         # No intent yet - a poll that beats the first plan run must write nothing
@@ -650,12 +649,16 @@ def test_quick_poll_rebalance_guards(my_predbat):
         my_predbat.balance_inverters_crosscharge = False
         my_predbat.balance_inverters_threshold_discharge = 5
         my_predbat.balance_inverters_threshold_charge = 5
-        saved_readings = [(inverter.soc_percent, inverter.battery_power, inverter.discharge_rate_now, inverter.reserve_current) for inverter in my_predbat.inverters]
+        saved_readings = [(inverter.soc_percent, inverter.battery_power, inverter.discharge_rate_now, inverter.reserve_current, inverter.battery_rate_max_discharge) for inverter in my_predbat.inverters]
         try:
             for inverter in my_predbat.inverters:
                 inverter.soc_percent = 20 if inverter.id == 0 else 80
                 inverter.battery_power = 1000
                 inverter.discharge_rate_now = 2600 / MINUTE_WATT
+                # Pin the ceiling too. The capacity guard reasons about the rates that will be
+                # applied, which for an unclaimed intent is the maximum - so leaving this to
+                # whatever the previous scenario happened to set makes the fixture order-dependent.
+                inverter.battery_rate_max_discharge = 2600 / MINUTE_WATT
                 inverter.reserve_current = 4
             my_predbat.inverter_rate_intent = {inverter.id: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for inverter in my_predbat.inverters}
 
@@ -672,14 +675,17 @@ def test_quick_poll_rebalance_guards(my_predbat):
                     print("ERROR: the poll mutated the stored intent for inverter {} - successive polls would compound".format(inverter_id))
                     failed = True
         finally:
-            for inverter, (soc, power, rate, reserve) in zip(my_predbat.inverters, saved_readings):
+            for inverter, (soc, power, rate, reserve, max_discharge) in zip(my_predbat.inverters, saved_readings):
                 inverter.soc_percent = soc
                 inverter.battery_power = power
                 inverter.discharge_rate_now = rate
                 inverter.reserve_current = reserve
+                inverter.battery_rate_max_discharge = max_discharge
     finally:
-        my_predbat.inverter_rate_intent = saved_intent
-        my_predbat.balance_inverters_enable = saved_enable
+        # Every balance switch and threshold this test assigns has to go back, not just the three
+        # it used to restore - the whole registry entry shares one PredBat, so anything left
+        # behind turns later scenarios order-dependent (GH#5079).
+        restore_balance_state(my_predbat, saved)
         my_predbat.set_read_only = saved_read_only
     return failed
 
@@ -723,6 +729,8 @@ def save_balance_state(my_predbat):
         "charge": my_predbat.balance_inverters_charge,
         "discharge": my_predbat.balance_inverters_discharge,
         "crosscharge": my_predbat.balance_inverters_crosscharge,
+        "threshold_charge": my_predbat.balance_inverters_threshold_charge,
+        "threshold_discharge": my_predbat.balance_inverters_threshold_discharge,
         "intent": my_predbat.inverter_rate_intent,
     }
 
@@ -735,6 +743,8 @@ def restore_balance_state(my_predbat, saved):
     my_predbat.balance_inverters_charge = saved["charge"]
     my_predbat.balance_inverters_discharge = saved["discharge"]
     my_predbat.balance_inverters_crosscharge = saved["crosscharge"]
+    my_predbat.balance_inverters_threshold_charge = saved["threshold_charge"]
+    my_predbat.balance_inverters_threshold_discharge = saved["threshold_discharge"]
     my_predbat.inverter_rate_intent = saved["intent"]
     for inverter, (power, grid, soc) in zip(my_predbat.inverters, saved["readings"]):
         inverter.battery_power = power
@@ -957,6 +967,43 @@ def test_charge_balancing_through_execute_plan(my_predbat):
             failed = True
     finally:
         restore_balance_state(my_predbat, saved)
+    return failed
+
+
+def test_calibration_discards_intent_collected_so_far(my_predbat):
+    """
+    When any inverter is calibrating the whole fleet is put to full rates and the loop breaks.
+
+    Inverters processed BEFORE the calibrating one have already recorded their planned intent,
+    though. Applying that afterwards writes those planned rates straight back over the
+    calibration-safe settings - and the stored baseline keeps them, so the 60s poll re-applies
+    them for as long as calibration lasts. Before the intent refactor this could not happen:
+    earlier inverters wrote inline and the calibration reset came after them.
+    """
+    failed = balance_fixture(my_predbat, "calibration_setup")
+    if failed:
+        return failed
+    saved_calibration = [inverter.in_calibration for inverter in my_predbat.inverters]
+    try:
+        # Give inverter 0 a deliberately non-max rate, then make the LATER inverter calibrate
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(500)
+        my_predbat.inverters[0].in_calibration = False
+        my_predbat.inverters[1].in_calibration = True
+        my_predbat.execute_plan()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate != 2600:
+                print("ERROR: inverter {} was left at {}W during calibration, the fleet must be at full rate".format(inverter.id, inverter.charge_rate))
+                failed = True
+        if my_predbat.inverter_rate_intent:
+            print("ERROR: intent collected before the calibrating inverter was kept as the poll baseline: {}".format(my_predbat.inverter_rate_intent))
+            failed = True
+    finally:
+        for inverter, calibration in zip(my_predbat.inverters, saved_calibration):
+            inverter.in_calibration = calibration
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
     return failed
 
 
@@ -3665,6 +3712,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_read_only_mode_writes_no_rates(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_calibration_discards_intent_collected_so_far(my_predbat)
     if failed:
         return failed
 

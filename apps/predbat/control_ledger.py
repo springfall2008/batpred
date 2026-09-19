@@ -437,7 +437,13 @@ class ControlLedger:
             # Repetition in a later cycle is necessary but not sufficient: cycle rate is a
             # function of how often Predbat's entry points run, so without a wall-clock floor a
             # faster poll would convict a cached read sooner. See MIN_DIVERGENCE_S.
-            if (now - record.get("diverged_at", now)) < MIN_DIVERGENCE_S:
+            #
+            # Measured from the CONFIRMING WRITE, not from the first divergent read. The question
+            # is how long the vendor has had to stop serving a cached copy of the pre-write value,
+            # and that clock starts when we wrote. Measuring from the first divergence would add
+            # one poll interval on top, so the threshold would still drift with cadence - and at
+            # the old 120s cadence it would report at 360s where the previous code reported at 240s.
+            if (now - record["confirmed_at"]) < MIN_DIVERGENCE_S:
                 return PENDING
 
         event = {

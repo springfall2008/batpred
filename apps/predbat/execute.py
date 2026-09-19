@@ -323,6 +323,11 @@ class Execute:
                 # A value found moved next cycle is the inverter calibrating, not a third
                 # party, so ownership is dropped after the writes rather than before them.
                 self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
+                # Inverters processed before this one already recorded their planned intent.
+                # Applying it now would write those rates straight back over the full-rate
+                # calibration settings above, and keeping it as the poll baseline would have the
+                # 60s poll re-apply them for as long as calibration lasts.
+                intent.clear()
                 break
 
             charge_rate = None
@@ -418,12 +423,20 @@ class Execute:
                             )
                         )
 
-                        # One deadband, applied in the only writer. adjust_charge_rate and
-                        # adjust_discharge_rate both suppress a change below 5% of max, which lines
-                        # up with the GE power steps. The 10% that used to live here came from the
-                        # same PR (#1676) as that 5% and was never reconciled with it; being the
-                        # stricter of the two it was the only one that ever fired. Intent now
-                        # carries the rate we actually want, not one a deadband has rounded off.
+                        # No deadband here: adjust_charge_rate already suppresses a change below
+                        # 5% of max, which lines up with the GE power steps. The 10% that used to
+                        # live here came from the same PR (#1676) as that 5% and was never
+                        # reconciled with it; being the stricter of the two it was the only one
+                        # that ever fired. Intent now carries the rate we actually want rather
+                        # than one a deadband has rounded off.
+                        #
+                        # That 5% governs the power register. Inverters with
+                        # inv_output_charge_control == "current" drive a timed-current register as
+                        # their real control and re-assert it every cycle by design (#4415), with
+                        # write_and_poll_value's own read-compare deciding whether a write is
+                        # needed - so on those types a sub-5% change can still write. That is
+                        # deliberate: deadbanding the real control would cost precision, not
+                        # writes.
                         max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
                         charge_rate = new_charge_rate
                         rate_owner = "charge"

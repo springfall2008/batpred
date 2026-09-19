@@ -451,6 +451,35 @@ def test_discharge_hold_needs_another_inverter_above_reserve():
     assert intent[0]["discharge_rate"] == 0, "the low inverter must be held once another can carry the house"
 
 
+def test_capacity_guard_uses_the_rates_about_to_be_applied():
+    """
+    The capacity guard has to reason about the rates that will be in force after this pass, not
+    the ones currently read from hardware.
+
+    Balancing runs before the apply pass, so on a transition to lower rates - an export allocation
+    stepping down, say - the measured rates overstate what the fleet will actually be able to
+    deliver. Holding one inverter on that basis leaves the rest applying smaller rates and the
+    fleet short.
+
+    Measured 2600W each (7800W) but the executor is about to apply 1000W each (3000W), against a
+    2000W draw. On the measured rates a hold looks fine; on the intended ones it does not.
+    """
+    intent = make_intent(3, {id: {"discharge_rate": 1000, "owner": "export"} for id in range(3)})
+    before = {key: dict(value) for key, value in intent.items()}
+    snapshot = [
+        make_snapshot(20.0, 1000.0, discharge_rate_now=2600.0),
+        make_snapshot(80.0, 500.0, discharge_rate_now=2600.0),
+        make_snapshot(80.0, 500.0, discharge_rate_now=2600.0),
+    ]
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent == before, "the hold must be refused against the rates about to be applied"
+
+    # With nothing claimed the fleet really will run at max, and the same hold is fine
+    intent = make_intent(3)
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent[0]["discharge_rate"] == 0, "with max rates in force the hold is within capacity"
+
+
 def test_random_fleets_hold_the_physical_invariants():
     """
     Property test over random fleets of 2-6 inverters in random charge/discharge states, with
