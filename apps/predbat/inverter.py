@@ -578,6 +578,11 @@ class Inverter:
         # skipped rather than misreporting it as inverter clock skew or triggering an auto-restart.
         if isinstance(ivtime, str) and ivtime.strip().lower() in ("", "unavailable", "unknown", "none"):
             ivtime = None
+        # Reset every cycle, not just at construction (reset_cycle_state() only runs once on a
+        # persisted object) - otherwise a dropped/unavailable reading here leaves the previous
+        # cycle's stale timestamp in place, and the skew check below keeps comparing against a dead
+        # reading rather than treating the drop as "no reading" as intended (#5126 review).
+        self.inverter_time = None
         if ivtime:
             try:
                 self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
@@ -3325,12 +3330,12 @@ class Inverter:
                     start_hour_id = self.base.get_arg("charge_start_hour", indirect=False, index=self.id)
                     if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
                         schedule_write_ok = self.write_and_poll_option("charge_start_hour", start_hour_id, new_start) and schedule_write_ok
-                    else:
+                    elif start_hour_id:
                         schedule_write_ok = self.write_and_poll_option("charge_start_hour", start_hour_id, int(new_start[:2])) and schedule_write_ok
                     start_minute_id = self.base.get_arg("charge_start_minute", indirect=False, index=self.id)
                     if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
                         schedule_write_ok = self.write_and_poll_option("charge_start_minute", start_minute_id, new_start) and schedule_write_ok
-                    else:
+                    elif start_minute_id:
                         schedule_write_ok = self.write_and_poll_option("charge_start_minute", start_minute_id, int(new_start[3:5])) and schedule_write_ok
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
@@ -3351,12 +3356,12 @@ class Inverter:
                     end_hour_id = self.base.get_arg("charge_end_hour", indirect=False, index=self.id)
                     if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
                         schedule_write_ok = self.write_and_poll_option("charge_end_hour", end_hour_id, new_end) and schedule_write_ok
-                    else:
+                    elif end_hour_id:
                         schedule_write_ok = self.write_and_poll_option("charge_end_hour", end_hour_id, int(new_end[:2])) and schedule_write_ok
                     end_minute_id = self.base.get_arg("charge_end_minute", indirect=False, index=self.id)
                     if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
                         schedule_write_ok = self.write_and_poll_option("charge_end_minute", end_minute_id, new_end) and schedule_write_ok
-                    else:
+                    elif end_minute_id:
                         schedule_write_ok = self.write_and_poll_option("charge_end_minute", end_minute_id, int(new_end[3:5])) and schedule_write_ok
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass

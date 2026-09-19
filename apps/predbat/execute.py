@@ -969,12 +969,16 @@ class Execute:
             else:
                 inverter = self.inverters[id]
                 try:
-                    inverter.refresh_config(quiet=True)
+                    # Not quiet: the per-cycle diagnostics this logs (clock skew, soc_max, charge
+                    # windows/settings) are the primary triage evidence in predbat.log for "the plan
+                    # is wrong" and inverter-write reports - tying them to object creation would
+                    # silence them for the life of the process after the first cycle (#5126 review).
+                    inverter.refresh_config(quiet=False)
                 except Exception as e:
                     self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
                     self.inverters = []
                     return False
-            inverter.update_status(self.minutes_now, quiet=not create)
+            inverter.update_status(self.minutes_now, quiet=False)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
