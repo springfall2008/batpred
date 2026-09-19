@@ -250,12 +250,21 @@ class Execute:
         discharge_rate = intent.get("discharge_rate", None)
         notify_charge = baseline is None or charge_rate == baseline.get("charge_rate", None)
         notify_discharge = baseline is None or discharge_rate == baseline.get("discharge_rate", None)
+
+        # A rate nobody claimed is only reset to maximum where the executor is actually driving
+        # the windows. With both off - Monitor, Control SoC only - an unclaimed rate is left
+        # exactly as it is. A rate something DID claim, executor or balancer, is always written.
+        reset_rates = intent.get("reset_rates", True)
         if charge_rate is None:
-            charge_rate = inverter.battery_rate_max_charge * MINUTE_WATT
+            if reset_rates:
+                inverter.adjust_charge_rate(int(inverter.battery_rate_max_charge * MINUTE_WATT), notify=notify_charge)
+        else:
+            inverter.adjust_charge_rate(int(charge_rate), notify=notify_charge)
         if discharge_rate is None:
-            discharge_rate = inverter.battery_rate_max_discharge * MINUTE_WATT
-        inverter.adjust_charge_rate(int(charge_rate), notify=notify_charge)
-        inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
+            if reset_rates:
+                inverter.adjust_discharge_rate(int(inverter.battery_rate_max_discharge * MINUTE_WATT), notify=notify_discharge)
+        else:
+            inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
 
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
@@ -340,6 +349,11 @@ class Execute:
             charge_rate = None
             discharge_rate = None
             rate_owner = "demand"
+            # Whether an unclaimed rate should be reset to maximum at all. This is what the
+            # resetCharge / resetDischarge flags carried: in Monitor and Control-SoC-only modes
+            # both windows are off and they started FALSE, so no rate was written. Predbat is
+            # watching in those modes, not controlling.
+            reset_rates = self.set_charge_window or self.set_export_window
             pause_charge_requested = False
             pause_discharge_requested = False
             resetPause = self.set_charge_window or self.set_export_window
@@ -801,6 +815,7 @@ class Execute:
                 "pause_charge": pause_charge_requested,
                 "pause_discharge": pause_discharge_requested,
                 "owner": rate_owner,
+                "reset_rates": reset_rates,
             }
 
             # Set the SoC just before or within the charge window
@@ -1300,6 +1315,15 @@ class Execute:
         if not self.inverter_rate_intent:
             return
         if not self.balance_inverters_enable or self.set_read_only:
+            return
+
+        # A poll can land between an inverter entering calibration and the next plan run, with the
+        # previous plan's intent still stored. balance_inverters() declines to act on a calibrating
+        # fleet, but applying the stale intent would still write planned rates over the full-rate
+        # calibration settings - every 60s until execute_plan next clears it. Drop it here instead.
+        if any(inverter.in_calibration for inverter in self.inverters):
+            self.log("Balance: an inverter is calibrating, discarding the stored rate intent")
+            self.inverter_rate_intent = {}
             return
         intent = {inverter_id: dict(value) for inverter_id, value in self.inverter_rate_intent.items()}
 

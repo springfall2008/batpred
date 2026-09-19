@@ -1125,6 +1125,83 @@ def test_poll_clamps_stored_rates_to_refreshed_ceilings(my_predbat):
     return failed
 
 
+def test_monitor_mode_writes_no_rates(my_predbat):
+    """
+    Monitor and Control-SoC-only modes must not touch the rate registers.
+
+    Both leave set_charge_window and set_export_window false, and Monitor is documented as not
+    controlling charging or discharging. The reset flags this refactor replaced started FALSE in
+    that case, so no rate call was made at all. Resolving an unclaimed intent to the inverter
+    maximum and writing it unconditionally would have Predbat setting full rates in the one mode
+    where it is meant to be watching.
+    """
+    failed = balance_fixture(my_predbat, "monitor_mode_setup")
+    if failed:
+        return failed
+    saved_charge_window = my_predbat.set_charge_window
+    saved_export_window = my_predbat.set_export_window
+    try:
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(500)
+            inverter.adjust_discharge_rate(500)
+        my_predbat.set_charge_window = False
+        my_predbat.set_export_window = False
+        my_predbat.execute_plan()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate != 500:
+                print("ERROR: monitor mode wrote inverter {} charge rate, got {} (2600 means it was reset to max)".format(inverter.id, inverter.charge_rate))
+                failed = True
+            if inverter.discharge_rate != 500:
+                print("ERROR: monitor mode wrote inverter {} discharge rate, got {}".format(inverter.id, inverter.discharge_rate))
+                failed = True
+    finally:
+        my_predbat.set_charge_window = saved_charge_window
+        my_predbat.set_export_window = saved_export_window
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+    return failed
+
+
+def test_poll_does_not_apply_stale_intent_during_calibration(my_predbat):
+    """
+    A poll landing just after an inverter starts calibrating still holds the previous plan's
+    intent, because execute_plan has not run since to clear it.
+
+    balance_inverters() returns untouched when it sees calibration, but the poll would apply that
+    stale intent anyway - writing planned rates over the full-rate calibration settings every 60s
+    until the next plan run. The calibrating inverter's own firmware is driving it at that point.
+    """
+    failed = balance_fixture(my_predbat, "poll_calibration_setup")
+    if failed:
+        return failed
+    saved = save_balance_state(my_predbat)
+    saved_calibration = [inverter.in_calibration for inverter in my_predbat.inverters]
+    try:
+        my_predbat.balance_inverters_enable = True
+        my_predbat.balance_inverters_crosscharge = True
+        for inverter in my_predbat.inverters:
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+        # The previous plan wanted 900W; an inverter has since entered calibration
+        my_predbat.inverter_rate_intent = {inverter.id: {"charge_rate": 900, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "charge", "reset_rates": True} for inverter in my_predbat.inverters}
+        my_predbat.inverters[1].in_calibration = True
+        my_predbat.rebalance_inverter_rates()
+
+        for inverter in my_predbat.inverters:
+            if inverter.charge_rate == 900:
+                print("ERROR: the poll applied the previous plan's {}W to inverter {} during calibration".format(inverter.charge_rate, inverter.id))
+                failed = True
+        if my_predbat.inverter_rate_intent:
+            print("ERROR: stale intent was kept during calibration, so the next poll would apply it again")
+            failed = True
+    finally:
+        for inverter, calibration in zip(my_predbat.inverters, saved_calibration):
+            inverter.in_calibration = calibration
+        restore_balance_state(my_predbat, saved)
+    return failed
+
+
 def test_stored_intent_is_the_executor_baseline(my_predbat):
     """
     The baseline the inverter poll re-applies must be the EXECUTOR's intent, not the balanced one.
@@ -3802,6 +3879,14 @@ def run_execute_tests(my_predbat):
         return failed
 
     failed |= test_read_only_mode_writes_no_rates(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_monitor_mode_writes_no_rates(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_poll_does_not_apply_stale_intent_during_calibration(my_predbat)
     if failed:
         return failed
 
