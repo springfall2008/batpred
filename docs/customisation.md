@@ -270,7 +270,8 @@ If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are sc
 This can be useful to adjust for your systems real performance.<BR>
 The comparison is made against the raw forecast your solar provider gave, recorded in the `now` attribute of `sensor.predbat_pv_forecast_h0`, rather than against Predbat's own calibrated figure,
 so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
-That history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - if you want to sanity-check the calibration factor by hand against the raw provider figure, multiply your result by `pv_scaling` first.<BR>
+That history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
+(equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
 Predbat relies upon your solar generation being accurate so if your export generation can be curtailed by your solar inverter or your electricity supplier in periods when there is excess electricity in the grid,
 then you must turn PV calibration Off as otherwise Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
