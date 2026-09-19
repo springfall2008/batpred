@@ -2098,7 +2098,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         Called every 15 seconds
         """
         if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
-            self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
+            # Only report db_primary when there is an interface to read it from - when ha_interface is None
+            # reading it here raised AttributeError before fatal_error could be set below (#5135)
+            if self.ha_interface:
+                self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
+            else:
+                self.log("Error: HA interface not active")
             self.fatal_error = True
             raise Exception("HA interface not active")
 
