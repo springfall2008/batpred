@@ -485,6 +485,17 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "eon_optimise": {
+        "class": "eon_optimise.EonOptimiseAPI",
+        "name": "E.ON Next Optimise (Amber app)",
+        "event_filter": "predbat_eon_optimise_",
+        "args": {
+            "enabled": {"required_true": True, "config": "eon_optimise_enable", "default": False},
+            "email": {"required": True, "secret": True, "config": "eon_optimise_email"},
+            "password": {"required": True, "secret": True, "config": "eon_optimise_password"},
+        },
+        "phase": 1,
+    },
     "kraken": {
         "class": "kraken.KrakenAPI",
         "name": "Kraken Energy (EDF/E.ON)",
