@@ -1387,6 +1387,18 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                     active = control.get("control_active")
                     if isinstance(active, list):
                         self.control_active = set(active)
+                    else:
+                        # A cache written before this key existed carries applied_payload alone.
+                        # Restoring that half on its own would preserve the very bug this fix is
+                        # for through the one restart that installs the fix, so infer the missing
+                        # half from applied_payload. Its keys are a safe lower bound and cannot arm
+                        # an inverter Predbat never drove: apply_dynamic_control is only reached
+                        # through apply_schedule/apply_reserve_live, which add to control_active
+                        # first (deye.py:1049/1065), or through _reconcile_control, which is
+                        # already gated on it. The reverse is not true - an apply that wrote
+                        # nothing leaves control_active set with no applied_payload entry - so this
+                        # restores a subset, never a superset.
+                        self.control_active = set(applied.keys())
                 else:
                     # Deliberately discarded. This cache asserts the inverter still holds
                     # what Predbat last wrote; after a long gap that may be false, and a

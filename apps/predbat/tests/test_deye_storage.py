@@ -417,6 +417,43 @@ def test_save_control_persists_control_active():
     assert not failed, "test_save_control_persists_control_active"
 
 
+def test_pre_upgrade_control_cache_infers_control_active():
+    """A cache predating the control_active key infers it from applied_payload, rather than restoring half the state.
+
+    Without this, upgrading to this fix would still lose control_active on the one restart
+    that installs it: the cache on disk was written by the old save_control, so it carries
+    applied_payload alone, and restoring that half on its own leaves _reconcile_control
+    gated off exactly as before. Inferring cannot arm an inverter Predbat never drove -
+    every applied_payload key got there through apply_schedule/apply_reserve_live, which add
+    to control_active first - so it restores a subset, never a superset.
+
+    An explicitly empty list is honoured rather than inferred: "the new format saved nothing
+    armed" and "this cache predates the key" are different states, and only the second may
+    be guessed at.
+    """
+    failed = False
+    old_format = StorageDeye()
+    old_format._mock_storage = FakeStorage(
+        data={DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}}},
+        ages={DEYE_CACHE_CONTROL: 1.0},
+    )
+    run_async(old_format.restore_state())
+    if old_format.control_active != {"INV1"}:
+        print(f"ERROR: a pre-upgrade cache should infer control_active from applied_payload, got {old_format.control_active}")
+        failed = True
+
+    explicit_empty = StorageDeye()
+    explicit_empty._mock_storage = FakeStorage(
+        data={DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}, "control_active": []}},
+        ages={DEYE_CACHE_CONTROL: 1.0},
+    )
+    run_async(explicit_empty.restore_state())
+    if explicit_empty.control_active:
+        print(f"ERROR: an explicitly empty control_active must be honoured, not inferred, got {explicit_empty.control_active}")
+        failed = True
+    assert not failed, "test_pre_upgrade_control_cache_infers_control_active"
+
+
 def test_fresh_applied_payload_suppresses_a_redundant_write():
     """A recent applied_payload survives a restart and stops the same payload being rewritten."""
     failed = False
@@ -762,6 +799,7 @@ def run_deye_storage_tests(my_predbat):
         ("stale_applied_payload", test_stale_applied_payload_is_discarded_but_orders_are_not),
         ("fresh_applied_payload_suppresses", test_fresh_applied_payload_suppresses_a_redundant_write),
         ("save_control_persists_control_active", test_save_control_persists_control_active),
+        ("pre_upgrade_infers_control_active", test_pre_upgrade_control_cache_infers_control_active),
         ("first_fails_without_telemetry", test_first_run_fails_when_telemetry_is_unavailable),
         ("first_succeeds_with_telemetry", test_first_run_succeeds_once_telemetry_arrives),
         ("success_timestamp_reported", test_successful_run_reports_a_success_timestamp),

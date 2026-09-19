@@ -176,6 +176,37 @@ def test_save_control_persists_control_active():
     assert not failed, "test_save_control_persists_control_active"
 
 
+def test_pre_upgrade_control_cache_infers_control_active():
+    """A cache predating the control_active key infers it from applied_payload, rather than restoring half the state.
+
+    Without this, upgrading to the #5138 fix would still lose control_active on the one
+    restart that installs it: the cache on disk was written by the old save_control, so it
+    carries applied_payload alone, and restoring that half on its own leaves
+    _reconcile_control gated off exactly as before. Inferring cannot arm an inverter Predbat
+    never drove - every applied_payload key got there through a path that adds to
+    control_active first - so it restores a subset, never a superset.
+
+    An explicitly empty list is honoured rather than inferred, which is why the restore
+    tests isinstance() and not truthiness: "the new format saved nothing armed" and "this
+    cache predates the key" are different states and only the second may be guessed at.
+    """
+    failed = False
+    old_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
+    old_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    run_async_local(old_format.restore_state())
+    if old_format.control_active != {"INV1"}:
+        print(f"ERROR: a pre-upgrade cache should infer control_active from applied_payload, got {old_format.control_active}")
+        failed = True
+
+    explicit_empty = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
+    explicit_empty.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}, "control_active": []}
+    run_async_local(explicit_empty.restore_state())
+    if explicit_empty.control_active:
+        print(f"ERROR: an explicitly empty control_active must be honoured, not inferred, got {explicit_empty.control_active}")
+        failed = True
+    assert not failed, "test_pre_upgrade_control_cache_infers_control_active"
+
+
 def test_tier_expiry_uses_the_seeded_clock():
     """Tier clocks are seeded from storage age, so cadence survives a restart."""
     failed = False
@@ -356,6 +387,7 @@ def run_sunsynk_storage_tests(my_predbat):
         ("restore_static_config", test_restore_reinstates_static_and_config),
         ("control_restore_bounded", test_control_cache_restore_is_time_bounded),
         ("save_control_persists_control_active", test_save_control_persists_control_active),
+        ("pre_upgrade_infers_control_active", test_pre_upgrade_control_cache_infers_control_active),
         ("tier_expiry", test_tier_expiry_uses_the_seeded_clock),
         ("telemetry_not_cached", test_telemetry_is_not_cached),
         ("restore_survives_raising_storage", test_restore_state_survives_a_raising_storage_and_retries_once_recovered),

@@ -1408,7 +1408,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
             control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
             self.applied_payload = control.get("applied_payload", {}) or {}
-            self.control_active = set(control.get("control_active") or [])
+            stored_active = control.get("control_active")
+            if isinstance(stored_active, list):
+                self.control_active = set(stored_active)
+            else:
+                # A cache written before this key existed carries applied_payload alone. Restoring
+                # that half on its own would preserve the very bug this fix is for through the one
+                # restart that installs the fix, so infer the missing half from applied_payload.
+                # Its keys are a safe lower bound and cannot arm an inverter Predbat never drove:
+                # apply_settings is only reached through the write button, which adds to
+                # control_active first (sunsynk.py:1260), or through _reconcile_control, which is
+                # already gated on it. The reverse is not true - a press whose write returned False
+                # leaves control_active set with no applied_payload entry - so this restores a
+                # subset, never a superset, and control_enable/read-only still gate every write.
+                self.control_active = set(self.applied_payload.keys())
         elif control_age is not None:
             self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
 
