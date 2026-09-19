@@ -9,7 +9,7 @@
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
 from unittest.mock import patch
-from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
 from deye_const import CONFIG_BATTERY_KEYS, DEYE_TOU_DAYS
 from tests.test_deye_api import MockDeye, MOCK_RATED_POWER
 from tests.test_infra import run_async as run_async_local
@@ -401,10 +401,10 @@ def test_run_clears_pending_order_and_count_on_success():
 def test_window_times_reach_the_slots_in_deye_format():
     """A HH:MM:SS window becomes HH:MM slot times and actually produces a window.
 
-    Live regression: every control payload for two hours carried only the filler times
-    (00:00/04:00/08:00/12:00/16:00/20:00) with grid charge off everywhere — the signature of
-    build_tou_slots seeing no window at all — because Predbat was writing the window times
-    to dummy entities this component never reads.
+    Live regression: every control payload for two hours carried only padding slots with
+    grid charge off everywhere — the signature of build_tou_slots seeing no window at all —
+    because Predbat was writing the window times to dummy entities this component never
+    reads.
     """
     failed = False
     d = MockDeye()
@@ -425,9 +425,10 @@ def test_window_times_reach_the_slots_in_deye_format():
     if not any(s[TOU_FIELD["grid_charge"]] and s[TOU_FIELD["soc"]] == 95 for s in slots):
         print(f"ERROR: no grid-charge slot was produced for the window: {slots}")
         failed = True
-    # The all-filler payload is exactly what the bug produced, so assert we are not back there
-    if times == TOU_FILLER_TIMES[:TOU_SLOT_COUNT]:
-        print(f"ERROR: slots are pure filler, the window was lost: {times}")
+    # The window's end must come back too: a payload carrying the start but no return to
+    # self-use is an unterminated window, the other way this can go wrong.
+    if "05:30" not in times:
+        print(f"ERROR: the window's end never reached the slots: {times}")
         failed = True
 
     # A HH:MM window still works, so a stale entity value cannot break the payload
@@ -1180,30 +1181,32 @@ def _acting_at(slots, minute, field, target_soc):
 
 
 def test_padding_slots_do_not_truncate_a_window():
-    """Every minute of a window must stay in that window's state, fillers included.
+    """Every minute of a window must stay in that window's state, padding included.
 
-    GH#5156: the 6-slot programme is padded out with fillers at fixed clock hours, and
-    those carried the idle baseline whatever time they landed on. A filler inside a window
-    is a boundary the inverter obeys, so grid charging stopped dead at 04:00/08:00/12:00
-    while Predbat's plan still showed the window running to its end - confirmed against the
-    reporter's captured payload and their inverter's own Time-of-Use table.
+    GH#5156: the 6-slot programme used to be padded out at fixed clock hours, and those
+    slots carried the idle baseline whatever time they landed on. A padding slot inside a
+    window is a boundary the inverter obeys, so grid charging stopped dead at
+    04:00/08:00/12:00 while Predbat's plan still showed the window running to its end -
+    confirmed against the reporter's captured payload and their inverter's own
+    Time-of-Use table.
 
-    Checked minute by minute rather than by counting slots, because the bug does not change
-    how many slots there are or what times they carry: the 12:00 slot is correctly present,
-    it simply says the wrong thing.
+    Checked minute by minute rather than by counting slots, because the bug did not change
+    how many slots there were or what times they carried: the 12:00 slot was correctly
+    present, it simply said the wrong thing. Placement is covered in test_tou_schedule;
+    this is the DEYE encoding's view of the same property.
     """
     failed = False
     d = MockDeye()
     cases = [
-        # (label, direction, start, end, target soc) - the two reported reproductions, an overnight
-        # window crossing 04:00 (the commonest shape, and the one that crosses a filler
-        # most often), and the export side of the same flaw.
+        # (label, direction, start, end, target soc) - the two reported reproductions, an
+        # overnight window (the commonest shape, and the one the old fixed-hour padding
+        # broke most often), and the export side of the same flaw.
         ("reported day 2", "charge", "09:45", "15:30", 100),
         ("reported day 1", "charge", "11:15", "15:30", 100),
         ("overnight charge", "charge", "00:30", "07:30", 100),
-        # 11:00-13:00 rather than any export window: the fillers are taken in list order,
-        # so only a window crossing 04:00, 08:00 or 12:00 gets one landing inside it. An
-        # export window over 16:00 pads to 04:00/08:00/12:00 and never reproduces the flaw.
+        # 11:00-13:00 specifically: under the old fixed-hour padding only a window crossing
+        # 04:00, 08:00 or 12:00 got a padding slot landing inside it, so an export window
+        # over 16:00 passed whether or not the bug was present and proved nothing.
         ("export over 12:00", "export", "11:00", "13:00", 20),
     ]
     for label, direction, start, end, target_soc in cases:
@@ -1227,27 +1230,26 @@ def test_padding_slots_do_not_truncate_a_window():
 
 
 def test_padding_slots_outside_a_window_stay_idle():
-    """A filler outside every window still carries the idle baseline.
+    """Every slot outside the window is idle in the DEYE encoding, padding included.
 
-    The other half of the GH#5156 fix: fillers derive their state at their own time, so one
-    that lands outside the windows must be unchanged - idle, no grid charge - rather than
-    inheriting a window's action across the rest of the day.
+    The other half of the GH#5156 fix. Placement is covered in test_tou_schedule; this is
+    the vendor's view of it - the padding must reach the wire as genuinely idle slots, with
+    grid charge and the sell flag both off, rather than inheriting a window's action.
     """
     failed = False
     d = MockDeye()
     sched = {"reserve": 8, "charge": {"enable": True, "soc": 100, "power": 12288, "start": "09:45", "end": "15:30"}, "export": {"enable": False, "soc": 0, "power": 12000}}
     slots = d.build_tou_slots(sched, current_soc=40, self_use_power=MOCK_RATED_POWER)
-    by_time = {slot[TOU_FIELD["time"]]: slot for slot in slots}
-    for outside in ("00:00", "04:00", "08:00"):
-        slot = by_time.get(outside)
-        if slot is None:
-            print(f"ERROR: expected a slot at {outside}, got {sorted(by_time)}")
+    for slot in slots:
+        inside = "09:45" <= slot[TOU_FIELD["time"]] < "15:30"
+        if inside and not slot[TOU_FIELD["grid_charge"]]:
+            print(f"ERROR: slot inside the window is not charging: {slot}")
             failed = True
-        elif slot[TOU_FIELD["grid_charge"]] or slot[TOU_FIELD["sell"]]:
-            print(f"ERROR: slot at {outside} is outside every window but is not idle: {slot}")
+        if not inside and (slot[TOU_FIELD["grid_charge"]] or slot[TOU_FIELD["sell"]]):
+            print(f"ERROR: slot outside the window is not idle: {slot}")
             failed = True
-    # And the window's own end returns to idle rather than running on.
-    end_slot = by_time.get("15:30")
+    # The window's own end must return to idle rather than running on.
+    end_slot = next((slot for slot in slots if slot[TOU_FIELD["time"]] == "15:30"), None)
     if end_slot is None or end_slot[TOU_FIELD["grid_charge"]]:
         print(f"ERROR: the window end slot must return to idle, got {end_slot}")
         failed = True

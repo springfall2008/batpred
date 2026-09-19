@@ -205,6 +205,7 @@ from tests.test_deye_config import run_deye_config_tests
 from tests.test_deye_api import run_deye_api_tests
 from tests.test_deye_oauth import run_deye_oauth_tests
 from tests.test_deye_control import run_deye_control_tests
+from tests.test_tou_schedule import run_tou_schedule_tests
 from tests.test_deye_publish import run_deye_publish_tests
 from tests.test_deye_storage import run_deye_storage_tests
 from tests.test_sunsynk_const import run_sunsynk_const_tests
@@ -581,6 +582,7 @@ def main():
         ("saving_session_zero_octopoints_free_slot", test_saving_session_zero_octopoints_joined_is_free_slot, "Joined zero octopoints session becomes a free import slot test (issue #4851)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
+        ("tou_schedule", run_tou_schedule_tests, "Shared TOU slot programme tests", False),
         ("deye_const", run_deye_const_tests, "DEYE constants tests", False),
         ("deye_config", run_deye_config_tests, "DEYE config/INVERTER_DEF tests", False),
         ("deye_api", run_deye_api_tests, "DEYE API tests", False),

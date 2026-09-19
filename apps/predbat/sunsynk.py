@@ -28,6 +28,7 @@ import aiohttp
 from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from tou_schedule import TouScheduleMixin
 from sunsynk_const import (
     SUNSYNK_REGIONS,
     SUNSYNK_ENDPOINTS,
@@ -63,7 +64,6 @@ from sunsynk_const import (
     SUNSYNK_DAY_FIELDS,
     TOU_FIELD,
     TOU_SLOT_COUNT,
-    TOU_FILLER_TIMES,
     FREEZE_EXPORT_SOC,
     SUNSYNK_SETTLE_POLLS,
     SUNSYNK_TTL_STATIC,
@@ -80,13 +80,16 @@ from sunsynk_const import (
 )
 
 
-class SunsynkAPI(ComponentBase, OAuthMixin):
+class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     """Sunsynk Connect cloud API component."""
 
     # Trace every API request/response while the Sunsynk integration beds in. Nobody on
     # the project has a Sunsynk account, so a tester's log is the only evidence available
     # for the inferred wire format; flip to False once the format is confirmed.
     api_debug = True
+
+    # How many slots the TOU programme holds, read by TouScheduleMixin.build_tou_slots.
+    TOU_SLOTS = TOU_SLOT_COUNT
 
     def initialize(
         self,
@@ -735,43 +738,6 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """
         return {"behaviour": "freeze_export", "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": int(reserve), "power": 0}
 
-    @staticmethod
-    def _to_slot_time(value):
-        """Normalise a schedule time to the HH:MM Sunsynk's slots require.
-
-        The control entities carry HH:MM:SS because that is what Predbat writes (see
-        INVERTER_DEF charge_time_format), so the seconds are dropped here — at the one
-        point a schedule time becomes a slot time.
-        """
-        parts = str(value or "00:00").split(":")
-        if len(parts) < 2:
-            return "00:00"
-        try:
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-        except ValueError:
-            return "00:00"
-
-    @staticmethod
-    def _hm_to_minutes(hm):
-        """Convert an HH:MM string to minutes since midnight (0 on bad input)."""
-        try:
-            parts = str(hm).split(":")
-            return int(parts[0]) * 60 + int(parts[1])
-        except (ValueError, IndexError):
-            return 0
-
-    def _window_active(self, window, now_minutes):
-        """Return True if an enabled window covers now_minutes, handling a midnight wrap."""
-        if not window.get("enable") or not window.get("start") or not window.get("end"):
-            return False
-        start = self._hm_to_minutes(self._to_slot_time(window["start"]))
-        end = self._hm_to_minutes(self._to_slot_time(window["end"]))
-        if start == end:
-            return False
-        if start < end:
-            return start <= now_minutes < end
-        return now_minutes >= start or now_minutes < end
-
     def _self_use_slot(self, start_time, reserve, self_use_power):
         """Build a self-use slot holding at the reserve SOC.
 
@@ -805,96 +771,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return self._action_slot(start_time, state)
         return self._self_use_slot(start_time, reserve, self_use_power)
 
-    def build_tou_slots(self, schedule, current_soc, self_use_power):
-        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
-
-        Slots are sequential intervals ("from this start until the next slot's start") and
-        Sunsynk documents that they MUST be set chronologically, so every start is written
-        distinct and ascending. A slot is an interval whatever its grid-charge flag says,
-        which is what lets a filler slot terminate the charge window before it.
-
-        Segment boundaries are collected from a 00:00 baseline plus each enabled window's
-        start (its action) and end (back to the baseline), then padded with fillers and
-        trimmed to the earliest, most imminent TOU_SLOT_COUNT.
-
-        The baseline is DERIVED rather than assumed to be self-use, because "no window is
-        active" is not always demand: a freeze export is exactly that state plus a zero
-        charge rate (see derive_control_state). Every slot the schedule does not otherwise
-        claim - the 00:00 start, each window's end, and the fillers - therefore carries the
-        baseline, so a freeze covers the whole programme instead of being defeated by the
-        first filler that happens to cover the current time.
-
-        That coarseness is deliberate. Predbat never tells this component when a freeze
-        ends - it disables the export window rather than describing it - so there is no
-        boundary to write. Pinning the freeze to "now" instead would move every slot time
-        on every tick and turn the applied-payload change detection into a write per cycle.
-        The programme is rebuilt whenever Predbat's plan changes (run() applies each tick
-        for control_active inverters), so it reverts to self-use as soon as the charge rate
-        comes back.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
-        segments = {"00:00": dict(baseline)}
-        for direction in ("charge", "export"):
-            window = schedule.get(direction, {})
-            if not (window.get("enable") and window.get("start") and window.get("end")):
-                continue
-            start_time = self._to_slot_time(window["start"])
-            end_time = self._to_slot_time(window["end"])
-            if start_time == end_time:
-                # Mirrors the guard in _window_active: a zero-length window has no interval
-                # to act over. Compared on the NORMALISED times so "02:00:00" vs "02:00"
-                # is caught too. Without this, an enable event that arrives before the time
-                # fields (both still the "00:00:00" default) would add an action segment at
-                # 00:00 with no matching return-to-self-use segment - an unterminated,
-                # multi-hour full-power grid-charge/export slot even though _active_state
-                # correctly reports the window inactive.
-                continue
-            intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
-            intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
-            segments[start_time] = self.derive_control_state(intent, current_soc)
-            segments.setdefault(end_time, dict(baseline))
-
-        slots = []
-        for start_time, state in sorted(segments.items(), key=lambda item: item[0]):
-            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
-
-        used = {slot["time"] for slot in slots}
-        for filler in TOU_FILLER_TIMES:
-            if len(slots) >= TOU_SLOT_COUNT:
-                break
-            if filler not in used:
-                slots.append(self._slot_for(filler, baseline, reserve, self_use_power))
-                used.add(filler)
-        return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
-
     def _now_minutes(self):
         """Return minutes since local midnight, for time-aware window selection."""
         try:
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
-
-    def _active_state(self, schedule, current_soc, now_minutes):
-        """Derive the control state for the window active at now_minutes, else idle.
-
-        Sunsynk has a single global work mode, so the top-level mode must follow the
-        window active RIGHT NOW rather than a static export-first precedence: otherwise
-        an export window enabled elsewhere in the day would pin the mode to selling-first
-        and block the charge window's grid charging.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        charge = schedule.get("charge", {})
-        export = schedule.get("export", {})
-        # The charge rate is carried even when no window is active: with both windows shut
-        # a zero rate is Predbat's Freeze Export, and the mode has to follow it rather than
-        # sit in demand (see derive_control_state).
-        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
-        if self._window_active(export, now_minutes):
-            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
-        elif self._window_active(charge, now_minutes):
-            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
-        return self.derive_control_state(intent, current_soc)
 
     def _owned_payload(self, sn, schedule, current_soc, now_minutes):
         """Build only the fields Predbat owns, with ZERO network I/O.
