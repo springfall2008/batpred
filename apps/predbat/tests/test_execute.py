@@ -303,6 +303,11 @@ def run_execute_test(
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
         inverter.charge_end_time_minutes = inverter_charge_time_minutes_end
+        # Reset the immediate-control sentinels so a scenario that doesn't call
+        # adjust_charge_immediate()/adjust_export_immediate() this cycle reads as "untouched" (-1)
+        # rather than inheriting whatever the previous scenario in this run happened to leave behind.
+        inverter.immediate_charge_soc_target = -1
+        inverter.immediate_discharge_soc_target = -1
         if soc_kw_array:
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
@@ -443,11 +448,18 @@ def run_execute_test(
         if assert_immediate_charge_soc_target_array:
             assert_soc_target_force = assert_immediate_charge_soc_target_array[inverter.id]
         else:
-            assert_soc_target_force = (
-                assert_immediate_soc_target
-                if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
-                else 0
-            )
+            charging_immediate_statuses = ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
+            exporting_statuses = ["Exporting", "Freeze exporting"]
+            status_base = assert_status.split(" [")[0]
+            if assert_status in charging_immediate_statuses:
+                assert_soc_target_force = assert_immediate_soc_target
+            elif any(s in status_base for s in exporting_statuses):
+                # Untouched (-1), not the charge-stop's target: while exporting the charge-off block
+                # is skipped, since adjust_export_immediate() already stopped charging as part of
+                # starting the export (GH#4165, GH#4641).
+                assert_soc_target_force = -1
+            else:
+                assert_soc_target_force = 0
             if not set_charge_window:
                 assert_soc_target_force = -1
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
@@ -2465,9 +2477,32 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
-    failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only", reserve=0)
     failed |= run_execute_test(
-        my_predbat, "charge_axle_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, set_read_only_axle=True, assert_status="Read-Only (Axle)", reserve=0
+        my_predbat,
+        "charge_read_only",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        read_only=True,
+        assert_status="Read-Only",
+        reserve=0,
+        assert_immediate_charge_soc_target_array=[-1, -1],
+        assert_immediate_discharge_soc_target_array=[-1, -1],
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_axle_read_only",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        read_only=True,
+        set_read_only_axle=True,
+        assert_status="Read-Only (Axle)",
+        reserve=0,
+        assert_immediate_charge_soc_target_array=[-1, -1],
+        assert_immediate_discharge_soc_target_array=[-1, -1],
     )
 
     failed |= run_execute_test(
@@ -3104,6 +3139,12 @@ def run_execute_tests(my_predbat):
         assert_status="Exporting",
         # A fleet acting in unison must not repeat the headline status on every segment (v8.48.4 regression)
         assert_status_extra=" target 100%-0% / 100%-0%",
+        # set_charge_window and set_export_window both true, actively exporting: this is the
+        # combination that used to also fire an extra adjust_charge_immediate(0) call after the
+        # export was started, clobbering a shared mode-select entity back off on service-template
+        # inverters such as Tesla (GH#4165, GH#4641). No assert_immediate_charge_soc_target_array
+        # here means it defaults to "untouched" (-1) for an "Exporting" status - i.e.
+        # adjust_charge_immediate() must not have been called at all this cycle.
         car_slot=charge_window_best_slot,
         car_charging_from_battery=True,
         assert_force_export=True,
