@@ -391,7 +391,7 @@ def test_save_control_persists_control_active():
     """save_control must persist control_active, not just applied_payload/orders.
 
     Believed to be the same bug as batpred#5138 (Sunsynk), found by code reading rather
-    than a reported deye.py incident: without this, _reconcile_control (deye.py:1664),
+    than a reported deye.py incident: without this, _reconcile_control(),
     gated on control_active, silently stops writing to every inverter after a restart
     until an unrelated event happens to re-add it - including one meant to stop an
     export already in progress. Fixed the same way as sunsynk.py and alphaess.py, which
@@ -452,6 +452,45 @@ def test_pre_upgrade_control_cache_infers_control_active():
         print(f"ERROR: an explicitly empty control_active must be honoured, not inferred, got {explicit_empty.control_active}")
         failed = True
     assert not failed, "test_pre_upgrade_control_cache_infers_control_active"
+
+
+def test_invalidated_payload_still_restores_control_active():
+    """An applied_payload emptied on purpose must not take control_active down with it.
+
+    run() pops a serial from applied_payload once its order has stayed unconfirmed past
+    DEYE_ORDER_MAX_POLLS - deliberately, so the next apply re-writes - and calls
+    save_control() in the same cycle. On a single-inverter install that persists an empty
+    payload beside a live control_active. Gating the restore on a non-empty payload would
+    discard both, leaving _reconcile_control behind an empty control_active on exactly the
+    inverter that had just been marked for a forced re-write.
+    """
+    failed = False
+    d = StorageDeye()
+    d._mock_storage = FakeStorage()
+    d.applied_payload = {"INV1": {"deviceSn": "INV1", "touAction": "on"}}
+    d.control_active = {"INV1"}
+    d.applied_payload.pop("INV1", None)  # what run() does when an order goes unconfirmed
+    run_async(d.save_control())
+    saved = d._mock_storage.data.get(DEYE_CACHE_CONTROL, {})
+
+    restored = StorageDeye()
+    restored._mock_storage = FakeStorage(data={DEYE_CACHE_CONTROL: saved}, ages={DEYE_CACHE_CONTROL: 1.0})
+    run_async(restored.restore_state())
+    if restored.control_active != {"INV1"}:
+        print(f"ERROR: control_active must survive an intentionally emptied applied_payload, got {restored.control_active}")
+        failed = True
+    if restored.applied_payload:
+        print(f"ERROR: the emptied applied_payload must stay empty so the next apply re-writes, got {restored.applied_payload}")
+        failed = True
+
+    # The age bound is unchanged by the above: past it both halves still go together.
+    stale = StorageDeye()
+    stale._mock_storage = FakeStorage(data={DEYE_CACHE_CONTROL: saved}, ages={DEYE_CACHE_CONTROL: DEYE_RESTORE_MAX_CONTROL + 1.0})
+    run_async(stale.restore_state())
+    if stale.control_active:
+        print(f"ERROR: a stale control cache must still discard control_active, got {stale.control_active}")
+        failed = True
+    assert not failed, "test_invalidated_payload_still_restores_control_active"
 
 
 def test_fresh_applied_payload_suppresses_a_redundant_write():
@@ -800,6 +839,7 @@ def run_deye_storage_tests(my_predbat):
         ("fresh_applied_payload_suppresses", test_fresh_applied_payload_suppresses_a_redundant_write),
         ("save_control_persists_control_active", test_save_control_persists_control_active),
         ("pre_upgrade_infers_control_active", test_pre_upgrade_control_cache_infers_control_active),
+        ("invalidated_payload_keeps_control_active", test_invalidated_payload_still_restores_control_active),
         ("first_fails_without_telemetry", test_first_run_fails_when_telemetry_is_unavailable),
         ("first_succeeds_with_telemetry", test_first_run_succeeds_once_telemetry_arrives),
         ("success_timestamp_reported", test_successful_run_reports_a_success_timestamp),

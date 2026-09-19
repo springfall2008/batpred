@@ -121,7 +121,7 @@ def test_control_cache_restore_is_time_bounded():
     next write would be wrongly skipped and the battery would silently diverge.
 
     control_active is bounded alongside applied_payload, not just restored unconditionally:
-    _reconcile_control (sunsynk.py:1346) gates every write on control_active, so restoring it
+    _reconcile_control() gates every write on control_active, so restoring it
     past the same staleness bound would let a write-skipping restart still claim to be
     actively controlling an inverter it has not actually confirmed for a long time.
     """
@@ -151,8 +151,8 @@ def test_control_cache_restore_is_time_bounded():
 def test_save_control_persists_control_active():
     """save_control must persist control_active, not just applied_payload.
 
-    Regression test for #5138: without this, _reconcile_control (gated on control_active,
-    sunsynk.py:1346) silently stops writing to every inverter after a restart, until an
+    Regression test for #5138: without this, _reconcile_control(), which is gated on
+    control_active, silently stops writing to every inverter after a restart, until an
     unrelated event happens to re-add it - including one meant to stop an export already
     in progress. alphaess.py's save_control already persists control_active for the same
     reason; this asserts sunsynk.py's matches it.

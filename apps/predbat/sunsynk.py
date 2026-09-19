@@ -1420,7 +1420,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
         # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
         # control_active is restored alongside applied_payload, not just it: control_active is
-        # what actually lets _reconcile_control write at all (sunsynk.py:1346), so restoring
+        # what actually lets _reconcile_control() write at all, so restoring
         # applied_payload without it would still leave every inverter silently unmanaged after a
         # restart. Past the age bound both are dropped together, so a stale cache still forces a
         # fresh write-button press to recommit, rather than trusting old control state indefinitely.
@@ -1437,7 +1437,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 # restart that installs the fix, so infer the missing half from applied_payload.
                 # Its keys are a safe lower bound and cannot arm an inverter Predbat never drove:
                 # apply_settings is only reached through the write button, which adds to
-                # control_active first (sunsynk.py:1260), or through _reconcile_control, which is
+                # control_active first, or through _reconcile_control(), which is
                 # already gated on it. The reverse is not true - a press whose write returned False
                 # leaves control_active set with no applied_payload entry - so this restores a
                 # subset, never a superset, and control_enable/read-only still gate every write.

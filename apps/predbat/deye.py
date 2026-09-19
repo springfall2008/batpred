@@ -1375,26 +1375,34 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             if isinstance(counts, dict):
                 self.order_poll_count = counts
             applied = control.get("applied_payload")
-            if isinstance(applied, dict) and applied:
+            active = control.get("control_active")
+            # Either half is enough to be worth restoring, and neither gates the other. An
+            # emptied applied_payload is a normal state, not an absent cache: run() pops a
+            # serial whose order stayed unconfirmed past DEYE_ORDER_MAX_POLLS and then calls
+            # save_control() in the same cycle, so a control_active saved right beside an empty
+            # payload is current. Requiring a non-empty payload here would discard it and leave
+            # _reconcile_control gated off after a restart - the exact failure this fix is for,
+            # on the one inverter that had just been told to re-write.
+            if (isinstance(applied, dict) and applied) or (isinstance(active, list) and active):
                 if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
-                    self.applied_payload = applied
+                    if isinstance(applied, dict):
+                        self.applied_payload = applied
                     # Restored alongside applied_payload, not just it: control_active is what
-                    # actually lets _reconcile_control write at all (deye.py:1664), so restoring
+                    # actually lets _reconcile_control() write at all, so restoring
                     # applied_payload without it would still leave every inverter silently
                     # unmanaged after a restart. Past the age bound both are dropped together,
                     # so a stale cache still forces a fresh write-button press to recommit,
                     # rather than trusting old control state indefinitely.
-                    active = control.get("control_active")
                     if isinstance(active, list):
                         self.control_active = set(active)
-                    else:
+                    elif isinstance(applied, dict):
                         # A cache written before this key existed carries applied_payload alone.
                         # Restoring that half on its own would preserve the very bug this fix is
                         # for through the one restart that installs the fix, so infer the missing
                         # half from applied_payload. Its keys are a safe lower bound and cannot arm
                         # an inverter Predbat never drove: apply_dynamic_control is only reached
-                        # through apply_schedule/apply_reserve_live, which add to control_active
-                        # first (deye.py:1049/1065), or through _reconcile_control, which is
+                        # through apply_schedule()/apply_reserve_live(), which add to
+                        # control_active first, or through _reconcile_control(), which is
                         # already gated on it. The reverse is not true - an apply that wrote
                         # nothing leaves control_active set with no applied_payload entry - so this
                         # restores a subset, never a superset.
