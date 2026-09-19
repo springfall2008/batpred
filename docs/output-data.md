@@ -703,7 +703,7 @@ The solar sensor attributes include:
 - remaining/remaining10/remaining90/remainingCL - forecast solar generation for the remainder of the day
 - detailedForecast - a half hourly breakdown of solar forecast for the day, with similar PV estimate, 10% estimate, 90% estimate and calibrated estimate values
 
-- binary_sensor.predbat_dawn - Set to 'on' when the current time is past dawn (forecast solar power at or above [low_power_pv_threshold_w](customisation.md#inverter-control-options)), 'off' before dawn or when the underlying split (which requires **switch.predbat_combine_charge_slots**) isn't in use. This reflects the same dawn boundary Predbat uses to split a low-power charge window at sunrise, not whether solar is producing enough to be useful right now.
+- binary_sensor.predbat_dawn - Set to 'on' when the current time is past dawn (forecast solar power at or above [low_power_pv_threshold_w](customisation.md#inverter-control-options)), 'off' before dawn or when no PV forecast is available. This reflects the same dawn boundary Predbat uses to split a low-power charge window at sunrise, not whether solar is producing enough to be useful right now.
 
 ## Dummy inverter sensors
 
