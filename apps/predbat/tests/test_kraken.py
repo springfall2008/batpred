@@ -1193,6 +1193,72 @@ def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
     api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
 
 
+def test_fetch_rates_rest_400_day_night_tariff_falls_back_to_graphql():
+    """async_fetch_rates() falls back to GraphQL when REST returns 400 on a day/night tariff.
+
+    GH#5166: EDF day/night-structured tariffs (e.g. E-FLAT2R-EDF_STANDARD_VARIABLE-D) have no
+    /standard-unit-rates/ resource — the API answers HTTP 400 "This tariff has day and night
+    rates, not standard." That is as permanent as a 404, so it must reach the GraphQL fallback
+    instead of being logged as a failure on every cycle. Auth cannot change a 400, so unlike the
+    404 path there must be no authenticated retry of the same URL.
+    """
+    api = make_kraken_api(provider="edf", account_id="A-9C006563")
+    api.current_tariff = {"tariff_code": "E-FLAT2R-EDF_STANDARD_VARIABLE-D", "product_code": "EDF_STANDARD_VARIABLE"}
+    api.import_mpan = "1900000000456"
+    api.failures_total = 0
+
+    graphql_rates = [{"value_inc_vat": 27.5, "value_exc_vat": round(27.5 / 1.05, 4), "valid_from": "2026-09-19T00:00:00Z", "valid_to": "2026-09-21T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_response = AsyncMock()
+    mock_response.status = 400
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-9C006563")
+    assert mock_session.get.call_count == 1, f"400 must not trigger an authenticated retry, got {mock_session.get.call_count} REST requests"
+    assert api.failures_total == 0, "A recovered 400 must not count as a failure"
+
+
+def test_fetch_rates_rest_400_no_fallback_without_import_mpan():
+    """async_fetch_rates() returns None and counts a failure when REST 400s with no MPAN to fall back on."""
+    api = make_kraken_api(provider="edf")
+    api.current_tariff = {"tariff_code": "E-FLAT2R-EDF_STANDARD_VARIABLE-D", "product_code": "EDF_STANDARD_VARIABLE"}
+    api.import_mpan = None  # Not yet discovered
+    api.failures_total = 0
+    api.async_fetch_rates_graphql = AsyncMock()
+
+    mock_response = AsyncMock()
+    mock_response.status = 400
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is None
+    api.async_fetch_rates_graphql.assert_not_called()
+    assert api.failures_total == 1
+
+
 def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
     """async_fetch_rates() returns None (no GraphQL fallback) for transient errors like 500/429."""
     for status_code in (429, 500, 503):

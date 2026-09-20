@@ -94,9 +94,10 @@ KRAKEN_ACCOUNT_QUERY = """{{
 # Viewer query to discover all account numbers under the authenticated user
 KRAKEN_VIEWER_QUERY = """{ viewer { accounts { number } } }"""
 
-# GraphQL applicableRates query — fallback when REST product endpoint returns 404
-# (product code removed/replaced while customer is still on the tariff, or TOU tariff
-# with no /standard-unit-rates/ REST endpoint e.g. E-TOU-* tariffs on E.ON Next).
+# GraphQL applicableRates query — fallback when the REST product endpoint cannot serve the
+# tariff: 404 (product code removed/replaced while customer is still on the tariff, or a private
+# product such as an EDF SEG export tariff) or 400 (tariff has no /standard-unit-rates/ REST
+# endpoint, e.g. E-TOU-* on E.ON Next or day/night-structured EDF tariffs).
 # Returns value (pence/kWh inc VAT), validFrom, validTo for the requested window.
 # applicableRates is a Relay-style connection (ApplicableRateConnectionTypeConnection),
 # so the rate fields live under edges { node { ... } }, not directly on the field. The
@@ -205,6 +206,17 @@ KRAKEN_BASE_URLS = {
 
 # Auth error codes that trigger token refresh + retry
 KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")
+
+# REST statuses meaning "the products API cannot serve this tariff's rates", as opposed to a
+# transient outage (429/500/503) — these are the ones worth falling back to GraphQL for.
+#  404/410 — the product is not in the REST API at all: a private product (EDF SEG / export
+#            tariffs) or one retired while the customer is still on it.
+#  400     — the tariff exists but has no /standard-unit-rates/ resource. Day/night-structured
+#            tariffs answer "This tariff has day and night rates, not standard." (GH#5166),
+#            which is permanent for the tariff, not a request the customer can fix.
+# Auth makes no difference to a 400, so the authenticated retry stays on 404/410 only.
+KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES = (404, 410)
+KRAKEN_REST_RATES_UNAVAILABLE_STATUSES = (400,) + KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES
 
 # applicableRates connection pagination — request this many nodes per page, cap total pages
 # so a runaway cursor can't loop forever. 100 * 20 = 2000 half-hourly periods (~41 days) is far
@@ -835,7 +847,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         REST auth — EDF SEG / export tariffs are private products that 404 unauthenticated.
         Only if the authenticated retry also fails do we fall back to the GraphQL applicableRates
         query (which is not available on every provider), so export rates are recovered wherever
-        possible.
+        possible. A 400 goes straight to that fallback without the authenticated retry: it means
+        the tariff has no /standard-unit-rates/ resource (day/night-structured tariffs), which
+        auth cannot change.
         """
         tariff = tariff or self.current_tariff
         if not tariff:
@@ -855,20 +869,22 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         results, err = await self._fetch_rates_rest(url, authenticate=False)
 
         # 2) On a permanent "not found", the product is likely private — retry authenticated.
-        if err in (404, 410):
+        if err in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES:
             self.log(f"Kraken: REST rates HTTP {err} for {tariff['tariff_code']}, retrying authenticated")
             results, err = await self._fetch_rates_rest(url, authenticate=True)
 
         if err is not None:
-            # A 404/410 with a known MPAN is the EXPECTED path for private products — EDF SEG
-            # export tariffs are never served by the REST products API, so this fires on every
-            # export fetch. Recover via GraphQL applicableRates and only count a failure if that
-            # also comes back empty; otherwise the failure counter would climb every cycle
-            # despite the fetch succeeding. Transient errors (429/500/503) fall through to the
-            # genuine-failure path below.
-            if err in (404, 410) and fallback_mpan:
+            # A "REST cannot serve this tariff" status with a known MPAN is the EXPECTED path for
+            # two tariff families: EDF SEG export tariffs are private products never served by the
+            # REST products API (404), and day/night-structured tariffs have no standard-unit-rates
+            # resource at all (400). Both fire on every fetch. Recover via GraphQL applicableRates
+            # and only count a failure if that also comes back empty; otherwise the failure counter
+            # would climb every cycle despite the fetch succeeding. Transient errors (429/500/503)
+            # fall through to the genuine-failure path below.
+            if err in KRAKEN_REST_RATES_UNAVAILABLE_STATUSES and fallback_mpan:
                 kind = "export" if is_export else "import"
-                self.log(f"Kraken: REST rates HTTP {err} for {tariff['tariff_code']} (private product), using GraphQL applicableRates for {kind} MPAN {fallback_mpan}")
+                reason = "private product" if err in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES else "tariff has no standard-unit-rates endpoint"
+                self.log(f"Kraken: REST rates HTTP {err} for {tariff['tariff_code']} ({reason}), using GraphQL applicableRates for {kind} MPAN {fallback_mpan}")
                 rates = await self.async_fetch_rates_graphql(fallback_mpan, account_id=fallback_account)
                 if rates is None:
                     self.failures_total += 1
