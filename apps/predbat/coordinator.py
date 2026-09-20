@@ -596,11 +596,28 @@ class Coordinator:
         return catalogue
 
     def _component_status(self, reports, reported_at):
-        """A status for every component the registry knows, not only those that reported.
+        """A status for every component that reported, plus every one that was expected to and did not.
 
-        A component that never reports is not an error: in this version only a handful report
-        at all, so "no_report" has to read differently from "started but never answered".
-        A "load_error" status deliberately carries no message. components.load_error() is the raw
+        Deliberately NOT a status for every component in the registry. COMPONENT_LIST holds 30
+        components and five of them can report at all, so listing the registry made the map ~30
+        entries of which a handful said anything - the rest were a static list already readable in
+        components.py, restated on every dump and in sensor.predbat_discovery's attributes. Two
+        kinds of entry are dropped, and they are dropped for the same reason: silence that carries
+        no information.
+
+        - A component the user never configured. Its absence from the map IS its status.
+        - An active component with no build_discovery() at all - storage, web, db, ha and most of
+          the rest. It is working exactly as intended and is never going to report, so "no_report"
+          against it says nothing. This is what separates it from the entry below.
+
+        What survives is the set worth reading: everything that reported, and everything that was
+        capable of reporting and did not. That second group is the whole point - a component
+        carrying a build_discovery() that never filed is either broken or starved, and it reads as
+        an anomaly here precisely because its silent, reporter-less neighbours are gone.
+
+        A "load_error" component is kept whatever it can do: construction failed, so there is no
+        instance to ask about a reporter, and a component that would not build is an anomaly on any
+        reading. Its status deliberately carries no message. components.load_error() is the raw
         str() of whatever exception construction raised, which is free text this document has no
         way to bound: every other value here reaches the catalogue through a typed container that
         cannot hold a name or a credential however the schema grows, and one unbounded string
@@ -609,6 +626,7 @@ class Coordinator:
         components.initialize() logs it (with a traceback for anything but an ImportError) and
         inverter_source_status() puts it on the component-status entity - so a maintainer reading
         a bug report still has it, just not from this document.
+
         reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
         lock as reports so the two agree with each other; it is only ever populated for a status
         "ok" component - one the coordinator has actually heard from. "automatic" is included only
@@ -621,17 +639,17 @@ class Coordinator:
         names = components.get_all() if components else sorted(reports)
         out = {}
         for name in names:
-            entry = {"status": "not_configured", "reported_at": None}
             if name in reports:
-                entry["status"] = "ok"
+                entry = {"status": "ok", "reported_at": reported_at.get(name)}
                 if "automatic" in reports[name]:
                     entry["automatic"] = reports[name]["automatic"]
                 entry["counts"] = {section: len(reports[name][section]) for section in SECTION_SPEC if reports[name].get(section)}
-                entry["reported_at"] = reported_at.get(name)
             elif components and components.load_error(name):
-                entry["status"] = "load_error"
-            elif components and components.is_active(name):
-                entry["status"] = "no_report" if components.is_alive(name) else "not_started"
+                entry = {"status": "load_error", "reported_at": None}
+            elif components and components.is_active(name) and _can_report(components.get_component(name)):
+                entry = {"status": "no_report" if components.is_alive(name) else "not_started", "reported_at": None}
+            else:
+                continue
             out[name] = entry
         return out
 
@@ -835,6 +853,22 @@ def _validate_record(record, section, component_name, log):
             if sub_out:
                 out[sub_name] = sub_out
     return out
+
+
+def _can_report(component):
+    """Whether this component instance is one the catalogue should ever expect a report from.
+
+    A component opts in to discovery by defining build_discovery() - the same test
+    ComponentBase.refresh_discovery() makes before doing anything. Anything else is working as
+    intended by staying silent, so _component_status() leaves it out rather than filing a
+    "no_report" against it.
+
+    An instance that cannot be resolved at all (None) counts as reportable. is_active() is true
+    exactly when get_component() returns a real object, so this should not arise in practice; if
+    it ever does, a redundant line in the map costs a reader a moment, whereas wrongly hiding a
+    component that failed to report costs them the bug.
+    """
+    return component is None or hasattr(component, "build_discovery")
 
 
 def validate_report(report, component_name, log):

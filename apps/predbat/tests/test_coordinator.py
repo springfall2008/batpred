@@ -328,7 +328,12 @@ def test_catalogue_reassembles_so_a_post_assembly_report_reaches_it():
 
 
 def test_assemble_component_status():
-    """Every registry entry gets a status, distinguishing silent from timed out from failed from absent."""
+    """A configured component gets a status distinguishing silent from timed out from failed.
+
+    A component the user never configured is absent entirely rather than carrying a status: the
+    registry holds 30 entries and a handful can report, so listing them all restated a static list
+    from components.py on every dump. Absence from the map is its status.
+    """
     base, coordinator = _coordinator()
     base.components = _StubRegistry(active=["givtcp", "octopus", "gecloud"], alive=["givtcp", "octopus"],
                                     errors={"fox": "No module named 'protobuf'"},
@@ -336,19 +341,52 @@ def test_assemble_component_status():
     coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A"}]})
     components = coordinator.assemble()["components"]
     assert components["givtcp"]["status"] == "ok"
-    assert components["octopus"]["status"] == "no_report"      # alive, simply does not report yet
+    assert components["octopus"]["status"] == "no_report"      # alive, capable of reporting, silent
     assert components["gecloud"]["status"] == "not_started"    # active but not alive
     assert components["fox"]["status"] == "load_error"
-    assert components["solis"]["status"] == "not_configured"
-    print("PASS: component statuses derived")
+    assert "solis" not in components, "a component that was never configured must not appear at all"
+    print("PASS: component statuses derived, unconfigured components omitted")
+    return 0
+
+
+class _SilentComponent:
+    """A component with no build_discovery() - working as intended, never going to report."""
+
+
+class _ReportingComponent:
+    """A component that carries a reporter, so silence from it is an anomaly worth showing."""
+
+    def build_discovery(self):
+        """Report nothing - this stub exists only to be recognised as reporter-carrying."""
+        return None
+
+
+def test_component_status_omits_components_that_cannot_report():
+    """An active component with no build_discovery() is left out; one that has it and stayed silent is kept.
+
+    This is the distinction that makes the map worth reading. Before it, "no_report" covered both
+    storage/web/db/ha - which are working perfectly and will never report - and a component whose
+    reporter genuinely failed to fire. The first group is the overwhelming majority, so it buried
+    the second. Dropping it is what turns a silent reporter back into a visible anomaly.
+    """
+    base, coordinator = _coordinator()
+    base.components = _StubRegistry(
+        active=["storage", "givtcp"],
+        alive=["storage", "givtcp"],
+        all_names=["storage", "givtcp"],
+        components={"storage": _SilentComponent(), "givtcp": _ReportingComponent()},
+    )
+    components = coordinator.assemble()["components"]
+    assert "storage" not in components, "a component with no reporter must not be filed as no_report"
+    assert components["givtcp"]["status"] == "no_report", "a component that CAN report and did not is the anomaly worth keeping"
+    print("PASS: only components capable of reporting are held to account for silence")
     return 0
 
 
 def test_component_status_reported_at_set_only_for_ok():
     """reported_at carries a UTC timestamp for a component that has actually reported, and stays
-    None for every other status - the field previously existed on the "not_configured" default
-    but was never populated anywhere, so a published catalogue showed reported_at: null forever
-    even for a component reporting normally."""
+    None for every other status - the field was previously never populated anywhere, so a
+    published catalogue showed reported_at: null forever even for a component reporting normally."""
     base, coordinator = _coordinator()
     base.components = _StubRegistry(active=["givtcp", "octopus"], alive=["octopus"], all_names=["givtcp", "octopus", "solis"])
     coordinator.report("givtcp", {"inverters": [{"device_id": "givtcp:A"}]})
@@ -358,7 +396,7 @@ def test_component_status_reported_at_set_only_for_ok():
     assert reported_at, "an 'ok' component must carry a reported_at timestamp"
     datetime.fromisoformat(reported_at)  # must parse as a real ISO-8601 timestamp, not just be truthy
     assert components["octopus"]["reported_at"] is None, "a component that has not reported must not have a timestamp"
-    assert components["solis"]["reported_at"] is None
+    assert "solis" not in components, "an unconfigured component is absent, so it has no reported_at at all"
     print("PASS: reported_at is set only for a component with status ok")
     return 0
 
@@ -1395,6 +1433,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_assemble_merges_sections_and_tags_source()
     failures += test_catalogue_reassembles_so_a_post_assembly_report_reaches_it()
     failures += test_assemble_component_status()
+    failures += test_component_status_omits_components_that_cannot_report()
     failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()
     failures += test_observations_duplicate_serial_sees_a_gateways_fronted_batteries()

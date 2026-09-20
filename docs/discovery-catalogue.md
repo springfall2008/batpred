@@ -73,12 +73,20 @@ Every record carries a `source` field naming the component that reported it, a `
 within that component, and whichever typed containers below the component chose to populate. Two
 extra top-level sections describe the fleet as a whole rather than any one device:
 
-- **`components`** - a status (`ok`, `no_report`, `not_started`, `load_error` or `not_configured`)
-  for *every* component Predbat's registry knows about, not only the ones that reported something -
-  so a component that should be describing your hardware but is not shows up as clearly as one that
-  is. `load_error` says only *that* the component failed to start; the reason is an arbitrary
-  exception message, which is free text this document deliberately does not carry - look in the
-  Predbat log, which records it in full alongside a traceback
+- **`components`** - a status (`ok`, `no_report`, `not_started` or `load_error`) for each component
+  that either reported, or was expected to and did not. A component that should be describing your
+  hardware but is not shows up as clearly as one that is. `load_error` says only *that* the
+  component failed to start; the reason is an arbitrary exception message, which is free text this
+  document deliberately does not carry - look in the Predbat log, which records it in full
+  alongside a traceback.
+
+    Two kinds of component are deliberately left out, because their silence carries no
+    information: one you never configured (its absence is its status - the full registry is in
+    `components.py`), and one that is running fine but has no reporter at all. Most components are
+    in that second group - `web`, `ha`, `chat`, `carbon`, `temperature` and the rest are not
+    hardware sources and will never report. Listing them all made the map thirty-odd entries of
+    which a handful said anything, and buried the case that matters: a component that *can* report
+    and did not
 - **`observations`** - things noticed about the assembled picture rather than about any one
   component: `conflicts` (see below) and `resulting_config`, the handful of apps.yaml keys
   (`num_inverters`, `num_cars`, `inverter_type`) discovery can be compared against

@@ -33,8 +33,9 @@ from tests.test_givtcp_component import _rest_data_blob
 from tests.test_infra import run_async
 
 # A registry name deliberately never constructed by _build_reporting_fleet(), so the assembly test
-# can assert that a component which never reports still gets a status entry rather than being
-# silently absent from the catalogue's components map.
+# can assert that a component the user never configured is absent from the catalogue's components
+# map entirely - its absence is its status, rather than a "not_configured" line restating a static
+# registry on every dump.
 UNCONFIGURED_REGISTRY_NAME = "solis"
 
 # The five registry keys the fleet's reporters are filed under - the same strings
@@ -223,11 +224,10 @@ def test_discovery_assembles_across_sections_and_sources(my_predbat=None):
     assert sorted(conflicts["multiple_inverter_sources"]["claimed_by"]) == ["gecloud", "givtcp"]
     assert "contested_car_slots" in conflicts, conflicts
 
-    for name in REPORTER_NAMES + (UNCONFIGURED_REGISTRY_NAME,):
-        assert name in catalogue["components"], catalogue["components"]
     for name in REPORTER_NAMES:
+        assert name in catalogue["components"], catalogue["components"]
         assert catalogue["components"][name]["status"] == "ok", catalogue["components"][name]
-    assert catalogue["components"][UNCONFIGURED_REGISTRY_NAME]["status"] == "not_configured"
+    assert UNCONFIGURED_REGISTRY_NAME not in catalogue["components"], "a component that was never configured must not appear in the map at all"
 
     # The document every consumer actually gets (the debug dump, the sensor) is the redacted one -
     # that is what has to round-trip through both serialisers a debug dump and its YAML export use.
@@ -235,7 +235,7 @@ def test_discovery_assembles_across_sections_and_sources(my_predbat=None):
     json.dumps(redacted)
     yaml.safe_dump(redacted)
 
-    print("PASS: records from five reporters assemble into tagged sections, conflicts are recorded, every registry entry gets a status, and the catalogue serialises cleanly")
+    print("PASS: records from five reporters assemble into tagged sections, conflicts are recorded, only configured components get a status, and the catalogue serialises cleanly")
     return 0
 
 
