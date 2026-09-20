@@ -4204,6 +4204,61 @@ def test_in_calibration_clears_when_battery_leaves_calibration(test_name, my_pre
     return failed
 
 
+def test_refresh_failure_keeps_other_inverters(test_name, my_predbat, ha):
+    """
+    A transient refresh_config() failure on one inverter must not discard the others' state.
+
+    refresh_config() has ways to raise on a live system that have nothing to do with configuration
+    being wrong - an entity that reads back None reaching int(), say. Clearing self.inverters there
+    threw away every inverter's commit-once state, so the next successful cycle re-committed and
+    re-pressed the button on all of them - on Solis a non-volatile write per press, which is the
+    thing this PR exists to stop (#5126 review). The construction path still clears, because a
+    half-built list is not safe to reuse.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_inverters = my_predbat.inverters
+
+    try:
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: initial fetch_inverter_data() failed")
+            return True
+
+        first = my_predbat.inverters[0]
+        first.last_committed["charge_window"] = ("marker", "marker", True)
+        before = list(my_predbat.inverters)
+
+        saved_refresh = first.refresh_config
+        try:
+            first.refresh_config = lambda quiet=False: (_ for _ in ()).throw(TypeError("simulated transient read failure"))
+            if my_predbat.fetch_inverter_data():
+                print(f"ERROR: {test_name}: a refresh_config() failure should make fetch_inverter_data() return False")
+                failed = True
+        finally:
+            first.refresh_config = saved_refresh
+
+        if my_predbat.inverters != before:
+            print(f"ERROR: {test_name}: a refresh failure discarded the inverter objects instead of leaving them intact")
+            failed = True
+        elif first.last_committed.get("charge_window") != ("marker", "marker", True):
+            print(f"ERROR: {test_name}: a refresh failure discarded the commit-once state")
+            failed = True
+
+        # The next good cycle must reuse the same objects rather than rebuilding.
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after the simulated failure cleared")
+            failed = True
+        elif my_predbat.inverters[0] is not first:
+            print(f"ERROR: {test_name}: the inverter was rebuilt after a transient refresh failure")
+            failed = True
+    finally:
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
 def test_inverters_persist_across_cycles(test_name, my_predbat, ha):
     """
     Regression test for issue #4712: the Inverter objects must persist across cycles.
@@ -5200,6 +5255,7 @@ charge_start_service:
     failed |= test_charge_window_unmapped_minute_entity_commits_once("charge_window_unmapped_minute_entity_commits_once", ha, inv, my_predbat)
     failed |= test_commit_scopes_are_independent("commit_scopes_are_independent", inv)
     failed |= test_inverters_persist_across_cycles("inverters_persist_across_cycles", my_predbat, ha)
+    failed |= test_refresh_failure_keeps_other_inverters("refresh_failure_keeps_other_inverters", my_predbat, ha)
     failed |= test_in_calibration_clears_when_battery_leaves_calibration("in_calibration_clears", my_predbat, ha)
     failed |= test_set_current_from_power_before_battery_voltage_known("set_current_from_power_before_voltage_known", my_predbat)
     failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)

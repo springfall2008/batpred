@@ -1175,8 +1175,13 @@ class Execute:
                 try:
                     inverter.refresh_config(quiet=quiet)
                 except Exception as e:
+                    # The objects are left intact, unlike the construction path above where the list
+                    # is only half built. refresh_config() has transient ways to raise on a live
+                    # system - an entity reading back None through int(), say - and discarding every
+                    # inverter's commit-once state because one of them hiccuped forces the redundant
+                    # commit and button press this guard exists to prevent, on hardware where that is
+                    # a non-volatile write (#5126 review).
                     self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
-                    self.inverters = []
                     return False
             inverter.update_status(self.minutes_now, quiet=quiet)
 
