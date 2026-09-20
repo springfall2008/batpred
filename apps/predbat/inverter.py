@@ -46,6 +46,11 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+# Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
+# might use - including None, which adjust_charge_window() can legitimately produce for an unset
+# window time.
+_NOT_COMMITTED = object()
+
 
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
@@ -327,15 +332,17 @@ class Inverter:
         # used to be reseeded every cycle because the object itself was rebuilt every cycle).
         self.count_register_writes = 0
         self.created_attributes = {}
-        # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
-        # None means nothing has been committed yet in this run, so the next call commits once.
-        self.last_export_schedule_committed = None
-        # The charge-side equivalent. #4711 added the export guard only, leaving adjust_charge_window()
-        # able to re-press the commit button on every cycle (#4712).
-        self.last_charge_schedule_committed = None
-        # Set when a charge window's writes or commit button press failed, so the next cycle retries
-        # even though the times now read back as already correct.
-        self.charge_schedule_commit_pending = False
+        # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
+        # scope actually committed to this inverter; a scope absent from the dict has committed
+        # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
+        # writes or button press failed, so the next cycle retries even though the registers now read
+        # back as already correct. Both live here rather than as per-scope attributes so every
+        # press_and_poll_button() caller gets the same suppression and retry semantics - #4711
+        # guarded the export window alone and #4712 the charge window separately, with different key
+        # shapes and different retry ordering, and the target-SoC and window-disable presses had no
+        # guard at all and kept pressing every cycle (#2328).
+        self.last_committed = {}
+        self.commit_pending = {}
 
         self.reset_cycle_state()
 
@@ -2155,9 +2162,12 @@ class Inverter:
                 # If we have a separate enable for the charge limit then make sure it's enabled when we set the charge limit
                 self.write_and_poll_switch("charge_limit_enable", charge_limit_enable_entity_id, True)
 
-            # For inverters that need a button press to apply changes (e.g., Fox), press the button now
+            # For inverters that need a button press to apply changes (e.g., Fox), press the button now.
+            # Guarded on the target being written: the current_soc != soc check above is an observed
+            # comparison, so on hardware that never reads the limit back it is pinned true and this
+            # pressed every cycle (#2328).
             if self.inv_time_button_press:
-                self.press_and_poll_button(side="charge")
+                self.press_and_poll_button(side="charge", scope="target_soc", commit_key=soc)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} Target SoC has been changed to {soc}% at {self.base.time_now_str()}")
@@ -2880,7 +2890,7 @@ class Inverter:
         # a bare scheduled_discharge_enable flip with the window untouched, which doesn't need settling.
         times_changed = start_changed or end_changed
         schedule_changed = times_changed or (force_export != old_discharge_enable)
-        if is_hm_format and export_schedule != self.last_export_schedule_committed:
+        if is_hm_format and self.commit_needed("export_window", export_schedule):
             # Only the H M path rewrites unconditionally, so only it needs the extra commit-once-per-run
             # safety net; every other format already commits on a real change alone. Treat it as a real
             # window write too, so the settle sleep still runs on this first post-restart commit.
@@ -2891,12 +2901,7 @@ class Inverter:
             button_committed = True
             if self.inv_time_button_press:
                 button_committed = self.press_and_poll_button(side="discharge")
-            committed = schedule_write_ok and button_committed
-            if committed:
-                # Only remember a commit that actually succeeded, otherwise a failed button press would
-                # be recorded as done and never retried until the schedule next changes on its own; the
-                # same applies if one of the time/switch writes failed before the button press.
-                self.last_export_schedule_committed = export_schedule
+            self.record_commit("export_window", export_schedule, schedule_write_ok and button_committed)
 
         # Force export, turn it on after we change the window
         if force_export:
@@ -2958,9 +2963,10 @@ class Inverter:
             if not self.inv_has_charge_enable_time:
                 self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
             else:
-                # Press button if needed
+                # Press button if needed - guarded so a disable that the inverter never reads back
+                # (old_charge_schedule_enable pinned "on") does not re-press every cycle (#2328).
                 if self.inv_time_button_press:
-                    self.press_and_poll_button(side="charge")
+                    self.press_and_poll_button(side="charge", scope="charge_window", commit_key=("disabled",))
 
         # Updated cached status to disabled
         # Don't do it if notify is not set as this is just a temporary call when setting the charge window
@@ -3395,45 +3401,77 @@ class Inverter:
             if old_charge_schedule_enable == "off":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
-        schedule_changed = (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off")
-
-        # Commit-once safety net, mirroring adjust_force_export(). Each term above can stay true
-        # indefinitely when the inverter does not read the written value back - an enable switch
-        # that never reports "on" pins the third term, and times that never read back pin the first
-        # two - which re-pressed the commit button on every 5 minute cycle for the life of the
-        # window. On Solis each press is a non-volatile write (#2328) and also zeroes the timed
-        # current registers (#4415/#4709), so the repeat is not merely wasteful.
-        #
-        # The observed old state is part of the key so that a window changed underneath us -
-        # externally, or re-presented in a different time format - is still re-committed rather than
-        # mistaken for a repeat of our own last commit.
-        charge_schedule = (new_start, new_end, old_start, old_end, old_charge_schedule_enable)
-
-        if charge_schedule == self.last_charge_schedule_committed:
-            # Already committed this exact schedule; suppress the repeat.
-            schedule_changed = False
-        elif self.charge_schedule_commit_pending:
-            # A previous cycle's writes or button press failed, so this window has never actually
-            # been applied. Those writes have since made old == new, which clears every term of
-            # schedule_changed above - retry instead of leaving the window programmed but
-            # uncommitted until it happens to change again on its own.
-            schedule_changed = True
+        # Whether this window still needs committing to the inverter - see commit_needed(). The
+        # observed-state comparisons this used to rely on ((new != old) or enable read back "off")
+        # stay true forever on hardware that does not read written values back, which re-pressed the
+        # commit button every 5 minute cycle for the life of the window. On Solis each press is a
+        # non-volatile write (#2328) and also zeroes the timed current registers (#4415/#4709).
+        # The third term is the enable state being *written* (the block above enables whenever the
+        # window is a real one), not the "off" the inverter read back - that read is pinned on the
+        # very hardware this guard exists for, which is also why the enable write is kept out of
+        # schedule_write_ok above.
+        charge_schedule = (new_start, new_end, new_start != new_end)
+        schedule_changed = self.commit_needed("charge_window", charge_schedule)
 
         if schedule_changed:
             # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
             button_committed = True
             if self.inv_time_button_press:
                 button_committed = self.press_and_poll_button(side="charge")
-            # Only remember a commit where both the schedule writes and the button press actually
-            # succeeded. Recording it on the button result alone would cache a schedule whose
-            # register writes failed: later cycles would keep rewriting the registers but never
-            # press again, leaving the window programmed and uncommitted (#4711, export side).
-            committed = schedule_write_ok and button_committed
-            self.charge_schedule_commit_pending = not committed
-            if committed:
-                self.last_charge_schedule_committed = charge_schedule
+            self.record_commit("charge_window", charge_schedule, schedule_write_ok and button_committed)
 
-    def press_and_poll_button(self, side="both"):
+    def commit_needed(self, scope, commit_key):
+        """
+        Whether `scope` still needs its update button pressed to commit `commit_key`.
+
+        The single answer to "does this state still need committing to this inverter", asked by
+        every caller that presses an update button. True when a previous attempt is still pending,
+        or when the state differs from the last one that scope committed.
+
+        `scope` names the thing being committed ("charge_window", "export_window", "target_soc"),
+        not the button used to commit it. Several scopes share one button - the charge-side button
+        commits the charge window, the target SoC and the window disable - so keying this memory by
+        button would let a target SoC commit mask a pending window commit and vice versa.
+
+        This is deliberately the whole decision, rather than one term a caller ANDs with its own
+        "did anything move this cycle" flag. Those flags cannot be trusted on the paths that matter:
+        the H M time formats rewrite their registers unconditionally every cycle (#1529), so their
+        "changed" signal is true forever, and on hardware that never reads a written value back the
+        observed-state comparisons behind those flags are pinned true just as permanently - which is
+        the #2328/#4712 spam. A caller that has genuinely nothing to commit simply does not call.
+
+        commit_key identifies the state being committed - the charge/export window tuple, a target
+        SoC, and so on. It must describe only what is being *written*, never what was *observed*
+        beforehand: an observed value necessarily differs on the cycle after a successful commit
+        (the registers now read back the new state), which would press a second time before the key
+        settled, and on non-reading hardware would never settle at all.
+
+        Pending is checked first and wins. Suppressing a retry because the failed state happens to
+        match a previously recorded key leaves the inverter programmed but uncommitted until the
+        schedule changes again on its own, which is precisely what pending exists to prevent; a
+        redundant press on an already-committed state is the cheaper error of the two (#5126 review).
+        """
+        if self.commit_pending.get(scope):
+            return True
+        return self.last_committed.get(scope, _NOT_COMMITTED) != commit_key
+
+    def record_commit(self, scope, commit_key, committed):
+        """
+        Record the outcome of committing `commit_key` for `scope` - see commit_needed() for what a
+        scope is.
+
+        `committed` must be True only when the register writes AND the button press both succeeded.
+        Recording a commit on the button result alone caches a state whose writes failed: later
+        cycles keep rewriting the registers but never press again, leaving the inverter programmed
+        and uncommitted (#4711). A failed attempt sets pending so the next cycle retries even once
+        the registers read back as already correct, and is cleared here on success rather than only
+        inside a "did anything change" branch, where a suppressed cycle would leave it set forever.
+        """
+        self.commit_pending[scope] = not committed
+        if committed:
+            self.last_committed[scope] = commit_key
+
+    def press_and_poll_button(self, side="both", scope=None, commit_key=None):
         """
         Press charge/discharge update button(s) for the inverter.
         Priority:
@@ -3447,7 +3485,21 @@ class Inverter:
         configured (e.g. some Solis setups) - pressing the unrelated side's button there writes
         an unnecessary command to the inverter (and, on hardware that counts these towards flash/
         EEPROM wear, batpred#2328).
+
+        `scope` and `commit_key` opt this press into the shared commit-once guard: the button is
+        pressed only when commit_needed() says that scope has not already committed that exact
+        state, and the outcome is recorded. Callers that accumulate their own register-write
+        results (the charge and export window paths) call commit_needed()/record_commit() directly
+        instead, so a failed write is not recorded as a successful commit; callers with nothing
+        else to gate on pass them here and let this handle both halves.
         """
+        if scope is not None:
+            if not self.commit_needed(scope, commit_key):
+                return True
+            success = self.press_and_poll_button(side=side)
+            self.record_commit(scope, commit_key, success)
+            return success
+
         success = True
 
         entity_id_schedule_write_button = self.base.get_arg("schedule_write_button", indirect=False, index=self.id)
