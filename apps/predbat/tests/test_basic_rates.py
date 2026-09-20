@@ -117,6 +117,13 @@ def test_basic_rates(my_predbat):
     my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Saturday (day 6)
     old_minutes_now = my_predbat.minutes_now
     my_predbat.minutes_now = 14 * 60  # 14:00 Saturday afternoon
+    # Tests 6 and 7 also assert the third day, which basic_rates() leaves to rate_replicate() where
+    # no rule seeds it - pin the forecast length so that day is replicated, and the future rate
+    # offset so the replicated values are comparable against the tariff's own rates
+    old_forecast_minutes = my_predbat.forecast_minutes
+    old_rate_offset_import = my_predbat.metric_future_rate_offset_import
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.metric_future_rate_offset_import = 0
     dutch_rate = [
         {"start": "07:00:00", "end": "22:00:00", "rate": 14.0, "day_of_week": "1,2,3,4,5"},  # Weekday peak
         {"start": "22:00:00", "end": "07:00:00", "rate": 8.0, "day_of_week": "1,2,3,4,5"},  # Weekday off-peak (spans midnight)
@@ -130,6 +137,16 @@ def test_basic_rates(my_predbat):
 
     # Day 2 (Sunday): All day = 8 (weekend flat rate)
     failed |= assert_rates(results, 24 * 60, 48 * 60, 8)  # All day Sunday = 8
+
+    # Day 3 (Monday): the weekday pattern must survive 48 hours out (issue #5168). basic_rates()
+    # seeds the slot past the days it models so rate_replicate() has something to copy forward,
+    # and that seeding write used to ignore day_of_week - so the weekend rule, being processed
+    # last, flattened Monday to the weekend rate and erased the weekday peak. 00:00-07:00 is not
+    # seeded by any rule here (the off-peak window seeds the fourth day from 22:00 onwards), so it
+    # comes from rate_replicate() copying the same time of day 24 hours earlier
+    failed |= assert_rates(results, 48 * 60, 48 * 60 + 7 * 60, 8)  # 00:00-07:00 off-peak
+    failed |= assert_rates(results, 48 * 60 + 7 * 60, 48 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
+    failed |= assert_rates(results, 48 * 60 + 22 * 60, 72 * 60, 8)  # 22:00-24:00 off-peak
 
     # Test 7: Monday (weekday) - peak/off-peak pattern
     print("*** Running test: Simple rate7 - Weekday peak/off-peak pattern")
@@ -148,8 +165,16 @@ def test_basic_rates(my_predbat):
     failed |= assert_rates(results, 24 * 60 + 7 * 60, 24 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
     failed |= assert_rates(results, 24 * 60 + 22 * 60, 48 * 60, 8)  # 22:00-24:00 off-peak
 
+    # Day 3 (Wednesday): same again with midnight on a weekday, where the weekend rule must leave
+    # the third day alone rather than flatten it (issue #5168)
+    failed |= assert_rates(results, 48 * 60, 48 * 60 + 7 * 60, 8)  # 00:00-07:00 off-peak
+    failed |= assert_rates(results, 48 * 60 + 7 * 60, 48 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
+    failed |= assert_rates(results, 48 * 60 + 22 * 60, 72 * 60, 8)  # 22:00-24:00 off-peak
+
     my_predbat.minutes_now = old_minutes_now
     my_predbat.midnight_utc = old_midnight_utc
+    my_predbat.forecast_minutes = old_forecast_minutes
+    my_predbat.metric_future_rate_offset_import = old_rate_offset_import
 
     # Test 8: predbat_manual_api rate override only marks the actually-overridden window in
     # rate_replicate, not the whole day (issue #2578). get_manual_api() returns each override
@@ -267,5 +292,35 @@ def test_basic_rates(my_predbat):
     finally:
         my_predbat.manual_api = old_manual_api
         my_predbat.had_errors = old_had_errors
+
+    # Test 13: the export config from issue #5168 - weekday rules tiling the whole day plus a
+    # weekend catch-all. The weekend rule is processed last, and before the fix its seeding write
+    # for the day beyond the ones basic_rates() models ignored day_of_week, so it flattened that
+    # day to the weekend rate and the weekday peaks vanished 48 hours out
+    print("*** Running test: Weekend day_of_week rule must not flatten future weekdays (issue #5168)")
+    saved_midnight_utc = my_predbat.midnight_utc
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-06T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Sunday, so the third day is Tuesday
+    try:
+        weekend_catch_all = [
+            {"start": "00:00:00", "end": "06:59:59", "rate": 11.5, "day_of_week": "1,2,3,4,5"},
+            {"start": "07:00:00", "end": "08:59:59", "rate": 23.0, "day_of_week": "1,2,3,4,5"},
+            {"start": "09:00:00", "end": "16:59:59", "rate": 11.5, "day_of_week": "1,2,3,4,5"},
+            {"start": "17:00:00", "end": "20:59:59", "rate": 23.0, "day_of_week": "1,2,3,4,5"},
+            {"start": "21:00:00", "end": "23:59:59", "rate": 11.5, "day_of_week": "1,2,3,4,5"},
+            {"start": "00:00:00", "end": "23:59:59", "rate": 11.5, "day_of_week": "6,7"},
+        ]
+        results = my_predbat.basic_rates(weekend_catch_all, "export")
+        results, results_replicated = my_predbat.rate_replicate(results, is_import=False, is_gas=False)
+
+        # Day 3 (Tuesday) must keep the weekday peaks. The rules end on :59:59 so each leaves the
+        # final minute of its window unset - assert the interiors, which are the ones the rules
+        # actually write
+        failed |= assert_rates(results, 48 * 60, 48 * 60 + 6 * 60 + 59, 11.5)  # 00:00-07:00 off-peak
+        failed |= assert_rates(results, 48 * 60 + 7 * 60, 48 * 60 + 8 * 60 + 59, 23.0)  # 07:00-09:00 peak
+        failed |= assert_rates(results, 48 * 60 + 9 * 60, 48 * 60 + 16 * 60 + 59, 11.5)  # 09:00-17:00 off-peak
+        failed |= assert_rates(results, 48 * 60 + 17 * 60, 48 * 60 + 20 * 60 + 59, 23.0)  # 17:00-21:00 peak
+        failed |= assert_rates(results, 48 * 60 + 21 * 60, 48 * 60 + 23 * 60 + 59, 11.5)  # 21:00-24:00 off-peak
+    finally:
+        my_predbat.midnight_utc = saved_midnight_utc
 
     return failed

@@ -2309,9 +2309,19 @@ class Fetch:
                                             break
                                 minute_index += 24 * 60
                             if not date and not prev:
-                                rates[minute_mod + max_minute] = rate
-                                if load_scaling is not None:
-                                    self.load_scaling_dynamic[minute_mod + max_minute] = load_scaling
+                                # Seed the slot past the days modelled above so rate_replicate() has
+                                # something to copy forward. This has to honour the rule's day filter
+                                # in the same way the loop just did, or the last rule processed for a
+                                # given time of day wins out there whatever the weekday - a weekend
+                                # rule flattening the weekday peaks two days out (batpred#5168).
+                                # Minutes left unwritten here are no loss: rate_replicate() fills them
+                                # from the same time of day 24 hours earlier.
+                                extend_minute = minute_mod + max_minute
+                                extend_day_of_week = (day_of_week_midnight + int(extend_minute / (24 * 60))) % 7
+                                if not day_of_week or (extend_day_of_week in day_of_week):
+                                    rates[extend_minute] = rate
+                                    if load_scaling is not None:
+                                        self.load_scaling_dynamic[extend_minute] = load_scaling
             else:
                 self.log("Warn: Bad rate data provided in energy rates type {} {}".format(rtype, this_rate))
 
