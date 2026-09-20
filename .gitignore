@@ -115,6 +115,7 @@ it
 # fetch_config_options() have already run) - so running the documented annual_cli.py command
 # from the repo root leaves this behind.
 predbat_config.json
+clipping_auto_tune.json
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
@@ -122,6 +123,7 @@ apps/predbat/manifest.yaml
 scratch/
 cases/
 apps_ha.yaml
+debug/
 
 # Superpowers planning artifacts (not project docs)
 docs/superpowers/
@@ -131,3 +133,4 @@ apps/predbat/git_version.txt
 
 # Claude Code local worktrees
 .claude/worktrees/
+.agents/
