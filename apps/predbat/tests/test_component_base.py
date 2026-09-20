@@ -612,6 +612,185 @@ def test_component_base_minutes_now_snapshots_the_clock(my_predbat):
     return False
 
 
+# ============================================================================
+# refresh_discovery() / discovery_entities() - the shared discovery reporting loop
+#
+# Every reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast) drives its report through these two
+# methods rather than hand-rolling the loop, so the rules they used to each restate in prose are
+# pinned once, here. See ComponentBase.refresh_discovery()'s own docstring for why each holds.
+# ============================================================================
+
+
+class _DiscoveryCoordinator:
+    """Stand-in for coordinator.Coordinator: records what each component filed."""
+
+    def __init__(self):
+        """Start with nothing filed."""
+        self.filed = []
+
+    def report(self, component_name, report):
+        """Record one component's report, as the real coordinator would."""
+        self.filed.append((component_name, report))
+
+
+class _DiscoveryComponent(ComponentBase):
+    """A component that reports whatever is put in self.next_report."""
+
+    def initialize(self, **kwargs):
+        """Start with an empty report and no recorded build calls."""
+        self.next_report = {"inverters": []}
+        self.build_calls = 0
+        self.build_raises = False
+
+    async def run(self, seconds, first):
+        """Never driven directly by these tests."""
+        return True
+
+    def build_discovery(self):
+        """Return the report this test staged, or blow up if it asked for a failure."""
+        self.build_calls += 1
+        if self.build_raises:
+            raise RuntimeError("boom")
+        return self.next_report
+
+
+def _discovery_component():
+    """One component wired to a recording coordinator, returned with it."""
+    base = MockBase()
+    coordinator = _DiscoveryCoordinator()
+    base.components = SimpleNamespace(coordinator=coordinator)
+    component = _DiscoveryComponent(base)
+    component.component_name = "test_component"
+    return component, coordinator
+
+
+def test_component_base_refresh_discovery_files_and_stops_churning(my_predbat):
+    """A changed report is filed; an unchanged one is not re-filed."""
+    component, coordinator = _discovery_component()
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, f"The first report should be filed, got {len(coordinator.filed)}"
+    assert coordinator.filed[0][0] == "test_component", "The report should be filed under the component's registry name"
+
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "An unchanged report must not be re-filed - that would churn the catalogue every cycle"
+
+    component.next_report = {"inverters": [{"device_id": "test:1", "serials": ["SERIAL-1"]}]}
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 2, "A report that has moved on should replace the last one"
+    print("PASS: refresh_discovery files a changed report and stops churning on an unchanged one")
+    return False
+
+
+def test_component_base_refresh_discovery_skips_none_and_missing_build(my_predbat):
+    """A None report files nothing, and a component with no build_discovery() is a no-op."""
+    component, coordinator = _discovery_component()
+    component.next_report = None
+
+    component.refresh_discovery()
+    assert coordinator.filed == [], "A None report means 'nothing to describe yet' and must file nothing"
+    assert component._discovery_report is None, "A None report must not advance the marker"
+
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "Once there is something to describe it should file"
+
+    plain = TestComponent(MockBase())
+    plain.refresh_discovery()  # no build_discovery() at all - must not raise
+    print("PASS: refresh_discovery skips a None report and a component that does not report at all")
+    return False
+
+
+def test_component_base_refresh_discovery_failure_is_contained_and_retried(my_predbat):
+    """A build failure is logged, never raised, and the marker is left for the next cycle to retry."""
+    component, coordinator = _discovery_component()
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+    component.build_raises = True
+
+    component.refresh_discovery()  # must not raise - an observer may not degrade what it observes
+
+    assert coordinator.filed == [], "Nothing should be filed when the build failed"
+    assert component._discovery_report is None, "A failed report must not advance the marker"
+    assert not component.base.had_errors, "A discovery failure must never set had_errors - that would suppress record_status()"
+    assert any("failed to report discovery" in message for message in component.base.log_messages), "The failure should be logged"
+
+    component.build_raises = False
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "The next cycle should retry and succeed, not stay lost for the life of the process"
+    print("PASS: a build_discovery failure is contained, logged and retried rather than lost")
+    return False
+
+
+def test_component_base_refresh_discovery_marker_waits_for_the_report_to_land(my_predbat):
+    """The marker advances only after the report is filed, not merely after it is built.
+
+    If it advanced first, a coordinator that threw would leave the component believing it had
+    reported - and since the rebuilt report would then match the marker every cycle, that report
+    would be lost for the life of the process. The order in refresh_discovery() is what prevents
+    it, so pin it here rather than leave it to reading.
+    """
+    component, coordinator = _discovery_component()
+    component.next_report = {"inverters": [{"device_id": "test:1"}]}
+
+    def _explode(report):
+        raise RuntimeError("coordinator is down")
+
+    component.report_discovery = _explode
+    component.refresh_discovery()  # must not raise
+
+    assert component._discovery_report is None, "The marker must not advance when filing the report failed"
+
+    component.report_discovery = lambda report: coordinator.report(component.component_name, report)
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, "The next cycle should retry the report the coordinator rejected"
+    print("PASS: the marker waits for the report to actually land, so a rejected report is retried")
+    return False
+
+
+def test_component_base_refresh_discovery_survives_a_component_built_without_init(my_predbat):
+    """A component built with Cls.__new__(Cls) must not raise out of refresh_discovery().
+
+    The test harnesses across this repo construct components that way to exercise one method in
+    isolation (solcast's own tests use SolarAPI.__new__(SolarAPI)), so component_name and the
+    report marker are declared on the class rather than only assigned in __init__. Without that,
+    the failure path itself raised AttributeError - which escapes run() and is exactly the
+    degradation the guard exists to prevent.
+    """
+    component = _DiscoveryComponent.__new__(_DiscoveryComponent)
+    base = MockBase()
+    component.base = base
+    component.log = base.log
+    component.build_raises = True
+    component.build_calls = 0
+
+    component.refresh_discovery()  # must not raise, despite __init__ never having run
+
+    assert component._discovery_report is None, "The class-level marker default should read as None"
+    assert any("failed to report discovery" in message for message in base.log_messages), "The failure should still be logged, under the class name"
+    print("PASS: refresh_discovery does not raise on a component built without __init__")
+    return False
+
+
+def test_component_base_discovery_entities_keeps_only_what_exists(my_predbat):
+    """Only entities Home Assistant has actually seen survive - a spec is not evidence of publication."""
+    component, _coordinator = _discovery_component()
+    published = {"sensor.predbat_test_published": "5.0"}
+    component.base.get_state_wrapper = lambda entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False: published.get(entity_id)
+
+    entities = component.discovery_entities(
+        {
+            "charge_rate": {"entity_id": "sensor.predbat_test_published", "domain": "sensor", "access": "rw"},
+            "discharge_rate": {"entity_id": "sensor.predbat_test_never_published", "domain": "sensor", "access": "rw"},
+        }
+    )
+
+    assert set(entities) == {"charge_rate"}, f"Only the published entity should survive, got {list(entities)}"
+    assert entities["charge_rate"]["domain"] == "sensor", "The descriptor should be carried through intact"
+    print("PASS: discovery_entities keeps only the entities that exist in the state store")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -629,6 +808,12 @@ def test_component_base_all(my_predbat):
         ("midnight_utc_rewound", test_component_base_midnight_utc_ignores_rewound_base, "midnight_utc ignores a rewound base.midnight_utc"),
         ("minutes_now_derived", test_component_base_minutes_now_follows_update_time, "minutes_now follows update_time and ignores the faked value"),
         ("minutes_now_snapshot", test_component_base_minutes_now_snapshots_the_clock, "minutes_now snapshots now_utc rather than reading it twice"),
+        ("discovery_refresh_churn", test_component_base_refresh_discovery_files_and_stops_churning, "refresh_discovery files a changed report, not an unchanged one"),
+        ("discovery_refresh_none", test_component_base_refresh_discovery_skips_none_and_missing_build, "refresh_discovery skips a None report and a non-reporting component"),
+        ("discovery_refresh_failure", test_component_base_refresh_discovery_failure_is_contained_and_retried, "a build_discovery failure is contained and retried"),
+        ("discovery_refresh_marker_order", test_component_base_refresh_discovery_marker_waits_for_the_report_to_land, "the marker advances only after the report is filed"),
+        ("discovery_refresh_no_init", test_component_base_refresh_discovery_survives_a_component_built_without_init, "refresh_discovery does not raise on a component built without __init__"),
+        ("discovery_entities_filter", test_component_base_discovery_entities_keeps_only_what_exists, "discovery_entities keeps only entities that exist"),
     ]
 
     failed = []
