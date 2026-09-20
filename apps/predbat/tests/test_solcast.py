@@ -5675,12 +5675,12 @@ def test_discovered_sites_append_only_and_deduplicated(my_predbat):
     return failed
 
 
-def test_refresh_discovery_report_skips_repeat_calls_when_unchanged(my_predbat):
+def test_refresh_discovery_skips_repeat_calls_when_unchanged(my_predbat):
     """
-    _refresh_discovery_report() is a no-op once the discovered set has not moved on from the last
+    refresh_discovery() is a no-op once the discovered set has not moved on from the last
     successful, complete report - matching the brief's "only when the discovered set has changed".
     """
-    print("  - test_refresh_discovery_report_skips_repeat_calls_when_unchanged")
+    print("  - test_refresh_discovery_skips_repeat_calls_when_unchanged")
     failed = False
 
     test_api = create_test_solar_api()
@@ -5690,13 +5690,13 @@ def test_refresh_discovery_report_skips_repeat_calls_when_unchanged(my_predbat):
         reports = []
         solar.report_discovery = lambda report: reports.append(report)
 
-        solar._refresh_discovery_report()
-        solar._refresh_discovery_report()
+        solar.refresh_discovery()
+        solar.refresh_discovery()
 
         if len(reports) != 1:
             print(f"ERROR: expected exactly 1 report when nothing changed between calls, got {len(reports)}")
             failed = True
-        if solar.discovery_reported_for is None:
+        if solar._discovery_report is None:
             print("ERROR: the marker should have advanced after a complete, successful report")
             failed = True
 
@@ -5706,7 +5706,7 @@ def test_refresh_discovery_report_skips_repeat_calls_when_unchanged(my_predbat):
     return failed
 
 
-def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
+def test_refresh_discovery_failure_contained_and_retried(my_predbat):
     """
     Requirement 5: a build_discovery() failure is swallowed and logged, the marker is left
     unmoved so the very next call retries, and the component's own health is not degraded by a
@@ -5715,7 +5715,7 @@ def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
     run notification, so a bug in this purely observational side channel must be visible only in
     the log, never by changing Predbat's own reported status.
     """
-    print("  - test_refresh_discovery_report_failure_contained_and_retried")
+    print("  - test_refresh_discovery_failure_contained_and_retried")
     failed = False
 
     test_api = create_test_solar_api()
@@ -5737,8 +5737,8 @@ def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
 
         solar.build_discovery = failing_then_succeeding_build_discovery
 
-        solar._refresh_discovery_report()  # cycle 1: raises
-        if solar.discovery_reported_for is not None:
+        solar.refresh_discovery()  # cycle 1: raises
+        if solar._discovery_report is not None:
             print("ERROR: the marker must not advance after a build_discovery() failure")
             failed = True
         if reports:
@@ -5748,8 +5748,8 @@ def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
             print("ERROR: a failed discovery report must not degrade Predbat's own status - see update_pred()'s had_errors branch")
             failed = True
 
-        solar._refresh_discovery_report()  # cycle 2: succeeds, retried
-        if solar.discovery_reported_for is None:
+        solar.refresh_discovery()  # cycle 2: succeeds, retried
+        if solar._discovery_report is None:
             print("ERROR: the marker should advance once build_discovery() succeeds on retry")
             failed = True
         if len(reports) != 1:
@@ -5762,15 +5762,15 @@ def test_refresh_discovery_report_failure_contained_and_retried(my_predbat):
     return failed
 
 
-def test_refresh_discovery_report_retried_via_unconditional_run_call(my_predbat):
+def test_refresh_discovery_retried_via_unconditional_run_call(my_predbat):
     """
     Requirement 4: the marker is compared OUTSIDE any one-shot "first" gate. Reproduces the exact
     failure mode GE Cloud and Octopus both shipped and had to fix: a build_discovery() failure on
     the very first cycle must not be lost for the life of the process just because "first" only
-    ever equals True once. Also proves _refresh_discovery_report() runs even on a cycle where
+    ever equals True once. Also proves refresh_discovery() runs even on a cycle where
     neither of run()'s own fetch conditions fires - the common steady-state case.
     """
-    print("  - test_refresh_discovery_report_retried_via_unconditional_run_call")
+    print("  - test_refresh_discovery_retried_via_unconditional_run_call")
     failed = False
 
     test_api = create_test_solar_api()
@@ -5803,12 +5803,12 @@ def test_refresh_discovery_report_retried_via_unconditional_run_call(my_predbat)
             solar.last_fetched_timestamp = test_api.mock_base.now_utc_exact
 
             run_async(solar.run(seconds=150, first=True))  # the one-shot "first" cycle - build_discovery raises
-            if solar.discovery_reported_for is not None:
+            if solar._discovery_report is not None:
                 print("ERROR: the marker must not advance on the failing first cycle")
                 failed = True
 
             run_async(solar.run(seconds=150, first=False))  # a later, non-"first" cycle - must still retry
-            if solar.discovery_reported_for is None:
+            if solar._discovery_report is None:
                 print("ERROR: a later run() cycle must retry and succeed even though 'first' is now False")
                 failed = True
             if len(reports) != 1:
@@ -5821,13 +5821,16 @@ def test_refresh_discovery_report_retried_via_unconditional_run_call(my_predbat)
     return failed
 
 
-def test_refresh_discovery_report_incomplete_ha_sensors_not_advanced(my_predbat):
+def test_refresh_discovery_incomplete_ha_sensors_not_advanced(my_predbat):
     """
-    Requirement 3: the marker must not advance while the ha_sensors record is incomplete - one
-    configured pv_forecast_* entity not yet visible in the state store must not be marked done, or
-    the catalogue would permanently describe an incomplete HA-sensor source.
+    Requirement 3: an incomplete ha_sensors record is replaced once the missing entity appears.
+
+    One configured pv_forecast_* entity not yet visible in the state store is still worth
+    reporting, but the catalogue must never be STUCK describing the incomplete source.
+    refresh_discovery() compares the whole report, so the completed one differs from the partial
+    one and replaces it - and an unchanged cycle files nothing.
     """
-    print("  - test_refresh_discovery_report_incomplete_ha_sensors_not_advanced")
+    print("  - test_refresh_discovery_incomplete_ha_sensors_not_advanced")
     failed = False
 
     test_api = create_test_solar_api()
@@ -5840,22 +5843,29 @@ def test_refresh_discovery_report_incomplete_ha_sensors_not_advanced(my_predbat)
         reports = []
         solar.report_discovery = lambda report: reports.append(report)
 
-        solar._refresh_discovery_report()
-        if solar.discovery_reported_for is not None:
-            print("ERROR: the marker must not advance while a configured pv_forecast_* entity is still missing from the state store")
-            failed = True
+        solar.refresh_discovery()
         if not reports:
             print("ERROR: an incomplete report should still reach the coordinator (partial data is still useful) - it should just not be marked done")
             failed = True
 
         # The second entity now appears - the retry (driven by the unchanged marker) completes it.
         test_api.set_mock_ha_state("sensor.solcast_pv_forecast_tomorrow", "6.0")
-        solar._refresh_discovery_report()
-        if solar.discovery_reported_for is None:
+        solar.refresh_discovery()
+        if solar._discovery_report is None:
             print("ERROR: the marker should advance once every configured pv_forecast_* entity exists")
             failed = True
         if len(reports) != 2:
             print(f"ERROR: expected 2 reports (one incomplete, one complete), got {len(reports)}")
+            failed = True
+        reported_entities = [record.get("entities", {}) for report in reports for record in report["forecasts"] if record["device_id"] == "ha_sensors"]
+        if len(reported_entities[0]) != 1 or len(reported_entities[-1]) != 2:
+            print(f"ERROR: expected the partial report to carry 1 entity and the replacement 2, got {[len(e) for e in reported_entities]}")
+            failed = True
+
+        # An unchanged cycle must file nothing, or every install churns the catalogue every minute.
+        solar.refresh_discovery()
+        if len(reports) != 2:
+            print(f"ERROR: an unchanged cycle must not re-file the report, got {len(reports)}")
             failed = True
 
     finally:
@@ -6105,10 +6115,10 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predbat)
     failed |= test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary(my_predbat)
     failed |= test_discovered_sites_append_only_and_deduplicated(my_predbat)
-    failed |= test_refresh_discovery_report_skips_repeat_calls_when_unchanged(my_predbat)
-    failed |= test_refresh_discovery_report_failure_contained_and_retried(my_predbat)
-    failed |= test_refresh_discovery_report_retried_via_unconditional_run_call(my_predbat)
-    failed |= test_refresh_discovery_report_incomplete_ha_sensors_not_advanced(my_predbat)
+    failed |= test_refresh_discovery_skips_repeat_calls_when_unchanged(my_predbat)
+    failed |= test_refresh_discovery_failure_contained_and_retried(my_predbat)
+    failed |= test_refresh_discovery_retried_via_unconditional_run_call(my_predbat)
+    failed |= test_refresh_discovery_incomplete_ha_sensors_not_advanced(my_predbat)
     failed |= test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat)
 
     return failed

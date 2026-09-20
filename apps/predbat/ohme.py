@@ -67,24 +67,25 @@ POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
 CONTROL_INTERVAL_SECONDS = 60
 
 # The charger-facing entities for the discovery catalogue's chargers record - see
-# OhmeAPI.build_discovery(). name -> (entity_id, domain, access). All three are published
+# OhmeAPI.build_discovery(). Predbat standard name -> entity descriptor, filtered down to what
+# Home Assistant has actually seen by ComponentBase.discovery_entities(). All three are published
 # unconditionally by publish_data(), so once it has run once every one of these exists.
 CHARGER_DISCOVERY_ENTITY_SPEC = {
-    "car_charging_planned": ("binary_sensor.predbat_ohme_connected", "binary_sensor", "r"),
-    "car_charging_energy": (ENERGY_TODAY_ENTITY, "sensor", "r"),
-    "car_charging_power": (POWER_WATTS_ENTITY, "sensor", "r"),
+    "car_charging_planned": {"entity_id": "binary_sensor.predbat_ohme_connected", "domain": "binary_sensor", "access": "r"},
+    "car_charging_energy": {"entity_id": ENERGY_TODAY_ENTITY, "domain": "sensor", "access": "r"},
+    "car_charging_power": {"entity_id": POWER_WATTS_ENTITY, "domain": "sensor", "access": "r"},
 }
 
-# The car-facing entities for the discovery catalogue's cars record - see
-# OhmeAPI.build_discovery(). name -> (entity_id, domain, access). The last three are exactly the
-# entities automatic_config_octopus_intelligent() wires octopus_intelligent_slot/octopus_ready_time/
-# octopus_charge_limit to, and - like the charger's own set above - are published unconditionally
-# by publish_data() regardless of whether Intelligent wiring is actually in use.
+# The car-facing entities for the discovery catalogue's cars record - see OhmeAPI.build_discovery().
+# Predbat standard name -> entity descriptor, as for the charger set above. The last three are
+# exactly the entities automatic_config_octopus_intelligent() wires octopus_intelligent_slot/
+# octopus_ready_time/octopus_charge_limit to, and are published unconditionally by publish_data()
+# regardless of whether Intelligent wiring is actually in use.
 CAR_DISCOVERY_ENTITY_SPEC = {
-    "car_charging_soc": ("sensor.predbat_ohme_battery_percent", "sensor", "r"),
-    "octopus_intelligent_slot": ("binary_sensor.predbat_ohme_slot_active", "binary_sensor", "r"),
-    "octopus_ready_time": ("select.predbat_ohme_target_time", "select", "rw"),
-    "octopus_charge_limit": ("number.predbat_ohme_target_percent", "number", "rw"),
+    "car_charging_soc": {"entity_id": "sensor.predbat_ohme_battery_percent", "domain": "sensor", "access": "r"},
+    "octopus_intelligent_slot": {"entity_id": "binary_sensor.predbat_ohme_slot_active", "domain": "binary_sensor", "access": "r"},
+    "octopus_ready_time": {"entity_id": "select.predbat_ohme_target_time", "domain": "select", "access": "rw"},
+    "octopus_charge_limit": {"entity_id": "number.predbat_ohme_target_percent", "domain": "number", "access": "rw"},
 }
 
 # Format Predbat writes its planned car charging windows in - see PredBat.time_abs_str()
@@ -241,9 +242,6 @@ class OhmeAPI(ComponentBase):
         self.energy_last_time = None
         self.energy_last_watts = 0.0
         self.energy_restored = False
-        # The (serial, vehicle id) snapshot build_discovery() was last successfully reported
-        # against - see _refresh_discovery_report(). None until the first successful report.
-        self.discovery_reported_for = None
 
     def last_updated_time(self):
         """
@@ -289,17 +287,12 @@ class OhmeAPI(ComponentBase):
                 await self.automatic_config_octopus_intelligent()
             self.enable_control(octopus_intelligent)
 
-        # Unconditional and outside the "if first and self.client.serial:" block above: "first"
-        # is a ComponentBase.start()-local that flips to False forever the instant run() returns
-        # True, and the try/except inside _refresh_discovery_report() (correctly) swallows a
-        # build_discovery() failure so run() still succeeds - without an out-of-band marker
-        # compared here every cycle, a single transient failure on that one-shot first cycle would
-        # lose the discovery report for the life of the process (the bug GE Cloud and Octopus both
-        # shipped and had to fix - see _refresh_discovery_report()'s docstring). Placed after
-        # publish_data() has already run this cycle (the "seconds % 120" block above, guaranteed on
-        # the first cycle since that condition is "first or ..."), so the entities this reports
-        # against already exist by the time it runs.
-        self._refresh_discovery_report()
+        # Unconditional and outside the "if first and self.client.serial:" block above, so a
+        # transient failure on that one-shot cycle is retried rather than lost - see
+        # ComponentBase.refresh_discovery(). Placed after publish_data() has already run this cycle
+        # (the "seconds % 120" block above, guaranteed on the first cycle since that condition is
+        # "first or ..."), so the entities this reports against already exist by the time it runs.
+        self.refresh_discovery()
 
         if self.control_active and (seconds % CONTROL_INTERVAL_SECONDS) == 0:
             await self.control_charge()
@@ -542,23 +535,6 @@ class OhmeAPI(ComponentBase):
         self.set_arg("octopus_ready_time", "select.predbat_ohme_target_time")
         self.set_arg("octopus_charge_limit", "number.predbat_ohme_target_percent")
 
-    def _discovery_entities(self, spec):
-        """
-        Entity descriptors for `spec`, keeping only the ones that actually exist in the state store.
-
-        `spec` is one of CHARGER_DISCOVERY_ENTITY_SPEC/CAR_DISCOVERY_ENTITY_SPEC: name -> (entity_id,
-        domain, access). Every one of those entities is published unconditionally by publish_data(),
-        but the catalogue must still never claim one exists before Home Assistant has actually seen
-        it - checking get_state_wrapper() rather than trusting the spec is what makes this true on a
-        restart mid-cycle, and is the same pattern OctopusAPI.build_discovery() uses for its own car
-        entities.
-        """
-        entities = {}
-        for name, (entity_id, domain, access) in spec.items():
-            if self.get_state_wrapper(entity_id) is not None:
-                entities[name] = {"entity_id": entity_id, "domain": domain, "access": access}
-        return entities
-
     def _discovery_vehicle(self):
         """
         (vehicle_id, make, model) for the Ohme account's current vehicle, or (None, None, None).
@@ -612,7 +588,7 @@ class OhmeAPI(ComponentBase):
         them: car_charging_planned/energy/power - the charger's own readings - go on the charger;
         car_charging_soc and the three Octopus Intelligent entities Ohme publishes - facts about the
         car and its charge target - go on the car. Every one of them is checked against the state
-        store by _discovery_entities() rather than assumed present. car_charging_now is deliberately
+        store by discovery_entities() rather than assumed present. car_charging_now is deliberately
         not reported: Ohme publishes no entity distinct from car_charging_planned's own "connected"
         sensor that means "drawing power right now" rather than "plugged in and wanting to charge",
         and reporting one entity under two different fact names would misdescribe it under whichever
@@ -623,9 +599,15 @@ class OhmeAPI(ComponentBase):
         the report's own "automatic" flag is for, not a gate on reporting here. A user running Ohme
         manually (ohme_automatic: false) is exactly the installation a discovery catalogue most wants
         to describe, so this must run either way - see run()'s unconditional call to
-        _refresh_discovery_report(), which calls this.
+        refresh_discovery(), which calls this.
+
+        Returns None until the charger has a serial: every identity in both records is derived from
+        it, so there is nothing to describe before it arrives, and refresh_discovery() treats None
+        as "nothing to report yet" and simply asks again next cycle.
         """
         serial = self.client.serial
+        if not serial:
+            return None
         charger_device_id = "ohme:{}".format(serial)
         vehicle_id, make, model = self._discovery_vehicle()
         car_device_id = "ohme:{}".format(vehicle_id) if vehicle_id else "ohme:{}:car".format(serial)
@@ -640,7 +622,7 @@ class OhmeAPI(ComponentBase):
             "hardware_ids": {"serial": serial},
             "info": charger_info,
             "serves_cars": [car_device_id],
-            "entities": self._discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
+            "entities": self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
         }
 
         if vehicle_id:
@@ -656,65 +638,10 @@ class OhmeAPI(ComponentBase):
             "device_id": car_device_id,
             "charged_by": charger_device_id,
             "info": car_info,
-            "entities": self._discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
+            "entities": self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
         }
 
         return {"automatic": self.ohme_automatic, "chargers": [charger], "cars": [car]}
-
-    def _discovery_state_key(self):
-        """
-        A snapshot of what build_discovery() depends on: the charger's serial and the current vehicle id.
-
-        Deliberately narrow, like OctopusAPI's own _discovery_state_key(): the serial never changes
-        for a running component and the vehicle id only changes if the Ohme account's selected
-        vehicle does, so this lets _refresh_discovery_report() treat a report as done rather than
-        rebuilding and re-submitting an unchanged one every cycle.
-        """
-        vehicle_id, _make, _model = self._discovery_vehicle()
-        return (self.client.serial, vehicle_id)
-
-    def _refresh_discovery_report(self):
-        """
-        Report the current charger/car snapshot to the discovery catalogue, if it has moved on from the last report that both succeeded and was complete.
-
-        Called unconditionally, once per run() cycle, from OUTSIDE the "if first and
-        self.client.serial:" block that everything else in this file's first-run wiring lives
-        inside. That block runs exactly once for the life of the process ("first" is a
-        ComponentBase.start()-local that flips to False forever the instant run() returns True), so
-        a build_discovery() failure on that single cycle - swallowed here by the try/except below,
-        exactly as it correctly is for GivTCP, GE Cloud and Octopus, so an observer can never
-        degrade the health of the component it observes - would otherwise be lost for the life of
-        the process with no way to retry it. self.discovery_reported_for is the out-of-band marker
-        that makes retrying possible: it is compared here on every call rather than gated on
-        "first", left unset on a failed or incomplete attempt, and only advanced once a report both
-        succeeds and every entity spec'd for the charger and the car was actually found in the state
-        store - a report built one cycle too early (before publish_data() has ever run) would
-        otherwise be marked done and the catalogue would permanently describe an incomplete charger
-        and car.
-
-        This is deliberately reachable with self.ohme_automatic False: self.client.serial, the
-        vehicle list and the entities this reports against are all populated regardless of that
-        flag, which gates only automatic_config()'s own apps.yaml wiring - see build_discovery()'s
-        own docstring.
-        """
-        if not self.client.serial:
-            return
-        state_key = self._discovery_state_key()
-        if state_key == self.discovery_reported_for:
-            return
-        try:
-            report = self.build_discovery()
-            self.report_discovery(report)
-            expected = len(CHARGER_DISCOVERY_ENTITY_SPEC) + len(CAR_DISCOVERY_ENTITY_SPEC)
-            actual = len(report["chargers"][0].get("entities", {})) + len(report["cars"][0].get("entities", {}))
-            if actual == expected:
-                self.discovery_reported_for = state_key
-        except Exception as e:
-            # Logged only, not non_fatal_error_occurred(): that sets base.had_errors, which makes
-            # update_pred() skip record_status() and suppress the run notification - a purely
-            # observational side channel must never be able to change Predbat's user-visible status
-            # this way (see solis.py's own comment on the same trap).
-            self.log("Warn: Ohme API: failed to report discovery for the catalogue: {}".format(e))
 
     def restore_energy_today(self, now):
         """

@@ -69,7 +69,7 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_devices_dict = []
         self.ems_device = None
         self.gateway_device = None
-        self.discovery_reported_for = None
+        self._discovery_report = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
         self.default_options_stamp = None
@@ -4838,7 +4838,7 @@ def _test_report_discovery_failure_does_not_degrade_component_health(my_predbat)
     assert ge.last_success_timestamp is not None, "the success timestamp must still be recorded"
     assert any("failed to report discovery" in message for message in ge.log_messages), "the failure should be logged"
     assert getattr(ge.base, "had_errors", False) is False, "a discovery-reporting bug must not degrade Predbat's own status - see update_pred()'s had_errors branch"
-    assert ge.discovery_reported_for is None, "a failed report must not be marked as reported"
+    assert ge._discovery_report is None, "a failed report must not be marked as reported"
     print("PASS: a build_discovery() failure is contained, not left to degrade the component")
     return 0
 
@@ -4856,10 +4856,11 @@ def _test_discovery_report_retries_after_a_failure(my_predbat):
     so without a marker compared outside that gate, a report that fails exactly once would be
     lost for the life of the process even once the underlying bug or data problem clears up.
 
-    self.discovery_reported_for is compared against self.devices_dict on every pass through the
-    settings block (not gated on "first"), so a failed attempt is retried on the very next such
-    cycle - simulated here by calling run() a second time with first=False, exactly as
-    ComponentBase would once run() has ever returned True.
+    refresh_discovery() rebuilds the report and compares it against the last one filed on every
+    pass through the settings block (not gated on "first"), and leaves the marker unmoved on the
+    failure path, so a failed attempt is retried on the very next such cycle - simulated here by
+    calling run() a second time with first=False, exactly as ComponentBase would once run() has
+    ever returned True.
     """
     devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": [], "battery_meters": {}}
     settings = {"battery001": {}}
@@ -4872,7 +4873,7 @@ def _test_discovery_report_retries_after_a_failure(my_predbat):
     result = run_async(ge.run(seconds=0, first=True))
     assert result is True, "a discovery-reporting bug must not fail the whole run() call"
     assert reports == [], "no report should have been recorded on the failing cycle"
-    assert ge.discovery_reported_for is None, "a failed report must not be marked as reported"
+    assert ge._discovery_report is None, "a failed report must not be marked as reported"
 
     # The bug is fixed; the next cycle - first=False, matching every call after run() has ever
     # returned True - retries and succeeds, even though "if first:" itself never runs again.
@@ -4881,7 +4882,7 @@ def _test_discovery_report_retries_after_a_failure(my_predbat):
 
     assert result is True
     assert len(reports) == 1, "the retried report should now succeed"
-    assert ge.discovery_reported_for == devices, "the marker should advance once the report actually succeeds"
+    assert ge._discovery_report == reports[0], "the marker should hold the report that was actually filed"
     print("PASS: a build_discovery() failure is retried on a later, non-first cycle - not lost forever")
     return 0
 

@@ -710,7 +710,7 @@ async def test_octopus_intelligent_devices(my_predbat):
 
 
 def _make_discovery_api(my_predbat, account_id, automatic=True):
-    """A real OctopusAPI instance for build_discovery()/_refresh_discovery_report() tests."""
+    """A real OctopusAPI instance for build_discovery()/refresh_discovery() tests."""
     return OctopusAPI(my_predbat, key="test-key", account_id=account_id, automatic=automatic)
 
 
@@ -922,11 +922,12 @@ def test_build_discovery_cars_entities_only_when_published(my_predbat):
 
 def test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat):
     """
-    The reported-marker does not advance while an active device's car entities are incomplete.
+    A report built before an active device's car entities exist is replaced once they appear.
 
-    Without this, a report built one cycle too early (see build_discovery()'s ordering docstring)
-    would be marked done forever, and the catalogue would permanently describe an incomplete car
-    slot even once Octopus goes on to publish the missing entities on a later cycle.
+    A report built one cycle too early (see build_discovery()'s ordering docstring) is still worth
+    filing, but the catalogue must never be STUCK describing the incomplete car slot once Octopus
+    goes on to publish the missing entities. refresh_discovery() compares the whole report, so the
+    completed one differs and replaces it - and an unchanged cycle files nothing.
     """
     api = _make_discovery_api(my_predbat, "cars-incomplete-marker")
     device_id = "smart-charge-4001"
@@ -934,11 +935,11 @@ def test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
     reports = []
     api.report_discovery = lambda report: reports.append(report)
 
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
     failed = 0
-    if api.discovery_reported_for is not None:
-        print("ERROR: the marker should not advance while the device's car entities are not yet published")
+    if reports and reports[0]["cars"][0].get("entities"):
+        print(f"ERROR: the first report should carry no car entities - none are published yet, got {list(reports[0]['cars'][0]['entities'])}")
         failed += 1
     if len(reports) != 1:
         print(f"ERROR: expected exactly one report attempt, got {len(reports)}")
@@ -947,22 +948,32 @@ def test_discovery_report_not_advanced_while_car_entities_incomplete(my_predbat)
     # Octopus has now published the device's entities - a later cycle's async_intelligent_update_sensor().
     _publish_car_entities(my_predbat, api, device_id)
 
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
-    if api.discovery_reported_for is None:
+    if api._discovery_report is None:
         print("ERROR: the marker should advance once the active device's car entities are complete")
         failed += 1
     if len(reports) != 2:
         print(f"ERROR: expected a second report attempt once entities were complete, got {len(reports)}")
         failed += 1
+    elif len(reports[1]["cars"][0].get("entities", {})) != len(OCTOPUS_CAR_ENTITY_SPEC):
+        print(f"ERROR: the replacement report should carry every car entity, got {list(reports[1]['cars'][0].get('entities', {}))}")
+        failed += 1
+
+    # An unchanged cycle must file nothing, or every install churns the catalogue every minute.
+    api.refresh_discovery()
+    if len(reports) != 2:
+        print(f"ERROR: an unchanged cycle must not re-file the report, got {len(reports)}")
+        failed += 1
+
     if failed == 0:
-        print("PASS: the reported-marker only advances once the active device's car entities are complete")
+        print("PASS: a partial car report is replaced once the entities are published, then stops churning")
     return failed
 
 
 def test_discovery_report_failure_contained_and_retried(my_predbat):
     """
-    A bug in build_discovery() must not propagate out of _refresh_discovery_report(), and the
+    A bug in build_discovery() must not propagate out of refresh_discovery(), and the
     failed attempt is retried the next time it is called - not lost for the life of the process,
     even though "first" (the one-shot gate on the first of automatic_config()'s three call sites)
     never runs again once run() has returned True once.
@@ -974,24 +985,24 @@ def test_discovery_report_failure_contained_and_retried(my_predbat):
     reports = []
     api.report_discovery = lambda report: reports.append(report)
 
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
     failed = 0
     if reports:
         print("ERROR: no report should have been recorded on the failing attempt")
         failed += 1
-    if api.discovery_reported_for is not None:
+    if api._discovery_report is not None:
         print("ERROR: a failed report must not be marked as reported")
         failed += 1
 
     # The bug is fixed; calling it again - as the next automatic_config() call site would - retries and succeeds.
     api.build_discovery = real_build_discovery
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
     if len(reports) != 1:
         print(f"ERROR: the retried report should now succeed, got {len(reports)} reports")
         failed += 1
-    if api.discovery_reported_for is None:
+    if api._discovery_report is None:
         print("ERROR: the marker should advance once the retried report succeeds")
         failed += 1
     if failed == 0:
@@ -1112,9 +1123,9 @@ def _stub_run_dependencies(api):
     Replace every network-facing async call OctopusAPI.run() makes with a harmless no-op.
 
     Lets a test drive a real run() cycle - exercising the actual gating/ordering the Finding 2 fix
-    relies on, not just calling _refresh_discovery_report() directly - without touching the network
+    relies on, not just calling refresh_discovery() directly - without touching the network
     or overwriting the tariffs/intelligent_devices state the test set up directly.
-    automatic_config(), build_discovery(), report_discovery() and _refresh_discovery_report() are
+    automatic_config(), build_discovery(), report_discovery() and refresh_discovery() are
     deliberately left real (or individually overridden by the caller), since exercising those is
     the whole point of the tests that use this.
     """
@@ -1181,7 +1192,7 @@ def test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_f
     if reports:
         print(f"ERROR: no report should have succeeded on the failing first cycle, got {len(reports)}")
         failed += 1
-    if api.discovery_reported_for is not None:
+    if api._discovery_report is not None:
         print("ERROR: a failed report must not be marked as reported")
         failed += 1
 
@@ -1197,7 +1208,7 @@ def test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_f
     if len(reports) != 1:
         print(f"ERROR: expected exactly one successful report after the retry, got {len(reports)}")
         failed += 1
-    if api.discovery_reported_for is None:
+    if api._discovery_report is None:
         print("ERROR: the marker should have advanced once the retried report succeeded")
         failed += 1
     if failed == 0:
@@ -1210,7 +1221,7 @@ def test_discovery_report_produced_when_automatic_is_false(my_predbat):
     Task 7 review, Finding 2: an installation running octopus_automatic: false - precisely the
     manually-configured installation the catalogue most wants to describe - still gets a discovery
     report, even though every automatic_config() call site (and therefore its own adjacent
-    _refresh_discovery_report() call) is gated on self.automatic and so never runs at all.
+    refresh_discovery() call) is gated on self.automatic and so never runs at all.
     self.tariffs/self.mpan/the intelligent-device data/the published entities are all populated
     regardless of that flag - self.automatic is referenced nowhere else in this file.
     """
@@ -1240,7 +1251,7 @@ def test_discovery_report_produced_when_automatic_is_false(my_predbat):
     elif reports[0].get("automatic") is not False:
         print(f"ERROR: the report should record automatic=False, got {reports[0].get('automatic')}")
         failed += 1
-    if api.discovery_reported_for is None:
+    if api._discovery_report is None:
         print("ERROR: the marker should have advanced once the report succeeded")
         failed += 1
     if failed == 0:

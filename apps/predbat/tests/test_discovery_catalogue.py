@@ -18,7 +18,6 @@ would.
 """
 
 import copy
-import functools
 import json
 
 import yaml
@@ -128,12 +127,7 @@ def _build_reporting_fleet():
     gecloud = GECloudDirect(base, ge_cloud_direct=True, api_key="test-ge-cloud-key", automatic=True)
     gecloud.component_name = "gecloud"
     gecloud.info = {"pv001": {"info": {"model": "GIV-PV"}}}
-    gecloud_devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"], "battery_meters": {}}
-    # GE Cloud's real build_discovery() takes `devices` as an explicit argument - the one named
-    # exception among the five reporters (see the design's own Interfaces block for it) - so it is
-    # bound here to a fixed devices snapshot via functools.partial. This is what lets every
-    # reporter in the fleet be driven the same no-argument way: component.build_discovery().
-    gecloud.build_discovery = functools.partial(GECloudDirect.build_discovery, gecloud, gecloud_devices)
+    gecloud.devices_dict = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"], "battery_meters": {}}
 
     octopus = OctopusAPI(base, key="test-octopus-key", account_id="A-1234ABCD", automatic=True)
     octopus.component_name = "octopus"
@@ -144,8 +138,8 @@ def _build_reporting_fleet():
     ohme = OhmeAPI(base, email="driver@example.com", password="hunter2", ohme_automatic=True)
     ohme.component_name = "ohme"
     ohme.client.serial = "OHME-SERIAL-1"
-    for entity_id, _domain, _access in list(CHARGER_DISCOVERY_ENTITY_SPEC.values()) + list(CAR_DISCOVERY_ENTITY_SPEC.values()):
-        base.set_state_wrapper(entity_id, "on")
+    for descriptor in list(CHARGER_DISCOVERY_ENTITY_SPEC.values()) + list(CAR_DISCOVERY_ENTITY_SPEC.values()):
+        base.set_state_wrapper(descriptor["entity_id"], "on")
 
     solar = SolarAPI(
         base,

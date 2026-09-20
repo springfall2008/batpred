@@ -562,11 +562,6 @@ class OctopusAPI(ComponentBase):
         # run() compares this against the live set so a device appearing, disappearing or being
         # suspended re-wires the slots without waiting for a restart (issue #4648).
         self.intelligent_config_devices = None
-        # The (tariff, active-device) snapshot build_discovery() was last reported against AND
-        # found complete - compared outside any one-shot gate by _refresh_discovery_report(), so a
-        # failed or incomplete report is retried the next time any of automatic_config()'s three
-        # call sites runs, rather than lost for the life of the process.
-        self.discovery_reported_for = None
         self.tariff_fetched_at = None
         self.device_fetched_at = None
         self.sensor_updated_at = None
@@ -691,7 +686,7 @@ class OctopusAPI(ComponentBase):
             active_devices = self.get_active_intelligent_device_ids()
             if first:
                 self.automatic_config(self.tariffs)
-                self._refresh_discovery_report()
+                self.refresh_discovery()
             elif sensor_due and active_devices != self.intelligent_config_devices:
                 # The set of live, non-suspended Intelligent devices has moved - a second EV
                 # registered on the account, one deregistered, or the customer suspended one in
@@ -699,7 +694,7 @@ class OctopusAPI(ComponentBase):
                 # dispatch sensor and Predbat never sees the live IOG window (issue #4648).
                 self.log("OctopusAPI: Live intelligent devices changed from {} to {}, reconfiguring car slots".format(self.intelligent_config_devices, active_devices))
                 self.automatic_config(self.tariffs)
-                self._refresh_discovery_report()
+                self.refresh_discovery()
 
         # Unconditional and outside the "if self.automatic:" block above (unlike the two calls
         # inside it, which exist only to refresh the report in the SAME cycle a wiring change
@@ -716,10 +711,10 @@ class OctopusAPI(ComponentBase):
         # here, at the end of every cycle, sensor_due has always already been true at least once
         # this cycle by the time this runs (guaranteed on the first cycle, since sensor_due = first
         # or ...), so entity publication has already happened before this executes. The extra call
-        # is a cheap no-op once _discovery_state_key() matches self.discovery_reported_for; an
-        # empty or partial snapshot taken too early self-corrects once real tariff/device data
-        # lands, because that changes the state key.
-        self._refresh_discovery_report()
+        # is a cheap no-op once the rebuilt report matches the last one filed; an empty or partial
+        # snapshot taken too early self-corrects once real tariff/device data lands, because that
+        # changes the report - see ComponentBase.refresh_discovery().
+        self.refresh_discovery()
 
         return True
 
@@ -923,7 +918,7 @@ class OctopusAPI(ComponentBase):
         if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
             self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
             self.automatic_config(self.tariffs)
-            self._refresh_discovery_report()
+            self.refresh_discovery()
 
         return self.tariffs
 
@@ -1451,8 +1446,8 @@ class OctopusAPI(ComponentBase):
         Reporting is independent of self.automatic: it records what Octopus's own account
         describes, not whether this component wired Predbat's apps.yaml to it - that distinction is
         what the report's own "automatic" flag is for, not a gate on reporting here. run() calls
-        _refresh_discovery_report() (which calls this) unconditionally once per cycle, in addition
-        to beside each of automatic_config()'s own three call sites, so this genuinely is reached
+        refresh_discovery() (which calls this) unconditionally once per cycle, in addition to
+        beside each of automatic_config()'s own three call sites, so this genuinely is reached
         regardless of self.automatic - see run()'s own comment for why the automatic-gated call
         sites alone are not enough.
         """
@@ -1518,74 +1513,13 @@ class OctopusAPI(ComponentBase):
             charge_point_power = device.get("charge_point_power_in_kw")
             if charge_point_power is not None:
                 ratings["charge_point_power_kw"] = charge_point_power
-            if ratings:
-                record["ratings"] = ratings
+            record["ratings"] = ratings
 
-            entities = {}
-            for name, (domain, suffix, access) in OCTOPUS_CAR_ENTITY_SPEC.items():
-                entity_id = self.get_entity_name(domain, suffix, index=index_suffix)
-                if self.get_state_wrapper(entity_id) is not None:
-                    entities[name] = {"entity_id": entity_id, "domain": domain, "access": access}
-            if entities:
-                record["entities"] = entities
+            record["entities"] = self.discovery_entities({name: {"entity_id": self.get_entity_name(domain, suffix, index=index_suffix), "domain": domain, "access": access} for name, (domain, suffix, access) in OCTOPUS_CAR_ENTITY_SPEC.items()})
 
             cars.append(record)
 
         return {"automatic": self.automatic, "meters": meters, "cars": cars}
-
-    def _discovery_state_key(self):
-        """
-        A snapshot of what build_discovery() depends on: the tariff identities and the active intelligent-device set.
-
-        Deliberately narrower than self.tariffs itself, which also carries the rate/standing-charge
-        API payloads and churns on every fetch cycle - keying on those would make
-        _refresh_discovery_report() re-report on every tick instead of only when something
-        build_discovery() actually renders differently has changed.
-        """
-        tariff_key = tuple(sorted((direction, tariff.get("tariffCode"), tariff.get("productCode"), tariff.get("deviceID"), tariff.get("mpan")) for direction, tariff in self.tariffs.items()))
-        return (tariff_key, tuple(self.get_active_intelligent_device_ids()))
-
-    def _refresh_discovery_report(self):
-        """
-        Report the current meters/tariffs/cars snapshot to the discovery catalogue, if it has moved on from the last report that both succeeded and was complete.
-
-        Called from four places: beside each of automatic_config()'s three call sites, so a
-        device-set or tariff change refreshes the report in the same cycle automatic_config()
-        itself refreshes apps.yaml, AND unconditionally once per run() cycle (outside "if
-        self.automatic:") - see run()'s own comment for why the first three alone are not enough:
-        every one of them is reachable only from a narrow, one-off condition ("first", a device-set
-        change, a tariff-structure change) or is itself gated on self.automatic, so for a stable,
-        manually-configured installation none would ever fire again after startup. Idempotent
-        against the state-key check below, so calling it up to twice in one cycle costs nothing.
-
-        self.discovery_reported_for is compared here rather than gated on "first": the try/except
-        below (correctly) swallows a build_discovery() failure so run() still succeeds, and "first"
-        is a start()-local that flips to False forever the instant run() returns True - without an
-        out-of-band marker, a failure on the very first cycle would be lost for the life of the
-        process. The marker is left as it was, so the very next call - now guaranteed within one
-        run() cycle regardless of which branch, if any, fires - retries, both on a build_discovery()
-        failure and when an active device's car entities are not all published yet (Octopus
-        publishes them conditionally - see build_discovery()); a report built before they exist
-        would otherwise be marked done and the catalogue would permanently describe an incomplete
-        car slot.
-
-        Exception-guarded like the other discovery reporters (GivTCP, GE Cloud): an observer must
-        never be able to degrade the health of the component it observes. Logged only, not
-        non_fatal_error_occurred(): that sets base.had_errors, which makes update_pred() skip
-        record_status() and suppress the run notification - a purely observational side channel
-        must never be able to change Predbat's user-visible status this way (see solis.py's own
-        comment on the same trap).
-        """
-        state_key = self._discovery_state_key()
-        if state_key == self.discovery_reported_for:
-            return
-        try:
-            report = self.build_discovery()
-            self.report_discovery(report)
-            if all(len(record.get("entities", {})) == len(OCTOPUS_CAR_ENTITY_SPEC) for record in report.get("cars", [])):
-                self.discovery_reported_for = state_key
-        except Exception as e:
-            self.log("Warn: OctopusAPI: failed to report discovery for the catalogue: {}".format(e))
 
     async def async_get_saving_sessions(self, account_id):
         """

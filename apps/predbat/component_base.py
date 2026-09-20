@@ -58,6 +58,13 @@ class ComponentBase(ABC):
             the registry (the standalone CLI harnesses), so report_discovery() always has a name.
     """
 
+    # Declared on the class, not only assigned in __init__, so they exist even on a component built
+    # without it - the test harnesses construct components with Cls.__new__(Cls) to exercise one
+    # method in isolation. refresh_discovery() must not be able to raise on such an instance: an
+    # AttributeError escaping run() is exactly the degradation an observer is forbidden to cause.
+    component_name = None
+    _discovery_report = None
+
     def __init__(self, base, **kwargs):
         """
         Initialise the component base.
@@ -162,7 +169,64 @@ class ComponentBase(ABC):
         components = getattr(self.base, "components", None)
         coordinator = getattr(components, "coordinator", None) if components else None
         if coordinator:
-            coordinator.report(self.component_name, report)
+            coordinator.report(self.component_name or type(self).__name__, report)
+
+    def refresh_discovery(self):
+        """Rebuild this component's discovery report and file it if it has moved on.
+
+        Call unconditionally once per run() cycle. A component opts in by defining
+        build_discovery(), returning the report dict, or None when it has not discovered enough to
+        describe yet (no serial, no account) - a component with no build_discovery() is a no-op.
+
+        This is the whole reporting loop, so that a reporter only has to write the part that is
+        actually its own. Three rules the reporters are otherwise each expected to remember are
+        structural here instead:
+
+        - The report is rebuilt and compared IN FULL on every call, never keyed on a hand-maintained
+          snapshot of whatever build_discovery() happens to read. A key has to be kept in step with
+          the build by hand, and when it drifts the symptom is a report frozen in its first,
+          incomplete state for the life of the process - the endpoint that had not yet decoded its
+          serial, the entity Home Assistant had not published yet. Comparing the built report cannot
+          drift, and needs no completeness check either: a report that fills in later simply differs
+          from the stored one and replaces it. Builds are dict work over data already in hand and
+          run() is called about once a minute, so rebuilding to compare costs nothing measurable,
+          and report() is still only reached when something actually moved.
+        - The marker advances only after the report has been filed, and never on the failure path,
+          so a transient failure is retried on the next cycle instead of being lost. This is why the
+          call belongs OUTSIDE any one-shot "if first:" gate: "first" is a start()-local that flips
+          to False forever the instant run() returns True, so a single failed cycle inside it can
+          never be retried.
+        - A failure is caught and logged here, never raised. An observer must not be able to degrade
+          the health of the component it observes: an exception escaping run() withholds
+          update_success_timestamp() and eventually pushes a healthy component toward unhealthy.
+          Logged only, never non_fatal_error_occurred(): that sets base.had_errors, which makes
+          update_pred() skip record_status() and suppress the run notification, so a purely
+          observational side channel would be changing Predbat's user-visible status (see solis.py's
+          own comment on the same trap).
+        """
+        build = getattr(self, "build_discovery", None)
+        if build is None:
+            return
+        try:
+            report = build()
+            if report is None or report == self._discovery_report:
+                return
+            self.report_discovery(report)
+            self._discovery_report = report
+        except Exception as e:
+            self.log("Warn: {}: failed to report discovery for the catalogue: {}".format(self.component_name or type(self).__name__, e))
+
+    def discovery_entities(self, descriptors):
+        """Keep only the entity descriptors Home Assistant has actually seen.
+
+        `descriptors` maps a Predbat standard control name to its descriptor dict, each carrying at
+        least an "entity_id". An entity spec describes what a component CAN publish, not what it HAS
+        published on this install with this firmware - most reporters publish a good part of theirs
+        conditionally - so the catalogue must never claim an entity exists that Home Assistant has
+        never seen. Checking the state store is also what keeps this true across a restart
+        mid-cycle, where a spec would still claim everything.
+        """
+        return {name: descriptor for name, descriptor in descriptors.items() if self.get_state_wrapper(descriptor["entity_id"]) is not None}
 
     @property
     def currency_symbols(self):

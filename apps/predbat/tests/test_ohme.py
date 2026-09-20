@@ -1627,7 +1627,10 @@ class MockOhmeAPI(OhmeAPI):
         self.energy_last_time = None
         self.energy_last_watts = 0.0
         self.energy_restored = False
-        self.discovery_reported_for = None
+        # Both set by ComponentBase.__init__/Components.initialize() on the real component, which
+        # this mock stands in for rather than inherits - refresh_discovery() reads them.
+        self.component_name = "ohme"
+        self._discovery_report = None
 
         # Stand-in for the PredBat base object, so arg wiring and state read-back can be tested
         self.args = {}
@@ -3153,7 +3156,7 @@ def _test_ohme_switch_event_handler_approve_charge_wrong_status(my_predbat=None)
 
 
 # ============================================================================
-# Discovery Catalogue Tests (build_discovery, _refresh_discovery_report)
+# Discovery Catalogue Tests (build_discovery, refresh_discovery)
 # ============================================================================
 #
 # Task 8: the Ohme reporter is what proves the charger-and-car split the discovery catalogue
@@ -3170,10 +3173,10 @@ def _test_ohme_switch_event_handler_approve_charge_wrong_status(my_predbat=None)
 
 def _stage_all_discovery_entities(api):
     """Publish every charger and car discovery entity into the mock state store."""
-    for entity_id, _domain, _access in CHARGER_DISCOVERY_ENTITY_SPEC.values():
-        api.states[(entity_id, None)] = "on"
-    for entity_id, _domain, _access in CAR_DISCOVERY_ENTITY_SPEC.values():
-        api.states[(entity_id, None)] = "on"
+    for descriptor in CHARGER_DISCOVERY_ENTITY_SPEC.values():
+        api.states[(descriptor["entity_id"], None)] = "on"
+    for descriptor in CAR_DISCOVERY_ENTITY_SPEC.values():
+        api.states[(descriptor["entity_id"], None)] = "on"
 
 
 def _known_vehicle():
@@ -3372,10 +3375,13 @@ def _test_ohme_build_discovery_records_automatic_flag(my_predbat=None):
 
 def _test_ohme_discovery_report_not_advanced_while_entities_incomplete(my_predbat=None):
     """
-    The reported-marker does not advance while the charger/car entity set is incomplete.
+    A report built before publish_data() has ever run is replaced once the entities appear.
 
-    Without this, a report built before publish_data() has ever run would be marked done forever,
-    and the catalogue would permanently describe an incomplete charger and car.
+    The catalogue is allowed to describe an incomplete charger - what Ohme knows so far is worth
+    recording - but it must never be STUCK describing one. refresh_discovery() compares the whole
+    report rather than a snapshot key, so the partial report files, and the complete one that
+    follows differs from it and replaces it. An unchanged cycle must file nothing, or every
+    install would churn the catalogue once a minute.
     """
     print("**** Running test_ohme_discovery_report_not_advanced_while_entities_incomplete ****")
 
@@ -3384,18 +3390,23 @@ def _test_ohme_discovery_report_not_advanced_while_entities_incomplete(my_predba
     reports = []
     api.report_discovery = lambda report: reports.append(report)
 
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
-    assert api.discovery_reported_for is None, "The marker should not advance while entities are incomplete"
-    assert len(reports) == 1, f"Expected exactly one report attempt, got {len(reports)}"
+    assert len(reports) == 1, f"Expected the partial report to be filed, got {len(reports)}"
+    assert not reports[0]["chargers"][0].get("entities"), "The first report should carry no entities - none are published yet"
 
     _stage_all_discovery_entities(api)
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
-    assert api.discovery_reported_for is not None, "The marker should advance once every entity is published"
-    assert len(reports) == 2, f"Expected a second report attempt once entities were complete, got {len(reports)}"
+    assert len(reports) == 2, f"Expected the completed report to replace the partial one, got {len(reports)}"
+    assert len(reports[1]["chargers"][0]["entities"]) == len(CHARGER_DISCOVERY_ENTITY_SPEC), "The second report should carry every charger entity"
+    assert len(reports[1]["cars"][0]["entities"]) == len(CAR_DISCOVERY_ENTITY_SPEC), "The second report should carry every car entity"
 
-    print("PASS: the reported-marker only advances once the charger and car entities are complete")
+    api.refresh_discovery()
+
+    assert len(reports) == 2, f"An unchanged cycle must not re-file the report, got {len(reports)}"
+
+    print("PASS: a partial report is replaced once the charger and car entities are published, then stops churning")
     return 0
 
 
@@ -3411,17 +3422,17 @@ def _test_ohme_discovery_report_failure_contained_and_retried(my_predbat=None):
     reports = []
     api.report_discovery = lambda report: reports.append(report)
 
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
     assert not reports, "No report should have been recorded on the failing attempt"
-    assert api.discovery_reported_for is None, "A failed report must not be marked as reported"
+    assert api._discovery_report is None, "A failed report must not be marked as reported"
     assert any("failed to report discovery" in msg for msg in api.log_messages), f"Expected a warning log, got {api.log_messages}"
 
     api.build_discovery = real_build_discovery
-    api._refresh_discovery_report()
+    api.refresh_discovery()
 
     assert len(reports) == 1, f"Expected the retried report to succeed, got {len(reports)} reports"
-    assert api.discovery_reported_for is not None, "The marker should advance once the retried report succeeds"
+    assert api._discovery_report is not None, "The marker should advance once the retried report succeeds"
 
     print("PASS: a build_discovery failure is contained and retried on the next call, not lost forever")
     return 0
@@ -3430,7 +3441,7 @@ def _test_ohme_discovery_report_failure_contained_and_retried(my_predbat=None):
 def _test_ohme_discovery_report_retried_via_unconditional_run_call(my_predbat=None):
     """
     A build_discovery failure on the very first run() cycle is retried on a later, unchanging
-    cycle via run()'s unconditional call to _refresh_discovery_report() - not lost for the life of
+    cycle via run()'s unconditional call to refresh_discovery() - not lost for the life of
     the process, even though the "if first and self.client.serial:" block it sits beside only ever
     runs once ("first" flips to False forever the instant run() returns True).
     """
@@ -3450,14 +3461,14 @@ def _test_ohme_discovery_report_retried_via_unconditional_run_call(my_predbat=No
 
     assert result1 is True, "run() should still succeed on a cycle where only the discovery report fails"
     assert not reports, f"No report should have succeeded on the failing first cycle, got {len(reports)}"
-    assert api.discovery_reported_for is None, "A failed report must not be marked as reported"
+    assert api._discovery_report is None, "A failed report must not be marked as reported"
 
     api.build_discovery = real_build_discovery
     result2 = run_async(api.run(seconds=600, first=False))
 
     assert result2 is True, "run() should succeed on the retried cycle"
     assert len(reports) == 1, f"Expected exactly one successful report after the retry, got {len(reports)}"
-    assert api.discovery_reported_for is not None, "The marker should have advanced once the retried report succeeded"
+    assert api._discovery_report is not None, "The marker should have advanced once the retried report succeeded"
 
     print("PASS: a first-cycle build_discovery failure is retried on a later cycle via run()'s unconditional call")
     return 0
@@ -3492,7 +3503,7 @@ def _test_ohme_discovery_report_produced_when_automatic_false(my_predbat=None):
     assert not automatic_config_calls, "automatic_config() must not run when ohme_automatic is False"
     assert len(reports) == 1, f"Expected exactly one discovery report even with ohme_automatic False, got {len(reports)}"
     assert reports[0].get("automatic") is False, f"Expected the report to record automatic False, got {reports[0].get('automatic')}"
-    assert api.discovery_reported_for is not None, "The marker should have advanced once the report succeeded"
+    assert api._discovery_report is not None, "The marker should have advanced once the report succeeded"
 
     print("PASS: run() reports to the discovery catalogue even when ohme_automatic is False")
     return 0
@@ -3501,13 +3512,13 @@ def _test_ohme_discovery_report_produced_when_automatic_false(my_predbat=None):
 def _test_ohme_discovery_report_skipped_before_serial_known(my_predbat=None):
     """
     A real run() cycle with no serial yet - the charger's very first cycle, before
-    async_update_device_info() has ever identified it - must not report at all: neither
-    build_discovery() nor report_discovery() is called, and no charger record with a missing
-    serial reaches the coordinator.
+    async_update_device_info() has ever identified it - must not report at all: no charger record
+    with a missing serial reaches the coordinator.
 
-    _refresh_discovery_report() now runs unconditionally every cycle rather than only inside "if
-    first and self.client.serial:" (see run()'s comment on why), so this pins that its own falsy-
-    serial guard is what stops it firing too early - not the gate it now sits outside.
+    refresh_discovery() runs unconditionally every cycle rather than only inside "if first and
+    self.client.serial:" (see run()'s comment on why), so what stops it firing too early is
+    build_discovery()'s own falsy-serial guard returning None - every identity in both records is
+    derived from the serial, so there is nothing to describe until it arrives.
     MockOhmeApiClient's serial defaults to "" (OhmeApiClient.__init__), matching the real state
     before the account has ever been fetched, so this test deliberately never sets it.
     """
@@ -3516,16 +3527,15 @@ def _test_ohme_discovery_report_skipped_before_serial_known(my_predbat=None):
     api = MockOhmeAPI()
     assert not api.client.serial, f"Expected the client to start with no serial, got {api.client.serial!r}"
     _stub_run_network_calls(api)
-    api.build_discovery = MagicMock(side_effect=AssertionError("build_discovery() should not be called before the serial is known"))
     reports = []
     api.report_discovery = lambda report: reports.append(report)
 
     result = run_async(api.run(seconds=0, first=True))
 
     assert result is True, "run() should still succeed on a cycle with no serial yet"
-    assert not api.build_discovery.called, "build_discovery() must not be called before the client has a serial"
+    assert api.build_discovery() is None, "build_discovery() must return None before the client has a serial"
     assert not reports, f"No report should reach the coordinator before the serial is known, got {reports}"
-    assert api.discovery_reported_for is None, "The marker must not advance before the serial is known"
+    assert api._discovery_report is None, "The marker must not advance before the serial is known"
 
     print("PASS: run() does not report to the discovery catalogue before the client's serial is known")
     return 0

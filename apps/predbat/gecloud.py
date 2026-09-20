@@ -489,10 +489,6 @@ class GECloudDirect(ComponentBase):
         self.evc_device_list = []
         self.settings_from_cache = False
         self.default_options_stamp = None
-        # The devices_dict build_discovery() was last successfully reported against - compared
-        # every cycle (not gated on "first", unlike the report call itself) so a failed report is
-        # retried on a later cycle rather than being lost for the life of the process. See run().
-        self.discovery_reported_for = None
 
         # Customer account details, including the timezone the inverter register times are expressed in
         self.account = {}
@@ -1570,7 +1566,7 @@ class GECloudDirect(ComponentBase):
             return
         record["measures_meter"] = "gecloud:meter:{}".format(meter_serial)
 
-    def build_discovery(self, devices):
+    def build_discovery(self):
         """
         Describe the discovered GE Cloud devices for the discovery catalogue.
 
@@ -1599,7 +1595,7 @@ class GECloudDirect(ComponentBase):
         found, not whether this component wired Predbat's apps.yaml to it - that distinction is
         what the report's own "automatic" flag is for.
         """
-        devices = devices or {}
+        devices = self.devices_dict or {}
         battery_devices = list(devices.get("battery") or [])
         gateway = devices.get("gateway")
         ems = devices.get("ems")
@@ -2000,41 +1996,12 @@ class GECloudDirect(ComponentBase):
 
             # Independent of self.automatic: the catalogue describes what hardware GE Cloud found,
             # not whether this component wired Predbat's apps.yaml to it - that distinction is
-            # recorded in the report's own "automatic" flag, not acted on here as a gate on
-            # reporting at all. Placed after both settings (populated for every device in
-            # self.device_list, above) and self.info (populated earlier this same cycle, in the
-            # seconds % 120 block) are in hand, so build_discovery()'s capabilities/info/ratings
-            # never see stale or empty data.
-            #
-            # Deliberately compared against self.discovery_reported_for on every pass through this
-            # block, not gated on "first" the way async_automatic_config() above is: self.devices_dict
-            # never changes once fetched (GE Cloud has no rediscovery loop the way GivTCP does), so
-            # this only ever actually calls build_discovery() once devices_dict differs from what was
-            # last successfully reported - normally exactly once, on the first pass. But "first" is a
-            # ComponentBase.start()-local that flips to False forever the instant run() returns True,
-            # and the guard below deliberately swallows a build_discovery() failure so run() still
-            # succeeds - unlike async_automatic_config(), which is unguarded and so gets a de facto
-            # retry from start() itself (an uncaught exception there keeps "first" True). Without this
-            # comparison living outside "if first:", a build_discovery() failure on the very first
-            # cycle would report nothing for the rest of the process's life, even once the underlying
-            # bug or data problem clears up. self.discovery_reported_for is left unset on failure so
-            # the very next cycle through this block (every ~10 minutes, matching how often settings
-            # refresh) retries.
-            #
-            # Exception-guarded like publish_data()'s per-inverter work in GivTCP: an observer must
-            # never be able to degrade the health of the component it observes - without this, a bug
-            # in build_discovery() would propagate out of run() itself and withhold
-            # update_success_timestamp() below, retrying - identically failing - every cycle instead
-            # of just being logged once. Logged only, not non_fatal_error_occurred(): that sets
-            # base.had_errors, which makes update_pred() skip record_status() and suppress the run
-            # notification - a purely observational side channel must never be able to change
-            # Predbat's user-visible status this way (see solis.py's own comment on the same trap).
-            if self.devices_dict != self.discovery_reported_for:
-                try:
-                    self.report_discovery(self.build_discovery(self.devices_dict))
-                    self.discovery_reported_for = self.devices_dict
-                except Exception as e:
-                    self.log("Warn: GECloud: failed to report discovery for the catalogue: {}".format(e))
+            # recorded in the report's own "automatic" flag. Placed after both settings (populated
+            # for every device in self.device_list, above) and self.info (populated earlier this
+            # same cycle, in the seconds % 120 block) are in hand, so build_discovery()'s
+            # capabilities/info/ratings never see stale or empty data. Outside "if first:" above,
+            # so a failed report is retried rather than lost - see refresh_discovery().
+            self.refresh_discovery()
 
             now_utc = self.now_utc_exact
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)

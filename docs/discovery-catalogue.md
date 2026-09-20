@@ -33,7 +33,8 @@ deliberately **not** in the entity's attributes; Home Assistant's recorder write
 change to disk, and the full catalogue is tens of kilobytes even on a modest install. Read the debug
 dump for the complete picture.
 
-Every report a component has ever filed is kept, and the catalogue is re-assembled fresh each time
+The latest report from each component is kept - a new one replaces that component's previous
+report rather than adding to it - and the catalogue is re-assembled fresh each time
 it is actually read. A debug dump always reflects the latest state, including anything reported
 *after* Predbat started - a rediscovered inverter, a changed tariff, a newly-discovered forecast
 site, a retry that succeeded on a later cycle - not only what was known at the "discovery barrier"
@@ -185,29 +186,38 @@ introduce, because a container that only accepts numbers structurally cannot car
 address or a pasted credential, however the schema grows. Choose whichever container matches the
 *kind* of fact you are reporting, not the one that happens to accept the value you have.
 
-### Four rules the five existing reporters paid for
+### Writing a reporter
 
-GivTCP, GE Cloud, Octopus, Ohme and Solcast each report today, and between them ran into the same
-handful of mistakes more than once. None of these are enforced by the coordinator - they are
-conventions a new reporter has to follow itself:
+A component reports by defining **`build_discovery()`**, returning its report dict - or `None` when
+it has not discovered enough to describe yet (no serial, no account) - and calling
+**`self.refresh_discovery()`** once per `run()` cycle, unconditionally. That is the whole contract.
+`ComponentBase.refresh_discovery()` owns the reporting loop itself, and with it three rules the
+first five reporters each had to remember, and between them got wrong more than once:
+
+- **A report is rebuilt and compared in full on every call**, never keyed on a hand-maintained
+  snapshot of whatever `build_discovery()` reads. Such a key has to be kept in step with the build
+  by hand, and when it drifts the report freezes in its first, incomplete state for the life of the
+  process. Comparing the built report cannot drift, and needs no completeness check either: a
+  report that fills in later simply differs from the stored one and replaces it. Builds are dict
+  work over data already in hand, so rebuilding to compare costs nothing measurable, and nothing is
+  filed unless something actually moved.
+- **The marker only advances after a report is filed**, never on the failure path, so a transient
+  failure is retried next cycle. This is why the call must sit *outside* any one-shot `if first:`
+  gate: `first` flips to False forever the instant `run()` returns True, so a single failed cycle
+  inside it could never be retried.
+- **A failure is caught and logged, never raised.** An observer must not be able to degrade the
+  health of the component it observes - an exception escaping `run()` withholds the success
+  timestamp and eventually pushes a healthy component toward unhealthy. It is logged only, never
+  through `non_fatal_error_occurred()`, which would set `had_errors` and suppress `record_status()`.
+
+Two rules remain yours to follow:
 
 1. **Report only entities that actually exist in the state store, never every entry in a static
    table.** An entity spec describes what a component *can* publish, not what it *has* published on
-   this particular install with this particular firmware version. Check `get_state_wrapper(entity_id)
-   is not None` for each one before including it - claiming an entity exists that Home Assistant has
-   never seen is worse than omitting it.
-2. **Compare your reported-marker outside any one-shot `if first:` gate.** A component's startup
-   path commonly runs certain setup exactly once, guarded by a `first` flag that never fires again
-   for the life of the process. If the discovery report is built only inside that gate, a single
-   transient failure on that one cycle (a bug, a slow API) loses the report forever, even once
-   whatever caused it is fixed. Keep your own out-of-band marker (a snapshot of whatever
-   `build_discovery()` depends on) and compare it on *every* `run()` cycle, unconditionally, so a
-   failed or incomplete attempt is simply retried the next time round.
-3. **Wrap the report call in try/except.** `build_discovery()`/`report_discovery()` is a side
-   channel, not the component's actual job - a bug in it must never be allowed to propagate out of
-   `run()` and withhold the success timestamp, which is what would otherwise happen. An observer
-   must never be able to degrade the health of the thing it is observing.
-4. **Never invent a record to resolve a cross-link - a dangling one is fine.** A device can point at
+   this particular install with this particular firmware version. Pass your descriptors through
+   `self.discovery_entities(descriptors)`, which keeps only those Home Assistant has actually seen -
+   claiming an entity exists that Home Assistant has never seen is worse than omitting it.
+2. **Never invent a record to resolve a cross-link - a dangling one is fine.** A device can point at
    another with a cross-link field (`measures_meter`, `charged_by`, ...) without the thing on the
    other end existing as a record in its own right. GE Cloud's CT-clamp cross-link is the clearest
    example: a battery can report which meter serial its own clamp measures without a `meters`

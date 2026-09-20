@@ -2500,7 +2500,7 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     An observer must never be able to degrade the health of the thing it observes: without the
     guard in run(), an exception here would skip update_success_timestamp() below it and retry -
     failing identically - every single cycle, eventually pushing an otherwise-healthy component
-    towards unhealthy over a bug in a side-channel report. self.reported_report is deliberately left
+    towards unhealthy over a bug in a side-channel report. self._discovery_report is deliberately left
     unset on failure so the next cycle still retries, exactly as it would without the guard. This
     also proves the failure never reaches base.had_errors: that flag makes update_pred() skip
     record_status() and suppress the run notification, so a bug in this purely observational side
@@ -2513,15 +2513,15 @@ def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=N
     result = run_async(component.run(seconds=0, first=True))
 
     assert result is True, "a discovery-reporting bug must not fail the whole run() call"
-    assert component.reported_report is None, "a failed report must not be marked as reported"
+    assert component._discovery_report is None, "a failed report must not be marked as reported"
     assert component.last_updated_time() is not None, "the success timestamp must still be recorded"
     assert getattr(base, "had_errors", False) is False, "a discovery-reporting bug must not degrade Predbat's own status - see update_pred()'s had_errors branch"
 
     # Once the bug is fixed, the very next cycle retries and succeeds - nothing was permanently lost
     del component.build_discovery
     run_async(component.run(seconds=1, first=False))
-    assert component.reported_report is not None, "the retried report should now succeed"
-    assert [record["device_id"] for record in component.reported_report["inverters"]] == ["givtcp:http://givtcp:6345"], component.reported_report["inverters"]
+    assert component._discovery_report is not None, "the retried report should now succeed"
+    assert [record["device_id"] for record in component._discovery_report["inverters"]] == ["givtcp:http://givtcp:6345"], component._discovery_report["inverters"]
     print("PASS: a build_discovery() failure is contained and retried, not left to degrade the component")
     return 0
 
@@ -2536,7 +2536,7 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
     it - publish_data() already ran that same cycle, over self.discovered as it stood at the TOP of
     the cycle, before the new index existed in it. The report block in run() is positioned BEFORE
     "if rediscover:" for exactly this reason: on the rediscovery cycle the report it builds still
-    equals self.reported_report (self.discovered hasn't grown yet) and is a no-op, and the NEXT
+    equals self._discovery_report (self.discovered hasn't grown yet) and is a no-op, and the NEXT
     cycle's poll republishes the now-grown fleet - including the rediscovered inverter's real
     entities - before the report block runs again. Drives an actual run() cycle through rediscovery
     rather than calling build_discovery() directly, since that ordering is exactly what a direct
@@ -2551,7 +2551,7 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
 
     run_async(component.run(seconds=0, first=True))
     assert len(reports) == 1, f"Expected the startup report, got {len(reports)}"
-    assert len(component.reported_report["inverters"]) == 1
+    assert len(component._discovery_report["inverters"]) == 1
 
     # inverter 1 comes back, and the hourly re-probe finds it
     component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
@@ -2561,12 +2561,12 @@ def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predb
     # The rediscovery cycle itself must not have reported anything new: reporting here, before
     # publish_data() has published inverter 1's entities, would emit an empty entity map for it.
     assert len(reports) == 1, "The rediscovery cycle itself must not report yet - inverter 1 has no published entities until next cycle's poll"
-    assert len(component.reported_report["inverters"]) == 1, f"Expected the report to stay deferred this cycle, got {component.reported_report['inverters']}"
+    assert len(component._discovery_report["inverters"]) == 1, f"Expected the report to stay deferred this cycle, got {component._discovery_report['inverters']}"
 
     # The following cycle republishes the grown fleet before the report block runs again
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS + GIVTCP_POLL_SECONDS, first=False))
     assert len(reports) == 2, "Expected the deferred report to fire once inverter 1's entities exist"
-    assert len(component.reported_report["inverters"]) == 2
+    assert len(component._discovery_report["inverters"]) == 2
     rediscovered_entities = reports[-1]["inverters"][1]["entities"]
     assert rediscovered_entities, "The rediscovered inverter's report must have a populated entity map, not an empty one"
     assert "charge_rate" in rediscovered_entities

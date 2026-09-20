@@ -123,10 +123,6 @@ class SolarAPI(ComponentBase):
         # a second local, active_source, that fetch_pv_forecast() corrects inside each fallback arm
         # - see that method's own comments.
         self.active_forecast_source = None
-        # The (sites, forecast_solar, open_meteo, ha-sensor-entities, active source) snapshot
-        # build_discovery() was last successfully reported against - see
-        # _refresh_discovery_report(). None until the first successful report.
-        self.discovery_reported_for = None
 
     async def run(self, seconds, first):
         """
@@ -144,15 +140,13 @@ class SolarAPI(ComponentBase):
             await self.fetch_pv_forecast()
 
         # Unconditional and outside both fetch conditions above, exactly like Ohme's and Octopus's
-        # own run()-level call: a build_discovery() failure on any one cycle is swallowed inside
-        # _refresh_discovery_report() (so a discovery observer can never degrade this component's
-        # own health) and must not be lost for the life of the process just because a later cycle
-        # happens not to call fetch_pv_forecast() again - the common steady-state case once the
-        # cached forecast is still fresh (see fetch_age/same_day above). self.discovered_sites and
-        # the forecast.solar/Open-Meteo/HA-sensor config are already whatever the most recent
-        # successful fetch left them as, so this reflects the current state correctly whether or
-        # not THIS cycle actually re-fetched anything - see that method's own docstring.
-        self._refresh_discovery_report()
+        # own run()-level call: a report must not be lost for the life of the process just because a
+        # later cycle happens not to call fetch_pv_forecast() again - the common steady-state case
+        # once the cached forecast is still fresh (see fetch_age/same_day above). self.discovered_sites
+        # and the forecast.solar/Open-Meteo/HA-sensor config are already whatever the most recent
+        # successful fetch left them as, so this reflects the current state correctly whether or not
+        # THIS cycle actually re-fetched anything - see ComponentBase.refresh_discovery().
+        self.refresh_discovery()
         return True
 
     async def cache_get_url(self, url, params, max_age=8 * 60):
@@ -698,23 +692,22 @@ class SolarAPI(ComponentBase):
         Unlike every other discovery reporter's own entity specs, these entity ids are not
         published by this component at all - they are user-configured apps.yaml values naming an
         entity an EXTERNAL integration publishes (see FORECAST_ENTITY_ARGS). "Exists" is still
-        checked the same way every other reporter checks it though: get_state_wrapper() against the
-        actual state store, since a configured-but-never-seen entity_id (a stale or mistyped
+        checked the same way every other reporter checks it though - discovery_entities() against
+        the actual state store - since a configured-but-never-seen entity_id (a stale or mistyped
         apps.yaml value, or an external integration that has not started yet) must not be claimed
         as discovered just because a value is set in apps.yaml. The domain is read back off the
         entity id itself, since - unlike a fixed entity spec - there is no way to know it in advance
         for an arbitrary externally-configured entity.
         """
-        entities = {}
+        descriptors = {}
         for name in FORECAST_ENTITY_ARGS:
             entity_id = getattr(self, name, None)
-            if not entity_id or self.get_state_wrapper(entity_id) is None:
+            if not entity_id:
                 continue
-            descriptor = {"entity_id": entity_id, "access": "r"}
+            descriptors[name] = {"entity_id": entity_id, "access": "r"}
             if "." in entity_id:
-                descriptor["domain"] = entity_id.split(".", 1)[0]
-            entities[name] = descriptor
-        return entities
+                descriptors[name]["domain"] = entity_id.split(".", 1)[0]
+        return self.discovery_entities(descriptors)
 
     def _discovery_capacity_kw(self, configs):
         """
@@ -858,64 +851,6 @@ class SolarAPI(ComponentBase):
             forecasts.append(record)
 
         return {"forecasts": forecasts}
-
-    def _discovery_state_key(self):
-        """
-        A snapshot of what build_discovery() depends on: the discovered Solcast sites, whether
-        forecast.solar/Open-Meteo are configured, which HA-sensor forecast entities currently exist,
-        and which provider actually served the most recent successful fetch.
-
-        Deliberately narrower than the forecast DATA itself (pv_forecast_minute and friends, which
-        churn every fetch cycle) - keying on those would make _refresh_discovery_report() re-report
-        on every cycle instead of only when the discovered SET has actually changed, exactly what
-        the design brief asks for. The HA-sensor entity set is part of the key (not just whether
-        pv_forecast_today etc are configured) so that an entity appearing in the state store for the
-        first time - the external integration publishing it later than this component starts -
-        is picked up as a change, not silently missed forever because the config value itself never
-        moved. self.active_forecast_source is included too: two providers can both stay configured
-        (and so contribute no change on their own) while which one is actually active flips between
-        cycles - forecast.solar's Open-Meteo fallback/primary settings are exactly this case - and
-        that flip is itself a change the catalogue must pick up.
-        """
-        return (tuple(self.discovered_sites), bool(self.forecast_solar), bool(self.open_meteo_forecast), tuple(sorted(self._discovery_forecast_entities())), self.active_forecast_source)
-
-    def _refresh_discovery_report(self):
-        """
-        Report the current forecast-provider snapshot to the discovery catalogue, if it has moved on from the last report that both succeeded and was complete.
-
-        Called unconditionally, once per run() cycle, from OUTSIDE both of run()'s own fetch
-        conditions - see run()'s own comment for why: the try/except below (correctly) swallows a
-        build_discovery() failure so run() still succeeds, and without an out-of-band marker
-        compared on every call (rather than on some one-shot "first" flag) a single transient
-        failure would otherwise be lost for the life of the process - the exact bug GE Cloud and
-        Octopus both shipped and had to fix.
-
-        self.discovery_reported_for is left unmoved, so the very next call retries, on two kinds
-        of incompleteness: a build_discovery() failure, and a report whose "ha_sensors" record does
-        not yet carry every pv_forecast_* entity that IS configured (get_state_wrapper() has not
-        seen it published yet) - a report built one cycle too early would otherwise be marked done
-        and the catalogue would permanently describe an incomplete HA-sensor source. Solcast/
-        forecast.solar/Open-Meteo have no equivalent partial state to guard: a site, once it has
-        ever been seen by the site loop, is never un-seen (self.discovered_sites is append-only),
-        and the forecast.solar/Open-Meteo records depend only on static apps.yaml config, not on
-        anything that can be "discovered but not yet visible".
-        """
-        state_key = self._discovery_state_key()
-        if state_key == self.discovery_reported_for:
-            return
-        try:
-            report = self.build_discovery()
-            self.report_discovery(report)
-            configured = sum(1 for name in FORECAST_ENTITY_ARGS if getattr(self, name, None))
-            reported = sum(len(record.get("entities", {})) for record in report["forecasts"] if record["device_id"] == "ha_sensors")
-            if reported == configured:
-                self.discovery_reported_for = state_key
-        except Exception as e:
-            # Logged only, not non_fatal_error_occurred(): that sets base.had_errors, which makes
-            # update_pred() skip record_status() and suppress the run notification - a purely
-            # observational side channel must never be able to change Predbat's user-visible status
-            # this way (see solis.py's own comment on the same trap).
-            self.log("Warn: SolarAPI: failed to report discovery for the catalogue: {}".format(e))
 
     def fetch_pv_datapoints(self, argname, entity_id):
         """
