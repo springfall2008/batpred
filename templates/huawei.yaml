@@ -68,7 +68,6 @@ pred_bat:
   # ------------------------------------------------------------------
   num_inverters: 1
   inverter_type: "HU"
-  balance_inverters_seconds: 0
 
   # Allow Predbat freeze/hold logic to use charge/discharge rate limits.
   #

@@ -146,6 +146,27 @@ SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
 # debugging "my cloud integration stopped working", so keep it readable.
 SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at", "_expires", "_expiry", "_expiration", "_birth")
 
+# Top-level apps.yaml keys not owned by any component (so not in the components.py registry) whose
+# own CONTENTS are sensitive rather than the key name matching a credential substring -
+# redact_strings/redact_strings_labelled are themselves the user's lists of values to redact
+# (GH#4770), so they must be masked wholesale in a debug dump or they would defeat their own
+# purpose - and for redact_strings_labelled, masking wholesale rather than per-value additionally
+# means the user's own chosen labels never end up in the dump either, which could themselves hint
+# at what the values are (a key named "landlord_mpan" is as informative as the MPAN itself).
+SECRET_KEY_EXPLICIT_NAMES = ("redact_strings", "redact_strings_labelled")
+
+# Credential key names that no substring catches and no component registers, because they are not
+# apps.yaml keys: "account_id" is the annual tool's own raw-schema spelling
+# (annual.load.octopus.account_id) for the credential apps.yaml calls octopus_api_account /
+# kraken_account_id. Without it the value reached the annual result and web surface in the clear
+# after being masked everywhere else (#5053 review).
+#
+# Kept separate from SECRET_KEY_EXPLICIT_NAMES because that list carries a second meaning -
+# _collect_secret_values() skips those names at the top level so the redact_strings denylists get
+# their labels from a later, more specific pass. These names have no such pass and must keep
+# collecting normally wherever they appear.
+SECRET_KEY_EXTRA_NAMES = ("account_id",)
+
 # What a redacted credential is replaced with. Named because find_redacted_secret_overwrite()
 # has to recognise it coming back in on a write, so the writer and the redactor must agree.
 SECRET_MASK = "xxx"
@@ -290,6 +311,8 @@ def is_secret_key(key, registry=True):
     noise. Redaction is the strict default so a new caller fails safe rather than leaking.
     """
     key_lower = str(key).lower()
+    if key_lower in SECRET_KEY_EXPLICIT_NAMES or key_lower in SECRET_KEY_EXTRA_NAMES:
+        return True
     if registry and key_lower in registry_secret_key_names():
         return True
     if key_lower.endswith(SECRET_KEY_EXEMPT_SUFFIXES):
@@ -341,10 +364,22 @@ def load_secrets(log=None):
         log(f"Loading secrets from {secrets_file}", quiet=False)
         try:
             with open(secrets_file, "r") as stream:
-                secrets = yaml.safe_load(stream) or {}
-                # Check for debug logging option
-                if secrets.get("logger") == "debug":
-                    log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
+                loaded = yaml.safe_load(stream) or {}
+                if not isinstance(loaded, dict):
+                    # Valid YAML (a bare scalar or list at the top level) but the wrong shape -
+                    # yaml.safe_load() raises nothing here, so without this check `secrets`
+                    # below would be reassigned to that scalar/list before the .get() call two
+                    # lines down throws AttributeError. The generic except then logs the crash
+                    # but the reassignment has already happened and is never undone, so
+                    # load_secrets() still returns the malformed value - and the very next
+                    # log() call reaches collect_log_secret_values()'s secrets.items(), which
+                    # raises unhandled and aborts startup entirely (#5053 review).
+                    log(f"Error: secrets.yaml at {secrets_file} must be a mapping of name: value, found {type(loaded).__name__} - ignoring it", quiet=False)
+                else:
+                    secrets = loaded
+                    # Check for debug logging option
+                    if secrets.get("logger") == "debug":
+                        log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
         except yaml.YAMLError as exc:
             log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
         except Exception as exc:
@@ -401,6 +436,258 @@ def mask_secret_args(args):
     masked = copy.deepcopy(args)
     _mask_secrets_in_place(masked)
     return masked
+
+
+def _collect_secret_values(value, found, label_prefix=""):
+    """
+    Recursively gather {value: label} for the string values of credential-like keys, mirroring
+    _mask_secrets_in_place()'s traversal but collecting rather than redacting. label_prefix lets
+    a nested call (e.g. inside a forecast_solar list entry) qualify the label with the parent
+    key, since the leaf key name alone ("api_key") is rarely distinctive on its own.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            # redact_strings/redact_strings_labelled are secret-flagged here (via
+            # SECRET_KEY_EXPLICIT_NAMES in is_secret_key()) so mask_secret_args()'s debug-dump
+            # masking hides them wholesale - but collect_log_secret_values() already gathers
+            # both explicitly afterward, in a specific order (a more specific label wins over
+            # the generic "redact_strings" one for the same value). Collecting them here too,
+            # at the top level, would race that ordering: this pass runs first, so a value
+            # present in both would keep this pass's generic "redact_strings" label instead of
+            # the more specific one redact_strings_labelled would have given it (#5053 review).
+            # Only exempt the true top-level keys (label_prefix empty) - an unrelated nested key
+            # that happens to share the name is not these denylists and should still collect.
+            # str(key) first: apps.yaml keys are always strings in practice, but is_secret_key()
+            # below already tolerates a non-string key the same way, and log() runs on the very
+            # first startup line - an unguarded .lower() here would crash before validation ever
+            # gets a chance to report the malformed input (#5053 review).
+            if not label_prefix and str(key).lower() in SECRET_KEY_EXPLICIT_NAMES:
+                continue
+            if is_secret_key(key):
+                key_label = (label_prefix + "." + str(key)) if label_prefix else str(key)
+                if isinstance(item, (str, int, float)) and not isinstance(item, bool) and str(item) and str(item) not in found:
+                    found[str(item)] = key_label
+                elif isinstance(item, list):
+                    # A secret-flagged key can itself hold a list (e.g. teslemetry_site_id,
+                    # sigenergy_system_id are "string|string_list") - collect each element
+                    # individually rather than dropping the whole list, since a log line needs
+                    # each real value recognised on its own, not the list masked as one blob the
+                    # way mask_secret_args()'s debug-dump redaction is allowed to.
+                    # Coerced like the scalar branch above: an unquoted numeric element of a
+                    # secret-flagged list (sigenergy_system_id, teslemetry_site_id) loads from
+                    # YAML as an int, and log() serializes with str(msg), so a str-only check
+                    # left it outside the pattern (#5053 review).
+                    for entry in item:
+                        if isinstance(entry, (str, int, float)) and not isinstance(entry, bool) and str(entry) and str(entry) not in found:
+                            found[str(entry)] = key_label
+            else:
+                nested_prefix = label_prefix
+                if isinstance(item, (dict, list)):
+                    # str(key): a YAML mapping may legitimately have a non-string key
+                    # ({123: {password: ...}}), and this traversal runs from log() on the very
+                    # first startup line - a raw concatenation raised TypeError there, aborting
+                    # startup before config validation could report it (#5053 review).
+                    nested_prefix = (label_prefix + "." + str(key)) if label_prefix else str(key)
+                _collect_secret_values(item, found, nested_prefix)
+    elif isinstance(value, list):
+        for entry in value:
+            _collect_secret_values(entry, found, label_prefix)
+
+
+def _flatten_denylist_value(value):
+    """
+    Yield every scalar inside a redact_strings/redact_strings_labelled entry, as strings.
+
+    The denylists are the user's explicit "never log these values" list, so a shape this does not
+    understand must not be dropped on the floor - dropping one leaves the credential the user
+    asked to hide in the clear, which is worse than redacting something harmless. Both entry
+    points previously tested `isinstance(value, (str, int, float))` and silently skipped anything
+    else, so `redact_strings: [[1234567890123]]` or `redact_strings_labelled: {mpan: [123...]}`
+    never entered the pattern even though validation accepted them (#5053 review).
+
+    Recurses lists/tuples/sets and dict values, coerces scalars with str() the way log() does when
+    it serialises a message, and drops only None, bools and empty strings - None and True/False
+    have no useful log representation to match on, and an empty string would match everywhere.
+    """
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, (str, int, float)):
+        text = str(value)
+        if text:
+            yield text
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _flatten_denylist_value(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _flatten_denylist_value(item)
+        return
+    # Any other type (a YAML date, say): str() it rather than ignore it, for the same
+    # fail-safe reason - the user put it on the denylist deliberately.
+    text = str(value)
+    if text:
+        yield text
+
+
+def collect_log_secret_values(args, secrets, redact_strings=None, redact_strings_labelled=None):
+    """
+    Return {value: label} for every credential string value a log line must never be allowed to
+    contain, and for every value in redact_strings/redact_strings_labelled (user-maintained
+    apps.yaml denylists).
+
+    Four sources, because not every user routes credentials through secrets.yaml and Predbat
+    cannot infer every credential-shaped string a third-party integration exposes (GH#4770):
+      - the resolved values of every secrets.yaml entry, labelled by their secrets.yaml key;
+      - the resolved values of every credential-like key in args (an apps.yaml written with the
+        key inline, `!secret` already resolved by the time args is built), labelled by that key;
+      - redact_strings - values Predbat cannot recognise as a credential by key name or registry
+        entry at all (an MPAN embedded in a third-party sensor's state or attributes, say), which
+        the user lists explicitly because only they know it is sensitive. Labelled generically
+        "redact_strings" - a bare string list carries no name to attach to any one entry;
+      - redact_strings_labelled - the same idea as redact_strings, but a {label: value} mapping
+        the user writes to get their own identifying label back in the log instead, the same way
+        a built-in credential is labelled by its own apps.yaml key name - e.g.
+        "my_landlords_mpan: '1234567890123'" redacts as <my_landlords_mpan> rather than every
+        entry collapsing into the one generic <redact_strings> label.
+    A value appearing in more than one source keeps whichever label it was found under first, in
+    the order above - args/secrets/redact_strings_labelled all identify the credential, a bare
+    redact_strings entry does not, so a more specific label wins when both would otherwise apply
+    to the same value.
+
+    Short values (len < 6) are dropped from the secrets.yaml and args sources - a one- or
+    two-character secret is either a placeholder/empty default or would false-positive-redact
+    ordinary log text constantly, and is not a credential worth the noise either way. Not applied
+    to redact_strings/redact_strings_labelled: those are the user's own deliberate denylist, not
+    a key-name heuristic that could coincidentally catch an ordinary word, so a short entry is
+    still exactly what was asked to be redacted.
+
+    redact_strings/redact_strings_labelled are not trusted to be well-formed: log() calls this on
+    the very first startup log line, before APPS_SCHEMA validation has run at all, so anything
+    malformed here must degrade rather than crash the whole of Predbat's startup on a config
+    typo, before the user ever sees the validation warning. Both go through
+    _flatten_denylist_value(), which accepts any shape - a bare scalar (apps.yaml's
+    "redact_strings: !secret my_mpan" reaches validate_config() unwrapped by get_arg()), a nested
+    list, or a dict - and yields every scalar inside it as a string. Values are coerced with
+    str() because log() serialises messages the same way, so an unquoted numeric MPAN or account
+    ID (landlord_mpan: 1234567890123, an int out of YAML) still matches (#5053 review).
+    """
+    found = {}
+    if secrets:
+        for key, value in secrets.items():
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                value = str(value)
+                if len(value) >= 6 and value not in found:
+                    found[value] = key
+    if args:
+        collected = {}
+        _collect_secret_values(args, collected)
+        for value, label in collected.items():
+            if len(value) >= 6 and value not in found:
+                found[value] = label
+    # No length floor below this point: redact_strings/redact_strings_labelled are entries the
+    # user put there deliberately, not something Predbat inferred from a key-name heuristic that
+    # could coincidentally catch an ordinary short word - the false-positive risk the floor
+    # exists to avoid above is the user's own call to accept here, and a short denylisted value
+    # (a 4-digit PIN, say) is still exactly what they asked to have redacted.
+    if isinstance(redact_strings_labelled, dict):
+        for label, value in redact_strings_labelled.items():
+            for scalar in _flatten_denylist_value(value):
+                if scalar not in found:
+                    found[scalar] = str(label)
+    for scalar in _flatten_denylist_value(redact_strings):
+        if scalar not in found:
+            found[scalar] = "redact_strings"
+    return found
+
+
+def compile_log_secret_pattern(secret_values):
+    """
+    Compile the {value: label} map into a single alternation pattern plus a value->label lookup
+    for redact_log_line(), or None when there is nothing to redact.
+
+    Compiled once whenever the value set changes (hass.py caches this alongside the values
+    themselves) rather than per log line: log() runs on every line, and matching one compiled
+    alternation is a single scan of the line regardless of how many secrets there are to check
+    for, where re-scanning the line once per value (the naive str.replace() loop) costs O(line
+    length x secret count) on every single line Predbat ever logs.
+
+    Returns (pattern, labels) rather than just a pattern: the label lookup is what lets
+    redact_log_line() report *which* credential a masked line held (octopus_api_key, say)
+    without ever writing out the value itself, so a log still tells you which integration to
+    check when something goes wrong, instead of every credential collapsing into one opaque
+    "xxx" indistinguishable from every other.
+    """
+    if not secret_values:
+        return None
+    # Longest-first: a shorter secret that happens to be a substring of a longer one (an API key
+    # and a derived token sharing a prefix, say) must not pre-empt the longer, more specific match.
+    ordered = sorted(secret_values, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(value) for value in ordered))
+    return pattern, secret_values
+
+
+def redact_log_line(line, secret_pattern):
+    """
+    Replace any occurrence of a known secret value in a log line with a labelled mask, e.g.
+    "<octopus_api_key>", identifying which credential was redacted without exposing it.
+
+    Written at the point a log line is produced (hass.py log()), not at serve/download time: some
+    users copy predbat.log directly off a Samba share exposing the addon's config directory,
+    bypassing every HTTP/MCP endpoint entirely, so redacting only at those endpoints would leave
+    the on-disk file itself carrying the plaintext value (GH#4770).
+
+    Takes the already-compiled (pattern, labels) pair from compile_log_secret_pattern(), not the
+    raw value map, so log() never pays compilation cost on the hot path.
+
+    Two secrets can overlap as substrings starting at different offsets (e.g. "sec1" and "c123x"
+    both present in "sec123x") - pattern.sub() alone only ever finds the first alternative that
+    matches at the earliest position ("sec1"), then resumes scanning after it, so it never
+    considers "c123x" starting one character in and leaves "23x" exposed. Extend each match to
+    the longest secret that starts anywhere inside it before emitting the mask, so a longer
+    secret overlapping a shorter one is always fully covered. Every secret that contributed to an
+    extended span keeps its own label in the mask (joined with "+"), rather than falling back to
+    the generic mask just because the merged span itself is not a single known value (#5053
+    review) - the point of a labelled mask is telling an operator which credential to check.
+    """
+    if secret_pattern is None or not line:
+        return line
+    pattern, labels = secret_pattern
+    out = []
+    pos = 0
+    for match in pattern.finditer(line):
+        start, end = match.span()
+        if start < pos:
+            # Already covered by the extended span of a previous match.
+            continue
+        # Collect the label of every secret found to contribute to the (possibly extended) span,
+        # in the order encountered, rather than looking up labels[line[start:end]] once at the
+        # end - a merged span covering more than one overlapping secret is not itself a key in
+        # labels, so that lookup would silently fall back to the generic mask and the line would
+        # read no differently from an unrecognised value, losing the "which credential" guarantee
+        # this feature exists to provide (#5053 review).
+        span_labels = [labels.get(match.group(0), SECRET_MASK)]
+        # Look for a longer secret starting at each position within this match's span and extend
+        # to cover it - finditer() itself won't report an overlapping match once it has already
+        # consumed the earlier one, so each candidate start position must be probed directly with
+        # match(). Repeat in case the extension is itself overlapped by a still-longer secret.
+        extended = True
+        while extended:
+            extended = False
+            for probe in range(start + 1, end):
+                rescan = pattern.match(line, probe)
+                if rescan and rescan.end() > end:
+                    end = rescan.end()
+                    rescan_label = labels.get(rescan.group(0), SECRET_MASK)
+                    if rescan_label not in span_labels:
+                        span_labels.append(rescan_label)
+                    extended = True
+        out.append(line[pos:start])
+        out.append("<{}>".format("+".join(span_labels)))
+        pos = end
+    out.append(line[pos:])
+    return "".join(out)
 
 
 def find_unmasked_secret_paths(node, path=""):
@@ -802,9 +1089,14 @@ def update_nested_yaml_value(data, path, value):
             raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
 
-def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
+def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True, fallback_to_state=False):
     """
     Get historical data for an attribute
+
+    fallback_to_state: when attributes=True and a point's attributes don't carry state_key
+    (e.g. history recorded before the attribute existed), fall back to that point's own
+    "state" field instead of dropping the point. Keeps a window that mixes pre/post-upgrade
+    points from being silently truncated to only the post-upgrade tail.
     """
     results = {}
     last_updated_time = None
@@ -826,8 +1118,11 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
 
         if attributes:
             if state_key not in item.get("attributes", {}):
-                continue
-            state = item["attributes"][state_key]
+                if not fallback_to_state or "state" not in item or item["state"] in ("unavailable", "unknown"):
+                    continue
+                state = item["state"]
+            else:
+                state = item["attributes"][state_key]
         else:
             # Ignore data without correct keys
             if state_key not in item:
@@ -1012,6 +1307,24 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
     max_days = max(max_age.days, 1)
     mdata, _ = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
     return [mdata, max_days]
+
+
+def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
+    """
+    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+
+    The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
+    same validity window. minute_data() writes each row over its range, so whichever row comes last
+    in the response wins, and that order is not stable across periods. Rows with no payment_method
+    (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
+    method, which keeps single-variant tariffs behaving exactly as before.
+    """
+    if not rates:
+        return rates
+    methods = {rate.get("payment_method") for rate in rates if isinstance(rate, dict)}
+    if preferred not in methods:
+        return rates
+    return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
 
 
 def minute_data(
@@ -2470,3 +2783,279 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
     if mallopt is None:
         return False
     return bool(mallopt(M_ARENA_MAX, max_arenas))
+
+
+# Spare PV below this (W) is noise rather than a surplus worth keeping the fleet charging for.
+# Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
+PV_SURPLUS_THRESHOLD = 50.0
+
+
+def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
+    """
+    Mutate the executor's per-inverter rate intent to correct fleet imbalance.
+
+    Ported from the old Execute.balance_inverters() timer loop, with the actuator changed: instead
+    of writing rate 0 and later resetting to max, this adjusts the intent that execute_plan built,
+    which is then applied once. Convergence therefore returns to the executor's value rather than
+    the register ceiling, so a deliberate hold can no longer be overwritten (F5 / GH#829).
+
+    Partner selection no longer uses the original's fixed (this_inverter + 1) % num_inverters ring,
+    which judged each inverter against its index neighbour and so gave different answers for the
+    same fleet depending on configuration order (F7 in GH#4856). The energy guards now ask whether
+    ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
+    as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
+
+    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
+    and a discharger together leaves the remaining units absorbing or supplying the difference,
+    against guards that were each evaluated as though its own hold were the only change. Holds
+    within the chosen direction are therefore applied cumulatively as well.
+
+    Args:
+        intent (dict): inverter id -> rate intent, mutated in place
+        snapshot (list): per-inverter plain readings, indexed by inverter id
+        balance_charge (bool): balance SoC while the fleet is charging
+        balance_discharge (bool): balance SoC while the fleet is discharging
+        balance_crosscharge (bool): stop one inverter charging from another
+        threshold_charge (float): minimum SoC% divergence to act on during charge
+        threshold_discharge (float): minimum SoC% divergence to act on during discharge
+        log_to (callable): optional logger, called with a single string
+    """
+    num_inverters = len(snapshot)
+    if num_inverters < 2:
+        return
+    for entry in snapshot:
+        if entry["in_calibration"]:
+            if log_to:
+                log_to("BALANCE: an inverter is in calibration, not balancing")
+            return
+
+    socs = [entry["soc_percent"] for entry in snapshot]
+    reserves = [entry["reserve_percent"] for entry in snapshot]
+    battery_powers = [entry["battery_power"] for entry in snapshot]
+    grid_powers = [entry.get("grid_power", 0.0) for entry in snapshot]
+    charge_rates = [entry["charge_rate_now"] for entry in snapshot]
+    discharge_rates = [entry["discharge_rate_now"] for entry in snapshot]
+
+    # The rates that will actually be in force after this pass. Balancing runs BEFORE the apply
+    # pass, so the measured rates above can overstate what the fleet is about to be able to do -
+    # an export allocation stepping down, for instance. The capacity guards below reason about
+    # these; the measured rates are kept for spotting an inverter that is already held at zero.
+    effective_charge_rates = []
+    effective_discharge_rates = []
+    for id in range(num_inverters):
+        if id in intent:
+            claimed_charge = intent[id].get("charge_rate", None)
+            claimed_discharge = intent[id].get("discharge_rate", None)
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+        else:
+            # Not being written this pass (read-only, or skipped for calibration), so whatever it
+            # reads now is what it will keep
+            effective_charge_rates.append(charge_rates[id])
+            effective_discharge_rates.append(discharge_rates[id])
+    total_effective_charge_rates = sum(effective_charge_rates)
+    total_effective_discharge_rates = sum(effective_discharge_rates)
+
+    total_battery_power = sum(battery_powers)
+    total_grid_power = sum(grid_powers)
+    total_charge_rates = sum(charge_rates)
+    total_discharge_rates = sum(discharge_rates)
+
+    out_of_balance = any(soc != socs[0] for soc in socs)
+    during_discharge = total_battery_power >= 0.0
+    during_charge = total_battery_power < 0.0
+    soc_min = min(socs)
+    soc_max = max(socs)
+
+    soc_low = [(soc < soc_max) and (abs(soc - soc_max) >= threshold_discharge) for soc in socs]
+    soc_high = [(soc > soc_min) and (abs(soc - soc_min) >= threshold_charge) for soc in socs]
+
+    above_reserve = [(socs[id] - reserves[id]) >= 4.0 for id in range(num_inverters)]
+    # Not an existence test - that form was unreachable, since soc_high[id] already implies some
+    # peer is below full. This is a per-peer filter on who can actually absorb charge.
+    below_full = [socs[id] < 100.0 for id in range(num_inverters)]
+    power_enough_discharge = [battery_powers[id] >= 50.0 for id in range(num_inverters)]
+    power_enough_charge = [battery_powers[id] <= -50.0 for id in range(num_inverters)]
+
+    if log_to:
+        log_to(
+            "BALANCE: socs {}% reserves {}% battery_powers {}W total {}W charge_rates {}W discharge_rates {}W out_of_balance {} soc_low {} soc_high {}".format(
+                socs, reserves, battery_powers, total_battery_power, charge_rates, discharge_rates, out_of_balance, soc_low, soc_high
+            )
+        )
+
+    # An inverter working against the fleet direction is the wasteful case: energy makes a round
+    # trip through two batteries for no benefit. Correct that first and EXCLUSIVELY - a pass must
+    # never pause in both directions, because the inverters share an AC bus and the remaining units
+    # simply absorb or supply whatever the paused pair stopped doing. Stopping an against-direction
+    # inverter needs no rate guard: it only removes load (fleet discharging) or removes draw (fleet
+    # charging), so it can never leave the house short.
+    # Which direction the fleet SHOULD be going is a question about the whole site's energy
+    # balance, not about the sign of the battery power. Per-inverter readings cannot answer it:
+    # one inverter discharging looks like less load to another, the PV wiring is not declared, and
+    # an AC-coupled unit has no PV of its own. The fleet totals can, and they are trustworthy.
+    #
+    # Predbat's grid convention is +ve EXPORT, -ve import (apps-yaml.md, grid_power_invert), and
+    # battery_power is +ve discharging, so conservation at the house gives:
+    #
+    #     PV + battery = load + grid  =>  load  = total_pv + total_battery_power - total_grid
+    #                                     spare = total_pv - load = total_grid - total_battery_power
+    #
+    # Spare PV therefore falls out of grid and battery alone, with no PV attribution needed. That
+    # grid sign is load-bearing - inverting it inverts every decision below - which is why it is
+    # spelled out here and pinned by the random-fleet property test.
+    #
+    # With spare PV the fleet should be soaking it up, so an inverter DISCHARGING into the surplus
+    # is the anomaly; blaming the chargers there drops PV absorption to zero during an export
+    # window. Only when the batteries are net discharging with no surplus is a charging inverter
+    # being fed by import or by another battery - the cross-charge worth stopping.
+    spare_pv = total_grid_power - total_battery_power
+
+    # Where the executor has claimed rates it already knows what the fleet is meant to be doing,
+    # and that beats anything inferred from the meters. Without this a planned export on a sunny
+    # day reads as "the fleet should be charging" - grid export exceeds what the batteries supply,
+    # so spare_pv is positive - and every inverter carrying out that export looks like an anomaly
+    # and gets held, cancelling it until the next plan run. The energy balance is the fallback for
+    # demand and idle, where nothing has been claimed and the meters are all there is to go on.
+    claimed = {intent[id].get("owner", "demand") for id in intent}
+    if "export" in claimed:
+        fleet_should_discharge = True
+    elif "charge" in claimed:
+        fleet_should_discharge = False
+    else:
+        fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
+
+    if fleet_should_discharge:
+        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+    else:
+        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+
+    if against_fleet and balance_crosscharge:
+        for id in against_fleet:
+            if log_to:
+                log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
+            if fleet_should_discharge:
+                intent[id]["charge_rate"] = 0
+            else:
+                intent[id]["discharge_rate"] = 0
+        # This pass is done: SoC balancing on top would be the second direction of hold that the
+        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
+        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
+        return
+
+    if not out_of_balance:
+        return
+
+    # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
+    # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
+    # ones already taken this pass or two holds each pass a check computed for one.
+    if during_discharge and balance_discharge and total_discharge_rates > 0:
+        held = set()
+        for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
+            if not soc_low[id]:
+                continue
+            if not (power_enough_discharge[id] or discharge_rates[id] == 0):
+                continue
+            # Somebody else has to have the energy to take over - any of them, not an arbitrary
+            # index neighbour, which is what the (i + 1) % n ring used to ask (F7).
+            # Count only the peers that could actually take over: above their reserve, and not
+            # already held this pass. Asking "somebody is above reserve" and "the fleet has rate
+            # headroom" separately lets two different inverters answer them - a peer with energy
+            # but no rate, and a peer with rate but sitting on its reserve - and holding this one
+            # then leaves only unusable capacity behind, with the shortfall coming off the grid.
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
+            if (usable - 200) < total_battery_power:
+                continue
+            if log_to:
+                log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
+            intent[id]["discharge_rate"] = 0
+            held.add(id)
+    elif during_charge and balance_charge and total_charge_rates > 0:
+        held = set()
+        for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: -socs[id]):
+            if not soc_high[id]:
+                continue
+            if not (power_enough_charge[id] or charge_rates[id] == 0):
+                continue
+            # No "somebody else has room" check is needed here, unlike above_reserve on the
+            # discharge side: soc_high[id] already requires socs[id] > soc_min, so the inverter
+            # holding the minimum is strictly below this one and therefore below 100%. The
+            # original's below_full[other_inverter] asked this of one arbitrary neighbour; asked
+            # of the fleet it is implied, so it is not restated.
+            # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
+            # not be counted towards what is left to soak up the surplus.
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            if spare_pv > usable:
+                continue
+            if log_to:
+                log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
+            intent[id]["charge_rate"] = 0
+            held.add(id)
+
+
+def allocate_export_rates(needs, max_rates, p_fleet):
+    """
+    Split the planned fleet export power across inverters by how much each still has to shed.
+
+    The planner costs a specific fleet export power (the low power ladder in plan.py), so the sum
+    of the allocation is pinned to it and only the split varies. An inverter already at its target
+    takes none of the budget and its share spills to inverters that can still deliver, which is
+    what stops fleet export power sagging below plan as inverters finish one by one.
+
+    At full rate p_fleet equals the sum of the ceilings, so every inverter clamps at its own
+    maximum and this reduces to exactly today's uniform scaling.
+
+    Args:
+        needs (list): kWh each inverter still has to shed before reaching its own target
+        max_rates (list): per-inverter export ceiling in W
+        p_fleet (float): planned fleet export power in W
+
+    Returns:
+    - list: export rate in W per inverter, summing to min(p_fleet, sum(max_rates))
+    """
+    count = len(max_rates)
+    if count == 0:
+        return []
+
+    remaining = min(p_fleet, sum(max_rates))
+    if remaining <= 0:
+        return [0.0] * count
+
+    # At or above full fleet power there is nothing to ration, so every inverter takes its own
+    # maximum - the documented no-op outside low power mode. Handled before zero-need entries are
+    # filtered out below, or their share would have nowhere to go and the sum would come up short
+    # of the power the planner costed. An inverter already at its export target is stopped by that
+    # target, not by having its rate held down.
+    if p_fleet >= sum(max_rates):
+        return list(max_rates)
+
+    shares = [need if need > 0 else 0.0 for need in needs]
+    if sum(shares) <= 0:
+        # Nothing to shed anywhere - fall back to the uniform split rather than dividing by zero
+        shares = [1.0] * count
+
+    alloc = [0.0] * count
+    open_set = [id for id in range(count) if shares[id] > 0]
+
+    # Water-fill: hand out the budget in proportion to need, clamp anyone who hits their ceiling,
+    # then redistribute what they could not take among those still open. Terminates because each
+    # pass either closes at least one inverter or places the whole remainder.
+    while remaining > 0.01 and open_set:
+        share_total = sum(shares[id] for id in open_set)
+        if share_total <= 0:
+            break
+        clamped_any = False
+        budget = remaining
+        for id in list(open_set):
+            want = alloc[id] + budget * (shares[id] / share_total)
+            if want >= max_rates[id]:
+                remaining -= max_rates[id] - alloc[id]
+                alloc[id] = max_rates[id]
+                open_set.remove(id)
+                clamped_any = True
+        if not clamped_any:
+            for id in open_set:
+                alloc[id] += remaining * (shares[id] / share_total)
+            remaining = 0.0
+
+    return alloc

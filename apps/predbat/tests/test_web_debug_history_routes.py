@@ -71,7 +71,7 @@ def test_web_debug_history_routes(my_predbat):
         if resp.status != 404:
             print("  ERROR: expected 404 downloading with no storage, got {}".format(resp.status))
             failed = True
-        resp = asyncio.run(w_no_storage.html_debug_history_download_all(FakeRequest()))
+        resp = asyncio.run(w_no_storage.html_debug_history_download_recent(FakeRequest()))
         if resp.status != 404:
             print("  ERROR: expected 404 for download-all with no storage, got {}".format(resp.status))
             failed = True
@@ -155,7 +155,7 @@ def test_web_debug_history_routes(my_predbat):
             failed = True
 
         print("Test: download-all bundles every retained snapshot into one archive")
-        resp = asyncio.run(w.html_debug_history_download_all(FakeRequest()))
+        resp = asyncio.run(w.html_debug_history_download_recent(FakeRequest()))
         if resp.status != 200:
             print("  ERROR: expected a 200 response from download-all, got status={}".format(resp.status))
             failed = True

@@ -78,9 +78,6 @@ pred_bat:
     - "GE"
   num_inverters: 1
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
-  #
   # Set this and Predbat talks to GivTCP's REST API directly - the recommended setup, and the only
   # thing you need for a GivEnergy system. Predbat creates its own entities from what GivTCP reports
   # and configures itself from them, so with this set you can delete everything below in the

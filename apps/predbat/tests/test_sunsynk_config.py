@@ -13,6 +13,7 @@ from unittest.mock import patch
 from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
 from sunsynk_const import SUNSYNK_TTL_STATIC
+from sunsynk import load_apps_yaml_credentials, _tou_test_window
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_sunsynk_publish import PublishingSunsynk
 from tests.test_infra import run_async as run_async_local
@@ -806,11 +807,110 @@ def test_sign_flags_are_claimed_not_inherited():
     assert not failed, "test_sign_flags_are_claimed_not_inherited"
 
 
+def test_apps_yaml_credentials_loader():
+    """The standalone CLI's --apps-yaml loader builds a usable account or refuses precisely.
+
+    This is what lets the CLI drive a real oauth account for the live TOU round trip, where
+    there is a bearer token and no password at all. A bug here either half-builds a client
+    that fails at login with a confusing message, or silently drops the serial.
+    """
+    failed = False
+    import os
+    import tempfile
+
+    import yaml as yaml_module
+
+    def write(folder, name, payload):
+        """Write a YAML fixture and return its path."""
+        path = os.path.join(folder, name)
+        with open(path, "w") as handle:
+            yaml_module.safe_dump(payload, handle)
+        return path
+
+    with tempfile.TemporaryDirectory() as folder:
+        oauth = write(folder, "oauth.yaml", {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_token_hash": "hash-abc", "sunsynk_inverter_sn": ["2211093089"], "sunsynk_token_expires_at": "2026-09-19T22:11:54.287+00:00"}})
+        credentials = load_apps_yaml_credentials(oauth)
+        expected = {"auth_method": "oauth", "key": "token-abc", "token_hash": "hash-abc", "inverter_sn": ["2211093089"], "token_expires_at": "2026-09-19T22:11:54.287+00:00"}
+        if credentials != expected:
+            print(f"ERROR: oauth config loaded as {credentials}, expected {expected}")
+            failed = True
+
+        # A YAML-parsed timestamp must come back as the string _parse_expiry wants, not a
+        # datetime - safe_load turns an unquoted ISO date into one.
+        from datetime import datetime as real_datetime
+
+        typed = write(folder, "typed.yaml", {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_inverter_sn": ["2211093089"], "sunsynk_token_expires_at": real_datetime(2026, 9, 19, 22, 11, 54)}})
+        if not isinstance(load_apps_yaml_credentials(typed).get("token_expires_at"), str):
+            print("ERROR: a YAML-typed expiry must be handed on as a string")
+            failed = True
+
+        # A bare mapping (a hand-trimmed file with no pred_bat wrapper) is accepted too.
+        bare = write(folder, "bare.yaml", {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_inverter_sn": "2211093089"})
+        if load_apps_yaml_credentials(bare).get("inverter_sn") != ["2211093089"]:
+            print("ERROR: a bare mapping with a scalar serial should load as a one-element list")
+            failed = True
+
+        # Each way of being unusable must refuse with its own reason, never half-build.
+        refusals = {
+            "no_serial.yaml": {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc"}},
+            "oauth_no_token.yaml": {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_inverter_sn": ["2211093089"]}},
+            "password_incomplete.yaml": {"pred_bat": {"sunsynk_username": "someone@example.com", "sunsynk_inverter_sn": ["2211093089"]}},
+        }
+        for name, payload in refusals.items():
+            try:
+                load_apps_yaml_credentials(write(folder, name, payload))
+                print(f"ERROR: {name} should have been refused")
+                failed = True
+            except ValueError:
+                pass
+        for name, path in (("missing", os.path.join(folder, "missing.yaml")), ("not a mapping", write(folder, "list.yaml", ["a", "b"]))):
+            try:
+                load_apps_yaml_credentials(path)
+                print(f"ERROR: {name} should have been refused")
+                failed = True
+            except ValueError:
+                pass
+
+        # A password account is complete without any token.
+        password = write(folder, "password.yaml", {"pred_bat": {"sunsynk_username": "someone@example.com", "sunsynk_password": "hunter2", "sunsynk_inverter_sn": ["2211093089"]}})
+        if load_apps_yaml_credentials(password).get("username") != "someone@example.com":
+            print("ERROR: a username/password account should load without a token")
+            failed = True
+    assert not failed, "test_apps_yaml_credentials_loader"
+
+
+def test_tou_test_window_avoids_now():
+    """The CLI's live TOU window never contains the current time.
+
+    The programme --tou-test writes is meant to be stored, read back and removed without
+    the inverter ever acting on it. A window covering the current minute would put the
+    battery into a real grid-charge for the seconds before the restore.
+    """
+    failed = False
+    for now_minutes in range(0, 24 * 60, 7):
+        start, end = _tou_test_window(now_minutes)
+        start_minutes = int(start[:2]) * 60 + int(start[3:])
+        end_minutes = int(end[:2]) * 60 + int(end[3:])
+        if start_minutes < end_minutes:
+            inside = start_minutes <= now_minutes < end_minutes
+        else:
+            inside = now_minutes >= start_minutes or now_minutes < end_minutes
+        if inside:
+            print(f"ERROR: window {start}-{end} contains the current time {now_minutes // 60:02d}:{now_minutes % 60:02d}")
+            failed = True
+        if start == end:
+            print(f"ERROR: window {start}-{end} is zero length and would be dropped")
+            failed = True
+    assert not failed, "test_tou_test_window_avoids_now"
+
+
 def run_sunsynk_config_tests(my_predbat):
     """Run all Sunsynk configuration tests."""
     failed = False
     for name, fn in [
         ("inverter_def", test_inverter_def_registered),
+        ("apps_yaml_credentials", test_apps_yaml_credentials_loader),
+        ("tou_test_window", test_tou_test_window_avoids_now),
         ("component_registered", test_component_registered),
         ("apps_schema", test_apps_schema_keys),
         ("automatic_config", test_automatic_config_maps_control_entities),

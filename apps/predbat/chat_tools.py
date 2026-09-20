@@ -771,6 +771,11 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
         return {"success": False, "error": "Could not write apps.yaml: {}".format(error), "data": None}
 
     base.args[key] = value
+    # The written key can itself be a credential (or the redact_strings/redact_strings_labelled
+    # denylists), so log()'s cached redaction pattern (hass.py) must be rebuilt on next use or a
+    # newly saved value keeps leaking into the log under the stale pattern until restart (#5053
+    # review).
+    base._invalidate_log_secret_pattern()
 
     description = "Changed apps.yaml key '{}' from {!r} to {!r}. {}".format(key, previous_value, value, APPS_YAML_RESTART_WARNING)
     return {

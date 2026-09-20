@@ -132,8 +132,6 @@ pred_bat:
   # **** End of Outputs to Sunsynk Inverter ****
 
 
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 0
   #
 
   # Custom sensors to get the BMS charge/discharge limit, based on inverter size (8000kW, BMS reported limit, and inverter set limit)

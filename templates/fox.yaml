@@ -146,9 +146,6 @@ pred_bat:
     option: "Feed-in First"
 
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  #balance_inverters_seconds: 60
-  #
 
   # charge_rate and discharge_rate come from the https://github.com/nathanmarlor/foxess_modbus/ integration, they are in kW but works without problems.
   charge_rate:

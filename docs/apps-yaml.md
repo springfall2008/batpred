@@ -236,6 +236,32 @@ If a secret is referenced in `apps.yaml` but not found in `secrets.yaml`, Predba
 - All secrets stored in one centralized location
 - Compatible with Home Assistant's secrets system
 
+### Redaction in logs and debug files
+
+Credential values - whether stored in `secrets.yaml` and referenced with `!secret`, or written directly in `apps.yaml` - are masked wherever Predbat writes them out: `predbat.log`, a `predbat_debug_*.yaml` file, and the apps.yaml downloads on the [web interface](web-interface.md). This happens at the point each line is written, not only when a file is later downloaded, so the on-disk files themselves never carry the plaintext value - including if you copy `predbat.log` directly off a Samba share rather than downloading it through Predbat.
+
+A masked value appears with a label naming which credential it was, e.g. `<octopus_api_key>`, rather than a generic placeholder, so a log line stays useful for diagnosing a problem without ever showing the value itself.
+
+#### redact_strings and redact_strings_labelled
+
+Predbat can only recognise a value as a credential by its `apps.yaml` key name (`_key`, `password`, `secret`, `token`) or from the list of account/meter/serial-number-style identifiers it knows about internally. It has no way to know that a value coming from a third-party Home Assistant integration - an MPAN embedded in a sensor's `entity_id` or attributes, say - is sensitive. For anything like that, list the value yourself, preferably with `redact_strings_labelled` - a name -> value mapping, so the masked line reads with your own label instead of a generic one:
+
+```yaml
+pred_bat:
+  redact_strings_labelled:
+    my_mpan: "1234567890123"  # e.g. an MPAN surfaced by a third-party integration
+```
+
+That masks as `<my_mpan>` wherever it appears. If you don't need a label, `redact_strings` is a bare list instead:
+
+```yaml
+pred_bat:
+  redact_strings:
+    - "1234567890123"
+```
+
+Each entry there is masked generically as `<redact_strings>`. As with any other credential, you can reference a `!secret` here too rather than writing the value inline. Both settings are themselves masked wholesale if they ever appear in a debug dump, so the denylist doesn't leak the very values (or, for the labelled form, the label names) it exists to hide.
+
 ## Basics
 
 Basic configuration items
@@ -2294,14 +2320,13 @@ Set **load_forecast_only** to `true` if you do not wish to use the Predbat forec
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-Most of the Predbat configuration for balancing inverters is through a number of [Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters),
-but there is one configuration item in `apps.yaml`:
+The Predbat configuration for balancing inverters is entirely through the
+[Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters); there is nothing to set
+in `apps.yaml`.
 
-```yaml
-  balance_inverters_seconds: seconds
-```
-
-Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+Balancing used to have its own `balance_inverters_seconds` interval. It now runs as part of Predbat's normal
+control cycle, so that setting has been removed - if it is still present in your `apps.yaml` it is ignored and
+can be deleted.
 
 ## Config validation retries
 

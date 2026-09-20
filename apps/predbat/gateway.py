@@ -1041,7 +1041,10 @@ class GatewayMQTT(ComponentBase):
             else:
                 # SoC not reported by this charger — estimate from session energy and configured battery size
                 # so the sensor always exists and the optimizer sees progress rather than a stuck 0%.
-                battery_size_kwh = self.get_arg("car_charging_battery_size", 100)
+                # car_charging_battery_size is a per-car list (entries: num_cars) and auto-config
+                # puts the gateway charger in car slot 0, so read that slot. A float default keeps
+                # a fractional size such as 10.5 kWh; an int default would truncate it to 10.
+                battery_size_kwh = self.get_arg("car_charging_battery_size", 100.0, index=0)
                 try:
                     battery_size_kwh = float(battery_size_kwh)
                 except (ValueError, TypeError):

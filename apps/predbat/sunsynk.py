@@ -21,13 +21,16 @@ The RSA path never downgrades to the plaintext one — see ``fetch_token``.
 
 import argparse
 import asyncio
+import os
 import hashlib
 import json
 import time
 import aiohttp
+import yaml
 from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from tou_schedule import TouScheduleMixin, MINUTES_PER_DAY
 from sunsynk_const import (
     SUNSYNK_REGIONS,
     SUNSYNK_ENDPOINTS,
@@ -55,6 +58,7 @@ from sunsynk_const import (
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
     SUNSYNK_WORKMODE,
     SUNSYNK_WORKMODE_FIELD,
+    SUNSYNK_TOU_TEST_SETTLE,
     SUNSYNK_SOLAR_SELL_FIELD,
     SUNSYNK_TOU_ENABLE_FIELD,
     SUNSYNK_SERIAL_FIELD,
@@ -63,7 +67,6 @@ from sunsynk_const import (
     SUNSYNK_DAY_FIELDS,
     TOU_FIELD,
     TOU_SLOT_COUNT,
-    TOU_FILLER_TIMES,
     FREEZE_EXPORT_SOC,
     SUNSYNK_SETTLE_POLLS,
     SUNSYNK_TTL_STATIC,
@@ -80,13 +83,16 @@ from sunsynk_const import (
 )
 
 
-class SunsynkAPI(ComponentBase, OAuthMixin):
+class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     """Sunsynk Connect cloud API component."""
 
     # Trace every API request/response while the Sunsynk integration beds in. Nobody on
     # the project has a Sunsynk account, so a tester's log is the only evidence available
     # for the inferred wire format; flip to False once the format is confirmed.
     api_debug = True
+
+    # How many slots the TOU programme holds, read by TouScheduleMixin.build_tou_slots.
+    TOU_SLOTS = TOU_SLOT_COUNT
 
     def initialize(
         self,
@@ -735,43 +741,6 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """
         return {"behaviour": "freeze_export", "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": int(reserve), "power": 0}
 
-    @staticmethod
-    def _to_slot_time(value):
-        """Normalise a schedule time to the HH:MM Sunsynk's slots require.
-
-        The control entities carry HH:MM:SS because that is what Predbat writes (see
-        INVERTER_DEF charge_time_format), so the seconds are dropped here — at the one
-        point a schedule time becomes a slot time.
-        """
-        parts = str(value or "00:00").split(":")
-        if len(parts) < 2:
-            return "00:00"
-        try:
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-        except ValueError:
-            return "00:00"
-
-    @staticmethod
-    def _hm_to_minutes(hm):
-        """Convert an HH:MM string to minutes since midnight (0 on bad input)."""
-        try:
-            parts = str(hm).split(":")
-            return int(parts[0]) * 60 + int(parts[1])
-        except (ValueError, IndexError):
-            return 0
-
-    def _window_active(self, window, now_minutes):
-        """Return True if an enabled window covers now_minutes, handling a midnight wrap."""
-        if not window.get("enable") or not window.get("start") or not window.get("end"):
-            return False
-        start = self._hm_to_minutes(self._to_slot_time(window["start"]))
-        end = self._hm_to_minutes(self._to_slot_time(window["end"]))
-        if start == end:
-            return False
-        if start < end:
-            return start <= now_minutes < end
-        return now_minutes >= start or now_minutes < end
-
     def _self_use_slot(self, start_time, reserve, self_use_power):
         """Build a self-use slot holding at the reserve SOC.
 
@@ -805,96 +774,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return self._action_slot(start_time, state)
         return self._self_use_slot(start_time, reserve, self_use_power)
 
-    def build_tou_slots(self, schedule, current_soc, self_use_power):
-        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
-
-        Slots are sequential intervals ("from this start until the next slot's start") and
-        Sunsynk documents that they MUST be set chronologically, so every start is written
-        distinct and ascending. A slot is an interval whatever its grid-charge flag says,
-        which is what lets a filler slot terminate the charge window before it.
-
-        Segment boundaries are collected from a 00:00 baseline plus each enabled window's
-        start (its action) and end (back to the baseline), then padded with fillers and
-        trimmed to the earliest, most imminent TOU_SLOT_COUNT.
-
-        The baseline is DERIVED rather than assumed to be self-use, because "no window is
-        active" is not always demand: a freeze export is exactly that state plus a zero
-        charge rate (see derive_control_state). Every slot the schedule does not otherwise
-        claim - the 00:00 start, each window's end, and the fillers - therefore carries the
-        baseline, so a freeze covers the whole programme instead of being defeated by the
-        first filler that happens to cover the current time.
-
-        That coarseness is deliberate. Predbat never tells this component when a freeze
-        ends - it disables the export window rather than describing it - so there is no
-        boundary to write. Pinning the freeze to "now" instead would move every slot time
-        on every tick and turn the applied-payload change detection into a write per cycle.
-        The programme is rebuilt whenever Predbat's plan changes (run() applies each tick
-        for control_active inverters), so it reverts to self-use as soon as the charge rate
-        comes back.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
-        segments = {"00:00": dict(baseline)}
-        for direction in ("charge", "export"):
-            window = schedule.get(direction, {})
-            if not (window.get("enable") and window.get("start") and window.get("end")):
-                continue
-            start_time = self._to_slot_time(window["start"])
-            end_time = self._to_slot_time(window["end"])
-            if start_time == end_time:
-                # Mirrors the guard in _window_active: a zero-length window has no interval
-                # to act over. Compared on the NORMALISED times so "02:00:00" vs "02:00"
-                # is caught too. Without this, an enable event that arrives before the time
-                # fields (both still the "00:00:00" default) would add an action segment at
-                # 00:00 with no matching return-to-self-use segment - an unterminated,
-                # multi-hour full-power grid-charge/export slot even though _active_state
-                # correctly reports the window inactive.
-                continue
-            intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
-            intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
-            segments[start_time] = self.derive_control_state(intent, current_soc)
-            segments.setdefault(end_time, dict(baseline))
-
-        slots = []
-        for start_time, state in sorted(segments.items(), key=lambda item: item[0]):
-            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
-
-        used = {slot["time"] for slot in slots}
-        for filler in TOU_FILLER_TIMES:
-            if len(slots) >= TOU_SLOT_COUNT:
-                break
-            if filler not in used:
-                slots.append(self._slot_for(filler, baseline, reserve, self_use_power))
-                used.add(filler)
-        return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
-
     def _now_minutes(self):
         """Return minutes since local midnight, for time-aware window selection."""
         try:
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
-
-    def _active_state(self, schedule, current_soc, now_minutes):
-        """Derive the control state for the window active at now_minutes, else idle.
-
-        Sunsynk has a single global work mode, so the top-level mode must follow the
-        window active RIGHT NOW rather than a static export-first precedence: otherwise
-        an export window enabled elsewhere in the day would pin the mode to selling-first
-        and block the charge window's grid charging.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        charge = schedule.get("charge", {})
-        export = schedule.get("export", {})
-        # The charge rate is carried even when no window is active: with both windows shut
-        # a zero rate is Predbat's Freeze Export, and the mode has to follow it rather than
-        # sit in demand (see derive_control_state).
-        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
-        if self._window_active(export, now_minutes):
-            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
-        elif self._window_active(charge, now_minutes):
-            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
-        return self.derive_control_state(intent, current_soc)
 
     def _owned_payload(self, sn, schedule, current_soc, now_minutes):
         """Build only the fields Predbat owns, with ZERO network I/O.
@@ -1107,6 +992,22 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         cry-wolf failure this docstring already warns about above: a perfectly healthy
         inverter warned about forever because encode_setting(key, None) can never match what
         was actually applied.
+
+        Past the settle window, divergence also clears applied_payload[sn], matching
+        alphaess.py's note_external_change (PR #4664, Task 10b): apply_settings only writes
+        when the owned payload differs from applied_payload, so a write the cloud
+        acknowledged but the dongle never actually collected would otherwise be trusted
+        forever and never retried, with no automatic recovery short of a Predbat restart
+        (which rebuilds applied_payload from a fresh read via restore_state). See #5138,
+        where exactly that left an export slot stuck for 55+ minutes because nothing else
+        happened to change Predbat's intended state in that window. Clearing the cache does
+        not write anything by itself - it just stops the next genuine write from being
+        skipped as a no-op.
+
+        TODO(#5140): this settle_count/applied_payload/clear-on-diverge shape is duplicated
+        between here and alphaess.py with no shared abstraction; deye.py, fox.py and
+        teslemetry.py have no equivalent detection at all. Extract into a ComponentBase
+        helper instead of a third copy next time this needs touching.
         """
         applied = self.applied_payload.get(sn)
         if not applied or not settings:
@@ -1121,6 +1022,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
         if self.settle_count[sn] > SUNSYNK_SETTLE_POLLS:
             self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} settings polls; check the inverter is online in the Sunsynk app")
+            # Clear the recorded intent so the next cycle re-applies rather than deciding
+            # the payload is unchanged and leaving the inverter stuck on whatever it
+            # actually has - see docstring above and #5138.
+            self.applied_payload.pop(sn, None)
 
     def _owned_fields(self):
         """Return every settings key this component writes, so the rest can be watched."""
@@ -1457,8 +1362,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
 
     async def save_control(self):
-        """Persist the applied-payload cache used for write change detection."""
-        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload})
+        """Persist the applied-payload cache used for write change detection, and control_active.
+
+        Without control_active surviving a restart, _reconcile_control() stays
+        gated off for every inverter until a fresh battery_schedule_charge_write event happens to
+        arrive - silently skipping every write, including one meant to stop an export already in
+        progress - until something unrelated re-arms it. alphaess.py's save_control/restore_state
+        already persists control_active for exactly this reason; this mirrors it.
+        """
+        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload, "control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's clock from its file age.
@@ -1507,10 +1419,29 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
         # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
+        # control_active is restored alongside applied_payload, not just it: control_active is
+        # what actually lets _reconcile_control() write at all, so restoring
+        # applied_payload without it would still leave every inverter silently unmanaged after a
+        # restart. Past the age bound both are dropped together, so a stale cache still forces a
+        # fresh write-button press to recommit, rather than trusting old control state indefinitely.
         control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
         if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
             control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
             self.applied_payload = control.get("applied_payload", {}) or {}
+            stored_active = control.get("control_active")
+            if isinstance(stored_active, list):
+                self.control_active = set(stored_active)
+            else:
+                # A cache written before this key existed carries applied_payload alone. Restoring
+                # that half on its own would preserve the very bug this fix is for through the one
+                # restart that installs the fix, so infer the missing half from applied_payload.
+                # Its keys are a safe lower bound and cannot arm an inverter Predbat never drove:
+                # apply_settings is only reached through the write button, which adds to
+                # control_active first, or through _reconcile_control(), which is
+                # already gated on it. The reverse is not true - a press whose write returned False
+                # leaves control_active set with no applied_payload entry - so this restores a
+                # subset, never a superset, and control_enable/read-only still gate every write.
+                self.control_active = set(self.applied_payload.keys())
         elif control_age is not None:
             self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
 
@@ -1777,6 +1708,59 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self.save_control()
 
 
+# apps.yaml key -> the SunsynkAPI keyword it supplies. Only what is needed to authenticate
+# and address one inverter; nothing else in the file is read.
+APPS_YAML_CREDENTIAL_KEYS = {
+    "sunsynk_username": "username",
+    "sunsynk_password": "password",
+    "sunsynk_key": "key",
+    "sunsynk_region": "region",
+    "sunsynk_auth_method": "auth_method",
+    "sunsynk_token_expires_at": "token_expires_at",
+    "sunsynk_token_hash": "token_hash",
+    "sunsynk_inverter_sn": "inverter_sn",
+}
+
+
+def load_apps_yaml_credentials(path):
+    """Read Sunsynk credentials out of a real apps.yaml for the standalone CLI.
+
+    Lets the CLI drive a real account without retyping credentials, and in particular
+    without a password at all: an install using the oauth flow has only a bearer token, and
+    --username/--password cannot express that. Returns a kwargs dict for SunsynkAPI, or
+    raises ValueError with the reason when the file cannot supply a usable account - the
+    caller is a CLI, and a precise refusal beats a half-built client failing at login.
+
+    Only the keys in APPS_YAML_CREDENTIAL_KEYS are read, and none of their values are ever
+    printed: the CLI reports the serial and the region, never the token.
+    """
+    try:
+        with open(path, "r") as handle:
+            config = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"could not read {path}: {error}")
+    if not isinstance(config, dict):
+        raise ValueError(f"{path} is not a YAML mapping")
+    # A real apps.yaml nests everything under pred_bat; accept a bare mapping too, so a
+    # hand-trimmed file holding just the sunsynk keys works.
+    config = config.get("pred_bat", config) or {}
+    credentials = {name: config[key] for key, name in APPS_YAML_CREDENTIAL_KEYS.items() if config.get(key) not in (None, "")}
+
+    serials = credentials.get("inverter_sn")
+    if not serials:
+        raise ValueError(f"{path} has no sunsynk_inverter_sn, so there is no inverter to address")
+    credentials["inverter_sn"] = [str(serial) for serial in (serials if isinstance(serials, list) else [serials])]
+    if credentials.get("token_expires_at") is not None:
+        # yaml parses an ISO timestamp into a datetime; _parse_expiry wants the string back.
+        credentials["token_expires_at"] = str(credentials["token_expires_at"])
+    if credentials.get("auth_method") == "oauth":
+        if not credentials.get("key"):
+            raise ValueError(f"{path} selects the oauth flow but carries no sunsynk_key token")
+    elif not (credentials.get("username") and credentials.get("password")):
+        raise ValueError(f"{path} has neither an oauth token nor a sunsynk_username/sunsynk_password pair")
+    return credentials
+
+
 def _build_sunsynk(mock_base, args):  # pragma: no cover
     """Construct a SunsynkAPI around a MockBase for standalone command-line use.
 
@@ -1790,13 +1774,21 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
     _build_deye does, so a serial restricts discovery itself (run() -> refresh_static() ->
     get_device_list()) rather than being trusted unverified after the fact.
     """
+    credentials = dict(getattr(args, "credentials", None) or {})
+    # --serial still wins over the file, so one inverter of a multi-inverter account can be
+    # singled out without editing apps.yaml.
+    if args.serial:
+        credentials["inverter_sn"] = args.serial
     return SunsynkAPI(
         mock_base,
-        username=args.username,
-        password=args.password,
-        region=args.region,
-        auth_method=args.auth_method,
-        inverter_sn=args.serial,
+        username=credentials.pop("username", args.username),
+        password=credentials.pop("password", args.password),
+        region=credentials.pop("region", args.region),
+        auth_method=credentials.pop("auth_method", args.auth_method),
+        inverter_sn=credentials.pop("inverter_sn", None),
+        key=credentials.pop("key", ""),
+        token_expires_at=credentials.pop("token_expires_at", None),
+        token_hash=credentials.pop("token_hash", ""),
         # The CLI is the verification tool, so control is on - but test_sunsynk_api still
         # asks before it sends anything to a real inverter, and run() only ever calls
         # apply_settings/apply_schedule for a serial already in control_active, which
@@ -1804,6 +1796,123 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
         control_enable=True,
         automatic=False,
     )
+
+
+def _tou_test_window(now_minutes, lead_minutes=240, length_minutes=180):
+    """Return an HH:MM charge window placed clear of the current time.
+
+    The programme --tou-test writes exists only to be read back and removed, so it must
+    never be one the inverter acts on. Starting a few hours ahead and running for a few
+    more keeps the current minute outside it however the window wraps past midnight, so
+    the battery cannot enter the window during the seconds it is live.
+    """
+    start = (now_minutes + lead_minutes) % MINUTES_PER_DAY
+    end = (start + length_minutes) % MINUTES_PER_DAY
+    return f"{start // 60:02d}:{start % 60:02d}", f"{end // 60:02d}:{end % 60:02d}"
+
+
+def _tou_snapshot(settings):
+    """Take the System Mode subset of a settings read - everything a restore needs."""
+    return {key: value for key, value in (settings or {}).items() if key in SUNSYNK_SYSTEM_MODE_FIELDS}
+
+
+def _tou_slot_times(settings):
+    """Return the six slot start times from a settings object, for printing."""
+    return [(settings or {}).get(TOU_FIELD["time"].format(n=n)) for n in range(1, TOU_SLOT_COUNT + 1)]
+
+
+async def _tou_round_trip(client, sn):  # pragma: no cover
+    """Write a padded TOU programme to a real inverter, verify it, then restore the original.
+
+    This is the only thing in the tree that proves the slot builder against real firmware
+    rather than a double. The mocked tests can say what build_tou_slots produces; only this
+    says the inverter stored it.
+
+    The original programme is written to a JSON file BEFORE anything is sent, the restore
+    runs from a finally, and the restore is itself verified by reading back - so a failure
+    anywhere still leaves the inverter as it was found, or names the file that will put it
+    back by hand.
+    """
+    original = await client.fetch_settings(sn)
+    snapshot = _tou_snapshot(original)
+    if len(snapshot) < TOU_SLOT_COUNT:
+        print(f"\nNo System Mode programme read back for {sn} ({len(snapshot)} owned keys), refusing to write.")
+        return False
+    snapshot_path = f"sunsynk_tou_restore_{sn}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(snapshot_path, "w") as handle:
+        json.dump(snapshot, handle, indent=2, sort_keys=True, default=str)
+    print(f"\n--- {sn} TOU round trip ---")
+    print(f"Current programme: {_tou_slot_times(original)}")
+    print(f"Restore snapshot saved to {os.path.abspath(snapshot_path)}")
+
+    now_minutes = client._now_minutes()
+    start, end = _tou_test_window(now_minutes)
+    schedule = {
+        "reserve": max(client.battery_reserve_min(sn), 10),
+        "charge": {"enable": True, "soc": 95, "power": int(client.battery_rate_max(sn)) or 3000, "start": start, "end": end},
+        "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+    }
+    self_use_power = int(client.inverter_limit(sn)) or client._existing_slot_power(sn)
+    expected = client.build_tou_slots(schedule, current_soc=50, self_use_power=self_use_power)
+    print(f"Writing charge {start}-{end} (now {now_minutes // 60:02d}:{now_minutes % 60:02d}, deliberately outside the window)")
+    print(f"Expected programme: {[(slot['time'], 'charge' if slot['grid_charge'] else 'self-use') for slot in expected]}")
+    print("  (the slots after the window are padding - they must carry the state they follow, not end it)")
+    try:
+        confirm = input("Send this to the inverter and then restore the original? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo input available, nothing sent.")
+        os.remove(snapshot_path)
+        return False
+    if confirm.strip().lower() != "y":
+        print("Nothing sent.")
+        os.remove(snapshot_path)
+        return False
+
+    failed = False
+    try:
+        if not await client.apply_settings(sn, schedule, current_soc=50, force=True):
+            print("FAILED: apply_settings reported no write - the programme did not reach the inverter.")
+            return True
+        # Read back rather than trusting the write's own success: this API accepts an
+        # oversized object and silently discards it, and has been seen to drop individual
+        # fields while persisting the rest (see SUNSYNK_BOOL_FIELDS), so only a read proves
+        # the programme landed.
+        print(f"Written, re-reading in {SUNSYNK_TOU_TEST_SETTLE}s to let the dongle collect it...")
+        await asyncio.sleep(SUNSYNK_TOU_TEST_SETTLE)
+        readback = await client.fetch_settings(sn)
+        if not readback:
+            print("FAILED: could not read the settings back after writing.")
+            return True
+        sent = client.applied_payload.get(sn, {})
+        asserted = [TOU_FIELD[field].format(n=index) for index in range(1, TOU_SLOT_COUNT + 1) for field in ("time", "grid_charge", "sell")]
+        for key in asserted:
+            if str(readback.get(key)) != str(sent.get(key)):
+                print(f"FAILED: {key} read back as {readback.get(key)!r}, wrote {sent.get(key)!r}")
+                failed = True
+        for key, value in sent.items():
+            # Reported, not failed: the inverter may normalise a power or a voltage, and
+            # that is not what this test is about.
+            if key not in asserted and key != SUNSYNK_SERIAL_FIELD and str(readback.get(key)) != str(value):
+                print(f"  note: {key} read back as {readback.get(key)!r}, wrote {value!r}")
+        if not failed:
+            print(f"VERIFIED: the inverter stored {_tou_slot_times(readback)} - the window runs unbroken through its padding.")
+    finally:
+        print("Restoring the original programme...")
+        if await client._post("settings_set", sn=sn, body=snapshot) is None:
+            print(f"RESTORE FAILED - the inverter is still on the test programme. Restore by hand from {os.path.abspath(snapshot_path)}")
+            failed = True
+        else:
+            await asyncio.sleep(SUNSYNK_TOU_TEST_SETTLE)
+            after = await client.fetch_settings(sn)
+            differing = [key for key, value in snapshot.items() if str((after or {}).get(key)) != str(value)]
+            if differing:
+                print(f"RESTORE INCOMPLETE - {len(differing)} field(s) still differ: {differing[:10]}")
+                print(f"  the original is saved at {os.path.abspath(snapshot_path)}")
+                failed = True
+            else:
+                print(f"Restored: {_tou_slot_times(after)}")
+                os.remove(snapshot_path)
+    return failed
 
 
 async def test_sunsynk_api(args):  # pragma: no cover
@@ -1830,13 +1939,17 @@ async def test_sunsynk_api(args):  # pragma: no cover
       - a token but no device_list -> login worked, discovery found nothing (or failed -
         see self.discovery_ok, Fix 3).
       - a device_list but run() still failed -> the first telemetry poll came back empty.
-    These three are exhaustive for the auth methods this CLI exposes (password,
-    password_legacy): check_and_refresh_oauth_token() only ever returns False for the
-    oauth flow, which --auth-method cannot select.
+    These three are exhaustive for the password flows (--auth-method password,
+    password_legacy). --apps-yaml can additionally supply an oauth account, where
+    check_and_refresh_oauth_token() can itself return False - an expired token with no
+    usable refresh reports as the no-access-token case above, which is the right diagnosis:
+    the fix is a fresh sunsynk_key in apps.yaml.
     """
     mock_base = MockBase()
     client = _build_sunsynk(mock_base, args)
-    print(f"Region {args.region} -> {client.base_url} (source={client.source}), auth={args.auth_method}")
+    # client.auth_method, not args.auth_method: --apps-yaml can override it, and reporting
+    # the CLI default while running an oauth account makes a login failure undiagnosable.
+    print(f"Region {client.region} -> {client.base_url} (source={client.source}), auth={client.auth_method}")
 
     print("Calling run() once (read-only: login, discover, poll config/telemetry, publish)...")
     ok = await client.run(seconds=0, first=True)
@@ -1862,6 +1975,7 @@ async def test_sunsynk_api(args):  # pragma: no cover
         return
 
     serials = client.device_list
+    failures = []
     print(f"Inverters: {serials}")
     for sn in serials:
         print(f"\n--- {sn} detail ---")
@@ -1899,7 +2013,12 @@ async def test_sunsynk_api(args):  # pragma: no cover
             if confirm.strip().lower() == "y":
                 await client.apply_settings(sn, schedule, current_soc=50, force=True)
                 print("Written. Re-reading in 60 seconds is the only way to confirm the dongle collected it.")
+        if args.tou_test:
+            if await _tou_round_trip(client, sn):
+                failures.append(sn)
 
+    if failures:
+        print(f"\nTOU round trip FAILED for {failures}")
     await client.final()
     print("Done")
 
@@ -1907,14 +2026,26 @@ async def test_sunsynk_api(args):  # pragma: no cover
 def main():  # pragma: no cover
     """Command-line entry point for Sunsynk diagnostics."""
     parser = argparse.ArgumentParser(description="Sunsynk Cloud API diagnostics")
-    parser.add_argument("--username", required=True, help="Sunsynk Connect account e-mail")
-    parser.add_argument("--password", required=True, help="Sunsynk Connect account password")
+    parser.add_argument("--apps-yaml", default=None, help="Read credentials from a real apps.yaml instead of --username/--password (the only way to use an oauth-token account)")
+    parser.add_argument("--username", default=None, help="Sunsynk Connect account e-mail (not needed with --apps-yaml)")
+    parser.add_argument("--password", default=None, help="Sunsynk Connect account password (not needed with --apps-yaml)")
     parser.add_argument("--region", default="sunsynk", choices=sorted(SUNSYNK_REGIONS), help="API region")
     parser.add_argument("--auth-method", default="password", choices=["password", "password_legacy"], help="Login flow: RSA-encrypted (default) or the pre-2025 plaintext one")
     parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
     parser.add_argument("--dump-settings", action="store_true", help="Print the full settings object")
     parser.add_argument("--write-test", action="store_true", help="Build a harmless self-use payload and offer to send it")
-    asyncio.run(test_sunsynk_api(parser.parse_args()))
+    parser.add_argument("--tou-test", action="store_true", help="Write a padded TOU programme to the inverter, verify the read-back, then restore the original (asks first)")
+    args = parser.parse_args()
+    args.credentials = None
+    if args.apps_yaml:
+        try:
+            args.credentials = load_apps_yaml_credentials(args.apps_yaml)
+        except ValueError as error:
+            parser.error(str(error))
+        print(f"Credentials loaded from {args.apps_yaml} for inverter(s) {args.credentials['inverter_sn']}")
+    elif not (args.username and args.password):
+        parser.error("--username and --password are required unless --apps-yaml is given")
+    asyncio.run(test_sunsynk_api(args))
 
 
 if __name__ == "__main__":

@@ -107,8 +107,6 @@ pred_bat:
   #   - service: switch.turn_on
   #     entity_id: "switch.lux_charge_last"
 
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  # balance_inverters_seconds: 60
 
   timed_charge_current:
     - number.lux_charge_current_limit

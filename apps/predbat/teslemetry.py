@@ -46,6 +46,15 @@ LIVE_POLL_SECONDS = 120
 # calendar_history response is large (there is no smaller "totals only" endpoint - the library's
 # energy_history() just wraps calendar_history), so its payload is truncated in the debug log.
 ENERGY_POLL_SECONDS = 300
+# How often run() re-asserts the whole device tuple (export rule, grid charging, reserve, mode)
+# with force=True, bypassing _apply_command's write-on-change dedupe. A Powerwall can silently stop
+# honouring a standing tuple while still reading that tuple back correctly over site_info (GH#5157),
+# so no read-back comparison can detect the drift and the transition-based self-heal never fires
+# while Predbat legitimately wants the same state for hours (the Demand/idle case). A blind periodic
+# re-assert is the only correction available. 2 hours bounds the stall at roughly one solar window
+# while costing at most 3 extra commands per fire (~36/day worst case), and is long enough not to
+# fight a user who has just changed mode in the Tesla app.
+FORCED_ASSERT_SECONDS = 2 * 60 * 60
 # Approximate usable capacity per Powerwall unit (kWh), used only to ESTIMATE soc_max when the API
 # exposes no capacity field at all (observed on some Powerwall 3 firmware, whose site_info and
 # live_status omit total_pack_energy/nameplate_energy/energy_left). Users can override soc_max in apps.yaml.
@@ -155,6 +164,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.api_auth_failed = False
         self.last_live_poll = 0
         self.last_energy_poll = 0
+        # Seeded to 0 (run()'s `seconds` clock also starts at 0 at process start) so the first forced
+        # re-assert lands FORCED_ASSERT_SECONDS after startup rather than on the boot cycle, leaving
+        # the dedupe cache fetch_site_info seeds from the device to do its job on that first assert.
+        self._last_forced_assert = 0
         self.site_info_done = False
         self.last_soc = None
         self.soc_max_real = False  # True once soc_max is published from a real device value (not the estimate).
@@ -167,7 +180,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
-        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes) - full periodic device-state reconciliation is a pilot follow-up")
+        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
         self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
@@ -401,12 +414,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         # completion ONCE per process - run()'s site_info_done latch stops calling it again once it
         # returns True - so the operation_mode/backup_reserve drift-refresh below corrects drift at
         # BOOT only. If the device drifts again mid-run (e.g. the customer changes mode/reserve via
-        # the Tesla app after startup), that drift is not detected again until the process restarts.
-        # In the meantime it self-heals only on a Predbat "transition" - i.e. whenever Predbat's OWN
-        # desired value actually changes, since a changed target never matches the stale cache
-        # regardless of the device's true state. A repeated assertion of the SAME target while the
-        # device has silently drifted away stays stuck until the next boot. This is a ship-now,
-        # close-in-pilot decision; continuous periodic device-state reconciliation is a follow-up.
+        # the Tesla app after startup), that drift is not DETECTED again until the process restarts:
+        # the control entities keep showing Predbat's desired values rather than the device's actual
+        # ones. Correction no longer depends on detection though - run()'s FORCED_ASSERT_SECONDS
+        # timer re-asserts the whole tuple with the dedupe bypassed, so a repeated assertion of the
+        # SAME target now overwrites such drift within that interval instead of staying stuck until
+        # the next boot (GH#5157). Between forced asserts it still self-heals immediately on a Predbat
+        # "transition" - whenever Predbat's OWN desired value changes, since a changed target never
+        # matches the stale cache regardless of the device's true state.
         default_mode = response.get("default_real_mode")
         if default_mode in OPERATION_MODES:
             self.publish_control(self.entity("operation_mode", domain="select"), default_mode)
@@ -494,8 +509,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # Scheduler emulator: the Powerwall has no native scheduler, so translate the committed
             # windows into device commands each cycle. Failures are logged and self-retry via the
             # dedupe cache; they do not fail the run() data path.
+            #
+            # Every FORCED_ASSERT_SECONDS the tuple is re-asserted with the dedupe bypassed, so a device
+            # that has silently stopped honouring an unchanged standing state recovers without a restart
+            # (GH#5157). The timer advances only on a fully successful forced assert, which keeps
+            # _apply_command's failure-retry invariant: a forced assert that failed is retried on the next
+            # cycle instead of waiting another two hours.
+            force = (seconds - self._last_forced_assert) >= FORCED_ASSERT_SECONDS
             await self.sync_tariff()
-            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+            asserted = await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc), force=force)
+            if force and asserted:
+                self._last_forced_assert = seconds
         return success
 
     def register_control_entities(self):
@@ -712,7 +736,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         now = datetime.now(timezone.utc).astimezone(getattr(self, "local_tz", None) or timezone.utc)
         return now.hour * 60 + now.minute
 
-    async def assert_device_state(self, desired):
+    async def assert_device_state(self, desired, force=False):
         """Assert the desired device tuple (export rule, grid charging, reserve, mode); tariff is synced separately.
 
         The export rule and grid-charging flag are asserted together in ONE grid_import_export write (they
@@ -720,11 +744,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         call, not two. Each write dedupes on write-on-change, so an unchanged assert costs zero commands.
         Successful writes are mirrored into the diagnostic control entities; failures leave both the dedupe
         cache and the entity state untouched so the next cycle retries.
+
+        `force=True` bypasses that dedupe for every write in the tuple, so the full tuple is re-sent even
+        when nothing has changed. run() uses this on a FORCED_ASSERT_SECONDS timer to correct a device that
+        has silently drifted while still reporting the desired state (GH#5157).
         """
         results = {}
-        results["grid_import_export"] = await self.set_grid_import_export(desired["export_rule"], desired["grid_charging"])
-        results["reserve"] = await self.set_backup_reserve(desired["reserve"])
-        results["mode"] = await self.set_operation_mode(desired["mode"])
+        results["grid_import_export"] = await self.set_grid_import_export(desired["export_rule"], desired["grid_charging"], force=force)
+        results["reserve"] = await self.set_backup_reserve(desired["reserve"], force=force)
+        results["mode"] = await self.set_operation_mode(desired["mode"], force=force)
         if results["grid_import_export"]:
             self.publish_control(self.entity("allow_export", domain="select"), desired["export_rule"])
             self.publish_control(self.entity("allow_charging_from_grid", domain="switch"), "on" if desired["grid_charging"] else "off")
@@ -891,8 +919,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         `fetch_site_info`), "grid_charging" and "export_rule" are NEVER device-drift-refreshed at all,
         because the site_info response this component reads does not expose either field's actual
         device state. If the device drifts on these two externally, the cache is never proactively
-        corrected; they self-heal only when Predbat's own desired value changes (a transition), since a
-        changed target never matches the stale cache irrespective of the device's true state.
+        corrected; between forced asserts they self-heal only when Predbat's own desired value changes (a
+        transition), since a changed target never matches the stale cache irrespective of the device's true
+        state. Drift that outlives a transition is caught by run()'s FORCED_ASSERT_SECONDS re-assert, which
+        bypasses this cache for the whole tuple and so covers these two fields as well (GH#5157).
         """
         if not force and self._last_sent.get(key) == signature:
             return True

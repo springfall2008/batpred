@@ -268,6 +268,11 @@ If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are sc
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
+The comparison is made against the forecast your solar provider gave, recorded in `sensor.predbat_pv_forecast_h0_uncalibrated`, rather than against Predbat's own calibrated figure,
+so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
+Until that sensor has a week of history, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
+The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
+(equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
 Predbat relies upon your solar generation being accurate so if your export generation can be curtailed by your solar inverter or your electricity supplier in periods when there is excess electricity in the grid,
 then you must turn PV calibration Off as otherwise Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
@@ -524,19 +529,25 @@ A value of 0 applies no limit.
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-If you do use Predbat's balance inverter function then be aware that Predbat will start repeatedly and rapidly updating your inverter settings to keep the inverters in balance with each other.
-This can be a problem with inverters that have a [limited life-span flash memory](caution.md#flash-memory).
-If available, you are strongly recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for GivEnergy inverters controlled via GivTCP, or an equivalent function for your inverter.
+Balancing runs as part of Predbat's normal control cycle rather than on a timer of its own, and it adjusts
+the charge and discharge rates Predbat was already going to set rather than overriding them afterwards.
+Rate changes below 5% of the inverter's maximum are not written at all, so balancing only writes a register
+when it genuinely changes what the inverter is doing.
 
-The `apps.yaml` contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+If your inverter has a [limited life-span flash memory](caution.md#flash-memory) and the option is available,
+you are still recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for
+GivEnergy inverters controlled via GivTCP, or the equivalent for your inverter.
 
 Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It is Off by default. When turned on a number of other balance controls and configurations are made available:
 
-- **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
-- **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
-- **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
+- **switch.predbat_balance_inverters_crosscharge** - Toggles stopping one inverter charging from another when the fleet is in Eco/Demand mode. **On by default** - this is the case worth correcting, because that energy makes a round trip through two batteries for no benefit
+- **switch.predbat_balance_inverters_charge** - Toggles balancing the batteries' SoC while they are charging. Off by default
+- **switch.predbat_balance_inverters_discharge** - Toggles balancing the batteries' SoC while they are discharging. Off by default
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
+
+Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
+off by default. They remain fully functional if you want them.
 
 ## Freeze Export during Demand
 
@@ -946,11 +957,15 @@ mode: single
 Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
 
 - **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
-- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0 - maximum 500).
 - **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
 - **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
 
-Retained snapshots can all be downloaded together as a single gzip tarball from a link on the web interface's dashboard **Debug** panel. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself is usually under 5MB. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+The retained window is simply `debug_history_count` x `debug_history_interval`, so a longer window can be had either by keeping more snapshots or by spacing them further apart. If you are chasing something intermittent that only shows up on the odd night, 336 snapshots at a 1-hour interval covers a fortnight, and 112 snapshots at 3-hourly covers the same fortnight for a third of the disk space.
+
+_CAUTION: each snapshot is a complete debug dump rather than a delta, roughly 2MB-5MB of YAML apiece depending on your system's configuration (so a 15-snapshot history measures around 30MB-75MB on disk), which puts the 500-snapshot maximum of the order of 1GB-2.5GB retained in the `debug/` folder. Raise the count only as far as the window you actually need, and put it back to the default once your investigation is finished - especially on an SD-card based install, where the write volume matters as much as the space._
+
+The most recent 16 retained snapshots can be downloaded together as a single gzip tarball from the **Download recent** link on the web interface's dashboard **Debug** panel. That archive is built in memory, so it is deliberately capped rather than bundling the whole retained history - with the count raised for a long investigation, use the plan's **History** view to download individual snapshots, or copy them straight out of the `debug/` folder over a Samba share. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself compresses down a great deal. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
 
 Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml.txt` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the archive/single-file download links above don't work (see the note above). The contents are ordinary YAML; the `.txt` on the end is there because GitHub refuses to accept a `.yaml` file as an issue attachment, so a snapshot picked up from `debug/` can be attached to a bug report as-is with no renaming. These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots. Snapshots written by a version before this naming change (`predbat_debug_<timestamp>.yaml`) still download and are still pruned normally, but they keep the old plain-`.yaml` name on disk until that happens, so they need renaming to `.yaml.txt` before GitHub will accept them as an attachment.
 

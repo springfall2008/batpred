@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS
 
 
 class FakeStorage:
@@ -45,6 +45,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.api_auth_failed = False
         self.last_live_poll = 0
         self.last_energy_poll = 0
+        self._last_forced_assert = 0
         self.site_info_done = False
         self.last_soc = None
         self.soc_max_real = False
@@ -1316,6 +1317,73 @@ def test_teslemetry_dedupe_failed_post_not_cached_so_retries():
     posts = [req for req in api.requests_made if req[0] == "POST"]
     assert len(posts) == 2
     assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "backup"
+
+
+def _make_forced_assert_api():
+    """Build a run()-driveable API whose control branch is reachable, for the forced re-assert tests."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.get_arg = lambda a, d=None, **k: d  # not read-only
+    api.mock_responses["/api/1/products"] = {"response": [{"energy_site_id": 123456}]}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    for path in ("operation", "backup", "grid_import_export", "time_of_use_settings"):
+        api.mock_responses["/api/1/energy_sites/123456/" + path] = {"response": {"code": 201}}
+    return api
+
+
+def _control_posts(api):
+    """Return the device-tuple POSTs made so far (the tariff push is not part of the asserted tuple)."""
+    return [req[1].rsplit("/", 1)[-1] for req in api.requests_made if req[0] == "POST" and not req[1].endswith("/time_of_use_settings")]
+
+
+def test_teslemetry_forced_assert_resends_unchanged_tuple_after_interval():
+    """An unchanged desired tuple is deduped away every cycle until FORCED_ASSERT_SECONDS, then re-sent in full.
+
+    This is the GH#5157 stall: a Powerwall silently stops honouring a standing state while still
+    reading it back correctly, so nothing detects the drift and the transition-based self-heal never
+    fires. The periodic forced re-assert is the only correction, so it must actually re-POST the
+    whole tuple rather than being skipped by the write-on-change cache.
+    """
+    api = _make_forced_assert_api()
+    run_async(api.run(seconds=0, first=True))
+    assert _control_posts(api), "boot cycle should assert the tuple onto the device"
+    # Steady state: the desired tuple never changes, so every cycle short of the interval is deduped away.
+    api.requests_made.clear()
+    for seconds in range(60, FORCED_ASSERT_SECONDS, 60):
+        run_async(api.run(seconds=seconds, first=False))
+    assert _control_posts(api) == [], "an unchanged tuple must not cost commands before the forced re-assert is due"
+    # Interval reached: the full tuple is re-asserted despite nothing having changed.
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS, first=False))
+    assert sorted(_control_posts(api)) == ["backup", "grid_import_export", "operation"]
+    assert api._last_forced_assert == FORCED_ASSERT_SECONDS
+    # ...and the timer resets, so the next cycle is deduped again rather than re-sending every cycle.
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS + 60, first=False))
+    assert _control_posts(api) == []
+
+
+def test_teslemetry_forced_assert_failure_retries_next_cycle():
+    """A forced re-assert that fails must not advance the timer, so it retries next cycle rather than waiting another interval.
+
+    This is _apply_command's failure-retry invariant carried up to the forced assert: the dedupe cache
+    is only refreshed on a confirmed send, and the forced-assert timer must behave the same way.
+    """
+    api = _make_forced_assert_api()
+    run_async(api.run(seconds=0, first=True))
+    # Break the /operation endpoint so the forced assert cannot complete (returns None -> command fails).
+    del api.mock_responses["/api/1/energy_sites/123456/operation"]
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS, first=False))
+    assert "operation" in _control_posts(api)
+    assert api._last_forced_assert == 0, "a failed forced assert must not advance the timer"
+    # Next cycle retries immediately instead of waiting another FORCED_ASSERT_SECONDS.
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS + 60, first=False))
+    assert "operation" in _control_posts(api)
+    assert api._last_forced_assert == FORCED_ASSERT_SECONDS + 60
 
 
 def test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post():
@@ -2671,6 +2739,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_dedupe_operation_mode_skips_repeat_post()
     test_teslemetry_dedupe_operation_mode_resends_on_change()
     test_teslemetry_dedupe_failed_post_not_cached_so_retries()
+    test_teslemetry_forced_assert_resends_unchanged_tuple_after_interval()
+    test_teslemetry_forced_assert_failure_retries_next_cycle()
     test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post()
     test_teslemetry_dedupe_tariff_resends_when_rates_change()
     test_teslemetry_drift_correction_refreshes_cache_and_reasserts()
