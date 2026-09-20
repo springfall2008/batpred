@@ -40,9 +40,10 @@ def validate_planner_source(base):
 class EonOptimiseAPI(ComponentBase):
     """Use the same rate-sensor contract as Kraken without supplier control APIs."""
 
-    def initialize(self, enabled=False, email=None, password=None):
+    def initialize(self, enabled=False, observe_only=False, email=None, password=None):
         """Keep credentials in memory and scope price caches to this login."""
         self.email, self.password = email, password
+        self.observe_only = observe_only
         self.client = None
         self.rates = {"import": [], "export": []}
         self.fetched_at = None
@@ -134,19 +135,27 @@ class EonOptimiseAPI(ComponentBase):
         self.dashboard_item(
             self.entity("status"),
             state=status,
-            attributes={"friendly_name": "E.ON Next Optimise Status", "refresh_error": self.error, "last_success": self.fetched_at.isoformat() if self.fetched_at else None, "poll_seconds": POLL_SECONDS, "max_age_seconds": MAX_AGE_SECONDS},
+            attributes={
+                "friendly_name": "E.ON Next Optimise Status",
+                "mode": "observe_only" if self.observe_only else "planner",
+                "refresh_error": self.error,
+                "last_success": self.fetched_at.isoformat() if self.fetched_at else None,
+                "poll_seconds": POLL_SECONDS,
+                "max_age_seconds": MAX_AGE_SECONDS,
+            },
             app="eon_optimise",
         )
         return usable
 
     async def run(self, seconds, first):
         """Poll five-minutely; publish freshness on each component housekeeping tick."""
-        try:
-            self.bind_sources()
-        except ValueError as exc:
-            self.error = str(exc)
-            self.log("Error: " + self.error)
-            return False
+        if not self.observe_only:
+            try:
+                self.bind_sources()
+            except ValueError as exc:
+                self.error = str(exc)
+                self.log("Error: " + self.error)
+                return False
         now = datetime.now(timezone.utc)
         if not self.restored:
             await self.restore_cache(now)
@@ -169,4 +178,4 @@ class EonOptimiseAPI(ComponentBase):
         usable = self.publish(datetime.now(timezone.utc))
         if usable:
             self.update_success_timestamp()
-        return usable if first else True
+        return (usable or self.observe_only) if first else True

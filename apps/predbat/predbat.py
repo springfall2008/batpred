@@ -99,7 +99,7 @@ from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
-from fetch import Fetch
+from fetch import Fetch, EonOptimisePriceUnavailable
 from output import Output
 from userinterface import UserInterface
 from compare import Compare
@@ -1065,7 +1065,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        sensor_force_replan = self.fetch_sensor_data()
+        try:
+            sensor_force_replan = self.fetch_sensor_data()
+        except EonOptimisePriceUnavailable as exc:
+            self.log("Warn: " + str(exc))
+            self.record_status(message=str(exc), had_errors=True)
+            return
 
         # Check if any sensor changes require a replan
         if sensor_force_replan:

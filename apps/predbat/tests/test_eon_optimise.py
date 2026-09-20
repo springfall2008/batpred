@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from eon_optimise import EonOptimiseAPI, validate_planner_source
 from eon_optimise_client import OptimiseClient, AuthenticationError, PriceFeedError
 from eon_optimise_rates import normalise_response, validate_cached_rates
-from fetch import Fetch
+from fetch import Fetch, EonOptimisePriceUnavailable
 
 
 def payload(now=None, price=3, export=-2):
@@ -105,6 +105,41 @@ class EonOptimiseTests(unittest.IsolatedAsyncioTestCase):
         api.base.set_arg.assert_any_call("metric_octopus_export", "sensor.predbat_eon_optimise_export_rates")
         self.assertTrue(await api.run(60, False))
         api.fetch_prices.assert_awaited_once()
+
+    async def test_observe_only_publishes_with_existing_tariff_source(self):
+        """Observe-only polling leaves the current planner bindings untouched."""
+        base = MagicMock()
+        base.prefix = "predbat"
+        base.args = {"kraken_provider": "eon", "metric_octopus_import": "sensor.existing_import", "metric_octopus_export": "sensor.existing_export"}
+        base.components = None
+        api = EonOptimiseAPI(base, enabled=True, observe_only=True, email="example@example.invalid", password="test-private-password")
+        api.fetch_prices = AsyncMock(return_value=normalise_response(payload()))
+        self.assertTrue(await api.run(0, True))
+        self.assertEqual(base.args["metric_octopus_import"], "sensor.existing_import")
+        self.assertEqual(base.args["metric_octopus_export"], "sensor.existing_export")
+        base.set_arg.assert_not_called()
+        self.assertEqual(base.dashboard_item.call_args.args[2]["mode"], "observe_only")
+        self.assertEqual(base.dashboard_item.call_args_list[-3].args[2]["rates"], api.rates["import"])
+
+        unavailable_api = EonOptimiseAPI(base, enabled=True, observe_only=True, email="example@example.invalid", password="test-private-password")
+        unavailable_api.fetch_prices = AsyncMock(side_effect=PriceFeedError("Price service unavailable"))
+        self.assertTrue(await unavailable_api.run(0, True))
+        self.assertEqual(base.dashboard_item.call_args.args[1], "unavailable")
+        self.assertEqual(base.args["metric_octopus_import"], "sensor.existing_import")
+
+    def test_price_guard_skips_cycle_cleanly(self):
+        """A stale E.ON feed records status and avoids inverter/planner work."""
+        from predbat import PredBat
+
+        base = MagicMock()
+        base.get_arg.return_value = False
+        base.is_template_mode.return_value = False
+        base.fetch_sensor_data.side_effect = EonOptimisePriceUnavailable("E.ON Optimise: current import/export prices unavailable")
+        PredBat.update_pred(base)
+        base.record_status.assert_called_once_with(message="E.ON Optimise: current import/export prices unavailable", had_errors=True)
+        base.fetch_inverter_data.assert_not_called()
+        base.calculate_plan.assert_not_called()
+        base.execute_plan.assert_not_called()
 
     async def test_failed_fetch_keeps_original_age_then_withdraws(self):
         """A failed refresh may use a fresh cache but cannot make it younger."""

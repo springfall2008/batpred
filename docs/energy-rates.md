@@ -295,12 +295,23 @@ values in `secrets.yaml`:
   eon_optimise_enable: true
   eon_optimise_email: !secret eon_optimise_email
   eon_optimise_password: !secret eon_optimise_password
+  eon_optimise_observe_only: true
 ```
 
 The runtime must include `pycognito==2024.5.1`; a source-only update does not
-install it. Disable competing Kraken/Octopus components and remove both
+install it. Start with `eon_optimise_observe_only: true` to poll and publish
+E.ON prices alongside your existing tariff source without changing Predbat's
+planner inputs. Compare both import and export rates for several days,
+including any in-day revisions. The status sensor reports `mode: observe_only`.
+
+To use E.ON prices for planning, set `eon_optimise_observe_only: false` and
+restart Predbat. Disable competing Kraken/Octopus components and remove both
 `rates_import_octopus_url` and `rates_export_octopus_url` keys, including empty
 entries. E.ON owns both price inputs; keep your standing-charge configuration.
+
+Before allowing Predbat to control the battery, set Next Optimise/Amber battery
+automation to manual mode. If both services automate the battery, they can issue
+conflicting inverter commands.
 
 With the default prefix, prices appear in the `rates` attributes of
 `sensor.predbat_eon_optimise_import_rates` and
@@ -312,6 +323,9 @@ Prices refresh every five minutes and expire after 15 minutes. Missing or stale
 current prices block new calculations, but do not cancel existing inverter
 commands. Future gaps use Predbat's normal previous-day/last-price estimates,
 as with Kraken; published future prices are also forecasts, not final settlement.
+Past Optimise periods are supplier history, not confirmed billed or settled
+prices. Predbat's cost figures remain estimates; this component does not
+reconcile them against Kraken billing history or an invoice.
 
 **Experimental: live testing is limited to the contributor's own account and UK
 supply region.** Other accounts/regions, multi-site selection and interactive MFA

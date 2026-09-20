@@ -491,6 +491,7 @@ COMPONENT_LIST = {
         "event_filter": "predbat_eon_optimise_",
         "args": {
             "enabled": {"required_true": True, "config": "eon_optimise_enable", "default": False},
+            "observe_only": {"required": False, "config": "eon_optimise_observe_only", "default": False},
             "email": {"required": True, "secret": True, "config": "eon_optimise_email"},
             "password": {"required": True, "secret": True, "config": "eon_optimise_password"},
         },
