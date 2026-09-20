@@ -307,7 +307,17 @@ including any in-day revisions. The status sensor reports `mode: observe_only`.
 To use E.ON prices for planning, set `eon_optimise_observe_only: false` and
 restart Predbat. Disable competing Kraken/Octopus components and remove both
 `rates_import_octopus_url` and `rates_export_octopus_url` keys, including empty
-entries. E.ON owns both price inputs; keep your standing-charge configuration.
+entries. E.ON owns both price inputs.
+
+The Optimise component publishes half-hourly unit prices only; it does not
+fetch or set the daily standing charge. To include the standing charge in
+Predbat's cost figures, set `metric_standing_charge` yourself to your current
+import tariff's charge in **pounds per day** (for example, `0.50` means 50p/day),
+or point it at a current Home Assistant sensor that reports £/day. Check the
+amount against your tariff or bill, and replace any standing-charge sensor left
+over from an old supplier. Without this setting, Predbat uses zero for this
+component. Kraken can fetch standing charges for some tariffs, but the Optimise
+planner mode does not use Kraken or require its credentials.
 
 Before allowing Predbat to control the battery, set Next Optimise/Amber battery
 automation to manual mode. If both services automate the battery, they can issue
