@@ -63,6 +63,8 @@ def test_custom_type_respects_configured_time_entity(my_predbat):
 
     saved_args = copy.deepcopy(my_predbat.args)
     saved_def = copy.deepcopy(INVERTER_DEF.get("TEST_CUSTOM_TIME_ENTITY"))
+    had_created_entities = hasattr(my_predbat, "predbat_created_entities")
+    saved_created_entities = copy.deepcopy(my_predbat.predbat_created_entities) if had_created_entities else None
 
     try:
         # Case 1: real entity configured - must be kept, not overwritten
@@ -163,6 +165,11 @@ def test_custom_type_respects_configured_time_entity(my_predbat):
             failed = True
     finally:
         my_predbat.args = saved_args
+        if had_created_entities:
+            my_predbat.predbat_created_entities = saved_created_entities
+        else:
+            if hasattr(my_predbat, "predbat_created_entities"):
+                del my_predbat.predbat_created_entities
         if saved_def is None:
             INVERTER_DEF.pop("TEST_CUSTOM_TIME_ENTITY", None)
         else:
