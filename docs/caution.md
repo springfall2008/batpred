@@ -28,7 +28,7 @@ Things you can do to have a less complex plan include:
 - Ensure inverter losses are set to a representative value
 - Turn off charge_low_power mode
 
-**Avoid using balance inverters ('switch.predbat_balance_inverters_enable') which can make register changes once or twice a minute unless you are sure this is not an issue**
+**Balance inverters ('switch.predbat_balance_inverters_enable') writes rate registers when the inverters drift apart. It no longer runs on its own timer, and a rate change below 5% of maximum is not written at all, so it is far less write-heavy than it once was - but on an inverter with limited-life flash memory, check the write rate below before leaving it on.**
 
 Predbat creates an entity called **predbat.inverter_register_writes** which can be used to check the total number of writes across all inverters. If you divide this by the period of use
 and by the number of inverters, you will be able to figure out the actual rate of register writes - see the [Simple inverter writes dashboard](output-data.md#inverter-data).
