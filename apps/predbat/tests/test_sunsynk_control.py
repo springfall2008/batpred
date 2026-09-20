@@ -777,6 +777,49 @@ def test_note_settle_catches_a_divergent_power_field():
     assert not failed, "test_note_settle_catches_a_divergent_power_field"
 
 
+def test_note_settle_clears_applied_payload_once_it_warns():
+    """Sustained divergence must clear applied_payload so the next cycle re-applies (#5138).
+
+    Before this fix, note_settle only logged a warning past SUNSYNK_SETTLE_POLLS - a write
+    the cloud acknowledged but the dongle never actually collected stayed cached as
+    "applied" forever, so apply_settings kept skipping the write as a no-op. Matches
+    alphaess.py's note_external_change (PR #4664, Task 10b): on confirmed divergence, drop
+    the cached payload so apply_settings treats the owned payload as changed again.
+    """
+    failed = False
+    s, applied = _settled_baseline()
+    divergent = dict(applied)
+    divergent[TOU_FIELD["power"].format(n=2)] = "9999"
+    warned = _drive_to_warn(s, "INV1", divergent)
+    if not warned:
+        print("ERROR: setup failed to reach the warn threshold")
+        failed = True
+    if "INV1" in s.applied_payload:
+        print("ERROR: applied_payload was not cleared after sustained divergence, the next cycle would still skip the write")
+        failed = True
+    assert not failed, "test_note_settle_clears_applied_payload_once_it_warns"
+
+
+def test_note_settle_does_not_clear_applied_payload_before_it_warns():
+    """Divergence within the settle grace window must not clear applied_payload early.
+
+    A write is acknowledged by the cloud long before the dongle collects it, so a few
+    polls of divergence right after a write is normal latency, not a failure - clearing
+    the cache that early would force a needless re-read-modify-write every settle cycle
+    even on a perfectly healthy inverter.
+    """
+    failed = False
+    s, applied = _settled_baseline()
+    divergent = dict(applied)
+    divergent[TOU_FIELD["power"].format(n=2)] = "9999"
+    for _ in range(SUNSYNK_SETTLE_POLLS):
+        s.note_settle("INV1", divergent)
+    if "INV1" not in s.applied_payload:
+        print("ERROR: applied_payload was cleared before the settle threshold was reached")
+        failed = True
+    assert not failed, "test_note_settle_does_not_clear_applied_payload_before_it_warns"
+
+
 def test_note_settle_catches_a_divergent_solar_sell():
     """A read-back that diverges only on solarSell must not settle."""
     failed = False
@@ -1290,6 +1333,8 @@ def run_sunsynk_control_tests(my_predbat):
         ("apply_failed_write", test_apply_settings_reports_a_failed_write),
         ("note_settle_normalises_types", test_note_settle_normalises_wire_types_before_comparing),
         ("note_settle_catches_power_divergence", test_note_settle_catches_a_divergent_power_field),
+        ("note_settle_clears_applied_payload_on_warn", test_note_settle_clears_applied_payload_once_it_warns),
+        ("note_settle_keeps_applied_payload_before_warn", test_note_settle_does_not_clear_applied_payload_before_it_warns),
         ("note_settle_catches_solar_sell_divergence", test_note_settle_catches_a_divergent_solar_sell),
         ("note_settle_catches_tou_enable_divergence", test_note_settle_catches_a_divergent_tou_enable),
         ("note_settle_catches_day_flag_divergence", test_note_settle_catches_a_divergent_day_flag),

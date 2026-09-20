@@ -135,6 +135,7 @@ dayname
 daynumber
 daysymbol
 deadband
+deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
@@ -260,6 +261,7 @@ gridconsumption
 gridconsumptionpower
 Groq
 growatt
+growattsph
 GWMQTT
 HACS
 hadashboard
@@ -685,6 +687,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrepresentable
 unreproduced
 unsmoothed
 unstaged

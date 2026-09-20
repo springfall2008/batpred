@@ -85,9 +85,6 @@ pred_bat:
   #
   num_inverters: 1
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
-  #
   # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
   # Set one per inverter
   # If using Docker then change homeassistant.local to the Docker IP address
@@ -672,3 +669,15 @@ pred_bat:
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
   #  - '{car_charging_now}'
+
+  # Redact additional values from predbat.log and debug dumps that Predbat cannot otherwise
+  # recognise as sensitive (an MPAN or similar identifier surfaced by a third-party HA
+  # integration's sensor, say) - see "Redaction in logs and debug files" in apps-yaml.md.
+  # redact_strings_labelled is a name -> value mapping, masked with your own label (e.g. <my_mpan>
+  # below); redact_strings is a bare list for when you don't need one, masked generically as
+  # <redact_strings>. As with any other setting, either can reference a value in secrets.yaml
+  # with !secret instead of writing it here directly.
+  #redact_strings_labelled:
+  #  my_mpan: "1234567890123"
+  #redact_strings:
+  #  - "1234567890123"

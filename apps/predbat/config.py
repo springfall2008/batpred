@@ -1301,14 +1301,14 @@ CONFIG_ITEMS = [
         "friendly_name": "Balance Inverters for charging",
         "type": "switch",
         "enable": "balance_inverters_enable",
-        "default": True,
+        "default": False,
     },
     {
         "name": "balance_inverters_discharge",
         "friendly_name": "Balance Inverters for discharge",
         "type": "switch",
         "enable": "balance_inverters_enable",
-        "default": True,
+        "default": False,
     },
     {
         "name": "balance_inverters_crosscharge",
@@ -1360,7 +1360,14 @@ CONFIG_ITEMS = [
         "friendly_name": "Debug history snapshot count",
         "type": "input_number",
         "min": 1,
-        "max": 50,
+        # The maximum only bounds what a user can opt into, the default below is what almost every
+        # install actually runs. It was raised from 50 to 500 for #5070: intermittent optimiser
+        # behaviour often needs a week or two of history to audit, and at the 1-hour minimum
+        # interval 50 snapshots only reached back about two days. 500 covers 14 days hourly (336)
+        # with headroom. Snapshots are full debug dumps, roughly 2MB-5MB each dependent on system
+        # configuration, so the top of this range is around 2.5GB on disk - see the storage warning
+        # in docs/customisation.md.
+        "max": 500,
         "step": 1,
         "unit": "snapshots",
         "icon": "mdi:history",
@@ -2716,7 +2723,6 @@ APPS_SCHEMA = {
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
     "num_inverters": {"type": "integer", "zero": False},
-    "balance_inverters_seconds": {"type": "integer", "zero": True},
     "validate_config_retries": {"type": "integer", "zero": True},
     "validate_config_retry_minutes": {"type": "integer", "zero": True},
     "givtcp_rest": {"type": "string_list", "entries": "num_inverters"},
@@ -2965,4 +2971,18 @@ APPS_SCHEMA = {
     "pv_clearsky_d5": {"type": "sensor", "sensor_type": "float"},
     "pv_clearsky_d6": {"type": "sensor", "sensor_type": "float"},
     "pv_clearsky_d7": {"type": "sensor", "sensor_type": "float"},
+    # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
+    # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
+    # credential from its own config - an MPAN or account number surfaced by a third-party HA
+    # integration's entity state/attributes, say, which Predbat has no schema for and so cannot
+    # infer is sensitive. `!secret` references resolve here the same as anywhere else in
+    # apps.yaml, so the values themselves need not be written out in the clear either. Each
+    # redacted occurrence is masked generically as <redact_strings> - use redact_strings_labelled
+    # for a name of your own choosing back in the log.
+    "redact_strings": {"type": "string_list"},
+    # Labelled form of redact_strings: a name -> value mapping, so a masked occurrence reads as
+    # <your_label> instead of the generic <redact_strings>, the same way a built-in credential is
+    # labelled by its own apps.yaml key name - e.g. "my_landlords_mpan: '1234567890123'" redacts
+    # as <my_landlords_mpan> rather than every entry collapsing into one indistinguishable label.
+    "redact_strings_labelled": {"type": "dict", "scalar_value_dict": True},
 }

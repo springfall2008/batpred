@@ -925,12 +925,13 @@ class Fetch:
         # Stored on self, not just local, so it can be used elsewhere rather than only by the
         # window split below.
         pv_light_dark = self.pv_light_dark = self.calc_pv_light_dark()
-        # "on" past dawn, "off" before it or when unclassified (combine_charge_slots off, or no
-        # PV forecast) - not the same as PV actually producing right now, see calc_dawn's docstring
+        # "on" past dawn, "off" before it or when unclassified (no PV forecast) - based on the PV
+        # forecast crossing low_power_pv_threshold_w, not the same as PV actually producing right
+        # now, see calc_dawn's docstring. Independent of combine_charge_slots/set_charge_low_power.
         self.dashboard_item(
             "binary_sensor." + self.prefix + "_dawn",
             state="on" if pv_light_dark.get(self.minutes_now) == 1 else "off",
-            attributes={"friendly_name": "Predbat is past dawn (light, not dark, in the low-power charge window split)", "icon": "mdi:weather-sunset-up"},
+            attributes={"friendly_name": "Predbat is past dawn (light, not dark, by PV forecast)", "icon": "mdi:weather-sunset-up"},
         )
         return pv_light_dark
 
@@ -1939,19 +1940,18 @@ class Fetch:
 
     def calc_pv_light_dark(self):
         """
-        Decide whether a dawn light/dark boundary is worth computing at all, and return it via
-        calc_dawn if so - otherwise an empty dict (no split).
+        Compute the dawn light/dark split via calc_dawn().
 
-        Only combine_charge_slots can merge a charge window across dawn in the first place - with it
-        off, find_charge_window already forces a break every charge_slot_split minutes (which equals
-        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary could
-        never be reached and computing it would be a pure no-op. This used to be gated on
-        set_charge_low_power instead, since that was the only feature that needed the split - but the
-        split also lets the plan optimizer charge just the dark portion of a combined window and skip
-        the daylight portion (where solar may cover the load) on its own merits, independent of low
-        power charging, so it now runs for any combine_charge_slots user.
+        Always computed, even when combine_charge_slots is off: with it off, find_charge_window
+        already forces a window break every charge_slot_split minutes (which equals
+        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary can
+        never actually be reached there and calc_dawn's result is a no-op for window splitting in
+        that case - but binary_sensor.predbat_dawn (published from this same result, see
+        fetch_pv_forecast_and_dawn) is a useful standalone signal regardless of combine_charge_slots,
+        and used to read permanently "off" for anyone with it disabled (the default) even in broad
+        daylight, which is what it is not meant to mean.
         """
-        return self.calc_dawn() if self.combine_charge_slots else {}
+        return self.calc_dawn()
 
     def calc_dawn(self):
         """
