@@ -316,7 +316,7 @@ class Inverter:
 
         Only genuinely persistent state is set here - values this object accumulates over its
         lifetime and that nothing ever unconditionally overwrites. Everything else is set to None
-        by reset_cycle_state() below: it is about to be replaced with real data by refresh_config()
+        by _init_attribute_defaults() below: it is about to be replaced with real data by refresh_config()
         or update_status() before anything reads it, so giving it a real-looking placeholder value
         (a prior version of this code set reserve_percent = 4.0, battery_rate_max_raw = 2600.0, and
         so on) is indistinguishable from a deliberately configured one and invites exactly the kind
@@ -344,21 +344,25 @@ class Inverter:
         self.last_committed = {}
         self.commit_pending = {}
 
-        self.reset_cycle_state()
+        self._init_attribute_defaults()
 
         # Everything below here is re-read every cycle, not just at construction - see
         # refresh_config().
         self.refresh_config(quiet=quiet)
 
-    def reset_cycle_state(self):
+    def _init_attribute_defaults(self):
         """
-        Set every attribute that refresh_config()/update_status() are about to overwrite to None.
+        Establish the starting shape of every attribute refresh_config()/update_status() will own.
 
-        Called once from __init__, before the object has any real data to give an attribute a
-        placeholder value that could be mistaken for one. Not called again afterwards: these
-        attributes persist and get reassigned in place by refresh_config()/update_status() every
-        cycle, the same as any other state on a persisted object - this only establishes the
-        starting shape.
+        Construction-time only, and named to say so: calling this on a live object would null
+        charge_enable_time, soc_kw, battery_voltage and the window lists out from under a cycle that
+        is midway through using them. These attributes persist with the object and are reassigned in
+        place by refresh_config()/update_status() each cycle, so there is never a reason to re-run
+        this (#5126 review - the previous name, reset_cycle_state(), invited exactly that call).
+
+        They are seeded None rather than to a plausible-looking default because a real-looking
+        placeholder is indistinguishable from a configured value, which is what made in_calibration
+        and battery_voltage misbehave once the object stopped being rebuilt every cycle.
         """
         # Read every cycle by refresh_config().
         self.soc_max = None
@@ -583,7 +587,7 @@ class Inverter:
         # skipped rather than misreporting it as inverter clock skew or triggering an auto-restart.
         if isinstance(ivtime, str) and ivtime.strip().lower() in ("", "unavailable", "unknown", "none"):
             ivtime = None
-        # Reset every cycle, not just at construction (reset_cycle_state() only runs once on a
+        # Reset every cycle, not just at construction (_init_attribute_defaults() only runs once on a
         # persisted object) - otherwise a dropped/unavailable reading here leaves the previous
         # cycle's stale timestamp in place, and the skew check below keeps comparing against a dead
         # reading rather than treating the drop as "no reading" as intended (#5126 review).

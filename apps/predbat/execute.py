@@ -942,25 +942,19 @@ class Execute:
         export_limit = 0.0
         inverter_support_feedin_first = True
 
-        # Create the inverters only when we don't already have the right ones. The objects persist
-        # across cycles: rebuilding them every cycle wiped any state they accumulated, which is why
-        # the committed-schedule guard never suppressed a repeated commit (#4712). The config they
-        # read is not cached with them - refresh_config() re-reads it below, so a runtime change to
-        # battery_min_soc, battery_scaling or the rate limits still takes effect immediately.
+        # Create the inverters only when we don't already have the right number of them. The objects
+        # persist across cycles: rebuilding them every cycle wiped any state they accumulated, which
+        # is why the committed-schedule guard never suppressed a repeated commit (#4712).
         #
-        # The type is checked as well as the count. A component's automatic_config() normally runs
-        # once at startup, before any inverter exists, but a deferred startup (e.g. AlphaESS
-        # retrying until telemetry arrives) can set inverter_type after these objects were built -
-        # and the capability flags derived from it are the half refresh_config() does not re-derive.
-        # A changed count already forces a rebuild; this covers a same-count type change.
+        # Nothing else needs to force a rebuild. refresh_config() below re-reads everything derived
+        # from config, including inverter_type and every inv_* capability flag derived from it, and
+        # re-creates the type-named dummy entities - so a component whose automatic_config() sets the
+        # type after these objects were built (a deferred AlphaESS startup, say) is absorbed by the
+        # refresh. An earlier version of this rebuilt on a same-count type change too, which threw
+        # away the commit-once state for every inverter - forcing exactly the redundant commit and
+        # button press this guard exists to prevent - to redo work the refresh had already done
+        # (#5126 review).
         create = (not self.inverters) or (len(self.inverters) != self.num_inverters)
-        if not create:
-            for id in range(self.num_inverters):
-                wanted_type = self.get_arg("inverter_type", "GE", indirect=False, index=id)
-                if self.inverters[id].inverter_type != wanted_type:
-                    self.log("Info: Inverter {} type changed to {}, rebuilding".format(id, wanted_type))
-                    create = True
-                    break
         if create:
             self.inverters = []
 

@@ -3230,18 +3230,26 @@ def test_inverters_persist_across_cycles(test_name, my_predbat, ha):
                 failed = True
                 break
 
-        # A component whose startup is deferred can set inverter_type after the objects exist, and
-        # the capability flags derived from it are not re-derived by refresh_config() - so a changed
-        # type must rebuild rather than silently keep the old flags.
+        # A component whose startup is deferred can set inverter_type after the objects exist.
+        # refresh_config() re-reads the type and re-derives every inv_* capability flag from it, so
+        # this is absorbed without a rebuild - and must be, since rebuilding would discard the
+        # commit-once state and force the redundant commit this guard exists to prevent (#5126
+        # review). Asserts the flags actually followed the type, not merely that the object survived.
         my_predbat.args["inverter_type"] = ["GS"]
         if not my_predbat.fetch_inverter_data():
             print(f"ERROR: {test_name}: fetch_inverter_data() failed after a type change")
             return True
-        if my_predbat.inverters[0] is first:
-            print(f"ERROR: {test_name}: a changed inverter_type must rebuild the Inverter, not reuse it")
+        if my_predbat.inverters[0] is not first:
+            print(f"ERROR: {test_name}: a changed inverter_type rebuilt the Inverter, discarding its commit state")
             failed = True
-        elif my_predbat.inverters[0].inverter_type != "GS":
-            print(f"ERROR: {test_name}: rebuilt Inverter has type {my_predbat.inverters[0].inverter_type}, expected GS")
+        if my_predbat.inverters[0].inverter_type != "GS":
+            print(f"ERROR: {test_name}: Inverter has type {my_predbat.inverters[0].inverter_type} after the change, expected GS")
+            failed = True
+        if my_predbat.inverters[0].inv_charge_time_format != INVERTER_DEF["GS"]["charge_time_format"]:
+            print(f"ERROR: {test_name}: capability flags did not follow the type change - inv_charge_time_format is {my_predbat.inverters[0].inv_charge_time_format}")
+            failed = True
+        if first.last_committed.get("charge_window") != ("marker", "marker", True):
+            print(f"ERROR: {test_name}: a type change lost the committed-schedule state")
             failed = True
 
         # Runtime config must still be re-read on a persisted object.
@@ -3274,7 +3282,7 @@ def test_in_calibration_clears_when_battery_leaves_calibration(test_name, my_pre
     because most inverter types never configure battery_calibration at all (absent means never
     calibrating). Before Inverter objects persisted, that was fine: in_calibration was reseeded
     False by __init__ every single cycle. With persistence (#4712) a stuck True would never clear
-    on its own once the real device left calibration - reset_cycle_state() must be the one place
+    on its own once the real device left calibration - _init_attribute_defaults() must be the one place
     that still clears it, run once at construction, not on every refresh.
     """
     failed = False
