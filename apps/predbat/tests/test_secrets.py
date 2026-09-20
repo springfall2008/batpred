@@ -799,10 +799,13 @@ def test_log_secret_pattern_build_is_not_racy(my_predbat):
     print("**** Testing _log_secret_pattern() build is not racy against a concurrent invalidation ****")
     failed = False
 
-    import hass as hass_module
+    # Patched where _log_secret_pattern() looks the name up, which is log_secrets.py's module
+    # namespace since the cache moved out of Hass (GH#5169) - patching hass.py's copy would no
+    # longer pause the build at all, and the test would silently stop exercising the race.
+    import log_secrets as log_secrets_module
 
     saved_cache = my_predbat._log_secret_pattern_cache
-    saved_collect = hass_module.collect_log_secret_values
+    saved_collect = log_secrets_module.collect_log_secret_values
     build_started = _threading.Event()
     release_build = _threading.Event()
 
@@ -813,7 +816,7 @@ def test_log_secret_pattern_build_is_not_racy(my_predbat):
 
     try:
         my_predbat._log_secret_pattern_cache = my_predbat._LOG_SECRET_PATTERN_UNSET
-        hass_module.collect_log_secret_values = paused_collect
+        log_secrets_module.collect_log_secret_values = paused_collect
 
         builder = _threading.Thread(target=my_predbat._log_secret_pattern)
         builder.start()
@@ -849,11 +852,99 @@ def test_log_secret_pattern_build_is_not_racy(my_predbat):
             print("ERROR: a build that started before an invalidation was allowed to overwrite that invalidation's result")
             failed = True
     finally:
-        hass_module.collect_log_secret_values = saved_collect
+        log_secrets_module.collect_log_secret_values = saved_collect
         my_predbat._log_secret_pattern_cache = saved_cache
 
     if not failed:
         print("**** test_log_secret_pattern_build_is_not_racy PASSED ****")
+    return failed
+
+
+def test_log_redaction_mixin_needs_no_init():
+    """The redaction cache must work on any object that inherits the mixin, whatever its own
+    __init__ does (GH#5169).
+
+    The three members that drive it are called from files that do not define the class holding
+    them - userinterface.py's set_arg()/auto_config(), web.py's batch editor and chat_tools.py
+    all call _invalidate_log_secret_pattern() on the engine object - so while exactly one
+    __init__ established the state they need, "has the methods but not the state" was a
+    reachable state. An engine composed from a replacement hass.py crash-looped on precisely
+    that, during init, because set_arg() runs there.
+
+    Two things are asserted here, matching the two ways the mixin is meant to be usable:
+
+    - a Hass subclass that never calls Hass.__init__ still redacts, rather than raising
+      AttributeError on the first invalidation or log line;
+    - LogRedaction is usable on its own, with no Hass anywhere, and each instance's pattern
+      covers its own args only - the class attributes that replace the __init__ assignments are
+      defaults to read, not shared state to write into.
+    """
+    print("**** Testing the log redaction mixin works without Hass.__init__ ****")
+    failed = False
+
+    import io
+    from utils import redact_log_line
+
+    class EngineWithItsOwnInit(Hass):
+        """A Hass subclass that establishes its own state instead of calling Hass.__init__."""
+
+        def __init__(self):
+            """Set up just enough state to log, deliberately without calling Hass.__init__."""
+            self.args = {"octopus_api_key": "OVERLAY-SECRET-VALUE-5169"}
+            self.secrets = {}
+            self.logfile = io.StringIO()
+
+    engine = EngineWithItsOwnInit()
+    try:
+        # The exact call set_arg() makes after mutating args - where the reported crash surfaced.
+        engine._invalidate_log_secret_pattern()
+        engine.log("Info: connecting with OVERLAY-SECRET-VALUE-5169", quiet=True)
+    except AttributeError as error:
+        print("ERROR: redaction needed state that only Hass.__init__ establishes: {}".format(error))
+        failed = True
+    else:
+        content = engine.logfile.getvalue()
+        if "OVERLAY-SECRET-VALUE-5169" in content:
+            print("ERROR: a secret leaked into the log of an engine that skipped Hass.__init__: {}".format(content))
+            failed = True
+        if "<octopus_api_key>" not in content:
+            print("ERROR: the redaction lost its credential label: {}".format(content))
+            failed = True
+
+    try:
+        from log_secrets import LogRedaction
+    except ImportError as error:
+        print("ERROR: the redaction mixin is not importable on its own: {}".format(error))
+        return True
+
+    class BareRedactor(LogRedaction):
+        """An object that inherits the redaction mixin and nothing else - no Hass involved."""
+
+        def __init__(self, args):
+            """Hold the args the redaction pattern is built from."""
+            self.args = args
+
+    first = BareRedactor({"api_key": "FIRST-INSTANCE-SECRET-5169"})
+    second = BareRedactor({"api_key": "SECOND-INSTANCE-SECRET-5169"})
+
+    first_line = redact_log_line("Info: using FIRST-INSTANCE-SECRET-5169", first._log_secret_pattern())
+    if "FIRST-INSTANCE-SECRET-5169" in first_line or "<api_key>" not in first_line:
+        print("ERROR: the mixin did not redact on its own, without a Hass: {}".format(first_line))
+        failed = True
+
+    # Built after the first instance's: each object's pattern must cover its own args and only
+    # its own, so the class attributes that stand in for the removed __init__ assignments stay
+    # defaults every instance reads rather than one slot they all write into.
+    second_line = redact_log_line("Info: using SECOND-INSTANCE-SECRET-5169 with FIRST-INSTANCE-SECRET-5169", second._log_secret_pattern())
+    if "SECOND-INSTANCE-SECRET-5169" in second_line:
+        print("ERROR: the second instance did not build its own pattern: {}".format(second_line))
+        failed = True
+    if "FIRST-INSTANCE-SECRET-5169" not in second_line:
+        print("ERROR: the second instance is redacting the first instance's secrets - the cache is shared, not per-instance: {}".format(second_line))
+        failed = True
+
+    if not failed:
+        print("**** test_log_redaction_mixin_needs_no_init PASSED ****")
     return failed
 
 
@@ -912,6 +1003,7 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_set_arg_invalidates_log_secret_cache(my_predbat)
     failed |= test_log_redaction_survives_a_missed_invalidation(my_predbat)
     failed |= test_auto_config_invalidates_log_secret_cache(my_predbat)
+    failed |= test_log_redaction_mixin_needs_no_init()
     failed |= test_log_secret_pattern_build_is_not_racy(my_predbat)
     failed |= test_resolve_arg_re_masks_secret_arg_matches(my_predbat)
     return failed
