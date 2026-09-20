@@ -66,6 +66,28 @@ POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
 CONTROL_INTERVAL_SECONDS = 60
 
+# The charger-facing entities for the discovery catalogue's chargers record - see
+# OhmeAPI.build_discovery(). Predbat standard name -> entity descriptor, filtered down to what
+# Home Assistant has actually seen by ComponentBase.discovery_entities(). All three are published
+# unconditionally by publish_data(), so once it has run once every one of these exists.
+CHARGER_DISCOVERY_ENTITY_SPEC = {
+    "car_charging_planned": {"entity_id": "binary_sensor.predbat_ohme_connected", "domain": "binary_sensor", "access": "r"},
+    "car_charging_energy": {"entity_id": ENERGY_TODAY_ENTITY, "domain": "sensor", "access": "r"},
+    "car_charging_power": {"entity_id": POWER_WATTS_ENTITY, "domain": "sensor", "access": "r"},
+}
+
+# The car-facing entities for the discovery catalogue's cars record - see OhmeAPI.build_discovery().
+# Predbat standard name -> entity descriptor, as for the charger set above. The last three are
+# exactly the entities automatic_config_octopus_intelligent() wires octopus_intelligent_slot/
+# octopus_ready_time/octopus_charge_limit to, and are published unconditionally by publish_data()
+# regardless of whether Intelligent wiring is actually in use.
+CAR_DISCOVERY_ENTITY_SPEC = {
+    "car_charging_soc": {"entity_id": "sensor.predbat_ohme_battery_percent", "domain": "sensor", "access": "r"},
+    "octopus_intelligent_slot": {"entity_id": "binary_sensor.predbat_ohme_slot_active", "domain": "binary_sensor", "access": "r"},
+    "octopus_ready_time": {"entity_id": "select.predbat_ohme_target_time", "domain": "select", "access": "rw"},
+    "octopus_charge_limit": {"entity_id": "number.predbat_ohme_target_percent", "domain": "number", "access": "rw"},
+}
+
 # Format Predbat writes its planned car charging windows in - see PredBat.time_abs_str()
 PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
 
@@ -264,6 +286,13 @@ class OhmeAPI(ComponentBase):
             if octopus_intelligent:
                 await self.automatic_config_octopus_intelligent()
             self.enable_control(octopus_intelligent)
+
+        # Unconditional and outside the "if first and self.client.serial:" block above, so a
+        # transient failure on that one-shot cycle is retried rather than lost - see
+        # ComponentBase.refresh_discovery(). Placed after publish_data() has already run this cycle
+        # (the "seconds % 120" block above, guaranteed on the first cycle since that condition is
+        # "first or ..."), so the entities this reports against already exist by the time it runs.
+        self.refresh_discovery()
 
         if self.control_active and (seconds % CONTROL_INTERVAL_SECONDS) == 0:
             await self.control_charge()
@@ -505,6 +534,114 @@ class OhmeAPI(ComponentBase):
         self.set_arg("octopus_intelligent_slot", "binary_sensor.predbat_ohme_slot_active")
         self.set_arg("octopus_ready_time", "select.predbat_ohme_target_time")
         self.set_arg("octopus_charge_limit", "number.predbat_ohme_target_percent")
+
+    def _discovery_vehicle(self):
+        """
+        (vehicle_id, make, model) for the Ohme account's current vehicle, or (None, None, None).
+
+        Reads self.client._cars directly - the same list current_vehicle()/vehicles() already
+        expose as display strings, but with the id and make/model split back out rather than
+        flattened into one name. This is the data automatic_config() never looks at: Predbat
+        indexes cars, not chargers, and Ohme is the one charger integration that can describe the
+        vehicle behind the connection rather than emit an empty stub (see build_discovery()). The
+        selected vehicle is always index 0, matching current_vehicle()'s own convention. A vehicle
+        with no "id" is treated as unknown rather than risking a device_id built from something
+        else in the payload - build_discovery() falls back to a stub in that case.
+        """
+        cars = getattr(self.client, "_cars", None) or []
+        if not cars:
+            return None, None, None
+        vehicle = cars[0]
+        vehicle_id = vehicle.get("id")
+        if not vehicle_id:
+            return None, None, None
+        model_info = vehicle.get("model") or {}
+        brand = model_info.get("brand") or {}
+        make = brand.get("name") or model_info.get("make")
+        model = model_info.get("modelName")
+        return str(vehicle_id), make, model
+
+    def build_discovery(self):
+        """
+        Describe the discovered charger and its car for the discovery catalogue.
+
+        Two records, deliberately never merged into one: Predbat indexes cars, not chargers (a car
+        can arrive with a stub charger, and vice versa - see the design note in
+        docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md), so a charger and the
+        vehicle behind it are always reported as separate records, cross-linked in both directions
+        (serves_cars / charged_by) rather than resolved into one.
+
+        The charger record - device_id "ohme:{serial}" - carries the serial in hardware_ids, the
+        vendor and, where the API has reported it, the model name in info. No rated power is
+        reported: neither this client nor upstream ohmepy parses a max-current/max-power field
+        anywhere in the account or charge-device payloads it reads, and inventing one would be
+        exactly the kind of fabricated record the catalogue design forbids - ratings is therefore
+        never populated at all rather than populated with a guess.
+
+        The car record is a stub - device_id "ohme:{serial}:car", info.stub true - unless the Ohme
+        account reports a current vehicle (self.client._cars, via _discovery_vehicle()), which this
+        component discards today. When one is known, the record instead carries a genuine identity:
+        device_id "ohme:{vehicle id}" with make/model in info. This is the one place a charger
+        integration can do better than the stub every other charger in this catalogue is limited to.
+
+        Entities are split by what they actually describe, not by which record happens to publish
+        them: car_charging_planned/energy/power - the charger's own readings - go on the charger;
+        car_charging_soc and the three Octopus Intelligent entities Ohme publishes - facts about the
+        car and its charge target - go on the car. Every one of them is checked against the state
+        store by discovery_entities() rather than assumed present. car_charging_now is deliberately
+        not reported: Ohme publishes no entity distinct from car_charging_planned's own "connected"
+        sensor that means "drawing power right now" rather than "plugged in and wanting to charge",
+        and reporting one entity under two different fact names would misdescribe it under whichever
+        name it does not actually mean.
+
+        Reporting is independent of self.ohme_automatic: it describes what the Ohme account itself
+        holds, not whether this component wired Predbat's apps.yaml to it - that distinction is what
+        the report's own "automatic" flag is for, not a gate on reporting here. A user running Ohme
+        manually (ohme_automatic: false) is exactly the installation a discovery catalogue most wants
+        to describe, so this must run either way - see run()'s unconditional call to
+        refresh_discovery(), which calls this.
+
+        Returns None until the charger has a serial: every identity in both records is derived from
+        it, so there is nothing to describe before it arrives, and refresh_discovery() treats None
+        as "nothing to report yet" and simply asks again next cycle.
+        """
+        serial = self.client.serial
+        if not serial:
+            return None
+        charger_device_id = "ohme:{}".format(serial)
+        vehicle_id, make, model = self._discovery_vehicle()
+        car_device_id = "ohme:{}".format(vehicle_id) if vehicle_id else "ohme:{}:car".format(serial)
+
+        charger_info = {"vendor": "Ohme"}
+        device_model = (self.client.device_info or {}).get("model")
+        if device_model:
+            charger_info["model"] = device_model
+
+        charger = {
+            "device_id": charger_device_id,
+            "hardware_ids": {"serial": serial},
+            "info": charger_info,
+            "serves_cars": [car_device_id],
+            "entities": self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
+        }
+
+        if vehicle_id:
+            car_info = {}
+            if make:
+                car_info["make"] = make
+            if model:
+                car_info["model"] = model
+        else:
+            car_info = {"stub": True}
+
+        car = {
+            "device_id": car_device_id,
+            "charged_by": charger_device_id,
+            "info": car_info,
+            "entities": self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
+        }
+
+        return {"automatic": self.ohme_automatic, "chargers": [charger], "cars": [car]}
 
     def restore_energy_today(self, now):
         """

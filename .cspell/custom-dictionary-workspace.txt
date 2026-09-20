@@ -169,6 +169,7 @@ eauth
 echargingpile
 Eddi
 eddis
+efgh
 elif
 elinter
 eload
@@ -495,6 +496,10 @@ preseed
 preseeded
 prevs
 protobuf
+pseudonymisation
+pseudonymise
+pseudonymised
+pseudonymises
 psum
 pthread
 pvbat
@@ -700,6 +705,7 @@ varh
 venv
 Victron
 visibilitychange
+vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
@@ -712,6 +718,7 @@ WNOHANG
 workmode
 writeonly
 wrongsha
+wwxxabcdefyyzz
 xaxis
 xaxistooltip
 xlabel
@@ -719,6 +726,7 @@ xlim
 xload
 xrtkq
 xticks
+xxabcdefyy
 yaxis
 yaxistooltip
 yday
