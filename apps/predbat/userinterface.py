@@ -36,6 +36,7 @@ from const import (
     MANUAL_TIME_MAX_MINUTES,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
+from component_base import ComponentWriteError
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
@@ -991,11 +992,17 @@ class UserInterface:
         for the same True/success, False/None-failure contract the websocket branch provides,
         since loopback mode only ever simulates the entity-control services in EVENT_LISTEN_LIST,
         not arbitrary third-party integration services.
+        A rejected or uncertain component write returns a falsy ComponentWriteResult
+        so callers can distinguish it from successful dispatch and verify readback.
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
                 # self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
-                await item["callback"](item["service"], service_data, None)
+                try:
+                    await item["callback"](item["service"], service_data, None)
+                except ComponentWriteError as error:
+                    self.log(f"Warn: {error}")
+                    return error.result
                 return True
         return False
 

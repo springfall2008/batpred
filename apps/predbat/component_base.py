@@ -19,6 +19,7 @@ from this class.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from utils import minutes_since_midnight
@@ -32,6 +33,27 @@ import traceback
 # bounded by a monotonic deadline rather than by counting ticks, so `timeout` stays honest in
 # seconds however often the flag is checked.
 API_START_POLL_SECONDS = 0.1
+
+
+@dataclass(frozen=True)
+class ComponentWriteResult:
+    """A rejected or uncertain device write which must not be blindly repeated."""
+
+    error: str
+    outcome_unknown: bool = False
+
+    def __bool__(self):
+        """Neither rejection nor an unknown outcome is confirmed success."""
+        return False
+
+
+class ComponentWriteError(Exception):
+    """Carry a device result through asynchronous component event dispatch."""
+
+    def __init__(self, message, outcome_unknown=False):
+        """Preserve whether readback may still prove a write with a missing ACK."""
+        super().__init__(message)
+        self.result = ComponentWriteResult(message, outcome_unknown)
 
 
 class ComponentBase(ABC):

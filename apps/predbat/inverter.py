@@ -41,6 +41,7 @@ from const import (
     INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
+from component_base import ComponentWriteResult
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -2203,6 +2204,7 @@ class Inverter:
         retry = 0
         while not switch_matched(raw_state) and retry < INVERTER_MAX_RETRY:
             retry += 1
+            result = None
             if domain == "sensor":
                 if new_value:
                     self.base.set_state_wrapper(state="on", entity_id=entity_id, attributes=self.created_attributes.get(entity_id, {}))
@@ -2211,9 +2213,14 @@ class Inverter:
             else:
                 base_entity = entity_id.split(".")[0]
                 service = base_entity + "/turn_" + ("on" if new_value else "off")
-                self.base.call_service_wrapper(service, entity_id=entity_id)
+                result = self.base.call_service_wrapper(service, entity_id=entity_id)
+
+            if isinstance(result, ComponentWriteResult) and not result.outcome_unknown:
+                break
 
             raw_state = self._poll_after_write(entity_id, switch_matched, refresh=domain != "sensor")
+            if isinstance(result, ComponentWriteResult):
+                break
 
         if switch_matched(raw_state):
             self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
@@ -2282,15 +2289,19 @@ class Inverter:
         retry = 0
         while (not matched) and (retry < INVERTER_MAX_RETRY):
             retry += 1
+            result = None
             if domain == "sensor":
                 self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}), required_unit=required_unit)
             else:
                 entity_base = entity_id.split(".")[0]
                 service = entity_base + "/set_value"
                 new_value_conv = self.base.unit_conversion(entity_id, new_value, None, required_unit, going_to=True)
-                self.base.call_service_wrapper(service, value=new_value_conv, entity_id=entity_id)
+                result = self.base.call_service_wrapper(service, value=new_value_conv, entity_id=entity_id)
 
-            if ignore_fail:
+            if isinstance(result, ComponentWriteResult) and not result.outcome_unknown:
+                break
+
+            if ignore_fail and not isinstance(result, ComponentWriteResult):
                 # Returns success without ever polling, so nothing has been proved about what
                 # the inverter now holds - drop ownership rather than claim it.
                 if ledger is not None:
@@ -2300,6 +2311,8 @@ class Inverter:
             raw_state = self._poll_after_write(entity_id, value_matched, refresh=domain != "sensor", required_unit=required_unit)
             current_state = value_state(raw_state)
             matched = value_matched(raw_state)
+            if isinstance(result, ComponentWriteResult):
+                break
 
         if retry == 0:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
@@ -2355,14 +2368,16 @@ class Inverter:
         for _retry in range(INVERTER_MAX_RETRY):
             if entity_base == "time":
                 service = entity_base + "/set_value"
-                self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
+                result = self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
             elif entity_base == "input_datetime":
                 # input_datetime uses set_datetime (not set_value) with a time= parameter for time-only entities
-                self.base.call_service_wrapper("input_datetime/set_datetime", time=new_value, entity_id=entity_id)
+                result = self.base.call_service_wrapper("input_datetime/set_datetime", time=new_value, entity_id=entity_id)
             else:
                 service = entity_base + "/select_option"
-                self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
-            if ignore_fail:
+                result = self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
+            if isinstance(result, ComponentWriteResult) and not result.outcome_unknown:
+                break
+            if ignore_fail and not isinstance(result, ComponentWriteResult):
                 # Same as write_and_poll_value: success without a poll proves nothing.
                 if ledger is not None:
                     ledger.clear(entity_id)
@@ -2374,6 +2389,8 @@ class Inverter:
                 if ledger is not None:
                     ledger.record_write(entity_id, name, old_value, now=time.time(), generation=self._ledger_generation(entity_id))
                 return True
+            if isinstance(result, ComponentWriteResult):
+                break
         self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id, refresh=True)))
         self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         if ledger is not None:

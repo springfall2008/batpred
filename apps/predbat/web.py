@@ -91,7 +91,7 @@ from utils import (
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
-from component_base import ComponentBase
+from component_base import ComponentBase, ComponentWriteResult
 from config import APPS_SCHEMA
 import debug_history
 from web_annual import AnnualPage
@@ -2531,6 +2531,8 @@ chart.render();
         service_data = json_data.get("data", {})
         if service:
             result = self.base.call_service_wrapper(service, **service_data)
+            if isinstance(result, ComponentWriteResult):
+                result = {"success": False, "error": result.error, "outcome_unknown": result.outcome_unknown}
             return web.Response(content_type="application/json", text=json.dumps(result))
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
