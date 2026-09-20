@@ -95,9 +95,10 @@ KRAKEN_ACCOUNT_QUERY = """{{
 KRAKEN_VIEWER_QUERY = """{ viewer { accounts { number } } }"""
 
 # GraphQL applicableRates query — fallback when the REST product endpoint cannot serve the
-# tariff: 404 (product code removed/replaced while customer is still on the tariff, or a private
-# product such as an EDF SEG export tariff) or 400 (tariff has no /standard-unit-rates/ REST
-# endpoint, e.g. E-TOU-* on E.ON Next or day/night-structured EDF tariffs).
+# tariff: 404/410 (product code removed/replaced while customer is still on the tariff, a private
+# product such as an EDF SEG export tariff, or a TOU tariff absent from the REST API such as
+# E-TOU-* on E.ON Next) or 400 (the product is in the REST API but has no /standard-unit-rates/
+# resource, as day/night-structured EDF tariffs answer — GH#5166).
 # Returns value (pence/kWh inc VAT), validFrom, validTo for the requested window.
 # applicableRates is a Relay-style connection (ApplicableRateConnectionTypeConnection),
 # so the rate fields live under edges { node { ... } }, not directly on the field. The
@@ -849,7 +850,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         query (which is not available on every provider), so export rates are recovered wherever
         possible. A 400 goes straight to that fallback without the authenticated retry: it means
         the tariff has no /standard-unit-rates/ resource (day/night-structured tariffs), which
-        auth cannot change.
+        auth cannot change. A network error during the authenticated retry keeps the status the
+        public attempt returned, so the fallback still runs for a tariff already proven 404/410.
         """
         tariff = tariff or self.current_tariff
         if not tariff:
@@ -871,7 +873,15 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # 2) On a permanent "not found", the product is likely private — retry authenticated.
         if err in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES:
             self.log(f"Kraken: REST rates HTTP {err} for {tariff['tariff_code']}, retrying authenticated")
+            rest_unavailable_status = err
             results, err = await self._fetch_rates_rest(url, authenticate=True)
+            if results is None and err is None:
+                # (None, None) is a network error on the retry, which would otherwise erase the
+                # status the public attempt just proved and drop this cycle into the generic
+                # failure path. The products API still cannot serve this tariff, so keep that
+                # status and take the GraphQL fallback rather than losing the rates to a blip.
+                self.log(f"Warn: Kraken: Authenticated retry for {tariff['tariff_code']} hit a network error, treating as HTTP {rest_unavailable_status}")
+                err = rest_unavailable_status
 
         if err is not None:
             # A "REST cannot serve this tariff" status with a known MPAN is the EXPECTED path for
@@ -883,10 +893,16 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             # fall through to the genuine-failure path below.
             if err in KRAKEN_REST_RATES_UNAVAILABLE_STATUSES and fallback_mpan:
                 kind = "export" if is_export else "import"
-                reason = "private product" if err in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES else "tariff has no standard-unit-rates endpoint"
+                # 404/410 covers both a private product and one retired from the REST API, so the
+                # label has to fit both — a retired product is not a private one.
+                reason = "product not in the REST API" if err in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES else "tariff has no standard-unit-rates endpoint"
                 self.log(f"Kraken: REST rates HTTP {err} for {tariff['tariff_code']} ({reason}), using GraphQL applicableRates for {kind} MPAN {fallback_mpan}")
+                failures_before = self.failures_total
                 rates = await self.async_fetch_rates_graphql(fallback_mpan, account_id=fallback_account)
-                if rates is None:
+                if rates is None and self.failures_total == failures_before:
+                    # async_graphql_query counts its own failures (auth, non-200, GraphQL errors,
+                    # network), so only add a count when the fallback came back empty without
+                    # counting one — otherwise a down GraphQL would score 2 per cycle.
                     self.failures_total += 1
                 return rates
             self.log(f"Warn: Kraken: Rates HTTP {err} for {url}")
@@ -951,9 +967,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
     async def async_fetch_standing_charges(self, tariff=None):
         """Fetch standing charges from public REST endpoint. No auth needed.
 
-        Falls back to GraphQL applicableStandingCharges if the REST endpoint returns a non-200
-        status (e.g. 404 for TOU tariffs on E.ON Next whose product is not in the REST API)
-        and self.import_mpan is known.
+        Falls back to GraphQL applicableStandingCharges only on a permanent "product not found"
+        status (404/410 — e.g. TOU tariffs on E.ON Next whose product is not in the REST API)
+        when self.import_mpan is known. Transient statuses (429/500/503) are counted as failures
+        instead, and unlike the rates endpoint a 400 does not arise here: /standing-charges/ is
+        register-independent, so day/night-structured tariffs still serve it (GH#5166).
         """
         tariff = tariff or self.current_tariff
         if not tariff:
@@ -979,10 +997,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return None
 
         if http_error_status is not None:
-            # Only fall back to GraphQL for permanent "product not found" responses (404/410).
-            # Transient errors (429, 500, 503, …) should surface as failures, not trigger
-            # an extra GraphQL request that would mask the outage.
-            if http_error_status in (404, 410) and self.import_mpan:
+            # Only fall back to GraphQL for permanent "product not found" responses (404/410) —
+            # the same statuses the rates fallback retries authenticated on, shared via the
+            # constant so the gates cannot drift. Transient errors (429, 500, 503, …) should
+            # surface as failures, not trigger an extra GraphQL request that would mask the
+            # outage. 400 is deliberately absent: it is a rates-endpoint-only answer.
+            if http_error_status in KRAKEN_REST_PRODUCT_NOT_FOUND_STATUSES and self.import_mpan:
                 self.log(f"Kraken: REST standing charges returned HTTP {http_error_status}, falling back to GraphQL applicableStandingCharges for MPAN {self.import_mpan}")
                 return await self.async_fetch_standing_charges_graphql(self.import_mpan)
             return None
