@@ -20,6 +20,17 @@ invisible coincidence of startup order.
 
 ## Where to find it
 
+**The Discovery page in the web UI.** The quickest way to look: open **Discovery** in the Predbat
+web interface. It shows the per-section record counts, any conflicts, a status for every component,
+and a card per record, with the entity map collapsed behind a toggle and the whole document
+available at the bottom in the same YAML form a debug dump carries.
+
+The page is **redacted by default** - what you see is what a bug report would contain. "Show raw
+values" (`?raw=1`) switches to the unredacted document, so you can confirm your own serial number
+or MPAN was captured correctly. The raw view is labelled on screen and is **not safe to share**:
+Predbat's web interface has no authentication of its own, so treat raw mode the way you already
+treat the Apps page.
+
 **A debug dump.** Every `predbat_debug.yaml` (written to `debug/` when
 `switch.predbat_debug_enable` is on, and what you normally attach to a bug report) carries the full
 catalogue under a top-level `discovery:` key. This is the complete document, and the redacted form
