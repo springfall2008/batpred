@@ -409,7 +409,7 @@ def test_debug_history(my_predbat):
     legacy_bulk_storage = FakeStorage()
     legacy_bulk_id = asyncio.run(capture_snapshot(legacy_bulk_storage, sample_yaml_text("legacy-bulk"), now, max_count=15))
     legacy_bulk_storage.debug_copies[_legacy_snapshot_filename(legacy_bulk_id)] = legacy_bulk_storage.debug_copies.pop(snapshot_filename(legacy_bulk_id))
-    named_legacy = asyncio.run(load_all_snapshots(legacy_bulk_storage))
+    named_legacy = asyncio.run(load_all_snapshots(legacy_bulk_storage, 100))
     if len(named_legacy) != 1 or named_legacy[0][0] != snapshot_filename(legacy_bulk_id) or named_legacy[0][1] != sample_yaml_text("legacy-bulk"):
         print("  ERROR: expected the pre-rename snapshot in the archive under the current name, got {}".format([(fname, text) for fname, text in named_legacy]))
         failed = True
@@ -446,7 +446,7 @@ def test_debug_history(my_predbat):
     bulk_storage = FakeStorage()
     for offset in range(3):
         asyncio.run(capture_snapshot(bulk_storage, sample_yaml_text(offset), now + datetime.timedelta(hours=offset), max_count=15))
-    named = asyncio.run(load_all_snapshots(bulk_storage))
+    named = asyncio.run(load_all_snapshots(bulk_storage, 100))
     if len(named) != 3:
         print("  ERROR: expected 3 named snapshots, got {}".format(len(named)))
         failed = True
@@ -457,13 +457,13 @@ def test_debug_history(my_predbat):
     print("Test: a snapshot's archive filename is stable across downloads even as its ring position shifts")
     stable_storage = FakeStorage()
     target_id = asyncio.run(capture_snapshot(stable_storage, sample_yaml_text("target"), now, max_count=15))
-    named_before = {fname: text for fname, text in asyncio.run(load_all_snapshots(stable_storage))}
+    named_before = {fname: text for fname, text in asyncio.run(load_all_snapshots(stable_storage, 100))}
     filename_before = next(fname for fname, text in named_before.items() if text == sample_yaml_text("target"))
     # Push the target snapshot back in the ring (not out of it) with newer captures, simulating
     # time passing between two separate "download the archive" actions against the same buffer.
     for offset in range(1, 4):
         asyncio.run(capture_snapshot(stable_storage, sample_yaml_text("newer_{}".format(offset)), now + datetime.timedelta(hours=offset), max_count=15))
-    named_after = {fname: text for fname, text in asyncio.run(load_all_snapshots(stable_storage))}
+    named_after = {fname: text for fname, text in asyncio.run(load_all_snapshots(stable_storage, 100))}
     filename_after = next(fname for fname, text in named_after.items() if text == sample_yaml_text("target"))
     if filename_before != filename_after:
         print("  ERROR: the same snapshot's filename changed after its ring position shifted: {!r} -> {!r}".format(filename_before, filename_after))
@@ -477,16 +477,28 @@ def test_debug_history(my_predbat):
     asyncio.run(capture_snapshot(partial_storage, sample_yaml_text("keep"), now, max_count=15))
     missing_id = asyncio.run(capture_snapshot(partial_storage, sample_yaml_text("gone"), now + datetime.timedelta(hours=1), max_count=15))
     partial_storage.debug_copies.pop(snapshot_filename(missing_id), None)  # simulate a corrupt/evicted entry still left in the index
-    named_partial = asyncio.run(load_all_snapshots(partial_storage))
+    named_partial = asyncio.run(load_all_snapshots(partial_storage, 100))
     if len(named_partial) != 1 or named_partial[0][1] != sample_yaml_text("keep"):
         print("  ERROR: expected only the loadable snapshot to survive, got {}".format(named_partial))
         failed = True
 
+    print("Test: load_all_snapshots stops at max_num, newest-first, without loading the rest")
+    capped_storage = FakeStorage()
+    for offset in range(5):
+        asyncio.run(capture_snapshot(capped_storage, sample_yaml_text("capped_{}".format(offset)), now + datetime.timedelta(hours=offset), max_count=15))
+    named_capped = asyncio.run(load_all_snapshots(capped_storage, 2))
+    if len(named_capped) != 2:
+        print("  ERROR: expected load_all_snapshots to stop at max_num=2, got {} entries".format(len(named_capped)))
+        failed = True
+    elif [text for _, text in named_capped] != [sample_yaml_text("capped_4"), sample_yaml_text("capped_3")]:
+        print("  ERROR: expected the 2 newest snapshots in newest-first order, got {}".format([text for _, text in named_capped]))
+        failed = True
+
     print("Test: load_all_snapshots with no storage/snapshots returns an empty list")
-    if asyncio.run(load_all_snapshots(None)) != []:
+    if asyncio.run(load_all_snapshots(None, 100)) != []:
         print("  ERROR: load_all_snapshots(None) should give an empty list")
         failed = True
-    if asyncio.run(load_all_snapshots(FakeStorage())) != []:
+    if asyncio.run(load_all_snapshots(FakeStorage(), 100)) != []:
         print("  ERROR: load_all_snapshots with nothing captured should give an empty list")
         failed = True
 

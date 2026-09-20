@@ -4,6 +4,18 @@ Provides the Hass class that emulates the AppDaemon interface for standalone
 execution, including YAML configuration loading, secret management, log
 rotation, scheduled callback execution, and file change detection for
 development hot-reload.
+
+Despite the "outside AppDaemon" framing (legacy naming, kept for history), this
+IS the class predbat.PredBat actually inherits from in every currently
+supported install path - the Predbat app/addon and Docker both run this
+standalone-style loader, not a real appdaemon package. The genuinely
+AppDaemon-hosted install method has been retired (docs/install.md); there is
+no appdaemon dependency anywhere in this repo, and no conditional import
+branches to a different hass module. So Hass.log() below - and the write-time
+secret redaction in it (GH#4770) - is not a partial mitigation that misses an
+AppDaemon-hosted population still running elsewhere: there is no such
+population left to miss. Flagging this explicitly because the class/module
+docstrings alone would lead a reviewer to (reasonably) suspect the opposite.
 """
 
 import yaml
@@ -11,6 +23,8 @@ import sys
 import asyncio
 import os
 import subprocess
+
+from utils import collect_log_secret_values, compile_log_secret_pattern, redact_log_line
 
 
 def write_git_version_marker():
@@ -177,10 +191,83 @@ class Hass:
     and file change detection for development hot-reload.
     """
 
+    # Sentinel distinct from None: compile_log_secret_pattern() legitimately returns None when
+    # there are no secrets configured to redact, so None alone in the cache slot can't tell
+    # "not built yet" from "built, and there is nothing to redact" - the latter would otherwise
+    # rebuild (recompute the value set, recompile) on every single log() call instead of caching.
+    _LOG_SECRET_PATTERN_UNSET = object()
+
+    def _invalidate_log_secret_pattern(self):
+        """
+        Mark the cached redaction pattern stale so the next log() call rebuilds it from the
+        current args/secrets (GH#4770). Every call site that mutates self.args or self.secrets
+        after startup must call this - see _log_secret_pattern()'s docstring for why a missed
+        site is a real leak, not just a staleness bug.
+        """
+        with self._log_secret_pattern_lock:
+            self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
+
+    def _log_secret_fingerprint(self):
+        """
+        A cheap value that changes whenever the set of credentials in args/secrets could have.
+
+        Deliberately not a hash of every value: this runs under the lock on the way to each
+        rebuild decision, so it stays O(number of top-level keys). Identity of the args and
+        secrets mappings plus their sizes catches the shapes a config mutation takes - a key
+        added or removed (size), and the whole mapping being replaced or rebound (identity), as
+        web.py's batch editor does via clear()/update() and web_chat.py does by assigning a new
+        block.
+
+        An in-place edit of an existing key that keeps the size the same is NOT caught here, so
+        the explicit _invalidate_log_secret_pattern() call sites remain load-bearing. This is a
+        safety net under them, not a replacement: with it, a missed or mis-ordered call site
+        degrades to "redacted from the next line" instead of "leaks until the next restart",
+        which is the failure mode successive reviews of this PR kept finding one call site at a
+        time. GH#5063 tracks removing the contract itself by routing every args mutation through
+        one setter (#5053 review).
+        """
+        args = getattr(self, "args", None)
+        secrets = getattr(self, "secrets", None)
+        return (id(args), len(args) if isinstance(args, dict) else -1, id(secrets), len(secrets) if isinstance(secrets, dict) else -1)
+
+    def _log_secret_pattern(self):
+        """
+        Return the cached compiled redaction pattern log() must apply, rebuilding it the first
+        time it is needed and whenever load_secrets()/apps.yaml load invalidate it (GH#4770).
+
+        Cached rather than recomputed on every log() call: log() runs on every log line, while
+        args/secrets only change on startup and on a config reload, so rebuilding the value set
+        and recompiling the pattern that rarely - rather than on every call - keeps the
+        redaction check to a single compiled-regex scan per line on the hot path.
+
+        Guarded by a lock, not just the sentinel check: log() runs from component threads as well
+        as the main thread (create_task()), so two threads can both observe the sentinel and race
+        to rebuild. Without the lock, a thread that started building from stale args right before
+        another thread invalidates the cache (a credential just added via set_arg()) can finish
+        second and overwrite the fresh invalidation with its stale, already-out-of-date pattern -
+        silently keeping the just-added credential unredacted until something invalidates the
+        cache again. The lock makes "read sentinel, build, store" one atomic step so a build that
+        started before an invalidation can never win a race against it.
+        """
+        with self._log_secret_pattern_lock:
+            fingerprint = self._log_secret_fingerprint()
+            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET or fingerprint != self._log_secret_pattern_fingerprint:
+                args = getattr(self, "args", None)
+                redact_strings = args.get("redact_strings") if args else None
+                redact_strings_labelled = args.get("redact_strings_labelled") if args else None
+                values = collect_log_secret_values(args, getattr(self, "secrets", None), redact_strings, redact_strings_labelled)
+                self._log_secret_pattern_cache = compile_log_secret_pattern(values)
+                self._log_secret_pattern_fingerprint = fingerprint
+            return self._log_secret_pattern_cache
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
+        # Redacted here, at the point the line is written, not at serve/download time: some users
+        # copy predbat.log directly off a Samba share exposing the addon's config directory,
+        # bypassing every HTTP/MCP endpoint a download-time scrub could sit behind (GH#4770).
+        msg = redact_log_line(str(msg), self._log_secret_pattern())
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         self.logfile.flush()
@@ -251,6 +338,9 @@ class Hass:
         self.threads = []
         self.fatal_error = False
         self.hass_api_version = 2
+        self._log_secret_pattern_lock = threading.Lock()
+        self._log_secret_pattern_cache = self._LOG_SECRET_PATTERN_UNSET
+        self._log_secret_pattern_fingerprint = None
 
         self.logfile = open("predbat.log", "a")
 
@@ -260,6 +350,10 @@ class Hass:
         except yaml.YAMLError as exc:
             print(exc)
             sys.exit(1)
+
+        # Both args and secrets have just been populated, so the redaction pattern built from them
+        # (GH#4770) is stale - drop it so the next log() call rebuilds from the loaded config.
+        self._invalidate_log_secret_pattern()
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """

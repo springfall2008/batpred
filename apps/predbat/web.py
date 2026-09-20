@@ -51,6 +51,7 @@ from web_helper import (
     get_html_config_css,
     get_apps_js,
     get_components_css,
+    get_discovery_css,
     get_entity_modal_css,
     get_component_edit_modal_css,
     get_entity_modal_js,
@@ -86,8 +87,9 @@ from utils import (
     classify_log_line,
     log_line_included,
     predbat_log_file_prev,
+    is_secret_key,
 )
-from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -98,6 +100,11 @@ from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
+
+# How many of the newest debug-history snapshots the dashboard's one-click archive bundles.
+# debug_history_count reaches 500 since #5070 and the archive is built in memory, so this is the
+# point where a single download stops being practical - not a limit on what is retained on disk.
+DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
 def state_as_of_slots(records, slots):
@@ -514,6 +521,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
+        app.router.add_get("/discovery", self.html_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -525,7 +533,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/debug_history_list", self.html_debug_history_list)
         app.router.add_get("/debug_history_download", self.html_debug_history_download)
-        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
+        app.router.add_get("/debug_history_download_recent", self.html_debug_history_download_recent)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
@@ -1054,7 +1062,7 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
-        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_recent'>Download recent</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         # The HA Companion app's embedded webview does not act on Content-Disposition: attachment,
         # so it renders these downloads inline instead of saving them - a client limitation with no
@@ -3020,14 +3028,19 @@ chart.render();
         filename = debug_history.snapshot_filename(resolved_id)
         return await self.html_file(filename, data)
 
-    async def html_debug_history_download_all(self, request):
+    async def html_debug_history_download_recent(self, request):
         """
-        Download every retained debug-history snapshot as a single gzip tarball, so a
-        bug report can be gathered with one link instead of chasing a user through the
-        per-snapshot picker for the right moment, for #4417.
+        Download the most recent DEBUG_HISTORY_DOWNLOAD_MAX retained debug-history snapshots as a
+        single gzip tarball, so a bug report can be gathered with one link instead of chasing a
+        user through the per-snapshot picker for the right moment, for #4417.
+
+        Capped rather than "all": debug_history_count reaches 500 since #5070, and the archive is
+        built by loading every snapshot into memory at once, so an unbounded bundle of whole debug
+        dumps is neither downloadable nor attachable to an issue. Older snapshots are still
+        available individually from the plan's History view, or straight off disk in debug/.
         """
         storage = self._storage()
-        named_snapshots = await debug_history.load_all_snapshots(storage)
+        named_snapshots = await debug_history.load_all_snapshots(storage, DEBUG_HISTORY_DOWNLOAD_MAX)
         if not named_snapshots:
             return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
 
@@ -3342,7 +3355,9 @@ chart.render();
         elif chart == "PV" or chart == "PV7":
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
-            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False))
+            # The uncalibrated forecast: h0's state is the calibrated one while calibration is on, which would
+            # draw the same line as Forecast History CL below
+            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", 7, required=False))
             pv_forecast_histCL = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
 
             pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
@@ -3793,7 +3808,16 @@ chart.render();
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
-        args = self.args
+        # Mask once, here, through the same recursive traversal every other surface uses
+        # (mask_secret_args - see utils.py). A top-level `is_secret_key(arg)` test on the loop
+        # below only covers credentials whose own apps.yaml key names them: a nested one such as
+        # chat.providers.openrouter.api_key or forecast_solar[0].api_key sits under a top-level
+        # key that matches nothing, and render_type() recurses into it - so the value, and the
+        # data-nested-original attribute built from it, both reached the browser in the clear
+        # (#5053 review). Masking the structure instead of the row keeps this route honest as
+        # new nested credentials appear, and deep-copies, so self.args (the live object shared
+        # with self.base.args) is untouched.
+        args = mask_secret_args(self.args)
         row_id = 0
         # Initialise nested values tracking and row counter
         self._nested_values = {}
@@ -3802,8 +3826,6 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
-                value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
 
             # Determine if this value can be edited
@@ -4091,6 +4113,17 @@ chart.render();
                 except ValueError:
                     return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
 
+                # The /apps page serves credentials masked as SECRET_MASK (see html_apps), so the
+                # browser's data-original-value for a secret row is the mask, not the credential.
+                # Saving such a row unchanged would write "xxx" over a live key and destroy it -
+                # the same read-modify-write trap find_redacted_secret_overwrite() already refuses
+                # on the model's write path (chat_tools.py). Refuse it here too rather than trusting
+                # the page not to offer the edit, so the guard holds for any future surface (#5053
+                # review). A deliberate change to a real new value is unaffected.
+                secret_path = any(is_secret_key(segment) for segment in parse_yaml_path(path_or_arg) if not segment.startswith("["))
+                if converted_value == SECRET_MASK and secret_path:
+                    return web.json_response({"success": False, "message": f"Refusing to overwrite the credential {path_or_arg} with the redaction placeholder '{SECRET_MASK}' - edit it in apps.yaml or secrets.yaml directly"})
+
                 # Update the value in the YAML data
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
@@ -4136,6 +4169,12 @@ chart.render();
                 # self.base.args) never reflects a partially applied batch
                 self.args.clear()
                 self.args.update(live_args)
+                # A credential value or the redact_strings/redact_strings_labelled denylists
+                # themselves can change in this batch, so log()'s cached redaction pattern
+                # (hass.py, held on self.base - the PredBat instance, not this web component)
+                # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
+                # the log under the stale pattern until the restart below completes (GH#4770 review).
+                self.base._invalidate_log_secret_pattern()
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
@@ -4941,6 +4980,160 @@ chart.render();
         except Exception as e:
             self.log(f"Error in html_component_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
+
+    def _coordinator(self):
+        """Return the discovery coordinator, or None when there is no component registry."""
+        components = getattr(self.base, "components", None)
+        return getattr(components, "coordinator", None) if components else None
+
+    def _discovery_value_html(self, value):
+        """Render one catalogue value - a scalar, a list or a nested container - as HTML.
+
+        Deliberately generic: it renders whatever shape it is handed rather than knowing the
+        catalogue's fields. The catalogue is designed to grow, and a renderer written against a
+        fixed field list would silently omit anything added later - which is precisely the kind of
+        gap an observe-only release exists to catch. Every value is escaped: info strings come from
+        third-party vendor APIs, not from Predbat.
+        """
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if not value:
+                return "<span class='discovery-token'>none</span>"
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return " ".join("<span class='discovery-token'>{}</span>".format(html_module.escape(str(item))) for item in value)
+            return "".join("<div class='discovery-nested'>{}</div>".format(self._discovery_value_html(item)) for item in value)
+        return "<span class='discovery-token'>{}</span>".format(html_module.escape(str(value)))
+
+    def _discovery_fields_html(self, mapping, skip=()):
+        """Render a mapping as labelled rows, recursing into whatever it nests."""
+        text = ""
+        for key in mapping:
+            if key in skip:
+                continue
+            value = mapping[key]
+            label = html_module.escape(str(key))
+            nested = isinstance(value, dict) and value
+            nested = nested or (isinstance(value, list) and value and any(isinstance(item, (dict, list)) for item in value))
+            if nested:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>:</div>\n".format(label)
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_value_html(value))
+            else:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>: {}</div>\n".format(label, self._discovery_value_html(value))
+        return text
+
+    def _discovery_record_html(self, record):
+        """Render one catalogue record as a card, titled by its device_id and reporting source."""
+        text = "<div class='discovery-card'>\n"
+        text += "<div class='discovery-card-title'>{}".format(html_module.escape(str(record.get("device_id", "(no device_id)"))))
+        source = record.get("source")
+        if source:
+            text += "<span class='discovery-source'>{}</span>".format(html_module.escape(str(source)))
+        text += "</div>\n"
+        # entities is much the largest container on a real inverter - collapsed so one record does
+        # not push every other section off the screen.
+        entities = record.get("entities")
+        text += self._discovery_fields_html(record, skip=("device_id", "source", "entities"))
+        if entities:
+            text += "<details><summary>{} entities</summary><div class='discovery-nested'>{}</div></details>\n".format(len(entities), self._discovery_fields_html(entities))
+        text += "</div>\n"
+        return text
+
+    def _discovery_document_html(self, catalogue):
+        """Render the whole catalogue as the YAML a bug report would carry, for copying out."""
+        try:
+            stream = StringIO()
+            YAML().dump(json.loads(json.dumps(catalogue, default=str)), stream)
+            body = stream.getvalue()
+        except Exception as e:
+            self.log("Warn: Web: could not render the discovery document as YAML: {}".format(e))
+            body = json.dumps(catalogue, indent=2, default=str)
+        return "<details><summary>Full document</summary><pre class='discovery-raw'>{}</pre></details>\n".format(html_module.escape(body))
+
+    async def html_discovery(self, request):
+        """
+        Return the discovery catalogue as an HTML page
+
+        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
+        back out: that entity deliberately carries only a summary, and the coordinator is the
+        better coupling anyway (see Coordinator.publish()).
+        """
+        raw = str(request.query.get("raw", "")).lower() in ("1", "true", "yes", "on")
+        self.default_page = "./discovery"
+        text = self.get_header("Predbat Discovery", refresh=60)
+        text += "<body>\n"
+        text += get_discovery_css()
+        text += "<h2>Discovery Catalogue</h2>\n"
+
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue_raw() if raw else coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+
+        if catalogue is None:
+            text += "<div class='discovery-empty'>The discovery catalogue is not available - no component coordinator is running yet.</div>\n"
+            text += "</body></html>\n"
+            return web.Response(content_type="text/html", text=text)
+
+        # Any list at the top level is a section of records, so a section added to the catalogue
+        # later appears here without this page being taught about it.
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        sections = [key for key, value in catalogue.items() if key not in meta_keys and isinstance(value, list)]
+
+        text += "<div class='discovery-bar'>\n"
+        text += "<div class='discovery-counts'>\n"
+        text += "<span class='discovery-count'>schema {}</span>\n".format(html_module.escape(str(catalogue.get("schema_version", "?"))))
+        text += "<span class='discovery-count'>generated {}</span>\n".format(html_module.escape(str(catalogue.get("generated", "?"))))
+        for section in sections:
+            text += "<span class='discovery-count'>{} {}</span>\n".format(len(catalogue[section]), html_module.escape(section))
+        text += "</div>\n"
+        if raw:
+            text += "<a class='discovery-toggle' href='./discovery'>Show redacted</a>\n"
+        else:
+            text += "<a class='discovery-toggle' href='./discovery?raw=1'>Show raw values</a>\n"
+        text += "</div>\n"
+
+        if raw:
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+
+        conflicts = catalogue.get("observations", {}).get("conflicts", [])
+        if conflicts:
+            text += "<div class='discovery-conflicts'>\n"
+            text += "<strong>{} conflict(s)</strong> - two components describing the same hardware, or competing for the same slot.\n".format(len(conflicts))
+            for conflict in conflicts:
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_fields_html(conflict))
+            text += "</div>\n"
+        else:
+            text += "<div class='discovery-clear'>No conflicts - no two components are describing the same hardware.</div>\n"
+
+        components = catalogue.get("components", {})
+        if components:
+            text += "<h3>Components</h3>\n"
+            text += "<div class='discovery-grid'>\n"
+            for name in sorted(components):
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}</div>\n".format(html_module.escape(str(name)))
+                text += self._discovery_fields_html(components[name] if isinstance(components[name], dict) else {"status": components[name]})
+                text += "</div>\n"
+            text += "</div>\n"
+
+        for section in sections:
+            records = catalogue[section]
+            if not records:
+                continue
+            text += "<h3>{} <span class='discovery-count'>{}</span></h3>\n".format(html_module.escape(section.title()), len(records))
+            text += "<div class='discovery-grid'>\n"
+            for record in records:
+                text += self._discovery_record_html(record if isinstance(record, dict) else {"device_id": record})
+            text += "</div>\n"
+
+        text += self._discovery_document_html(catalogue)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
     async def html_components(self, request):
         """

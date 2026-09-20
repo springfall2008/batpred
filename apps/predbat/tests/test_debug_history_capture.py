@@ -255,3 +255,72 @@ def test_debug_history_capture_slot_alignment(my_predbat):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     return failed
+
+
+def test_debug_history_count_range(my_predbat):
+    """Test debug_history_count's schema range reaches a multi-week window (#5070) and still clamps above it."""
+    failed = 0
+    print("--- Debug history snapshot count range tests ---")
+
+    # The window a user can ask for is debug_history_count x debug_history_interval, and the
+    # interval is itself capped at 24 hours, so the count is the only thing standing between the
+    # default ~2-day buffer and the fortnight #5070 needed to audit intermittent optimiser
+    # behaviour. 336 is that report's own worked example: 336 snapshots at a 1-hour interval.
+    fortnight_hourly = 336
+
+    item = my_predbat.config_index.get("debug_history_count", None)
+    if item is None:
+        print("  FAILED: debug_history_count config item not found")
+        return failed + 1
+
+    print("Test 1: the declared range reaches a fortnight of hourly snapshots while the default stays small")
+    if item.get("max", 0) < fortnight_hourly:
+        print("  FAILED: debug_history_count max should allow at least {} snapshots (14 days hourly), got {}".format(fortnight_hourly, item.get("max", None)))
+        failed += 1
+    # The default deliberately does not move with the maximum - raising the ceiling must not cost
+    # storage on an install that never asked for a longer history (#5070 review discussion).
+    if item.get("default", None) != 15:
+        print("  FAILED: debug_history_count default should stay at 15, got {}".format(item.get("default", None)))
+        failed += 1
+    if item.get("min", None) != 1:
+        print("  FAILED: debug_history_count min should stay at 1 (the enable switch is the off-switch), got {}".format(item.get("min", None)))
+        failed += 1
+
+    original_had_errors = my_predbat.had_errors
+    original_value = item.get("value", item.get("default", 15))
+
+    try:
+        # load_user_config() clamps input_number items to their declared min/max, including values
+        # that arrived via an apps.yaml override (which bypasses the HA entity's own enforcement),
+        # so the schema bound above is what a user actually runs into - assert through that path
+        # rather than on the dict alone, and read the result back the way _capture_debug_history()
+        # does. See test_config_item_range_clamp in test_integer_config.py for the same pattern.
+        print("Test 2: a fortnight's worth of hourly snapshots survives a config refresh unclamped")
+        my_predbat.expose_config("debug_history_count", fortnight_hourly, force_ha=True)
+        my_predbat.had_errors = False
+        my_predbat.load_user_config()
+        resolved = my_predbat.get_arg("debug_history_count", 15)
+        if resolved != fortnight_hourly:
+            print("  FAILED: expected debug_history_count {} to pass through unclamped, got {}".format(fortnight_hourly, resolved))
+            failed += 1
+        if my_predbat.had_errors is not False:
+            print("  FAILED: an in-range debug_history_count should not flag had_errors")
+            failed += 1
+
+        print("Test 3: the ceiling is still enforced above the declared maximum")
+        item_max = item.get("max", 0)
+        my_predbat.expose_config("debug_history_count", item_max + 1, force_ha=True)
+        my_predbat.had_errors = False
+        my_predbat.load_user_config()
+        resolved = my_predbat.get_arg("debug_history_count", 15)
+        if resolved != item_max:
+            print("  FAILED: expected a value above the maximum to clamp to {}, got {}".format(item_max, resolved))
+            failed += 1
+        if my_predbat.had_errors is not True:
+            print("  FAILED: an above-maximum debug_history_count should flag had_errors")
+            failed += 1
+    finally:
+        my_predbat.expose_config("debug_history_count", original_value, force_ha=True)
+        my_predbat.had_errors = original_had_errors
+
+    return failed

@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
 import functools
 import io
 import itertools
@@ -213,6 +213,11 @@ class UserInterface:
                 self.args[arg][index] = value
             else:
                 self.args[arg] = value
+        # A credential value or the redact_strings/redact_strings_labelled denylists themselves
+        # can change here, so log()'s cached redaction pattern (hass.py) must be rebuilt on next
+        # use - otherwise a newly added/changed secret keeps leaking into the log under the stale
+        # pattern until Predbat restarts (GH#4770 review).
+        self._invalidate_log_secret_pattern()
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
@@ -893,6 +898,19 @@ class UserInterface:
         # rather than guessing from the data. Absent in dumps written before versioning.
         debug["debug_schema_version"] = DEBUG_SCHEMA_VERSION
 
+        # Explicit: "components" is in DEBUG_EXCLUDE_LIST so nothing under it is dumped
+        # automatically, and a plain redacted dict avoids the object-graph walk described above.
+        # getattr, not a bare attribute access: several tests stand self.components in for a
+        # minimal registry double that does not model .coordinator at all, and this function is
+        # what a real user's bug-report download runs - it must degrade to no discovery section
+        # rather than raise on an attribute a stand-in never promised to have.
+        coordinator = getattr(self.components, "coordinator", None) if self.components else None
+        if coordinator:
+            try:
+                debug["discovery"] = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Failed to add the discovery catalogue to the debug dump: {}".format(e))
+
         if write_file:
             with open(filename, "w") as file:
                 dump_debug_yaml(debug, file)
@@ -1227,19 +1245,20 @@ class UserInterface:
         elif isinstance(arg_value, str) and arg_value.startswith("re:"):
             matched = False
             my_re = "^" + arg_value[3:] + "$"
+            secret_arg = is_secret_key(arg)
             for key in state_keys:
                 res = re.search(my_re, key)
                 if res:
                     if len(res.groups()) > 0:
-                        self.log("Regular expression argument {} matched {} with {}".format(arg, my_re, res.group(1)))
                         arg_value = res.group(1)
-                        matched = True
-                        break
                     else:
-                        self.log("Regular expression argument {} Matched {} with {}".format(arg, my_re, res.group(0)))
                         arg_value = res.group(0)
-                        matched = True
-                        break
+                    # A matched entity id can itself embed a credential (e.g. an MPAN), and this fires
+                    # before auto_config()'s caller has invalidated the log-redaction cache to cover the
+                    # new value, so a secret-flagged arg only logs the pattern and key name (#5106).
+                    self.log("Regular expression argument {} matched {} with {}".format(arg, my_re, SECRET_MASK if secret_arg else arg_value))
+                    matched = True
+                    break
         return matched, arg_value
 
     def auto_config(self, final=False):
@@ -1254,6 +1273,7 @@ class UserInterface:
         self.unmatched_args = {}
 
         # Find each arg re to match
+        changed = False
         for arg in self.args:
             arg_value = self.args[arg]
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
@@ -1263,11 +1283,25 @@ class UserInterface:
                     disabled.append(arg)
             else:
                 self.args[arg] = arg_value
+                changed = True
 
         # Remove unmatched keys
         for key in disabled:
             self.unmatched_args[key] = self.args[key]
             del self.args[key]
+            changed = True
+
+        # A `re:` pattern can resolve to a live HA entity's state/attribute - a credential-shaped
+        # value from a third-party integration is exactly what redact_strings/redact_strings_labelled
+        # exist to catch (GH#4770) - and a disabled key's removal changes what collect_log_secret_values()
+        # sees from args too. Unlike set_arg() (this class's only other args mutator, which invalidates
+        # unconditionally on every call), auto_config() runs over every configured arg on each call, so
+        # invalidating once at the end - only when something actually changed - avoids rebuilding the
+        # pattern key-by-key while still closing the gap: a value resolved or removed here must not keep
+        # leaking under the stale pattern (or keep being redacted after a redact_strings entry is removed)
+        # until Predbat next restarts.
+        if changed:
+            self._invalidate_log_secret_pattern()
 
     def split_command_index(self, command):
         """

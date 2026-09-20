@@ -12,6 +12,7 @@ import json
 import copy
 import yaml
 import os
+import pytz
 from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface
@@ -19,7 +20,7 @@ from predbat import PredBat
 from inverter import Inverter
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
-from const import MINUTE_WATT
+from const import MINUTE_WATT, TIME_FORMAT_SECONDS
 
 
 def test_foxess_support_discharge_freeze_matches_foxcloud():
@@ -2886,474 +2887,91 @@ def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     return failed
 
 
-def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_predbat):
+def test_button_press_counts_as_register_write(test_name, ha, inv):
     """
-    Regression test for issue #4712: a stable charge window must commit once, not on every cycle.
-
-    adjust_charge_window() presses the commit button when the times moved *or* when
-    scheduled_charge_enable read back "off". On hardware that accepts the enable write but never
-    reports it back, that third term stays true forever, so the button was pressed every 5 minutes
-    for the whole window - the same failure #4711 fixed on the export side only. On Solis each press
-    is a non-volatile write (#2328) and zeroes the timed current registers (#4415/#4709).
+    Regression test for issue #4712: a commit button press is a real (on Solis, non-volatile) write
+    and must be counted, so repeated presses are visible to users rather than silently hidden from
+    the register-write counter.
     """
     failed = False
     print("Test: {}".format(test_name))
 
-    # run_inverter_tests() shares one PredBat/HA fixture across its scenarios, so anything mutated
-    # here has to be put back or a later scenario runs against altered config (batpred#5079, and
-    # the same review point raised on batpred#4711).
     unset = object()
-    arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
-    item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
-    saved_args = {key: inv.base.args.get(key, unset) for key in arg_keys}
-    saved_items = {key: ha.dummy_items.get(key, unset) for key in item_keys}
-    saved_fields = (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, dict(inv.last_committed), dict(inv.commit_pending))
-
+    saved_button = inv.base.args.get("schedule_write_button", unset)
+    saved_item = ha.dummy_items.get("switch.inverter_button", unset)
     try:
-        failed = _charge_window_stuck_enable_body(test_name, ha, inv, my_predbat)
-    finally:
-        for key, value in saved_args.items():
-            if value is unset:
-                inv.base.args.pop(key, None)
-            else:
-                inv.base.args[key] = value
-        for key, value in saved_items.items():
-            if value is unset:
-                ha.dummy_items.pop(key, None)
-            else:
-                ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
-
-    return failed
-
-
-def _charge_window_stuck_enable_body(test_name, ha, inv, my_predbat):
-    """
-    Body of test_charge_window_stuck_enable_presses_button_once, run inside its state guard.
-    """
-    failed = False
-
-    inv.rest_data = None
-    inv.inv_charge_time_format = "H M"
-    inv.inv_time_button_press = True
-    inv.last_committed.pop("charge_window", None)
-    inv.commit_pending.pop("charge_window", None)
-
-    charge_start = my_predbat.midnight_utc + timedelta(minutes=23 * 60 + 30)
-    charge_end = my_predbat.midnight_utc + timedelta(minutes=(5 * 60 + 30) + 24 * 60)
-
-    ha.dummy_items["select.charge_start_time"] = charge_start.strftime("%H:%M:%S")
-    ha.dummy_items["select.charge_end_time"] = charge_end.strftime("%H:%M:%S")
-    # The inverter never reports the enable switch back as on - the condition that pinned the press.
-    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-
-    inv.base.args["charge_start_time"] = "select.charge_start_time"
-    inv.base.args["charge_end_time"] = "select.charge_end_time"
-    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
-    # H M format also writes the hour/minute registers; map them as time entities (FB00 firmware)
-    # so those writes succeed - an unmapped one fails and would keep the commit permanently pending.
-    ha.dummy_items["time.charge_start_hour"] = charge_start.strftime("%H:%M:%S")
-    ha.dummy_items["time.charge_end_hour"] = charge_end.strftime("%H:%M:%S")
-    inv.base.args["charge_start_hour"] = "time.charge_start_hour"
-    inv.base.args["charge_end_hour"] = "time.charge_end_hour"
-    inv.base.args["charge_start_minute"] = "time.charge_start_hour"
-    inv.base.args["charge_end_minute"] = "time.charge_end_hour"
-
-    # Nothing committed yet, as after a Predbat restart - this cycle must commit the schedule.
-    ha.dummy_items["switch.inverter_button"] = "off"
-    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-
-    if ha.dummy_items.get("switch.inverter_button") != "on":
-        print(f"ERROR: {test_name}: first cycle should commit the charge window (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
-        failed = True
-
-    # Subsequent cycles of the same window must not press again, even with the enable stuck off.
-    for cycle in range(2, 5):
+        inv.base.args["schedule_write_button"] = "switch.inverter_button"
         ha.dummy_items["switch.inverter_button"] = "off"
-        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
 
-        if ha.dummy_items.get("switch.inverter_button") != "off":
-            print(f"ERROR: {test_name}: cycle {cycle} of an unchanged charge window should not press the button again")
+        before_writes = inv.count_register_writes
+        if not inv.press_and_poll_button(side="charge"):
+            print(f"ERROR: {test_name}: button press should have succeeded")
             failed = True
 
-    # A genuine change to the window must commit again.
-    ha.dummy_items["switch.inverter_button"] = "off"
-    inv.adjust_charge_window(charge_start, charge_end + timedelta(minutes=30), my_predbat.minutes_now)
-
-    if ha.dummy_items.get("switch.inverter_button") != "on":
-        print(f"ERROR: {test_name}: a changed charge window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
-        failed = True
-
-    # A failed button press must not be recorded as committed - it has to be retried next cycle.
-    saved_press = inv.press_and_poll_button
-    try:
-        inv.last_committed.pop("charge_window", None)
-        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None: False
-        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-
-        attempts = []
-        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, _a=attempts: (_a.append(side), True)[1]
-        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-
-        if not attempts:
-            print(f"ERROR: {test_name}: a failed charge commit must be retried on the next cycle, not recorded as done")
+        if inv.count_register_writes != before_writes + 1:
+            print(f"ERROR: {test_name}: a button press must count as one register write, was {before_writes} now {inv.count_register_writes}")
             failed = True
     finally:
-        inv.press_and_poll_button = saved_press
-
-    # A failed schedule *write* must not be cached as committed either, even when the button press
-    # itself succeeds - otherwise later cycles keep rewriting the registers but never press again,
-    # leaving the window programmed and uncommitted (the batpred#4711 review point, charge side).
-    saved_write = inv.write_and_poll_option
-    try:
-        inv.last_committed.pop("charge_window", None)
-        inv.commit_pending.pop("charge_window", None)
-        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-        inv.write_and_poll_option = lambda *args, **kwargs: False
-        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-
-        if "charge_window" in inv.last_committed:
-            print(f"ERROR: {test_name}: a failed schedule write must not be recorded as committed")
-            failed = True
-    finally:
-        inv.write_and_poll_option = saved_write
-
-    # ...and the next cycle, with writes working again, must re-commit it.
-    ha.dummy_items["switch.inverter_button"] = "off"
-    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-    if ha.dummy_items.get("switch.inverter_button") != "on":
-        print(f"ERROR: {test_name}: a window whose writes previously failed must be re-committed once they succeed")
-        failed = True
+        if saved_button is unset:
+            inv.base.args.pop("schedule_write_button", None)
+        else:
+            inv.base.args["schedule_write_button"] = saved_button
+        if saved_item is unset:
+            ha.dummy_items.pop("switch.inverter_button", None)
+        else:
+            ha.dummy_items["switch.inverter_button"] = saved_item
+        inv.count_register_writes = before_writes
 
     return failed
 
 
-def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, my_predbat):
+def test_button_press_and_poll_counts_as_register_write(test_name, ha, inv):
     """
-    Regression test for #5126 review: an unmapped charge_start_minute/charge_end_minute entity
-    must not permanently poison the commit-once guard.
-
-    adjust_force_export() guards each hour/minute write with `elif start_hour_id:` - if the user's
-    config leaves that entity unmapped (falsy), the write is skipped rather than attempted.
-    adjust_charge_window() used a plain `else:` instead, so an unmapped entity's write was attempted
-    anyway, write_and_poll_option() returned False for it (check_write_entity() fails on a falsy
-    entity_id), and schedule_write_ok stayed False forever - so the charge window commit never
-    cleared and the button was pressed every single cycle, exactly the #2328/#4712 failure this PR
-    exists to fix.
+    Regression test for issue #4712, second success path: unlike schedule_write_button (a toggle
+    switch, covered above), charge_discharge_update_button goes through
+    _press_single_button_and_poll - a button entity whose success is read back by polling its
+    last_updated timestamp. That path increments count_register_writes separately, so it needs its
+    own coverage rather than relying on the toggle-button test to exercise it.
     """
     failed = False
     print("Test: {}".format(test_name))
 
     unset = object()
-    arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
-    item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
-    saved_args = {key: inv.base.args.get(key, unset) for key in arg_keys}
-    saved_items = {key: ha.dummy_items.get(key, unset) for key in item_keys}
-    saved_fields = (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, dict(inv.last_committed), dict(inv.commit_pending))
-
+    saved_button = inv.base.args.get("charge_discharge_update_button", unset)
+    saved_schedule_button = inv.base.args.get("schedule_write_button", unset)
+    saved_item = ha.dummy_items.get("button.charge_discharge_update", unset)
+    saved_sleep = inv.sleep
     try:
-        failed = _charge_window_unmapped_minute_body(test_name, ha, inv, my_predbat)
-    finally:
-        for key, value in saved_args.items():
-            if value is unset:
-                inv.base.args.pop(key, None)
-            else:
-                inv.base.args[key] = value
-        for key, value in saved_items.items():
-            if value is unset:
-                ha.dummy_items.pop(key, None)
-            else:
-                ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.base.args["charge_discharge_update_button"] = "button.charge_discharge_update"
+        inv.base.args.pop("schedule_write_button", None)
+        inv.sleep = lambda seconds: None
 
-    return failed
+        local_tz = pytz.timezone(inv.base.get_arg("timezone", "Europe/London"))
+        ha.dummy_items["button.charge_discharge_update"] = datetime.now(local_tz).strftime(TIME_FORMAT_SECONDS)
 
-
-def _charge_window_unmapped_minute_body(test_name, ha, inv, my_predbat):
-    """
-    Body of test_charge_window_unmapped_minute_entity_commits_once, run inside its state guard.
-    """
-    failed = False
-
-    inv.rest_data = None
-    inv.inv_charge_time_format = "H M"
-    inv.inv_time_button_press = True
-    inv.last_committed.pop("charge_window", None)
-    inv.commit_pending.pop("charge_window", None)
-
-    charge_start = my_predbat.midnight_utc + timedelta(minutes=23 * 60 + 30)
-    charge_end = my_predbat.midnight_utc + timedelta(minutes=(5 * 60 + 30) + 24 * 60)
-
-    ha.dummy_items["select.charge_start_time"] = charge_start.strftime("%H:%M:%S")
-    ha.dummy_items["select.charge_end_time"] = charge_end.strftime("%H:%M:%S")
-    # The inverter never reports the enable switch back as on - same as the stuck-enable scenario,
-    # so schedule_changed is driven by that third term rather than by the (unchanged) window times.
-    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-
-    inv.base.args["charge_start_time"] = "select.charge_start_time"
-    inv.base.args["charge_end_time"] = "select.charge_end_time"
-    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
-    ha.dummy_items["time.charge_start_hour"] = charge_start.strftime("%H:%M:%S")
-    ha.dummy_items["time.charge_end_hour"] = charge_end.strftime("%H:%M:%S")
-    inv.base.args["charge_start_hour"] = "time.charge_start_hour"
-    inv.base.args["charge_end_hour"] = "time.charge_end_hour"
-    # The minute entities are left unmapped entirely - the reported config shape.
-    inv.base.args.pop("charge_start_minute", None)
-    inv.base.args.pop("charge_end_minute", None)
-
-    ha.dummy_items["switch.inverter_button"] = "off"
-    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-
-    if ha.dummy_items.get("switch.inverter_button") != "on":
-        print(f"ERROR: {test_name}: first cycle should commit the charge window (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
-        failed = True
-
-    # With the fix, an unmapped minute entity must not poison schedule_write_ok - later cycles of
-    # the same unchanged window, with the enable switch still stuck off, must not press again.
-    # Before the fix this pressed every single cycle regardless (the reported #2328/#4712 signature).
-    for cycle in range(2, 5):
-        ha.dummy_items["switch.inverter_button"] = "off"
-        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
-        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
-
-        if ha.dummy_items.get("switch.inverter_button") != "off":
-            print(f"ERROR: {test_name}: cycle {cycle} pressed the button again with unmapped minute entities - schedule_write_ok was poisoned by the unattempted write")
+        before_writes = inv.count_register_writes
+        if not inv.press_and_poll_button(side="charge"):
+            print(f"ERROR: {test_name}: button press should have succeeded")
             failed = True
 
-    return failed
-
-
-def test_commit_scopes_are_independent(test_name, inv):
-    """
-    The commit-once memory is keyed by scope, not by which button commits it.
-
-    Several scopes share the charge-side button - the charge window, the target SoC, and the window
-    disable. Keying the memory by button (the obvious reading of press_and_poll_button()'s `side`)
-    would let a target SoC commit overwrite the charge window's record, so the next window commit
-    would either be suppressed as a repeat or, worse, a pending window retry would be marked done by
-    an unrelated SoC press. Pins that the scopes do not interfere, and that pending is per scope.
-    """
-    failed = False
-    print("Test: {}".format(test_name))
-
-    saved_last_committed = dict(inv.last_committed)
-    saved_commit_pending = dict(inv.commit_pending)
-
-    try:
-        inv.last_committed.clear()
-        inv.commit_pending.clear()
-
-        window = ("01:00:00", "02:00:00", True)
-        inv.record_commit("charge_window", window, True)
-
-        # A different scope sharing the same button must not read as already committed...
-        if not inv.commit_needed("target_soc", 90):
-            print(f"ERROR: {test_name}: target_soc read as committed off the back of a charge_window commit")
-            failed = True
-
-        # ...and committing it must not disturb the charge window's record.
-        inv.record_commit("target_soc", 90, True)
-        if inv.commit_needed("charge_window", window):
-            print(f"ERROR: {test_name}: a target_soc commit invalidated the charge_window record")
-            failed = True
-
-        # A failed commit leaves only its own scope pending.
-        inv.record_commit("target_soc", 80, False)
-        if not inv.commit_needed("target_soc", 80):
-            print(f"ERROR: {test_name}: a failed target_soc commit did not leave that scope pending")
-            failed = True
-        if inv.commit_needed("charge_window", window):
-            print(f"ERROR: {test_name}: a failed target_soc commit left charge_window pending too")
-            failed = True
-
-        # Pending wins over a matching key, so a retry is never suppressed...
-        inv.record_commit("charge_window", window, False)
-        if not inv.commit_needed("charge_window", window):
-            print(f"ERROR: {test_name}: a pending charge_window commit was suppressed by its own matching key")
-            failed = True
-
-        # ...and a later success clears it.
-        inv.record_commit("charge_window", window, True)
-        if inv.commit_needed("charge_window", window):
-            print(f"ERROR: {test_name}: a successful retry did not clear the pending flag")
+        if inv.count_register_writes != before_writes + 1:
+            print(f"ERROR: {test_name}: a button press must count as one register write, was {before_writes} now {inv.count_register_writes}")
             failed = True
     finally:
-        inv.last_committed = saved_last_committed
-        inv.commit_pending = saved_commit_pending
-
-    return failed
-
-
-def test_inverters_persist_across_cycles(test_name, my_predbat, ha):
-    """
-    Regression test for issue #4712: the Inverter objects must persist across cycles.
-
-    fetch_inverter_data() used to default to create=True and rebuild them every cycle - more than
-    once when the plan was recomputed before execute_plan() - so any state they accumulated was
-    wiped before it could be used. That is why #4711's commit-once guard held in the unit tests,
-    which reuse one long-lived Inverter, but not in production: a reporter's log on v9.0.3 shows
-    377 presses over one night with every register logging "No write needed".
-
-    Also asserts refresh_config() still re-reads runtime-changeable config, so persisting the object
-    does not freeze a setting the user can change while Predbat runs.
-    """
-    failed = False
-    print("Test: {}".format(test_name))
-
-    saved_inverters = my_predbat.inverters
-    unset = object()
-    saved_min_soc = my_predbat.args.get("battery_min_soc", unset)
-    saved_type = my_predbat.args.get("inverter_type", unset)
-
-    try:
-        my_predbat.inverters = []
-        if not my_predbat.fetch_inverter_data():
-            print(f"ERROR: {test_name}: first fetch_inverter_data() failed")
-            return True
-        first = my_predbat.inverters[0]
-
-        # A marker that only survives if the object itself does.
-        first.last_committed["charge_window"] = ("marker", "marker", True)
-
-        for cycle in range(2, 5):
-            if not my_predbat.fetch_inverter_data():
-                print(f"ERROR: {test_name}: fetch_inverter_data() failed on cycle {cycle}")
-                return True
-            if my_predbat.inverters[0] is not first:
-                print(f"ERROR: {test_name}: cycle {cycle} rebuilt the Inverter instead of reusing it")
-                failed = True
-                break
-            if first.last_committed.get("charge_window") != ("marker", "marker", True):
-                print(f"ERROR: {test_name}: cycle {cycle} lost the committed-schedule state")
-                failed = True
-                break
-
-        # A component whose startup is deferred can set inverter_type after the objects exist.
-        # refresh_config() re-reads the type and re-derives every inv_* capability flag from it, so
-        # this is absorbed without a rebuild - and must be, since rebuilding would discard the
-        # commit-once state and force the redundant commit this guard exists to prevent (#5126
-        # review). Asserts the flags actually followed the type, not merely that the object survived.
-        my_predbat.args["inverter_type"] = ["GS"]
-        if not my_predbat.fetch_inverter_data():
-            print(f"ERROR: {test_name}: fetch_inverter_data() failed after a type change")
-            return True
-        if my_predbat.inverters[0] is not first:
-            print(f"ERROR: {test_name}: a changed inverter_type rebuilt the Inverter, discarding its commit state")
-            failed = True
-        if my_predbat.inverters[0].inverter_type != "GS":
-            print(f"ERROR: {test_name}: Inverter has type {my_predbat.inverters[0].inverter_type} after the change, expected GS")
-            failed = True
-        if my_predbat.inverters[0].inv_charge_time_format != INVERTER_DEF["GS"]["charge_time_format"]:
-            print(f"ERROR: {test_name}: capability flags did not follow the type change - inv_charge_time_format is {my_predbat.inverters[0].inv_charge_time_format}")
-            failed = True
-        if first.last_committed.get("charge_window") != ("marker", "marker", True):
-            print(f"ERROR: {test_name}: a type change lost the committed-schedule state")
-            failed = True
-
-        # Runtime config must still be re-read on a persisted object.
-        my_predbat.args["battery_min_soc"] = 15
-        if not my_predbat.fetch_inverter_data():
-            print(f"ERROR: {test_name}: fetch_inverter_data() failed after a config change")
-            return True
-        if my_predbat.inverters[0].reserve_percent_current < 15:
-            print(f"ERROR: {test_name}: refresh_config() did not pick up a changed battery_min_soc, got {my_predbat.inverters[0].reserve_percent_current}")
-            failed = True
-    finally:
-        if saved_min_soc is unset:
-            my_predbat.args.pop("battery_min_soc", None)
+        inv.sleep = saved_sleep
+        if saved_button is unset:
+            inv.base.args.pop("charge_discharge_update_button", None)
         else:
-            my_predbat.args["battery_min_soc"] = saved_min_soc
-        if saved_type is unset:
-            my_predbat.args.pop("inverter_type", None)
+            inv.base.args["charge_discharge_update_button"] = saved_button
+        if saved_schedule_button is unset:
+            inv.base.args.pop("schedule_write_button", None)
         else:
-            my_predbat.args["inverter_type"] = saved_type
-        my_predbat.inverters = saved_inverters
-
-    return failed
-
-
-def test_in_calibration_clears_when_battery_leaves_calibration(test_name, my_predbat, ha):
-    """
-    Regression test: in_calibration must clear when battery_calibration reports off again.
-
-    refresh_config() only ever sets in_calibration True - there is no matching "set it False" read,
-    because most inverter types never configure battery_calibration at all (absent means never
-    calibrating). Before Inverter objects persisted, that was fine: in_calibration was reseeded
-    False by __init__ every single cycle. With persistence (#4712) a stuck True would never clear
-    on its own once the real device left calibration - _init_attribute_defaults() must be the one place
-    that still clears it, run once at construction, not on every refresh.
-    """
-    failed = False
-    print("Test: {}".format(test_name))
-
-    unset = object()
-    saved_calibration = my_predbat.args.get("battery_calibration", unset)
-    saved_inverters = my_predbat.inverters
-
-    try:
-        my_predbat.args["battery_calibration"] = "on"
-        my_predbat.inverters = []
-        if not my_predbat.fetch_inverter_data():
-            print(f"ERROR: {test_name}: fetch_inverter_data() failed")
-            return True
-
-        if not my_predbat.inverters[0].in_calibration:
-            print(f"ERROR: {test_name}: in_calibration should be True while battery_calibration is on")
-            failed = True
-
-        my_predbat.args["battery_calibration"] = "off"
-        if not my_predbat.fetch_inverter_data():
-            print(f"ERROR: {test_name}: fetch_inverter_data() failed after calibration cleared")
-            return True
-
-        if my_predbat.inverters[0].in_calibration:
-            print(f"ERROR: {test_name}: in_calibration is still True after battery_calibration went off - it is stuck on a persisted object")
-            failed = True
-    finally:
-        if saved_calibration is unset:
-            my_predbat.args.pop("battery_calibration", None)
+            inv.base.args["schedule_write_button"] = saved_schedule_button
+        if saved_item is unset:
+            ha.dummy_items.pop("button.charge_discharge_update", None)
         else:
-            my_predbat.args["battery_calibration"] = saved_calibration
-        my_predbat.inverters = saved_inverters
-
-    return failed
-
-
-def test_set_current_from_power_before_battery_voltage_known(test_name, my_predbat):
-    """
-    Regression test: set_current_from_power() must not crash before update_status() has ever run.
-
-    battery_voltage is seeded to None (not a guessed 52.0) since #4712's __init__ split, precisely
-    so a caller that reaches the charge/discharge current path before the inverter's own state was
-    fetched - test_force_export_off_does_not_press_every_cycle does exactly this by construction -
-    gets an explicit skip rather than a silent divide against a made-up value.
-    """
-    failed = False
-    print("Test: {}".format(test_name))
-
-    unset = object()
-    saved_type = my_predbat.args.get("inverter_type", unset)
-
-    try:
-        my_predbat.args["inverter_type"] = ["GS"]
-        inv = Inverter(my_predbat, 0, quiet=True)
-
-        if inv.battery_voltage is not None:
-            print(f"ERROR: {test_name}: battery_voltage should be None before update_status() has run, got {inv.battery_voltage}")
-            failed = True
-
-        try:
-            inv.set_current_from_power("charge", 1000)
-        except TypeError as e:
-            print(f"ERROR: {test_name}: set_current_from_power() raised {e} instead of skipping cleanly")
-            failed = True
-    finally:
-        if saved_type is unset:
-            my_predbat.args.pop("inverter_type", None)
-        else:
-            my_predbat.args["inverter_type"] = saved_type
+            ha.dummy_items["button.charge_discharge_update"] = saved_item
+        inv.count_register_writes = before_writes
 
     return failed
 
@@ -4170,6 +3788,547 @@ def test_inverter_clock_skew_bands(my_predbat):
     return failed
 
 
+def test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items):
+    """Verify a space-separated inverter time with no offset parses and drives skew detection (#2444).
+
+    A Growatt read through the Solax Modbus integration (inverter_type SA) publishes its rtc sensor
+    as "2025-06-10 15:44:42" - a space separator with no timezone offset. That matched none of the
+    formats Inverter.__init__ tried (T-with-offset, space-with-offset, and the per-type
+    clock_time_format, "%Y-%m-%dT%H:%M:%S" for SA and "%H:%M:%S" for the GE type this fixture
+    normally uses), so inverter_time stayed None: clock-skew detection never ran for that inverter
+    and every 5-minute cycle logged a Warn and asked for an auto-restart. Checked for both the
+    fixture's own type and SA, the type in the report.
+    """
+    failed = False
+    print("**** Running Test: inverter_time_space_no_tz_gh2444 ****")
+
+    saved_time = dummy_items.get("sensor.inverter_time")
+    # Constructing an inverter of another type against this fixture rewrites base.args in place -
+    # create_missing_arg() swaps any entity list the type does not support for a dummy entity, and
+    # that swap outlives the test and silently redirects later inverters' writes. Snapshot the whole
+    # of args (lists copied, they are mutated in place too) and put it back afterwards.
+    saved_args = {key: (list(value) if isinstance(value, list) else value) for key, value in my_predbat.args.items()}
+    saved_sleep = Inverter.sleep
+    Inverter.sleep = lambda self, seconds: None
+    # now_utc is already in the configured timezone, so its wall clock is what a correctly parsed
+    # reading must read back as - comparing wall clocks keeps this independent of the host's own tz.
+    time_str = my_predbat.now_utc.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        for inverter_type in ["GE", "SA"]:
+            dummy_items["sensor.inverter_time"] = time_str
+            my_predbat.ha_interface.dummy_items = dummy_items
+            my_predbat.args["inverter_type"] = [inverter_type]
+            my_predbat.current_status = ""
+            my_predbat.restart_active = False
+            try:
+                inv = Inverter(my_predbat, 0)
+            except Exception as error:
+                # An unreadable time asks for an auto-restart, which the fixture's configured
+                # auto_restart raises on - report that rather than aborting the whole module.
+                print("ERROR: inverter type {} raised on time string {}: {}".format(inverter_type, time_str, error))
+                failed = True
+                continue
+            if inv.inverter_time is None:
+                print("ERROR: inverter type {} should parse time string {}, got None".format(inverter_type, time_str))
+                failed = True
+            elif inv.inverter_time.tzinfo is None:
+                print("ERROR: inverter type {} parsed {} as naive, skew detection needs it localized".format(inverter_type, time_str))
+                failed = True
+            elif inv.inverter_time.strftime("%Y-%m-%d %H:%M:%S") != time_str:
+                print("ERROR: inverter type {} parsed {} as {}".format(inverter_type, time_str, inv.inverter_time))
+                failed = True
+            if my_predbat.restart_active:
+                print("ERROR: inverter type {} with a readable time must not trigger an auto-restart".format(inverter_type))
+                failed = True
+            if "skew" in (my_predbat.current_status or "").lower():
+                print("ERROR: inverter type {} with a current time must not report clock skew, status={}".format(inverter_type, my_predbat.current_status))
+                failed = True
+    finally:
+        Inverter.sleep = saved_sleep
+        dummy_items["sensor.inverter_time"] = saved_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+
+    if not failed:
+        print("**** Test inverter_time_space_no_tz_gh2444 PASSED ****")
+    return failed
+
+
+def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_predbat):
+    """
+    Regression test for issue #4712: a stable charge window must commit once, not on every cycle.
+
+    adjust_charge_window() presses the commit button when the times moved *or* when
+    scheduled_charge_enable read back "off". On hardware that accepts the enable write but never
+    reports it back, that third term stays true forever, so the button was pressed every 5 minutes
+    for the whole window - the same failure #4711 fixed on the export side only. On Solis each press
+    is a non-volatile write (#2328) and zeroes the timed current registers (#4415/#4709).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # run_inverter_tests() shares one PredBat/HA fixture across its scenarios, so anything mutated
+    # here has to be put back or a later scenario runs against altered config (batpred#5079, and
+    # the same review point raised on batpred#4711).
+    unset = object()
+    arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
+    item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
+    saved_args = {key: inv.base.args.get(key, unset) for key in arg_keys}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in item_keys}
+    saved_fields = (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, dict(inv.last_committed), dict(inv.commit_pending))
+
+    try:
+        failed = _charge_window_stuck_enable_body(test_name, ha, inv, my_predbat)
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                inv.base.args.pop(key, None)
+            else:
+                inv.base.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+
+    return failed
+
+
+def _charge_window_stuck_enable_body(test_name, ha, inv, my_predbat):
+    """
+    Body of test_charge_window_stuck_enable_presses_button_once, run inside its state guard.
+    """
+    failed = False
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+    inv.last_committed.pop("charge_window", None)
+    inv.commit_pending.pop("charge_window", None)
+
+    charge_start = my_predbat.midnight_utc + timedelta(minutes=23 * 60 + 30)
+    charge_end = my_predbat.midnight_utc + timedelta(minutes=(5 * 60 + 30) + 24 * 60)
+
+    ha.dummy_items["select.charge_start_time"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["select.charge_end_time"] = charge_end.strftime("%H:%M:%S")
+    # The inverter never reports the enable switch back as on - the condition that pinned the press.
+    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+
+    inv.base.args["charge_start_time"] = "select.charge_start_time"
+    inv.base.args["charge_end_time"] = "select.charge_end_time"
+    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
+    # H M format also writes the hour/minute registers; map them as time entities (FB00 firmware)
+    # so those writes succeed - an unmapped one fails and would keep the commit permanently pending.
+    ha.dummy_items["time.charge_start_hour"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["time.charge_end_hour"] = charge_end.strftime("%H:%M:%S")
+    inv.base.args["charge_start_hour"] = "time.charge_start_hour"
+    inv.base.args["charge_end_hour"] = "time.charge_end_hour"
+    inv.base.args["charge_start_minute"] = "time.charge_start_hour"
+    inv.base.args["charge_end_minute"] = "time.charge_end_hour"
+
+    # Nothing committed yet, as after a Predbat restart - this cycle must commit the schedule.
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the charge window (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # Subsequent cycles of the same window must not press again, even with the enable stuck off.
+    for cycle in range(2, 5):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} of an unchanged charge window should not press the button again")
+            failed = True
+
+    # A genuine change to the window must commit again.
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end + timedelta(minutes=30), my_predbat.minutes_now)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a changed charge window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # A failed button press must not be recorded as committed - it has to be retried next cycle.
+    saved_press = inv.press_and_poll_button
+    try:
+        inv.last_committed.pop("charge_window", None)
+        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None: False
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        attempts = []
+        inv.press_and_poll_button = lambda side="both", scope=None, commit_key=None, _a=attempts: (_a.append(side), True)[1]
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if not attempts:
+            print(f"ERROR: {test_name}: a failed charge commit must be retried on the next cycle, not recorded as done")
+            failed = True
+    finally:
+        inv.press_and_poll_button = saved_press
+
+    # A failed schedule *write* must not be cached as committed either, even when the button press
+    # itself succeeds - otherwise later cycles keep rewriting the registers but never press again,
+    # leaving the window programmed and uncommitted (the batpred#4711 review point, charge side).
+    saved_write = inv.write_and_poll_option
+    try:
+        inv.last_committed.pop("charge_window", None)
+        inv.commit_pending.pop("charge_window", None)
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        inv.write_and_poll_option = lambda *args, **kwargs: False
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if "charge_window" in inv.last_committed:
+            print(f"ERROR: {test_name}: a failed schedule write must not be recorded as committed")
+            failed = True
+    finally:
+        inv.write_and_poll_option = saved_write
+
+    # ...and the next cycle, with writes working again, must re-commit it.
+    ha.dummy_items["switch.inverter_button"] = "off"
+    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a window whose writes previously failed must be re-committed once they succeed")
+        failed = True
+
+    return failed
+
+
+def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, my_predbat):
+    """
+    Regression test for #5126 review: an unmapped charge_start_minute/charge_end_minute entity
+    must not permanently poison the commit-once guard.
+
+    adjust_force_export() guards each hour/minute write with `elif start_hour_id:` - if the user's
+    config leaves that entity unmapped (falsy), the write is skipped rather than attempted.
+    adjust_charge_window() used a plain `else:` instead, so an unmapped entity's write was attempted
+    anyway, write_and_poll_option() returned False for it (check_write_entity() fails on a falsy
+    entity_id), and schedule_write_ok stayed False forever - so the charge window commit never
+    cleared and the button was pressed every single cycle, exactly the #2328/#4712 failure this PR
+    exists to fix.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    arg_keys = ("charge_start_time", "charge_end_time", "scheduled_charge_enable", "charge_start_hour", "charge_start_minute", "charge_end_hour", "charge_end_minute")
+    item_keys = ("select.charge_start_time", "select.charge_end_time", "switch.scheduled_charge_enable", "switch.inverter_button", "time.charge_start_hour", "time.charge_end_hour")
+    saved_args = {key: inv.base.args.get(key, unset) for key in arg_keys}
+    saved_items = {key: ha.dummy_items.get(key, unset) for key in item_keys}
+    saved_fields = (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, dict(inv.last_committed), dict(inv.commit_pending))
+
+    try:
+        failed = _charge_window_unmapped_minute_body(test_name, ha, inv, my_predbat)
+    finally:
+        for key, value in saved_args.items():
+            if value is unset:
+                inv.base.args.pop(key, None)
+            else:
+                inv.base.args[key] = value
+        for key, value in saved_items.items():
+            if value is unset:
+                ha.dummy_items.pop(key, None)
+            else:
+                ha.dummy_items[key] = value
+        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+
+    return failed
+
+
+def _charge_window_unmapped_minute_body(test_name, ha, inv, my_predbat):
+    """
+    Body of test_charge_window_unmapped_minute_entity_commits_once, run inside its state guard.
+    """
+    failed = False
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+    inv.last_committed.pop("charge_window", None)
+    inv.commit_pending.pop("charge_window", None)
+
+    charge_start = my_predbat.midnight_utc + timedelta(minutes=23 * 60 + 30)
+    charge_end = my_predbat.midnight_utc + timedelta(minutes=(5 * 60 + 30) + 24 * 60)
+
+    ha.dummy_items["select.charge_start_time"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["select.charge_end_time"] = charge_end.strftime("%H:%M:%S")
+    # The inverter never reports the enable switch back as on - same as the stuck-enable scenario,
+    # so schedule_changed is driven by that third term rather than by the (unchanged) window times.
+    ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+
+    inv.base.args["charge_start_time"] = "select.charge_start_time"
+    inv.base.args["charge_end_time"] = "select.charge_end_time"
+    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
+    ha.dummy_items["time.charge_start_hour"] = charge_start.strftime("%H:%M:%S")
+    ha.dummy_items["time.charge_end_hour"] = charge_end.strftime("%H:%M:%S")
+    inv.base.args["charge_start_hour"] = "time.charge_start_hour"
+    inv.base.args["charge_end_hour"] = "time.charge_end_hour"
+    # The minute entities are left unmapped entirely - the reported config shape.
+    inv.base.args.pop("charge_start_minute", None)
+    inv.base.args.pop("charge_end_minute", None)
+
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the charge window (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # With the fix, an unmapped minute entity must not poison schedule_write_ok - later cycles of
+    # the same unchanged window, with the enable switch still stuck off, must not press again.
+    # Before the fix this pressed every single cycle regardless (the reported #2328/#4712 signature).
+    for cycle in range(2, 5):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        inv.adjust_charge_window(charge_start, charge_end, my_predbat.minutes_now)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} pressed the button again with unmapped minute entities - schedule_write_ok was poisoned by the unattempted write")
+            failed = True
+
+    return failed
+
+
+def test_commit_scopes_are_independent(test_name, inv):
+    """
+    The commit-once memory is keyed by scope, not by which button commits it.
+
+    Several scopes share the charge-side button - the charge window, the target SoC, and the window
+    disable. Keying the memory by button (the obvious reading of press_and_poll_button()'s `side`)
+    would let a target SoC commit overwrite the charge window's record, so the next window commit
+    would either be suppressed as a repeat or, worse, a pending window retry would be marked done by
+    an unrelated SoC press. Pins that the scopes do not interfere, and that pending is per scope.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_last_committed = dict(inv.last_committed)
+    saved_commit_pending = dict(inv.commit_pending)
+
+    try:
+        inv.last_committed.clear()
+        inv.commit_pending.clear()
+
+        window = ("01:00:00", "02:00:00", True)
+        inv.record_commit("charge_window", window, True)
+
+        # A different scope sharing the same button must not read as already committed...
+        if not inv.commit_needed("target_soc", 90):
+            print(f"ERROR: {test_name}: target_soc read as committed off the back of a charge_window commit")
+            failed = True
+
+        # ...and committing it must not disturb the charge window's record.
+        inv.record_commit("target_soc", 90, True)
+        if inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a target_soc commit invalidated the charge_window record")
+            failed = True
+
+        # A failed commit leaves only its own scope pending.
+        inv.record_commit("target_soc", 80, False)
+        if not inv.commit_needed("target_soc", 80):
+            print(f"ERROR: {test_name}: a failed target_soc commit did not leave that scope pending")
+            failed = True
+        if inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a failed target_soc commit left charge_window pending too")
+            failed = True
+
+        # Pending wins over a matching key, so a retry is never suppressed...
+        inv.record_commit("charge_window", window, False)
+        if not inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a pending charge_window commit was suppressed by its own matching key")
+            failed = True
+
+        # ...and a later success clears it.
+        inv.record_commit("charge_window", window, True)
+        if inv.commit_needed("charge_window", window):
+            print(f"ERROR: {test_name}: a successful retry did not clear the pending flag")
+            failed = True
+    finally:
+        inv.last_committed = saved_last_committed
+        inv.commit_pending = saved_commit_pending
+
+    return failed
+
+
+def test_in_calibration_clears_when_battery_leaves_calibration(test_name, my_predbat, ha):
+    """
+    Regression test: in_calibration must clear when battery_calibration reports off again.
+
+    refresh_config() only ever sets in_calibration True - there is no matching "set it False" read,
+    because most inverter types never configure battery_calibration at all (absent means never
+    calibrating). Before Inverter objects persisted, that was fine: in_calibration was reseeded
+    False by __init__ every single cycle. With persistence (#4712) a stuck True would never clear
+    on its own once the real device left calibration - _init_attribute_defaults() must be the one place
+    that still clears it, run once at construction, not on every refresh.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_calibration = my_predbat.args.get("battery_calibration", unset)
+    saved_inverters = my_predbat.inverters
+
+    try:
+        my_predbat.args["battery_calibration"] = "on"
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed")
+            return True
+
+        if not my_predbat.inverters[0].in_calibration:
+            print(f"ERROR: {test_name}: in_calibration should be True while battery_calibration is on")
+            failed = True
+
+        my_predbat.args["battery_calibration"] = "off"
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after calibration cleared")
+            return True
+
+        if my_predbat.inverters[0].in_calibration:
+            print(f"ERROR: {test_name}: in_calibration is still True after battery_calibration went off - it is stuck on a persisted object")
+            failed = True
+    finally:
+        if saved_calibration is unset:
+            my_predbat.args.pop("battery_calibration", None)
+        else:
+            my_predbat.args["battery_calibration"] = saved_calibration
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
+def test_inverters_persist_across_cycles(test_name, my_predbat, ha):
+    """
+    Regression test for issue #4712: the Inverter objects must persist across cycles.
+
+    fetch_inverter_data() used to default to create=True and rebuild them every cycle - more than
+    once when the plan was recomputed before execute_plan() - so any state they accumulated was
+    wiped before it could be used. That is why #4711's commit-once guard held in the unit tests,
+    which reuse one long-lived Inverter, but not in production: a reporter's log on v9.0.3 shows
+    377 presses over one night with every register logging "No write needed".
+
+    Also asserts refresh_config() still re-reads runtime-changeable config, so persisting the object
+    does not freeze a setting the user can change while Predbat runs.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_inverters = my_predbat.inverters
+    unset = object()
+    saved_min_soc = my_predbat.args.get("battery_min_soc", unset)
+    saved_type = my_predbat.args.get("inverter_type", unset)
+
+    try:
+        my_predbat.inverters = []
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: first fetch_inverter_data() failed")
+            return True
+        first = my_predbat.inverters[0]
+
+        # A marker that only survives if the object itself does.
+        first.last_committed["charge_window"] = ("marker", "marker", True)
+
+        for cycle in range(2, 5):
+            if not my_predbat.fetch_inverter_data():
+                print(f"ERROR: {test_name}: fetch_inverter_data() failed on cycle {cycle}")
+                return True
+            if my_predbat.inverters[0] is not first:
+                print(f"ERROR: {test_name}: cycle {cycle} rebuilt the Inverter instead of reusing it")
+                failed = True
+                break
+            if first.last_committed.get("charge_window") != ("marker", "marker", True):
+                print(f"ERROR: {test_name}: cycle {cycle} lost the committed-schedule state")
+                failed = True
+                break
+
+        # A component whose startup is deferred can set inverter_type after the objects exist.
+        # refresh_config() re-reads the type and re-derives every inv_* capability flag from it, so
+        # this is absorbed without a rebuild - and must be, since rebuilding would discard the
+        # commit-once state and force the redundant commit this guard exists to prevent (#5126
+        # review). Asserts the flags actually followed the type, not merely that the object survived.
+        my_predbat.args["inverter_type"] = ["GS"]
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after a type change")
+            return True
+        if my_predbat.inverters[0] is not first:
+            print(f"ERROR: {test_name}: a changed inverter_type rebuilt the Inverter, discarding its commit state")
+            failed = True
+        if my_predbat.inverters[0].inverter_type != "GS":
+            print(f"ERROR: {test_name}: Inverter has type {my_predbat.inverters[0].inverter_type} after the change, expected GS")
+            failed = True
+        if my_predbat.inverters[0].inv_charge_time_format != INVERTER_DEF["GS"]["charge_time_format"]:
+            print(f"ERROR: {test_name}: capability flags did not follow the type change - inv_charge_time_format is {my_predbat.inverters[0].inv_charge_time_format}")
+            failed = True
+        if first.last_committed.get("charge_window") != ("marker", "marker", True):
+            print(f"ERROR: {test_name}: a type change lost the committed-schedule state")
+            failed = True
+
+        # Runtime config must still be re-read on a persisted object.
+        my_predbat.args["battery_min_soc"] = 15
+        if not my_predbat.fetch_inverter_data():
+            print(f"ERROR: {test_name}: fetch_inverter_data() failed after a config change")
+            return True
+        if my_predbat.inverters[0].reserve_percent_current < 15:
+            print(f"ERROR: {test_name}: refresh_config() did not pick up a changed battery_min_soc, got {my_predbat.inverters[0].reserve_percent_current}")
+            failed = True
+    finally:
+        if saved_min_soc is unset:
+            my_predbat.args.pop("battery_min_soc", None)
+        else:
+            my_predbat.args["battery_min_soc"] = saved_min_soc
+        if saved_type is unset:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+        my_predbat.inverters = saved_inverters
+
+    return failed
+
+
+def test_set_current_from_power_before_battery_voltage_known(test_name, my_predbat):
+    """
+    Regression test: set_current_from_power() must not crash before update_status() has ever run.
+
+    battery_voltage is seeded to None (not a guessed 52.0) since #4712's __init__ split, precisely
+    so a caller that reaches the charge/discharge current path before the inverter's own state was
+    fetched - test_force_export_off_does_not_press_every_cycle does exactly this by construction -
+    gets an explicit skip rather than a silent divide against a made-up value.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    unset = object()
+    saved_type = my_predbat.args.get("inverter_type", unset)
+
+    try:
+        my_predbat.args["inverter_type"] = ["GS"]
+        inv = Inverter(my_predbat, 0, quiet=True)
+
+        if inv.battery_voltage is not None:
+            print(f"ERROR: {test_name}: battery_voltage should be None before update_status() has run, got {inv.battery_voltage}")
+            failed = True
+
+        try:
+            inv.set_current_from_power("charge", 1000)
+        except TypeError as e:
+            print(f"ERROR: {test_name}: set_current_from_power() raised {e} instead of skipping cleanly")
+            failed = True
+    finally:
+        if saved_type is unset:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = saved_type
+
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -4237,6 +4396,7 @@ def run_inverter_tests(my_predbat_dummy):
 
     failed |= test_inverter_time_handling(my_predbat, dummy_items)
     failed |= test_inverter_clock_skew_bands(my_predbat)
+    failed |= test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items)
 
     failed |= test_inverter_update(
         "update1",
@@ -5042,6 +5202,8 @@ charge_start_service:
     failed |= test_inverters_persist_across_cycles("inverters_persist_across_cycles", my_predbat, ha)
     failed |= test_in_calibration_clears_when_battery_leaves_calibration("in_calibration_clears", my_predbat, ha)
     failed |= test_set_current_from_power_before_battery_voltage_known("set_current_from_power_before_voltage_known", my_predbat)
+    failed |= test_button_press_counts_as_register_write("button_press_counts_as_register_write", ha, inv)
+    failed |= test_button_press_and_poll_counts_as_register_write("button_press_and_poll_counts_as_register_write", ha, inv)
     if failed:
         return failed
 
