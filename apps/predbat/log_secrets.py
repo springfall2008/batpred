@@ -53,8 +53,17 @@ class LogRedaction:
     # each would each proceed inside their own - the exact interleaving it exists to prevent. A
     # class attribute is therefore shared by every instance, which is sound because all it guards
     # is the atomicity of one instance's "read sentinel, build, store"; making that atomic
-    # process-wide is strictly stronger than making it per-instance, and it is only ever held for
-    # the duration of a rebuild, which happens on a config change rather than per log line.
+    # process-wide is strictly stronger than making it per-instance.
+    #
+    # It is acquired on every _log_secret_pattern() call, so on every log line, and held across
+    # the fingerprint check - a handful of identity and len() reads - on the warm path; only a
+    # rebuild holds it for longer, and rebuilds happen on a config change. Sharing it does mean a
+    # rebuild on one instance briefly blocks log() on every other instance of the class, which
+    # the single-engine production case never notices but a test process holding several engines
+    # could (#5171 review). Nothing reached under the lock logs - collect_log_secret_values() and
+    # compile_log_secret_pattern() are pure helpers in utils.py - so there is no re-entrant path
+    # back into log() to deadlock a non-reentrant Lock, which is what makes sharing it safe
+    # rather than merely cheap.
     _log_secret_pattern_lock = threading.Lock()
 
     def _invalidate_log_secret_pattern(self):
@@ -78,6 +87,17 @@ class LogRedaction:
         web.py's batch editor does via clear()/update() and web_chat.py does by assigning a new
         block.
 
+        The mappings themselves are held here, not their id(): a stored id() is only an integer,
+        so once the mapping it was taken from is freed CPython is free to hand that same address
+        to the next allocation, and a rebind to a same-length dict landing there would produce a
+        fingerprint equal to the stored one - skipping the rebuild and leaving a just-configured
+        credential unredacted until the next explicit invalidation (#5171 review). Holding the
+        objects means an address recorded in a live fingerprint cannot be recycled while it is
+        still recorded, at the cost of keeping a superseded args/secrets mapping reachable until
+        the next rebuild. They are compared by _log_secret_fingerprint_matches() rather than ==,
+        because == on two dicts is an O(number of values) comparison that would also report two
+        distinct-but-equal mappings as unchanged - identity is the question being asked.
+
         An in-place edit of an existing key that keeps the size the same is NOT caught here, so
         the explicit _invalidate_log_secret_pattern() call sites remain load-bearing. This is a
         safety net under them, not a replacement: with it, a missed or mis-ordered call site
@@ -88,7 +108,20 @@ class LogRedaction:
         """
         args = getattr(self, "args", None)
         secrets = getattr(self, "secrets", None)
-        return (id(args), len(args) if isinstance(args, dict) else -1, id(secrets), len(secrets) if isinstance(secrets, dict) else -1)
+        return (args, len(args) if isinstance(args, dict) else -1, secrets, len(secrets) if isinstance(secrets, dict) else -1)
+
+    @staticmethod
+    def _log_secret_fingerprint_matches(left, right):
+        """
+        Whether two fingerprints from _log_secret_fingerprint() describe the same args/secrets.
+
+        The mapping halves are compared with `is` and only their sizes with ==, so a rebind to an
+        equal-but-distinct mapping counts as a change (a rebuild) rather than a match. `right` is
+        None before the first build, which never matches a real fingerprint.
+        """
+        if left is None or right is None:
+            return left is right
+        return left[0] is right[0] and left[1] == right[1] and left[2] is right[2] and left[3] == right[3]
 
     def _log_secret_pattern(self):
         """
@@ -111,7 +144,7 @@ class LogRedaction:
         """
         with self._log_secret_pattern_lock:
             fingerprint = self._log_secret_fingerprint()
-            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET or fingerprint != self._log_secret_pattern_fingerprint:
+            if self._log_secret_pattern_cache is self._LOG_SECRET_PATTERN_UNSET or not self._log_secret_fingerprint_matches(fingerprint, self._log_secret_pattern_fingerprint):
                 args = getattr(self, "args", None)
                 redact_strings = args.get("redact_strings") if args else None
                 redact_strings_labelled = args.get("redact_strings_labelled") if args else None

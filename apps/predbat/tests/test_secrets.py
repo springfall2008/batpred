@@ -902,6 +902,13 @@ def test_log_redaction_mixin_needs_no_init():
     except AttributeError as error:
         print("ERROR: redaction needed state that only Hass.__init__ establishes: {}".format(error))
         failed = True
+    except Exception as error:
+        # Not just AttributeError: log() has other ways to fail on an engine that skipped
+        # Hass.__init__ (a TypeError from an unexpected mixin-state shape, predbat_log_count()),
+        # and letting one escape would abort the whole suite run instead of reporting a failed
+        # test like every other case here (#5171 review).
+        print("ERROR: logging on an engine that skipped Hass.__init__ raised {}: {}".format(type(error).__name__, error))
+        failed = True
     else:
         content = engine.logfile.getvalue()
         if "OVERLAY-SECRET-VALUE-5169" in content:
@@ -945,6 +952,129 @@ def test_log_redaction_mixin_needs_no_init():
 
     if not failed:
         print("**** test_log_redaction_mixin_needs_no_init PASSED ****")
+    return failed
+
+
+def test_log_secret_pattern_cache_is_reused():
+    """A second _log_secret_pattern() call must return the cached pattern without rebuilding it.
+
+    The rest of this suite asserts the cold path (a build happens), the invalidation call sites and
+    the fingerprint safety net, but nothing counted rebuilds - so a regression that recomputed the
+    value set and recompiled the regex on every log line, which is the one thing the cache exists
+    to avoid on log()'s hot path, would have passed the whole suite silently (#5171 review).
+    """
+    print("**** Testing the log redaction pattern is cached across calls ****")
+    failed = False
+
+    # Patched in log_secrets.py's namespace, where _log_secret_pattern() looks the name up, for the
+    # same reason as test_log_secret_pattern_build_is_not_racy().
+    import log_secrets as log_secrets_module
+    from log_secrets import LogRedaction
+
+    class CountingRedactor(LogRedaction):
+        """A mixin-only object, so a shared engine's own logging cannot disturb the build count."""
+
+        def __init__(self, args):
+            """Hold the args the redaction pattern is built from."""
+            self.args = args
+
+    saved_collect = log_secrets_module.collect_log_secret_values
+    builds = []
+
+    def counting_collect(*args, **kwargs):
+        """Count each rebuild on the way through to the real collector."""
+        builds.append(1)
+        return saved_collect(*args, **kwargs)
+
+    try:
+        log_secrets_module.collect_log_secret_values = counting_collect
+        redactor = CountingRedactor({"api_key": "CACHE-REUSE-SECRET-5171"})
+
+        first = redactor._log_secret_pattern()
+        if len(builds) != 1:
+            print("ERROR: the first call made {} builds, expected exactly 1".format(len(builds)))
+            failed = True
+
+        stored_fingerprint = redactor._log_secret_pattern_fingerprint
+        second = redactor._log_secret_pattern()
+        if len(builds) != 1:
+            print("ERROR: a second call rebuilt the pattern instead of returning the cached one - {} builds".format(len(builds)))
+            failed = True
+        if second is not first:
+            print("ERROR: a second call returned a different pattern object from the one it cached")
+            failed = True
+        if redactor._log_secret_pattern_fingerprint is not stored_fingerprint:
+            print("ERROR: a cache hit replaced the stored fingerprint, so it did not take the cached path")
+            failed = True
+
+        # A cache that can never be rebuilt would satisfy everything above just as well as a
+        # correct one, so confirm the counter still moves when it is supposed to.
+        redactor._invalidate_log_secret_pattern()
+        redactor._log_secret_pattern()
+        if len(builds) != 2:
+            print("ERROR: the pattern was not rebuilt after an invalidation - {} builds".format(len(builds)))
+            failed = True
+    finally:
+        log_secrets_module.collect_log_secret_values = saved_collect
+
+    if not failed:
+        print("**** test_log_secret_pattern_cache_is_reused PASSED ****")
+    return failed
+
+
+def test_log_secret_fingerprint_is_not_fooled_by_address_reuse():
+    """Rebinding args to a mapping that could land on the freed one's address must still rebuild.
+
+    The fingerprint is the safety net under the explicit invalidation call sites, so a false
+    "unchanged" verdict there is a leak rather than mere staleness: the rebuild is skipped and a
+    just-configured credential stays in plaintext until something else invalidates the cache.
+    Recording id(args) permitted exactly that - the id is only an integer, so CPython may hand the
+    freed mapping's address to the next allocation and a same-length replacement landing there
+    compares equal (#5171 review). The fingerprint holds the mappings themselves, which is what
+    keeps an address it recorded from being recycled while it is still recorded.
+    """
+    print("**** Testing the redaction fingerprint is not fooled by a recycled mapping address ****")
+    failed = False
+
+    import gc
+    from utils import redact_log_line
+    from log_secrets import LogRedaction
+
+    class BareRedactor(LogRedaction):
+        """An object carrying args and the redaction mixin, and nothing else."""
+
+        def __init__(self, args):
+            """Hold the args the redaction pattern is built from."""
+            self.args = args
+
+    redactor = BareRedactor({"api_key": "FIRST-ADDRESS-SECRET-5171"})
+    if "FIRST-ADDRESS-SECRET-5171" in redact_log_line("Info: using FIRST-ADDRESS-SECRET-5171", redactor._log_secret_pattern()):
+        print("ERROR: the first pattern did not redact the args it was built from")
+        failed = True
+
+    # Rebind args and keep hold of the superseded mapping only through this local, so what the
+    # stored fingerprint retains is the question. Asserted by referrer rather than by trying to
+    # provoke a real address collision: whether CPython actually hands the freed address to the
+    # next allocation depends on the allocator's pool state, so a probe that allocates same-shaped
+    # dicts and looks for the old address passes with or without the fix and proves nothing. The
+    # property that rules the collision out is that the recorded address still belongs to a live
+    # object, which is exactly "the fingerprint refers to the mapping".
+    superseded_args = redactor.args
+    redactor.args = {"api_key": "SECOND-ADDRESS-SECRET-5171"}
+    gc.collect()
+
+    stored_fingerprint = redactor._log_secret_pattern_fingerprint
+    if not any(referrer is stored_fingerprint for referrer in gc.get_referrers(superseded_args)):
+        print("ERROR: the stored fingerprint does not refer to the mapping it describes, so that mapping can be freed and its address handed to a same-length replacement - which would compare as unchanged and skip the rebuild")
+        failed = True
+
+    second_line = redact_log_line("Info: using SECOND-ADDRESS-SECRET-5171", redactor._log_secret_pattern())
+    if "SECOND-ADDRESS-SECRET-5171" in second_line or "<api_key>" not in second_line:
+        print("ERROR: rebinding args to a same-length mapping did not rebuild the pattern: {}".format(second_line))
+        failed = True
+
+    if not failed:
+        print("**** test_log_secret_fingerprint_is_not_fooled_by_address_reuse PASSED ****")
     return failed
 
 
@@ -1004,6 +1134,8 @@ def run_secrets_tests(my_predbat=None):
     failed |= test_log_redaction_survives_a_missed_invalidation(my_predbat)
     failed |= test_auto_config_invalidates_log_secret_cache(my_predbat)
     failed |= test_log_redaction_mixin_needs_no_init()
+    failed |= test_log_secret_pattern_cache_is_reused()
+    failed |= test_log_secret_fingerprint_is_not_fooled_by_address_reuse()
     failed |= test_log_secret_pattern_build_is_not_racy(my_predbat)
     failed |= test_resolve_arg_re_masks_secret_arg_matches(my_predbat)
     return failed
