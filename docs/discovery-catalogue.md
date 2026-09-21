@@ -58,14 +58,14 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 
 | Section | What it holds |
 | ------- | -------------- |
-| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), and its entities |
+| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), and - where the reporter has a table mapping Predbat's controls to its entities (GivTCP today) - those entities |
 | `chargers` | EV chargers, cross-linked to the cars they serve |
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
 | `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
-No v1 reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox) populates `programmes` yet - it is part of
+No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
 rather than missing from the document.
 
