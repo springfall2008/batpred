@@ -36,6 +36,7 @@ import asyncio
 import re
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 from utils import dp4
 from givtcp_rest import GivTCPRest, InverterRestState
 
@@ -1016,21 +1017,19 @@ class GivTCPComponent(ComponentBase):
             if max_battery_rate:
                 ratings["max_charge_w"] = max_battery_rate
 
-            record = {
-                "device_id": device_id,
-                "inverter_type": "GE",
-                "composition": "direct",
-                "functions": ["solar", "battery"],
-                "capabilities": capabilities,
-                "entities": entities,
-            }
-            if known_serial:
-                record["hardware_ids"] = {"serial": known_serial}
-            if info:
-                record["info"] = info
-            if ratings:
-                record["ratings"] = ratings
-            inverters.append(record)
+            inverters.append(
+                inverter_record(
+                    device_id,
+                    inverter_type="GE",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=capabilities,
+                    hardware_ids={"serial": known_serial} if known_serial else None,
+                    info=info,
+                    ratings=ratings,
+                    entities=entities,
+                )
+            )
 
         return {"automatic": self.automatic, "inverters": inverters}
 
