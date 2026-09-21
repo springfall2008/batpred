@@ -2415,8 +2415,16 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         The inverter's rating goes through capacity_watts(), never capacity * 1000: Fox reports a
         half-kW model's capacity truncated (a KH10.5 says 10), and capacity_watts() is what
-        restores the 500 W for the _inverter_capacity sensor publish_data() publishes. Using it
-        here keeps the catalogue from disagreeing with that sensor.
+        restores the 500 W. For a battery device that is also the value of the _inverter_capacity
+        sensor publish_data() publishes; for a PV-only device publish_data() sets that sensor to
+        0, while the catalogue still reports the device's own rating.
+
+        stationName, stationID and moduleSN are deliberately not reported. stationName is
+        user-authored free text that can hold a street address (get_device_list()'s own sample
+        holds one), and the info container's guards - a length cap and no "@" - would let an
+        address straight into a debug dump users post publicly. Neither identifier describes the
+        hardware; a station ID, if one is ever wanted, belongs in account_ids, which is
+        pseudonymised.
 
         No battery capacity is reported. A real batteryList mixes control units that carry no
         capacity (bcu, ivu) with bmu entries carrying one in Wh, and publish_data() sums every
@@ -2454,14 +2462,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
             if has_battery:
                 functions.append("battery")
 
+            # "schedule" is the spec's token for a device-side scheduler; export_limit has no spec
+            # equivalent. A third-party generator this inverter meters is topology, not something
+            # the inverter can do, so it is a flag rather than a capability.
             capabilities = []
             if has_scheduler:
-                capabilities.append("scheduler")
-            if detail.get("thirdPartyGen", False):
-                capabilities.append("third_party_gen")
+                capabilities.append("schedule")
             settings = self.device_settings.get(serial, {}) or {}
             if "ExportLimit" in settings:
                 capabilities.append("export_limit")
+            flags = []
+            if detail.get("thirdPartyGen", False):
+                flags.append("third_party_gen")
 
             info = {}
             device_type = detail.get("deviceType")
@@ -2470,6 +2482,13 @@ class FoxAPI(ComponentBase, OAuthMixin):
             product_type = detail.get("productType")
             if product_type:
                 info["product_type"] = str(product_type)
+            # Fox reports a firmware version per board; info takes only strings, so they are
+            # flattened into one, board names in sorted order - as GE Cloud's
+            # _device_info_and_ratings() does with its firmware_version dict
+            boards = [(board, detail.get(board + "Version")) for board in ("manager", "master", "slave")]
+            firmware = " ".join("{} {}".format(board, version.strip()) for board, version in boards if isinstance(version, str) and version.strip())
+            if firmware:
+                info["firmware"] = firmware
 
             ratings = {}
             if detail.get("capacity"):
@@ -2495,6 +2514,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     composition="direct",
                     functions=functions,
                     capabilities=capabilities,
+                    flags=flags,
                     hardware_ids={"serial": serial},
                     info=info,
                     ratings=ratings,

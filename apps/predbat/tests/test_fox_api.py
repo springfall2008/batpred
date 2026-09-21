@@ -7514,20 +7514,77 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     assert sorted(battery["functions"]) == ["battery", "solar"]
     assert battery["hardware_ids"] == {"serial": "BATT001"}
     assert battery["info"]["model"] == "KH8"
+    assert battery["info"]["product_type"] == "KH"
+    # Fox's per-board versions flattened into one string, board names sorted, as GE Cloud does;
+    # the empty afciVersion and the placeholder hardwareVersion "--" are not firmware
+    assert battery["info"]["firmware"] == "manager 1.28 master 1.34 slave 1.01", battery["info"]
     assert battery["ratings"]["inverter_w"] == 8000.0
-    assert "scheduler" in battery["capabilities"]
-    assert "export_limit" in battery["capabilities"]
+    assert sorted(battery["capabilities"]) == ["export_limit", "schedule"], "schedule is the spec's token for a device-side scheduler - not scheduler"
+    assert "flags" not in battery, "thirdPartyGen is not set on this device"
+
+    # The station name is user-authored free text - get_device_list()'s own sample holds a street
+    # address - so neither it nor the station and module identifiers may reach a public dump.
+    for private in ("2 Example Street", "STATION-0001", "MODULE0001"):
+        assert private not in repr(report), f"{private} must never be reported"
 
     pv = by_id["fox:PVONLY1"]
     assert pv["functions"] == ["solar"], "a device with no battery is solar only"
     assert "inverter_type" not in pv, "a PV-only device is not an inverter Predbat controls"
+    # The device's own rating, even though publish_data() publishes 0 on a PV-only device's
+    # _inverter_capacity sensor - the catalogue and that sensor agree only for battery devices
+    assert pv["ratings"]["inverter_w"] == 5000.0
+    assert "firmware" not in pv.get("info", {}), "no version fields, no firmware"
+
+    # A third-party generator the inverter meters is topology, not something it can do: a flag
+    fox.device_detail["BATT001"]["thirdPartyGen"] = True
+    battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
+    assert battery["flags"] == ["third_party_gen"], battery
+    assert "third_party_gen" not in battery["capabilities"], battery["capabilities"]
 
     # A half-kW model: Fox reports a KH10.5's capacity truncated to 10. capacity_watts() restores
-    # the 500 W, so the catalogue agrees with the _inverter_capacity sensor publish_data() publishes.
+    # the 500 W, so for a battery inverter the catalogue agrees with the _inverter_capacity sensor.
     fox.device_detail["BATT001"].update({"deviceType": "KH10.5", "capacity": 10})
     battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
     assert battery["ratings"]["inverter_w"] == 10500.0, "a half-kW model must go through capacity_watts(), not capacity * 1000"
     print("PASS: Fox build_discovery describes each discovered device")
+    return 0
+
+
+def test_fox_build_discovery_round_trips_through_validate_report(my_predbat):
+    """A realistic Fox report survives validate_report() with every field intact.
+
+    validate_report() silently drops any value that does not fit its container - a string in
+    ratings, a capital letter in a token, an info string over 64 characters - so a reporter whose
+    values are quietly discarded passes its own tests and shows a thinner catalogue in production.
+    Built from the fixture taken from Fox's own samples, with thirdPartyGen set so flags is carried
+    too, and the GH#4919 AIO alongside it; the container checks at the end keep the equality from
+    passing vacuously on a record that populates nothing.
+    """
+    print("**** test_fox_build_discovery_round_trips_through_validate_report ****")
+    from coordinator import validate_report
+
+    fox = _fox_discovery_api(my_predbat)
+    fox.device_detail["BATT001"]["thirdPartyGen"] = True
+    fox.device_list.append({"deviceSN": "AIO0001"})
+    fox.device_detail["AIO0001"] = dict(fox.device_detail["BATT001"], deviceSN="AIO0001", batteryList=[dict(entry, batterySN="AIO0001") for entry in FOX_AIO_BATTERY_LIST], batteryDesignCapacity=10.24)
+    report = fox.build_discovery()
+
+    warnings = []
+    cleaned = validate_report(report, "fox", warnings.append)
+
+    assert warnings == [], f"validation dropped something: {warnings}"
+    assert cleaned["automatic"] is False
+    assert len(cleaned["inverters"]) == len(report["inverters"]) == 3, cleaned
+    for record, cleaned_record in zip(report["inverters"], cleaned["inverters"]):
+        assert cleaned_record == record, f"{record['device_id']} changed in validation:\n  built   {record}\n  cleaned {cleaned_record}"
+
+    by_id = {record["device_id"]: record for record in cleaned["inverters"]}
+    battery = by_id["fox:BATT001"]
+    assert set(battery) == {"device_id", "inverter_type", "composition", "functions", "capabilities", "flags", "hardware_ids", "info", "ratings"}, set(battery)
+    assert set(battery["info"]) == {"model", "product_type", "firmware"}, battery["info"]
+    assert set(battery["ratings"]) == {"inverter_w", "battery_capacity_entries", "battery_capacity_serials"}, battery["ratings"]
+    assert by_id["fox:AIO0001"]["ratings"]["battery_capacity_entries"] == 4 and by_id["fox:AIO0001"]["ratings"]["battery_capacity_serials"] == 1
+    print("PASS: Fox's report round-trips through validate_report() with nothing dropped")
     return 0
 
 
@@ -7983,6 +8040,7 @@ def run_fox_api_tests(my_predbat):
 
         # Discovery catalogue tests
         failed |= test_fox_build_discovery_describes_each_device(my_predbat)
+        failed |= test_fox_build_discovery_round_trips_through_validate_report(my_predbat)
         failed |= test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat)
         failed |= test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would(my_predbat)
         failed |= test_fox_build_discovery_returns_none_before_discovery(my_predbat)
