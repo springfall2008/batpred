@@ -252,7 +252,7 @@ from coordinator import CONTAINER_SPEC, Coordinator, Redactor, SCHEMA_VERSION, S
 
 ```bash
 cd coverage
-source /Users/treforsouthwell/predbat/batpred/coverage/venv/bin/activate
+source setup.csh
 python3 ../apps/predbat/unit_test.py --test coordinator > /tmp/t1.log 2>&1; grep -E "ImportError|cannot import|ERROR" /tmp/t1.log | head
 ```
 
