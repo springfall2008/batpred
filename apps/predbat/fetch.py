@@ -2123,8 +2123,9 @@ class Fetch:
 
     def basic_rates(self, info, rtype, prev=None, rate_replicate=None, include_manual_api=True):
         """
-        Work out the energy rates based on user supplied time periods
-        works on a 24-hour period only and then gets replicated later for future days
+        Work out the energy rates based on user supplied time periods. Weekly rules on the base
+        tariff are stamped across the whole horizon, each day against its own day_of_week; any
+        minute no rule claims is left for rate_replicate() to fill later
 
         include_manual_api should be False for callers (e.g. tariff comparison, annual replay)
         that simulate a tariff other than the live one - the live system's manual API overrides
@@ -2286,6 +2287,17 @@ class Fetch:
 
                 day_of_week_midnight = self.midnight_utc.weekday()
 
+                # A weekly rule on the base tariff is stamped over the whole horizon rate_replicate()
+                # goes on to cover, not just the days modelled above, so every day is filtered against
+                # its own weekday. rate_replicate() fills a missing minute from the same time of day 24
+                # hours earlier and knows nothing about day_of_week, so a day left to it takes the
+                # previous day's pattern - a weekend rule flattening the weekday peaks (batpred#5168).
+                # Overrides (prev) already span the replicated horizon via max_minute.
+                if not date and not prev:
+                    stamp_end = max(max_minute + 24 * 60, self.forecast_minutes + 48 * 60)
+                else:
+                    stamp_end = max_minute
+
                 # Store rates against range
                 if end_minutes >= (-48 * 60) and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
@@ -2293,9 +2305,10 @@ class Fetch:
                         if (not date) or (minute >= (-24 * 60) and minute < max_minute):
                             minute_index = minute_mod - 24 * 60
                             # For incremental adjustments we have to loop over 24-hour periods
-                            while minute_index < max_minute:
+                            while minute_index < stamp_end:
                                 if not date or (minute_index >= start_minutes and minute_index < end_minutes):
-                                    current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
+                                    # Floor division, so yesterday's minutes are checked against yesterday's weekday
+                                    current_day_of_week = (day_of_week_midnight + minute_index // (24 * 60)) % 7
                                     if not day_of_week or (current_day_of_week in day_of_week):
                                         if rate_increment:
                                             rates[minute_index] = rates.get(minute_index, 0.0) + rate
@@ -2308,20 +2321,6 @@ class Fetch:
                                         if date:
                                             break
                                 minute_index += 24 * 60
-                            if not date and not prev:
-                                # Seed the slot past the days modelled above so rate_replicate() has
-                                # something to copy forward. This has to honour the rule's day filter
-                                # in the same way the loop just did, or the last rule processed for a
-                                # given time of day wins out there whatever the weekday - a weekend
-                                # rule flattening the weekday peaks two days out (batpred#5168).
-                                # Minutes left unwritten here are no loss: rate_replicate() fills them
-                                # from the same time of day 24 hours earlier.
-                                extend_minute = minute_mod + max_minute
-                                extend_day_of_week = (day_of_week_midnight + int(extend_minute / (24 * 60))) % 7
-                                if not day_of_week or (extend_day_of_week in day_of_week):
-                                    rates[extend_minute] = rate
-                                    if load_scaling is not None:
-                                        self.load_scaling_dynamic[extend_minute] = load_scaling
             else:
                 self.log("Warn: Bad rate data provided in energy rates type {} {}".format(rtype, this_rate))
 
