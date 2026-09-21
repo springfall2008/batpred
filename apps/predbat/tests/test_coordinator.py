@@ -2,10 +2,11 @@
 # pylint: disable=line-too-long
 """Unit tests for the discovery catalogue coordinator (coordinator.py) - container validation and report collection."""
 
+import inspect
 from datetime import datetime
 
 from mock_base import MockBase
-from coordinator import Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC
+from coordinator import CONTAINER_SPEC, Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, inverter_record, validate_report
 
 
 def _coordinator():
@@ -287,6 +288,163 @@ class _StubRegistry:
     def get_component(self, name):
         """The stub component registered under this name, or None."""
         return self._components.get(name)
+
+
+def test_inverter_record_omits_empty_containers():
+    """An empty or unset container is left out of the record rather than written as {} or [].
+
+    Every reporter previously wrote its own `if info: record["info"] = info` ladder. Centralising
+    it means a reporter can pass whatever it gathered and let the builder decide, and the shape of
+    an inverters record lives in exactly one place.
+    """
+    record = inverter_record("fox:ABC123", inverter_type="FoxCloud", composition="direct", functions=["solar", "battery"], info={}, ratings={}, entities={}, serials=[])
+    assert record == {"device_id": "fox:ABC123", "inverter_type": "FoxCloud", "composition": "direct", "functions": ["solar", "battery"]}, record
+    print("PASS: inverter_record omits empty containers")
+    return 0
+
+
+def test_inverter_record_keeps_everything_populated():
+    """Every populated field survives, including a falsy-but-real rating like 0 and control=False.
+
+    control is the one top-level field where a falsy value is itself the fact: False means a
+    monitor-only inverter. A drop rule "simplified" to `if not value: continue` would silently
+    turn every monitor-only inverter into one whose control is unknown, so it is pinned here.
+    """
+    record = inverter_record(
+        "fox:ABC123",
+        inverter_type="FoxCloud",
+        control=False,
+        composition="gateway",
+        serials=["S1", "S2"],
+        measures_meter="fox:meter:M1",
+        functions=["solar"],
+        capabilities=["export_limit"],
+        hardware_ids={"serial": "ABC123"},
+        info={"model": "H3-10.0"},
+        ratings={"battery_kwh": 10.4, "max_charge_w": 0},
+        entities={"charge_rate": {"entity_id": "number.fox_abc123_charge_rate", "domain": "number", "access": "rw"}},
+    )
+    assert record["serials"] == ["S1", "S2"]
+    assert record["measures_meter"] == "fox:meter:M1"
+    assert record["capabilities"] == ["export_limit"]
+    assert record["hardware_ids"] == {"serial": "ABC123"}
+    assert record["ratings"]["max_charge_w"] == 0, "a real zero rating is data, not an empty container"
+    assert record["entities"]["charge_rate"]["domain"] == "number"
+    assert record["control"] is False, "control=False is a fact (monitor-only), not an empty value: {}".format(record)
+    print("PASS: inverter_record keeps every populated field")
+    return 0
+
+
+def test_inverter_record_round_trips_through_validation():
+    """A record the builder produced survives validate_report() unchanged.
+
+    The builder's whole job is producing something the coordinator will accept. If a field name
+    here ever drifts from SECTION_SPEC's structural list, validation silently drops it - so pin
+    that the two agree rather than trusting they do.
+    """
+    record = inverter_record("fox:ABC123", inverter_type="FoxCloud", composition="direct", serials=["S1"], measures_meter="fox:meter:M1", functions=["solar"], hardware_ids={"serial": "ABC123"}, info={"model": "H3"}, ratings={"battery_kwh": 10.4})
+    cleaned = validate_report({"inverters": [record]}, "fox", print)["inverters"][0]
+    for field in ("device_id", "inverter_type", "composition", "serials", "measures_meter", "functions", "hardware_ids", "info", "ratings"):
+        assert field in cleaned, "{} was dropped by validate_report - builder and SECTION_SPEC disagree: {}".format(field, cleaned)
+    assert cleaned == record, "validate_report() changed a built record:\n  built:   {}\n  cleaned: {}".format(record, cleaned)
+    print("PASS: a built record survives validation with every field intact")
+    return 0
+
+
+def test_inverter_record_parameters_match_the_inverters_schema():
+    """inverter_record()'s parameters are exactly the inverters section's fields - no more, no fewer.
+
+    The builder spells the schema out as named parameters so a mistyped field is a TypeError at
+    the call site. That only holds while its parameter list and the coordinator's schema agree:
+    rename a container in CONTAINER_SPEC, or add a structural field to SECTION_SPEC, and the builder
+    would go on emitting the old name, which validate_report() then silently drops from every
+    reporter's records at once. This passes today; its job is to fail the day the two drift.
+    """
+    parameters = set(inspect.signature(inverter_record).parameters)
+    assert "device_id" in parameters, "device_id is the record's identity and must stay a parameter: {}".format(sorted(parameters))
+    schema = (set(SECTION_SPEC["inverters"]["structural"]) - {"device_id"}) | set(CONTAINER_SPEC) | set(VOCAB_CONTAINERS)
+    fields = parameters - {"device_id"}
+    assert fields == schema, "inverter_record() and the inverters schema disagree - missing from the builder: {}, not in the schema: {}".format(sorted(schema - fields), sorted(fields - schema))
+    print("PASS: inverter_record's parameters are exactly the inverters schema")
+    return 0
+
+
+def test_inverter_record_fields_are_keyword_only():
+    """Only device_id may be passed positionally; every other field must be named.
+
+    Fifteen optional parameters in a row are an easy place to slip by one: accepted positionally,
+    inverter_record("x:1", "direct", True) would quietly build inverter_type="direct",
+    control=True - a wrong record with nothing to say so.
+    """
+    try:
+        inverter_record("gecloud:x", "direct", True)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("a positional second argument must be a TypeError, not silently taken as inverter_type")
+    parameters = inspect.signature(inverter_record).parameters
+    positional = [name for name, parameter in parameters.items() if parameter.kind is not inspect.Parameter.KEYWORD_ONLY]
+    assert positional == ["device_id"], "only device_id may be positional, got {}".format(positional)
+    print("PASS: inverter_record's schema fields are keyword-only")
+    return 0
+
+
+def test_inverter_record_copies_the_callers_containers():
+    """The record holds its own copies of the containers, never the caller's live objects.
+
+    refresh_discovery() stores the report it filed and compares the next build against it with ==.
+    If the record held the caller's own list - a reporter passing serials=self.serials - then
+    growing that list would grow the STORED report too, the rebuilt report would compare equal to
+    it, and the change would never be filed: a report frozen at its first state, the exact bug
+    refresh_discovery() exists to prevent.
+    """
+    live_serials = ["S1"]
+    live_info = {"model": "GIV-GATEWAY"}
+    first = inverter_record("gecloud:gateway001", composition="gateway", serials=live_serials, info=live_info)
+
+    live_serials.append("S2")
+    live_info["firmware"] = "ARM 1"
+    second = inverter_record("gecloud:gateway001", composition="gateway", serials=live_serials, info=live_info)
+
+    assert first != second, "a rebuilt record must differ once the caller's live state has moved on: {}".format(first)
+    assert first["serials"] == ["S1"], "the first record's serials changed under it: {}".format(first["serials"])
+    assert first["info"] == {"model": "GIV-GATEWAY"}, "the first record's info changed under it: {}".format(first["info"])
+    print("PASS: inverter_record copies the caller's containers, so live state cannot freeze a report")
+    return 0
+
+
+def test_inverter_record_normalises_sets_and_tuples():
+    """A set or frozenset becomes a sorted list, a tuple becomes a list, and an empty frozenset is omitted.
+
+    validate_report() keeps only a list for a structural or vocabulary field, so anything else
+    would be silently dropped from the catalogue. A set is sorted rather than listed as-is: string
+    hashing is randomised per process, so list(some_set) comes out in a different order after a
+    restart and two dumps of the same hardware would diff for no reason.
+    """
+    record = inverter_record(
+        "gecloud:gateway001",
+        serials={"S5", "S3", "S1", "S4", "S2"},
+        functions=frozenset({"solar", "battery"}),
+        capabilities=frozenset(),
+        flags=("monitor_only",),
+    )
+    assert record["serials"] == ["S1", "S2", "S3", "S4", "S5"], "a set should become a sorted list: {}".format(record.get("serials"))
+    assert record["functions"] == ["battery", "solar"], "a frozenset should become a sorted list: {}".format(record.get("functions"))
+    assert "capabilities" not in record, "an empty frozenset is empty and must be omitted: {}".format(record)
+    assert record["flags"] == ["monitor_only"], "a tuple should become a list: {}".format(record.get("flags"))
+    print("PASS: inverter_record sorts sets, lists tuples and omits an empty frozenset")
+    return 0
+
+
+def test_inverter_record_drops_an_empty_string():
+    """An empty string is unset, like None - but control=False is a real value and is kept."""
+    record = inverter_record("fox:ABC123", inverter_type="", measures_meter="", composition="direct", control=False)
+    assert "inverter_type" not in record, "an empty inverter_type is unset and must be omitted: {}".format(record)
+    assert "measures_meter" not in record, "an empty measures_meter is unset and must be omitted: {}".format(record)
+    assert record["composition"] == "direct"
+    assert record["control"] is False, "control=False is a bool, not an empty string, and must be kept: {}".format(record)
+    print("PASS: inverter_record drops an empty string but keeps control=False")
+    return 0
 
 
 def test_assemble_merges_sections_and_tags_source():
@@ -1433,6 +1591,14 @@ def test_coordinator_all(my_predbat=None):
     failures += test_assemble_merges_sections_and_tags_source()
     failures += test_catalogue_reassembles_so_a_post_assembly_report_reaches_it()
     failures += test_assemble_component_status()
+    failures += test_inverter_record_omits_empty_containers()
+    failures += test_inverter_record_keeps_everything_populated()
+    failures += test_inverter_record_round_trips_through_validation()
+    failures += test_inverter_record_parameters_match_the_inverters_schema()
+    failures += test_inverter_record_fields_are_keyword_only()
+    failures += test_inverter_record_copies_the_callers_containers()
+    failures += test_inverter_record_normalises_sets_and_tuples()
+    failures += test_inverter_record_drops_an_empty_string()
     failures += test_component_status_omits_components_that_cannot_report()
     failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()

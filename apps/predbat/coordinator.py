@@ -871,6 +871,86 @@ def _can_report(component):
     return component is None or hasattr(component, "build_discovery")
 
 
+def inverter_record(
+    device_id,
+    *,
+    inverter_type=None,
+    control=None,
+    composition=None,
+    measures_meter=None,
+    serials=None,
+    functions=None,
+    capabilities=None,
+    flags=None,
+    effects=None,
+    hardware_ids=None,
+    account_ids=None,
+    info=None,
+    ratings=None,
+    coverage=None,
+    entities=None,
+):
+    """Assemble one inverters-section record, omitting every field that is unset or empty.
+
+    The parameter list IS the inverters section's schema, spelled out rather than taken as
+    **kwargs: a mistyped field name is then a TypeError a test catches at the call site, instead
+    of a key that reaches validate_report() and is silently dropped from a user's dump. Every
+    field after device_id is keyword-only for the same reason - fifteen optional parameters in a
+    row are easy to slip by one, and inverter_record("x:1", "direct", True) would otherwise build
+    inverter_type="direct", control=True without complaint.
+
+    Unset fields are omitted rather than written as None, {}, [] or "". Every reporter previously
+    carried its own `if info: record["info"] = info` ladder, which is how a record ends up
+    carrying `"ratings": {}` in one component and omitting it in another. A falsy value that is
+    real data is kept: a rating of 0 inside a container, and control=False, which is the fact
+    "monitor-only" rather than an absence. Only None, an empty string and an empty container are
+    dropped.
+
+    Every container is copied, never stored as the caller's own object. refresh_discovery()
+    compares each new build against the report it last filed, so a record holding a reporter's
+    live list (serials=self.serials) would change whenever that list did, the rebuilt report
+    would always compare equal to it, and the report would freeze at its first state. The copy is
+    shallow - the top level only - which is enough because reporters build nested descriptor
+    dicts fresh on every call rather than handing over long-lived ones.
+
+    Tuples become lists because validate_report() keeps only a list for a structural or
+    vocabulary field: a tuple `serials` or `functions` - a module-level constant, say - would be
+    silently dropped from the catalogue. A set or frozenset becomes a sorted list for the same
+    reason, sorted because string hashing is randomised per process, so list(some_set) comes out
+    in a different order after a restart and two dumps of the same hardware would diff for nothing.
+    """
+    fields = {
+        "inverter_type": inverter_type,
+        "control": control,
+        "composition": composition,
+        "measures_meter": measures_meter,
+        "serials": serials,
+        "functions": functions,
+        "capabilities": capabilities,
+        "flags": flags,
+        "effects": effects,
+        "hardware_ids": hardware_ids,
+        "account_ids": account_ids,
+        "info": info,
+        "ratings": ratings,
+        "coverage": coverage,
+        "entities": entities,
+    }
+    record = {"device_id": device_id}
+    for name, value in fields.items():
+        if isinstance(value, (set, frozenset)):
+            value = sorted(value)
+        elif isinstance(value, (list, tuple)):
+            value = list(value)
+        elif isinstance(value, dict):
+            value = dict(value)
+        # A bool is never dropped: it is not a str/list/dict, so control=False survives
+        if value is None or (isinstance(value, (str, list, dict)) and not value):
+            continue
+        record[name] = value
+    return record
+
+
 def validate_report(report, component_name, log):
     """Return a cleaned copy of one component's report - never raises, drops what does not fit.
 

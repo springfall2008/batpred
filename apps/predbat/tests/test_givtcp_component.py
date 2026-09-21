@@ -2416,6 +2416,39 @@ def test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config
     return 0
 
 
+def test_build_discovery_omits_capabilities_when_no_probe_applies(my_predbat=None):
+    """
+    An inverter to which no capability probe applies carries no capabilities key - raw or in the catalogue.
+
+    This is the one raw-report change moving GivTCP onto inverter_record() made (ruling R1 in the
+    rollout plan's Amendments): the hand-built record always wrote "capabilities": capabilities,
+    even when the list was empty, whereas the builder omits an empty container. validate_report()
+    already dropped an empty container, so the catalogue never carried one either way. Every
+    other fixture here fills capabilities, so without this test neither half would be pinned.
+
+    A v2 GivTCP with no battery module details (so no soh) and no Enable_Charge_Target register
+    (so no charge_enable) trips none of build_discovery()'s probes.
+    """
+    from coordinator import validate_report
+
+    base, component = _make_component(rest_urls=["http://a:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob(version="2.4.0", charge_target_enable=None)
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    rest = component.rest[0]
+    assert not rest.rest_v3 and rest.battery_soh() is None and rest.charge_target_enabled is None, "the fixture must leave every capability probe false"
+
+    report = component.build_discovery()
+    record = report["inverters"][0]
+    assert "capabilities" not in record, "an empty capabilities list is omitted from the raw record, got {}".format(record.get("capabilities"))
+    assert "entities" in record, "the record itself is still there - only the empty container is gone"
+
+    cleaned = validate_report(report, "givtcp", print)["inverters"][0]
+    assert "capabilities" not in cleaned, "no capabilities key may reach the catalogue, got {}".format(cleaned.get("capabilities"))
+    print("PASS: an inverter with no capabilities carries no capabilities key, raw or in the catalogue")
+    return 0
+
+
 def test_build_discovery_entities_omit_what_v2_never_publishes(my_predbat=None):
     """
     The catalogue never lists an entity as present when publish_data() did not actually create it.
@@ -2728,6 +2761,7 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_regardless_of_automatic", test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),
         ("discovery_serial_fallback", test_build_discovery_falls_back_to_rest_api_without_a_serial, "device_id falls back to the REST URL"),
         ("discovery_capabilities", test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config, "capabilities follow automatic_config()'s own probes"),
+        ("discovery_no_capabilities", test_build_discovery_omits_capabilities_when_no_probe_applies, "no capabilities key when no probe applies, raw or in the catalogue"),
         ("discovery_entities_v2_omit", test_build_discovery_entities_omit_what_v2_never_publishes, "v2 catalogue omits entities never published"),
         ("discovery_entities_v3_include", test_build_discovery_entities_include_what_v3_actually_publishes, "v3 catalogue includes entities actually published"),
         ("discovery_round_trip", test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
