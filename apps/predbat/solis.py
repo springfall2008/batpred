@@ -1002,8 +1002,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
                     max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
 
-                # Nor above what the inverter can deliver at its rated power. CID 7224/7226 are battery limits: a 3.6kW
-                # inverter reading 100A there refused every 100A write and left its discharge slot at 0A (issue #5187)
+                # Then cap both at what the inverter can deliver at its rated power. CID 7224/7226 are battery limits: a
+                # 3.6kW inverter reading 100A there refused every 100A write and left its discharge slot at 0A (issue #5187)
                 rated_current = self.get_rated_current(inverter_sn)
                 if rated_current is not None and rated_current < max(max_charge_current_amps, max_discharge_current_amps):
                     self.log(f"Solis API: Capping slot currents on {inverter_sn} at {rated_current}A, the most the inverter can deliver at its rated power")
