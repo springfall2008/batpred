@@ -2418,7 +2418,7 @@ def test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config
 
 def test_build_discovery_omits_capabilities_when_no_probe_applies(my_predbat=None):
     """
-    An inverter no capability probe applies to carries no capabilities key - raw or in the catalogue.
+    An inverter to which no capability probe applies carries no capabilities key - raw or in the catalogue.
 
     This is the one raw-report change moving GivTCP onto inverter_record() made (ruling R1 in the
     rollout plan's Amendments): the hand-built record always wrote "capabilities": capabilities,
