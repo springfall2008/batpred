@@ -237,12 +237,6 @@ Two rules remain yours to follow:
    `self.discovery_entities(descriptors)`, which keeps only those Home Assistant has actually seen -
    claiming an entity exists that Home Assistant has never seen is worse than omitting it.
 
-For the `inverters` section, build each record with `inverter_record()` from `coordinator.py`
-rather than assembling the dict by hand. It takes the section's fields as named parameters and
-omits whatever is unset or empty, so a reporter can pass everything it gathered without writing
-its own `if info: record["info"] = info` ladder. A mistyped field name is a `TypeError` at the
-call site rather than a key silently dropped from a user's dump.
-
 2. **Never invent a record to resolve a cross-link - a dangling one is fine.** A device can point at
    another with a cross-link field (`measures_meter`, `charged_by`, ...) without the thing on the
    other end existing as a record in its own right. GE Cloud's CT-clamp cross-link is the clearest
@@ -251,3 +245,9 @@ call site rather than a key silently dropped from a user's dump.
    supply point. Resolving a dangling cross-link against a genuine record reported by another
    component is exactly what `observations` is for - it is not this reporter's job to guess one into
    existence.
+
+For the `inverters` section, build each record with `inverter_record()` from `coordinator.py`
+rather than assembling the dict by hand. It takes the section's fields as keyword-only parameters and
+omits whatever is unset or empty, so a reporter can pass everything it gathered without writing
+its own `if info: record["info"] = info` ladder. A mistyped field name is a `TypeError` at the
+call site rather than a key silently dropped from a user's dump.
