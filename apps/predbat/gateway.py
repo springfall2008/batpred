@@ -1175,10 +1175,20 @@ class GatewayMQTT(ComponentBase):
             # Old firmware: no primary flags, use all with battery data
             aios = [inv for inv in candidate_aios if inv.battery.ByteSize() > 0]
 
+        # An unidentified AIO is usually still mid-handshake and reports no battery block yet,
+        # so it is invisible to the `aios` count above even though it will occupy a control slot
+        # once identified. Count it towards the topology decision (by identity, since these are
+        # protobuf messages and `in` would use value equality — two blank units compare equal)
+        # so the control point follows what is actually on site, not which units happened to
+        # report battery data on this particular tick.
+        aio_ids = {id(inv) for inv in aios}
+        unidentified_aios = [inv for inv in candidate_aios if id(inv) not in aio_ids and _serial_missing(inv)]
+        topology_aio_count = len(aios) + len(unidentified_aios)
+
         if ems_units:
             # A Plant EMS is the single control point for the whole system.
             inverters = ems_units[:1]
-        elif gateway_units and len(aios) > 1:
+        elif gateway_units and topology_aio_count > 1:
             # Multiple AIOs behind a Gateway: the Gateway is the single control point.
             # NOTE: control commands are addressed to the Gateway/EMS serial — the firmware
             # must fan these out to the AIOs (tracked separately in command_handler.cpp).

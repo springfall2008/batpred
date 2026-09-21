@@ -3437,6 +3437,48 @@ class TestGatewayUnitControlBinding:
         assert gw._args["charge_start_time"] == ["select.predbat_gateway_47g077_charge_slot1_start"]
         assert gw._configured_inverter_serials == frozenset({"GW2347G077", "CH2414G318"})
 
+    def test_blank_serial_aio_with_no_battery_still_counts_towards_gateway_topology(self):
+        """An unidentified AIO still makes the Gateway the control point even with no battery block yet.
+
+        A unit that has not been identified is usually still mid-handshake and reports no
+        battery block at all — unlike the fixture above, where the blank unit happens to carry
+        battery data. The control point must not depend on which units happened to report
+        battery on a given tick, so this covers the shape that would otherwise fall through.
+        """
+        gw = self._make_handler_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_blank_no_battery"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        status.timestamp = 1700000000
+
+        gateway_inv = status.inverters.add()
+        gateway_inv.type = pb.INVERTER_TYPE_GIVENERGY_GATEWAY
+        gateway_inv.serial = "GW2347G077"
+        gateway_inv.primary = True
+        gateway_inv.battery.rate_max_w = 38
+
+        real_aio = status.inverters.add()
+        real_aio.type = pb.INVERTER_TYPE_GIVENERGY
+        real_aio.serial = "CH2414G318"
+        real_aio.primary = True
+        real_aio.battery.soc_percent = 100
+        real_aio.battery.capacity_wh = 12680
+        real_aio.battery.rate_max_w = 6000
+
+        blank_aio = status.inverters.add()
+        blank_aio.type = pb.INVERTER_TYPE_GIVENERGY
+        blank_aio.serial = ""
+        blank_aio.primary = True
+        # No battery block set at all — the mid-handshake shape the fixture above misses.
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 1
+        assert gw._args["charge_start_time"] == ["select.predbat_gateway_47g077_charge_slot1_start"]
+        assert gw._configured_inverter_serials == frozenset({"GW2347G077", "CH2414G318"})
+
     def _make_ev_handler_gateway(self):
         """A telemetry-driven gateway with automatic EV charger registration enabled."""
         from unittest.mock import MagicMock
