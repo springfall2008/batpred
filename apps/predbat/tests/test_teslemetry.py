@@ -60,6 +60,8 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.schedule_loaded = False
         self.automatic = False
         self.automatic_done = False
+        # Production defaults this on (GH#5186); the double keeps the real-rate path so the tests
+        # written against it still exercise that path, and the TBC tests opt in explicitly.
         self.tbc_control = False
         self._reserve_band_warned = False
         self.args_set = {}
@@ -1138,12 +1140,12 @@ def test_teslemetry_sync_tariff_read_only_no_push():
     assert not [r for r in api.requests_made if r[0] == "POST"]
 
 
-def test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff():
-    """With the trial setting off nothing changes: the real-rate builder is still what gets pushed."""
+def test_teslemetry_tbc_control_off_uses_the_real_rate_tariff():
+    """With teslemetry_tbc_control set False the opt-out holds: the real-rate builder is still what gets pushed."""
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}}
-    assert api.tbc_control is False
+    api.tbc_control = False
     pushed = {}
     api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
     run_async(api.sync_tariff())
@@ -1176,6 +1178,31 @@ def test_teslemetry_initialize_sets_tbc_control_from_component_arg():
     assert api.tbc_control is False
     api.initialize(tbc_control=True)
     assert api.tbc_control is True
+    # The opt-out must survive too, now that the setting is on by default (GH#5186).
+    api.initialize(tbc_control=False)
+    assert api.tbc_control is False
+
+
+def test_teslemetry_tbc_control_defaults_on_via_the_registry():
+    """An apps.yaml that never sets teslemetry_tbc_control takes the Time-Based Control path (GH#5186).
+
+    Components.start() resolves an unset key to the registry default and constructs the class with
+    it, so this feeds that default through initialize() and asserts the path it selects (what that
+    path pushes is test_teslemetry_tbc_control_on_pushes_the_signal_tariff's job). The registry
+    default and initialize()'s own default must agree, or a direct construction (the CLI test run)
+    would take a different path from production.
+    """
+    from components import COMPONENT_LIST
+
+    api = MockTeslemetryAPI()
+    api.initialize(tbc_control=COMPONENT_LIST["teslemetry"]["args"]["tbc_control"]["default"])
+    assert api.tbc_control is True
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous"
+
+    direct = MockTeslemetryAPI()
+    direct.initialize()
+    assert direct.tbc_control is True
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -1561,7 +1588,7 @@ def test_teslemetry_component_registry_config():
     assert entry["args"]["automatic"]["default"] is False
     assert entry["args"]["automatic"]["required"] is False
     assert entry["args"]["tbc_control"]["config"] == "teslemetry_tbc_control"
-    assert entry["args"]["tbc_control"]["default"] is False
+    assert entry["args"]["tbc_control"]["default"] is True  # on by default since GH#5186
     assert entry.get("can_restart") is True
     assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
     assert APPS_SCHEMA["teslemetry_tbc_control"] == {"type": "boolean"}
@@ -2727,9 +2754,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_set_tariff_asserts_optimization_strategy_economics()
     test_teslemetry_sync_tariff_dedupes_unchanged()
     test_teslemetry_sync_tariff_pushes_on_window_change()
-    test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff()
+    test_teslemetry_tbc_control_off_uses_the_real_rate_tariff()
     test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
     test_teslemetry_initialize_sets_tbc_control_from_component_arg()
+    test_teslemetry_tbc_control_defaults_on_via_the_registry()
     test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()

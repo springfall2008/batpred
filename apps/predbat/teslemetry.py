@@ -125,7 +125,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     DEFAULT_IMPORT_RATE = 0.28
     DEFAULT_EXPORT_RATE = 0.15
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=False, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=True, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
@@ -137,8 +137,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection;
                 in oauth mode set this to the regional Fleet endpoint).
             automatic: Automatically configure Predbat's inverter args to use this component (fox-style).
-            tbc_control: Trial setting (teslemetry_tbc_control). When set, evaluate_schedule and
-                sync_tariff switch to the signal-tariff / Time-Based Control path - see GH#4892.
+            tbc_control: teslemetry_tbc_control, on by default (GH#5186). When set, evaluate_schedule and
+                sync_tariff take the signal-tariff / Time-Based Control path - see GH#4892; False opts
+                back into the real-rate tariff and reserve-driven charging.
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
                 refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
             token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
