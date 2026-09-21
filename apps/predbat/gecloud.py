@@ -23,6 +23,7 @@ import math
 import json
 import random
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
 
 """
@@ -1616,38 +1617,35 @@ class GECloudDirect(ComponentBase):
 
         for device in controlled:
             info, ratings = self._device_info_and_ratings(device)
-            record = {
-                "device_id": "gecloud:{}".format(device),
-                "inverter_type": inverter_type,
-                "composition": composition,
-                "functions": ["solar", "battery"],
-                "hardware_ids": {"serial": device},
-            }
-            if fronted_serials:
-                record["serials"] = fronted_serials
-            capabilities = self._device_capabilities(device)
-            if capabilities:
-                record["capabilities"] = capabilities
+            record = inverter_record(
+                "gecloud:{}".format(device),
+                inverter_type=inverter_type,
+                composition=composition,
+                functions=["solar", "battery"],
+                capabilities=self._device_capabilities(device),
+                hardware_ids={"serial": device},
+                serials=fronted_serials,
+                info=info,
+                ratings=ratings,
+            )
+            # Sets record["measures_meter"] in place when GE Cloud reports a CT/meter serial for
+            # this device - after the build, since it is a cross-link derived from other devices
+            # rather than a property of this one.
             self._apply_meter_cross_link(devices, device, record)
-            if info:
-                record["info"] = info
-            if ratings:
-                record["ratings"] = ratings
             inverters.append(record)
 
         for device in devices.get("pv") or []:
             info, ratings = self._device_info_and_ratings(device)
-            record = {
-                "device_id": "gecloud:{}".format(device),
-                "composition": "direct",
-                "functions": ["solar"],
-                "hardware_ids": {"serial": device},
-            }
-            if info:
-                record["info"] = info
-            if ratings:
-                record["ratings"] = ratings
-            inverters.append(record)
+            inverters.append(
+                inverter_record(
+                    "gecloud:{}".format(device),
+                    composition="direct",
+                    functions=["solar"],
+                    hardware_ids={"serial": device},
+                    info=info,
+                    ratings=ratings,
+                )
+            )
 
         # Always empty - see _apply_meter_cross_link for why a CT clamp does not become a
         # fabricated meters record.
