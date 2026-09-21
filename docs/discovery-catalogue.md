@@ -65,7 +65,13 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 | `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
-No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox) populates `programmes` yet - it is part of
+Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
+their automatic configuration treats every discovered inverter as a battery inverter. Their
+records say the same - `solar` and `battery` on every inverter - because the catalogue reports
+what Predbat believes about the hardware. If a PV-only unit has been configured as a battery
+inverter, that record is where the mistake shows.
+
+No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
 rather than missing from the document.
 
