@@ -599,15 +599,21 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if first or settings_refresh or production_refresh or realtime_refresh:
             await self.publish_data()
 
+        # Unconditional, once per cycle and outside any one-shot gate, so a transient failure is
+        # retried rather than lost - see ComponentBase.refresh_discovery(), which owns the
+        # compare/guard loop, and never raises. Placed after the device poll and publish_data()
+        # above so it describes what this cycle actually read.
+        #
+        # Deliberately BEFORE automatic_config() below, as GivTCP's run() does: automatic_config()
+        # raises when no device qualifies as a battery inverter (a battery with no scheduler, say),
+        # and that exception leaves run() every retry. Called after it, the report would never be
+        # filed on exactly the installs whose debug dump most needs to say why. automatic_config()
+        # reads nothing this call writes, so it still runs, and still raises, exactly as before.
+        self.refresh_discovery()
+
         # Automatic configuration on first run
         if first and self.automatic:
             await self.automatic_config()
-
-        # Unconditional, once per cycle and outside any one-shot gate, so a transient failure is
-        # retried rather than lost - see ComponentBase.refresh_discovery(), which owns the
-        # compare/guard loop. Placed after the device poll above so it describes what this cycle
-        # actually read.
-        self.refresh_discovery()
 
         return True
 

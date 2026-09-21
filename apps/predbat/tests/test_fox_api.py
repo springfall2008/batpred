@@ -7573,6 +7573,49 @@ def test_fox_run_reports_discovery_and_survives_a_failure(my_predbat):
     return 0
 
 
+def test_fox_run_reports_discovery_when_automatic_config_fails(my_predbat):
+    """A cycle whose automatic_config() raises still files a report - and still raises exactly as before.
+
+    With fox_automatic: true and no device automatic_config() can drive (here a battery inverter
+    whose function.scheduler is False), automatic_config() raises ValueError out of run(). run()
+    then never returns True, so ComponentBase.start() keeps retrying it with first=True, and it
+    raises every time. Those are exactly the installs whose debug dump most needs the catalogue to
+    say why - "battery present, no scheduler" - so the report has to be filed BEFORE
+    automatic_config() runs, the placement GivTCP's run() uses for the same reason.
+
+    Discovery is observe-only, so the failure itself must be untouched: the same ValueError, with
+    the same message, still out of run() on every retry. The REAL automatic_config() is bound here
+    (MockFoxAPIWithRunTracking stubs it out) so the failure is the production one, not a stand-in.
+    """
+    print("**** test_fox_run_reports_discovery_when_automatic_config_fails ****")
+    device_list, device_detail, device_settings = _fox_discovery_devices()
+    fox = MockFoxAPIWithRunTracking()
+    fox.automatic = True
+    fox.automatic_config = FoxAPI.automatic_config.__get__(fox)
+    fox.device_list = [device_list[0]]
+    fox.device_detail = {"BATT001": dict(device_detail["BATT001"], function={"scheduler": False})}
+    fox.device_settings = {"BATT001": device_settings["BATT001"]}
+    reports = []
+    fox.report_discovery = lambda report: reports.append(report)
+
+    # Two start()-style retries: first stays True because run() never returned True
+    for seconds in (0, 120):
+        try:
+            run_async(fox.run(seconds, first=True))
+        except ValueError as error:
+            assert "No batteries with scheduler found" in str(error), error
+        else:
+            raise AssertionError("automatic_config() must still raise out of run() - discovery must not change that")
+
+    assert len(reports) == 1, f"a cycle whose automatic_config() fails must still file a report (and an unchanged one only once), got {len(reports)}"
+    record = reports[0]["inverters"][0]
+    assert record["device_id"] == "fox:BATT001", record
+    assert "battery" in record["functions"], "the report must show the battery automatic_config() could not configure"
+    assert reports[0]["automatic"] is True
+    print("PASS: Fox files its report even on a cycle where automatic_config() fails")
+    return 0
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -7836,6 +7879,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_fox_build_discovery_counts_battery_entries_rather_than_summing_them(my_predbat)
         failed |= test_fox_build_discovery_returns_none_before_discovery(my_predbat)
         failed |= test_fox_run_reports_discovery_and_survives_a_failure(my_predbat)
+        failed |= test_fox_run_reports_discovery_when_automatic_config_fails(my_predbat)
     except Exception as e:
         print(f"ERROR: Fox API test failed with exception: {e}")
         import traceback
