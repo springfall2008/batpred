@@ -1460,6 +1460,10 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_offline_datalogger_stops_being_polled())
         failed |= asyncio.run(test_run_survives_startup_register_reset_refusal())
         failed |= asyncio.run(test_b0600_backs_off_without_calling_the_datalogger_offline())
+        failed |= asyncio.run(test_startup_leaves_an_inverter_in_datalogger_cooldown_alone())
+        failed |= asyncio.run(test_datalogger_diagnostic_dropped_once_the_inverter_leaves_the_rotation())
+        failed |= asyncio.run(test_datalogger_diagnostic_cleared_by_an_unrelated_failure_after_its_cooldown())
+        failed |= asyncio.run(test_datalogger_reason_follows_the_latest_refusal())
         failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
         failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
         failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
@@ -6168,7 +6172,7 @@ async def test_offline_datalogger_stops_being_polled():
     api = _make_run_api(configured_sns=[offline_sn, healthy_sn], control_enable=False)
     api.inverter_sn = [offline_sn, healthy_sn]
     api._test_now_utc_exact = datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC)
-    api.note_datalogger_offline(offline_sn)
+    api.note_datalogger_offline(offline_sn, solis_module.SOLIS_API_CODE_DATALOGGER_OFFLINE)
 
     await api.run(60, False)
 
@@ -6272,6 +6276,7 @@ async def test_b0600_backs_off_without_calling_the_datalogger_offline():
     sn = "INV001"
     other_sn = "INV002"
     api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.inverter_sn = [sn, other_sn]
     api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "B0600", "msg": "Datalogger returns data abnormally. Please try again later"}))
 
     try:
@@ -6302,7 +6307,7 @@ async def test_b0600_backs_off_without_calling_the_datalogger_offline():
         failed = True
 
     # A second inverter that is genuinely offline is reported under its own reason
-    api.note_datalogger_offline(other_sn)
+    api.note_datalogger_offline(other_sn, solis_module.SOLIS_API_CODE_DATALOGGER_OFFLINE)
     message = api.health_message() or ""
     if "offline or disconnected for inverter {}".format(other_sn) not in message or "B0600) for inverter {}".format(sn) not in message:
         print("ERROR: expected each inverter under its own reason, got {}".format(message))
@@ -6328,6 +6333,163 @@ async def test_b0600_backs_off_without_calling_the_datalogger_offline():
 
     if not failed:
         print("PASSED: B0600 backs off the inverter and is reported as abnormal data, not offline")
+    return failed
+
+
+async def test_startup_leaves_an_inverter_in_datalogger_cooldown_alone():
+    """Startup attempts inside a datalogger cooldown send nothing for that inverter.
+
+    Early startup backoff re-runs the first-cycle block 2, 6 and 14 minutes in, all inside the 15
+    minute cooldown, and each attempt used to send the detail read, the TOU mode read and the reset
+    read regardless - every one refused, every one counted against the 200 a day (issue #5177). This
+    drives the real detail, poll and reset code against a datalogger that refuses everything.
+    """
+    failed = False
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+    api._test_now_utc_exact = datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC)
+    # The real requests, not _make_run_api's no-ops
+    del api.fetch_inverter_details
+    del api.poll_inverter_data
+    del api.startup_reset_registers
+    session = _RecordingSession(_FakeResponse(status=200, payload={"code": "B0600", "msg": "Datalogger returns data abnormally. Please try again later"}))
+    api.session = session
+
+    async def mock_get_inverter_list():
+        """Discovery succeeds, as it did on the reporting account."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    # The first refusal starts the cooldown, and nothing more is sent for that inverter
+    if await api.run(0, True):
+        print("ERROR: a startup attempt whose only inverter is in cooldown should fail, so startup is retried")
+        failed = True
+    if len(session.post_calls) != 1:
+        print("ERROR: the first startup attempt should stop at its first refusal, got {} requests".format(len(session.post_calls)))
+        failed = True
+
+    # The early backoff attempts all land inside the cooldown and send nothing
+    for minutes in (2, 6, 14):
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, minutes, 0, tzinfo=UTC)
+        session.post_calls = []
+        if await api.run(minutes * 60, True):
+            print("ERROR: the startup attempt at {} minutes should still fail".format(minutes))
+            failed = True
+        if session.post_calls:
+            print("ERROR: the startup attempt at {} minutes should send nothing, got {} requests".format(minutes, len(session.post_calls)))
+            failed = True
+
+    # The first attempt after the cooldown expires probes it again
+    api._test_now_utc_exact = datetime(2026, 9, 7, 12, 30, 0, tzinfo=UTC)
+    session.post_calls = []
+    await api.run(30 * 60, True)
+    if len(session.post_calls) != 1:
+        print("ERROR: the attempt after the cooldown should re-probe with one request, got {}".format(len(session.post_calls)))
+        failed = True
+
+    if not failed:
+        print("PASSED: startup sends nothing to a datalogger in its cooldown and re-probes once it expires")
+    return failed
+
+
+async def test_datalogger_diagnostic_dropped_once_the_inverter_leaves_the_rotation():
+    """An inverter that is no longer polled is not reported for ever, since no request will clear it."""
+    failed = False
+    sn = "INV001"
+    api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.inverter_sn = [sn]
+    api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_ABNORMAL)
+
+    message = api.health_message()
+    if not message or sn not in message:
+        print("ERROR: expected the health message to name {} while it is polled, got {}".format(sn, message))
+        failed = True
+
+    # Dropped by discovery, or removed from the inverter_sn setting
+    api.inverter_sn = []
+    if api.health_message() is not None:
+        print("ERROR: an inverter no longer polled should not be reported, got {}".format(api.health_message()))
+        failed = True
+
+    if not failed:
+        print("PASSED: the datalogger diagnostic only covers inverters still being polled")
+    return failed
+
+
+async def test_datalogger_diagnostic_cleared_by_an_unrelated_failure_after_its_cooldown():
+    """Once the cooldown has expired, a re-probe failing for another reason stops the datalogger being blamed.
+
+    The diagnostic outlasts the cooldown until a request succeeds, so without this an HTTP error or an
+    unrelated API code on the re-probe - a SolisCloud outage, say - would still be reported as the
+    datalogger returning data abnormally.
+    """
+    failed = False
+    sn = "INV001"
+    payload = {"inverterSn": sn, "cid": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC}
+    unrelated_failures = (
+        ("an HTTP 500", _FakeResponse(status=500, payload={"error": "Internal Server Error"})),
+        ("an unrelated API code", _FakeResponse(status=200, payload={"code": "1", "msg": "System error"})),
+    )
+    for description, response in unrelated_failures:
+        api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+        api.inverter_sn = [sn]
+        api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_ABNORMAL)
+        api.session = _RecordingSession(response)
+
+        # Inside the cooldown it changes nothing
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, 5, 0, tzinfo=UTC)
+        try:
+            await api._execute_request(SOLIS_READ_ENDPOINT, payload)
+        except solis_module.SolisAPIError:
+            pass
+        message = api.health_message() or ""
+        if not api.datalogger_offline(sn) or "B0600" not in message:
+            print("ERROR: {} inside the cooldown should leave it and its reason alone, got {}".format(description, message))
+            failed = True
+
+        # After it expires the datalogger is no longer the latest explanation
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, 20, 0, tzinfo=UTC)
+        try:
+            await api._execute_request(SOLIS_READ_ENDPOINT, payload)
+        except solis_module.SolisAPIError:
+            pass
+        if api.health_message() is not None or sn in api.datalogger_cooldown_code:
+            print("ERROR: {} after the cooldown should clear the datalogger diagnostic, got {}".format(description, api.health_message()))
+            failed = True
+
+    if not failed:
+        print("PASSED: an unrelated failure after the cooldown clears the datalogger diagnostic")
+    return failed
+
+
+async def test_datalogger_reason_follows_the_latest_refusal():
+    """A refusal inside the cooldown updates the reported reason without extending the cooldown or re-logging."""
+    failed = False
+    sn = "INV001"
+    api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.inverter_sn = [sn]
+    api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_OFFLINE)
+    resume_at = api.datalogger_offline_until[sn]
+
+    # The refusals turn from B0115 into B0600 part way through the cooldown
+    api._test_now_utc_exact = datetime(2026, 9, 7, 12, 5, 0, tzinfo=UTC)
+    api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_ABNORMAL)
+
+    message = api.health_message() or ""
+    if "B0600" not in message or "offline" in message:
+        print("ERROR: expected the health message to report the latest refusal, B0600, got {}".format(message))
+        failed = True
+    if api.datalogger_offline_until[sn] != resume_at:
+        print("ERROR: a refusal inside the cooldown must not extend it, got {} instead of {}".format(api.datalogger_offline_until[sn], resume_at))
+        failed = True
+    pause_logs = [m for m in api.log_messages if "pausing its reads" in m]
+    if len(pause_logs) != 1:
+        print("ERROR: the pause should be logged once, got {}".format(pause_logs))
+        failed = True
+
+    if not failed:
+        print("PASSED: the reported reason follows the latest refusal")
     return failed
 
 
