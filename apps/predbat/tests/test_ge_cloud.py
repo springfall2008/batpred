@@ -4669,6 +4669,9 @@ def _test_build_discovery_pv_only_devices(my_predbat):
     assert "inverter_type" not in pv_record, "a PV-only device has no inverter_type"
     assert pv_record["composition"] == "direct"
     assert pv_record["info"]["model"] == "GIV-PV"
+    # The coordinator's duplicate_serial observation reads hardware_ids, so a PV-only device that
+    # lost its serial would silently drop out of that check.
+    assert pv_record["hardware_ids"] == {"serial": "pv001"}, "a PV-only device must carry its own serial: {}".format(pv_record.get("hardware_ids"))
     battery_record = next(record for record in inverters if record["device_id"] == "gecloud:battery001")
     assert battery_record["functions"] == ["solar", "battery"]
     print("PASS: a PV-only device yields a solar-only record with no inverter_type")
@@ -4681,7 +4684,7 @@ def _test_build_discovery_shared_meter(my_predbat):
 
     `meters` stays empty: a CT clamp is not a utility supply point (no direction, no MPAN, no
     tariff), so build_discovery() never fabricates a meters-section record for it - see
-    _apply_meter_cross_link. The cross-link is real, useful information on its own even with
+    _meter_cross_link. The cross-link is real, useful information on its own even with
     nothing (yet) on the other end of it.
     """
     devices = {
@@ -4809,7 +4812,7 @@ def _test_build_discovery_round_trips_through_the_coordinator(my_predbat):
     assert record["ratings"]["battery_kwh"] == original["ratings"]["battery_kwh"]
     assert record["ratings"]["max_charge_w"] == 3600
     assert record["measures_meter"] == "gecloud:meter:9999"
-    # A dangling cross-link, not a fabricated supply-point record - see _apply_meter_cross_link.
+    # A dangling cross-link, not a fabricated supply-point record - see _meter_cross_link.
     # The coordinator only ever keys "meters" in when there is at least one record for it.
     assert cleaned.get("meters", []) == []
     print("PASS: build_discovery() round-trips through the real Coordinator with nothing dropped")
