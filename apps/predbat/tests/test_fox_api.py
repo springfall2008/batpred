@@ -7435,23 +7435,58 @@ def test_merge_fox_credentials_reports_what_it_used(my_predbat):
     return False
 
 
+# The single-pack batteryList from get_device_detail()'s own docstring sample: a bcu and an ivu
+# that carry no capacity, and one bmu carrying the pack's capacity in Wh. len() is 3 for ONE pack.
+FOX_SINGLE_PACK_BATTERY_LIST = [
+    {"batterySN": "PACK0001", "model": "EP11", "type": "bcu", "version": "1.005"},
+    {"batterySN": "PACK0001", "model": "EP11", "type": "bmu", "version": "1.05", "capacity": 10360},
+    {"batterySN": "PACK0001", "model": "EP11", "type": "ivu", "version": "0.00"},
+]
+
+# GH#4919, read out of the reporter's own "Fox: Device detail" log line: an AIO ESS with ONE
+# 10.24 kWh pack reports a bcu plus four bmu entries, each claiming the whole pack's 10240 Wh and
+# all carrying the inverter's own serial as batterySN (here BATT001, the fixture inverter's).
+FOX_AIO_BATTERY_LIST = [{"batterySN": "BATT001", "type": "bcu"}] + [{"batterySN": "BATT001", "type": "bmu", "capacity": 10240} for _ in range(4)]
+
+
 def _fox_discovery_devices():
-    """One battery inverter and one PV-only device as the Fox cloud reports them: (device_list, device_detail, device_settings)."""
-    device_list = [{"deviceSN": "BATT001"}, {"deviceSN": "PVONLY1"}]
+    """One battery inverter and one PV-only device as the Fox cloud reports them: (device_list, device_detail, device_settings).
+
+    BATT001 is Fox's own samples, field for field, with the identifiers replaced: its device_list
+    entry is get_device_list()'s docstring sample, and its detail is get_device_detail()'s. Both
+    carry stationName, stationID and moduleSN, which the reporter must never copy out - the
+    stationName here is address-shaped because get_device_list()'s real sample holds an address.
+    The repo holds no real sample of a PV-only device's detail, so PVONLY1 carries only fields
+    automatic_config() and publish_data() already read.
+    """
+    station = {"stationName": "2 Example Street", "stationID": "STATION-0001", "moduleSN": "MODULE0001"}
+    device_list = [
+        dict(station, deviceType="KH8", hasBattery=True, hasPV=True, deviceSN="BATT001", productType="KH", status=1),
+        dict(station, deviceType="S1-5.0", hasBattery=False, hasPV=True, deviceSN="PVONLY1", status=1),
+    ]
     device_detail = {
-        "BATT001": {
-            "hasPV": True,
-            "hasBattery": True,
-            "thirdPartyGen": False,
-            "capacity": 10.0,
-            "deviceType": "H3-10.0",
-            "function": {"scheduler": True},
-            "batteryList": [{"capacity": 2.6}, {"capacity": 2.6}, {"capacity": 2.6}, {"capacity": 2.6}],
-        },
+        "BATT001": dict(
+            station,
+            deviceType="KH8",
+            masterVersion="1.34",
+            afciVersion="",
+            hasPV=True,
+            deviceSN="BATT001",
+            slaveVersion="1.01",
+            capacity=8,
+            hasBattery=True,
+            function={"scheduler": True},
+            hardwareVersion="--",
+            managerVersion="1.28",
+            batteryList=[dict(entry) for entry in FOX_SINGLE_PACK_BATTERY_LIST],
+            productType="KH",
+            status=1,
+        ),
         "PVONLY1": {"hasPV": True, "hasBattery": False, "capacity": 5.0, "deviceType": "S1-5.0", "function": {}},
     }
-    # {deviceSN: {SettingName: {"value": ...}}} - the shape fox.py reads at line 1251
-    device_settings = {"BATT001": {"ExportLimit": {"value": 5000}, "WorkMode": {"value": "SelfUse"}}, "PVONLY1": {}}
+    # {deviceSN: {SettingName: <what get_device_setting() stored>}}: WorkMode is get_device_setting()'s
+    # own docstring sample; ExportLimit is the value update_settings_from_schedule() derives
+    device_settings = {"BATT001": {"ExportLimit": {"value": 12000.0}, "WorkMode": {"enumList": ["PeakShaving", "Feedin", "SelfUse"], "unit": "", "precision": 1.0, "value": "SelfUse"}}, "PVONLY1": {}}
     return device_list, device_detail, device_settings
 
 
@@ -7478,8 +7513,8 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     assert battery["inverter_type"] == "FoxCloud", "inverter_type is an INVERTER_DEF key - the one Fox's own automatic_config() writes"
     assert sorted(battery["functions"]) == ["battery", "solar"]
     assert battery["hardware_ids"] == {"serial": "BATT001"}
-    assert battery["info"]["model"] == "H3-10.0"
-    assert battery["ratings"]["inverter_w"] == 10000.0
+    assert battery["info"]["model"] == "KH8"
+    assert battery["ratings"]["inverter_w"] == 8000.0
     assert "scheduler" in battery["capabilities"]
     assert "export_limit" in battery["capabilities"]
 
@@ -7496,24 +7531,96 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     return 0
 
 
-def test_fox_build_discovery_counts_battery_entries_rather_than_summing_them(my_predbat):
-    """batteryList entries are counted, never summed into a capacity.
-
-    GH#4919: an AIO ESS returns one physical pack as four bmu entries all carrying the inverter's
-    own serial, so publish_data()'s sum comes out 4x the real capacity. Reporting that sum would
-    put a knowingly-wrong battery_kwh into every affected user's dump. The COUNT is the evidence
-    the bug needs - a fleet reporting four entries against one pack is exactly what a maintainer
-    wants to see - so report that and no capacity at all.
-    """
-    print("**** test_fox_build_discovery_counts_battery_entries_rather_than_summing_them ****")
+def _fox_battery_record(my_predbat, battery_list, **detail):
+    """BATT001's discovery record with its batteryList (and any other detail fields) replaced."""
     fox = _fox_discovery_api(my_predbat)
+    fox.device_detail["BATT001"].update(detail, batteryList=battery_list)
+    return {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
 
-    battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
 
-    assert battery["ratings"]["battery_entries"] == 4
-    assert "battery_kwh" not in battery["ratings"], "the summed capacity is known to be wrong - do not report it"
-    assert 10.4 not in battery["ratings"].values(), "4 x 2.6 is the bug, not a rating"
-    print("PASS: Fox reports the battery entry count, not the known-wrong sum")
+def _fox_battery_facts(record):
+    """Every battery-derived rating in a record - whatever the reporter chose to name them."""
+    return {name: value for name, value in record.get("ratings", {}).items() if name.startswith("battery")}
+
+
+def test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat):
+    """The battery ratings distinguish the GH#4919 AIO from a healthy system, and never report the known-wrong sum.
+
+    publish_data() sums the capacity of every batteryList entry that carries one. GH#4919's AIO
+    reports one 10.24 kWh pack as four bmu entries, each claiming 10240 Wh and all carrying the
+    inverter's own serial, so that sum is 4x the truth. Counting entries is no better evidence: the
+    real list is a bcu plus the four bmu entries, five in all - exactly what a genuine four-module
+    stack reports, whose bmu entries each carry their own serial. Only the serials tell the two
+    apart, so the report carries both how many entries publish_data() sums and how many distinct
+    serials those entries hold: four against one is the GH#4919 signature.
+
+    The healthy four-module stack is the AIO's own entries with a serial per module - the repo holds
+    no captured multi-pack sample, so it changes only the one field the ratings claim to read.
+    """
+    print("**** test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack ****")
+    four_module_list = [{"batterySN": "BATT001", "type": "bcu"}] + [{"batterySN": "MODULE{}".format(n), "type": "bmu", "capacity": 10240} for n in range(4)]
+
+    single_pack = _fox_battery_facts(_fox_battery_record(my_predbat, [dict(entry) for entry in FOX_SINGLE_PACK_BATTERY_LIST]))
+    aio = _fox_battery_facts(_fox_battery_record(my_predbat, [dict(entry) for entry in FOX_AIO_BATTERY_LIST], batteryDesignCapacity=10.24))
+    four_module = _fox_battery_facts(_fox_battery_record(my_predbat, four_module_list))
+
+    assert aio != four_module, f"the GH#4919 AIO must not look like a healthy four-module stack: both report {aio}"
+    assert aio == {"battery_capacity_entries": 4, "battery_capacity_serials": 1}, aio
+    assert four_module == {"battery_capacity_entries": 4, "battery_capacity_serials": 4}, four_module
+    # The bcu and ivu carry no capacity, so one pack is one summed entry - not len(batteryList), 3
+    assert single_pack == {"battery_capacity_entries": 1, "battery_capacity_serials": 1}, single_pack
+    for facts in (single_pack, aio, four_module):
+        assert "battery_kwh" not in facts, "the summed capacity is known to be wrong - do not report it"
+        assert 40960 not in facts.values() and 40.96 not in facts.values(), "4 x 10240 Wh is the bug, not a rating"
+
+    # Deliberately not gated on hasBattery: a battery list on a device that says it has no battery
+    # is itself worth seeing
+    stray = _fox_battery_record(my_predbat, [dict(entry) for entry in FOX_SINGLE_PACK_BATTERY_LIST], hasBattery=False)
+    assert "battery" not in stray["functions"]
+    assert _fox_battery_facts(stray) == {"battery_capacity_entries": 1, "battery_capacity_serials": 1}, stray
+    print("PASS: Fox's battery ratings tell the GH#4919 AIO from a healthy stack")
+    return 0
+
+
+def test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would(my_predbat):
+    """inverter_type is set exactly on the devices automatic_config() counts as inverters.
+
+    automatic_config() configures a device only when hasBattery, function.scheduler and a positive
+    capacity all hold, and raises when none does. build_discovery() duplicates that predicate
+    rather than sharing it (sharing it would touch the control path), so this pins the copy to the
+    source of truth by running the REAL automatic_config() on each case: a device it refuses must
+    carry no inverter_type - while still showing its battery in functions, which is the evidence
+    a user's dump needs.
+    """
+    print("**** test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would ****")
+    _, device_detail, device_settings = _fox_discovery_devices()
+    cases = {
+        "healthy": {},
+        "no scheduler": {"function": {"scheduler": False}},
+        "no function block": {"function": None},
+        "zero capacity": {"capacity": 0},
+    }
+    for name, change in cases.items():
+        detail = dict(device_detail["BATT001"], **change)
+        if detail["function"] is None:
+            del detail["function"]
+        fox = MockFoxAPIWithRequests()
+        fox.device_list = [{"deviceSN": "BATT001"}]
+        fox.device_detail = {"BATT001": detail}
+        fox.device_settings = {"BATT001": device_settings["BATT001"]}
+
+        record = fox.build_discovery()["inverters"][0]
+        try:
+            run_async(fox.automatic_config())
+            configured = True
+        except ValueError:
+            configured = False
+
+        assert ("inverter_type" in record) == configured, f"{name}: inverter_type {record.get('inverter_type')!r} but automatic_config() configured={configured}"
+        assert "battery" in record["functions"], f"{name}: the battery is reported whether or not Predbat can drive it"
+        if configured:
+            assert record["inverter_type"] == "FoxCloud" and fox.args_set["inverter_type"] == ["FoxCloud"], name
+    print("PASS: Fox sets inverter_type exactly where automatic_config() would configure the device")
     return 0
 
 
@@ -7876,7 +7983,8 @@ def run_fox_api_tests(my_predbat):
 
         # Discovery catalogue tests
         failed |= test_fox_build_discovery_describes_each_device(my_predbat)
-        failed |= test_fox_build_discovery_counts_battery_entries_rather_than_summing_them(my_predbat)
+        failed |= test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat)
+        failed |= test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would(my_predbat)
         failed |= test_fox_build_discovery_returns_none_before_discovery(my_predbat)
         failed |= test_fox_run_reports_discovery_and_survives_a_failure(my_predbat)
         failed |= test_fox_run_reports_discovery_when_automatic_config_fails(my_predbat)

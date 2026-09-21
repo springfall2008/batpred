@@ -2403,23 +2403,34 @@ class FoxAPI(ComponentBase, OAuthMixin):
         not whether this component wired apps.yaml to it, which is what the report's own
         "automatic" flag is for.
 
-        A device with no battery is reported with functions ["solar"] and no inverter_type: it is
-        a generation source Predbat reads, not an inverter it controls. A battery device gets both
-        functions and inverter_type "FoxCloud" - the INVERTER_DEF key automatic_config() itself
-        writes, so the catalogue's resulting_config comparison matches rather than showing a
-        permanent mismatch.
+        functions says what a device physically has ("solar", "battery"); inverter_type says
+        whether Predbat would drive it. inverter_type is "FoxCloud" - the INVERTER_DEF key
+        automatic_config() itself writes - on exactly the devices automatic_config() counts as
+        inverters: hasBattery AND function.scheduler AND a positive capacity. Any other device,
+        a PV-only one or a battery automatic_config() refuses (no scheduler, say), carries no
+        inverter_type but still shows its battery in functions, which is precisely what a dump
+        from an install whose auto-config fails needs to show. That predicate is duplicated here
+        rather than shared, because sharing it means changing automatic_config(), a control path;
+        automatic_config() is the source of truth, and a test runs it to pin this copy to it.
 
         The inverter's rating goes through capacity_watts(), never capacity * 1000: Fox reports a
         half-kW model's capacity truncated (a KH10.5 says 10), and capacity_watts() is what
         restores the 500 W for the _inverter_capacity sensor publish_data() publishes. Using it
         here keeps the catalogue from disagreeing with that sensor.
 
-        batteryList entries are COUNTED, never summed. publish_data() sums them (fox.py:1852) and
-        that is a known live bug (GH#4919): an AIO ESS returns one physical pack as four bmu
-        entries all carrying the inverter's own serial, so the sum is 4x the real capacity.
-        Publishing that figure would put a knowingly-wrong battery_kwh in every affected user's
-        dump, whereas the entry count is the evidence the bug needs - a fleet reporting four
-        entries against one pack is exactly what a maintainer wants to see.
+        No battery capacity is reported. A real batteryList mixes control units that carry no
+        capacity (bcu, ivu) with bmu entries carrying one in Wh, and publish_data() sums every
+        entry that carries one - a known live bug (GH#4919): an AIO ESS reports its one pack as
+        four bmu entries, each claiming the whole pack and all carrying the inverter's own
+        serial, so the sum is 4x the truth. Publishing it would put a knowingly-wrong battery_kwh
+        in every affected dump. Two ratings are reported instead, named for what the API returned
+        rather than as the spec's "modules", since the vendor figure is known to be wrong:
+        battery_capacity_entries, how many entries publish_data() sums, and
+        battery_capacity_serials, how many distinct batterySN those entries carry. A healthy
+        four-module stack reports four and four; four entries against one serial is the GH#4919
+        signature. Neither len(batteryList) nor the entry count alone can tell them apart - each
+        reads the same for the bug as for that healthy stack. Deliberately not gated on hasBattery:
+        a battery list on a device that says it has no battery is itself worth seeing.
 
         Returns None when nothing has been discovered yet, which refresh_discovery() treats as
         "nothing to report, ask again next cycle".
@@ -2435,6 +2446,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             detail = self.device_detail.get(serial, {}) or {}
             has_battery = bool(detail.get("hasBattery", False))
             has_pv = bool(detail.get("hasPV", False))
+            has_scheduler = bool((detail.get("function") or {}).get("scheduler", False))
 
             functions = []
             if has_pv:
@@ -2443,7 +2455,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 functions.append("battery")
 
             capabilities = []
-            if detail.get("function", {}).get("scheduler", False):
+            if has_scheduler:
                 capabilities.append("scheduler")
             if detail.get("thirdPartyGen", False):
                 capabilities.append("third_party_gen")
@@ -2463,13 +2475,23 @@ class FoxAPI(ComponentBase, OAuthMixin):
             if detail.get("capacity"):
                 ratings["inverter_w"] = self.capacity_watts(detail)
             battery_list = detail.get("batteryList") or []
-            if battery_list:
-                ratings["battery_entries"] = len(battery_list)
+            summed = [entry for entry in battery_list if isinstance(entry, dict) and "capacity" in entry] if isinstance(battery_list, list) else []
+            if summed:
+                ratings["battery_capacity_entries"] = len(summed)
+                ratings["battery_capacity_serials"] = len({entry.get("batterySN") for entry in summed if entry.get("batterySN")})
+
+            # automatic_config() is the source of truth for which devices are inverters Predbat
+            # drives: it configures one only when hasBattery, function.scheduler and capacity > 0
+            # all hold. Duplicated here, not shared, so this observer does not touch that control
+            # path; test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would
+            # runs the real automatic_config() to keep the two in step.
+            capacity = detail.get("capacity", 0)
+            drives_it = has_battery and has_scheduler and isinstance(capacity, (int, float)) and capacity > 0
 
             inverters.append(
                 inverter_record(
                     "fox:{}".format(serial),
-                    inverter_type="FoxCloud" if has_battery else None,
+                    inverter_type="FoxCloud" if drives_it else None,
                     composition="direct",
                     functions=functions,
                     capabilities=capabilities,
