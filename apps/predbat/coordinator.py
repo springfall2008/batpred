@@ -1,0 +1,985 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+"""Discovery catalogue: what each component found, assembled into one document.
+
+Components report inverters, chargers, cars, meters, forecast providers and flexibility
+programmes as plain dicts during their first successful run. The coordinator validates,
+assembles and redacts them into a catalogue published in the debug YAML dump, so real user
+topologies can be read. Nothing here allocates anything or writes to self.args - see
+docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
+
+Safety comes from typed containers rather than from enumerating every field: a record is a
+few structural fields plus containers that each declare what they accept and what happens
+to them when shared. A container taking only numbers cannot leak a name or a credential
+however the catalogue grows, so components add facts freely by choosing a container.
+"""
+
+import hashlib
+import re
+import secrets
+import threading
+from datetime import datetime, timezone
+
+from utils import is_secret_key
+
+SCHEMA_VERSION = 1
+
+MAX_STRING = 64
+VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+# Containers whose value is a list of vocabulary tokens
+VOCAB_CONTAINERS = ("functions", "capabilities", "flags", "effects")
+
+SECTION_SPEC = {
+    "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials"), "sub_records": ()},
+    "chargers": {"structural": ("device_id", "serves_cars"), "sub_records": ()},
+    "cars": {"structural": ("device_id", "charged_by"), "sub_records": ()},
+    "meters": {"structural": ("device_id", "direction"), "sub_records": ("tariff",)},
+    "forecasts": {"structural": ("device_id", "kind"), "sub_records": ()},
+    "programmes": {"structural": ("device_id", "kind", "meter"), "sub_records": ()},
+}
+
+
+def _clean_string(value):
+    """A vendor descriptor string, or None if it is not one.
+
+    Length-capped and free of "@" so an address, an email or a pasted blob cannot ride in on
+    a descriptive field. Vendor model and firmware strings are comfortably inside the cap.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > MAX_STRING or "@" in value:
+        return None
+    return value
+
+
+def _clean_number(value):
+    """A numeric or boolean fact, or None. Strings are refused however numeric they look."""
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _clean_token(value):
+    """A vocabulary token (lower case, no spaces), or None."""
+    return value if isinstance(value, str) and VOCAB_RE.match(value) else None
+
+
+def _clean_scalar(value):
+    """Any scalar, for account_ids - the container pseudonymises whatever it holds, so its type is open."""
+    return value if isinstance(value, (str, int, float, bool)) else None
+
+
+MAX_OPTIONS = 256
+
+
+def _clean_option_list(value):
+    """A select's legal option list: bounded strings, capped at MAX_OPTIONS entries, or None.
+
+    Not vocabulary tokens - real select options look like "00:30" or "PauseCharge", which the
+    lowercase-token pattern would reject outright.
+    """
+    if not isinstance(value, list):
+        return None
+    return [option for option in (_clean_string(entry) for entry in value[:MAX_OPTIONS]) if option is not None]
+
+
+def _clean_measure_or_tokens(value):
+    """A coverage fact: a number, a boolean, or a list of vocabulary tokens (e.g. forecast variants), or None."""
+    cleaned = _clean_number(value)
+    if cleaned is not None:
+        return cleaned
+    if isinstance(value, list):
+        return [token for token in (_clean_token(entry) for entry in value) if token is not None]
+    return None
+
+
+# Descriptor field name -> cleaner. entity_id is required and handled separately in
+# _clean_descriptor, since every other field is optional and dropped rather than disqualifying.
+DESCRIPTOR_FIELD_CLEANERS = {
+    "domain": _clean_token,
+    "access": _clean_token,
+    "unit": _clean_string,
+    "device_class": _clean_string,
+    "min": _clean_number,
+    "max": _clean_number,
+    "step": _clean_number,
+    "precision": _clean_number,
+    "options": _clean_option_list,
+    "format": _clean_string,
+}
+
+
+def _clean_descriptor(value):
+    """One entity descriptor: entity_id required verbatim, every other field cleaned by its own declared type.
+
+    entities is a "clear" container, republished unredacted into debug dumps users post to public
+    GitHub issues, so a field is kept only if it fits its type - free text cannot ride in on unit,
+    device_class or options just because the container's name sounds safe.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("entity_id"), str):
+        return None
+    kept = {"entity_id": value["entity_id"]}
+    for field, cleaner in DESCRIPTOR_FIELD_CLEANERS.items():
+        if field in value and value[field] is not None:
+            cleaned = cleaner(value[field])
+            if cleaned is not None:
+                kept[field] = cleaned
+    return kept
+
+
+# container name -> (redaction class, value cleaner applied per key)
+CONTAINER_SPEC = {
+    "hardware_ids": ("clear", _clean_string),
+    "account_ids": ("pseudonym", _clean_scalar),
+    "info": ("clear", _clean_string),
+    "ratings": ("clear", _clean_number),
+    "coverage": ("clear", _clean_measure_or_tokens),
+    "entities": ("clear", _clean_descriptor),
+}
+
+# Container name sets derived from CONTAINER_SPEC's own class tags rather than hardcoded, so a
+# container added there later is redacted correctly with nothing extra to keep in sync - a
+# hardcoded tuple here already went stale once, when entities moved into CONTAINER_SPEC as a
+# clear container and a copy of the old tuple would have kept quietly skipping it.
+CLEAR_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "clear")
+PSEUDONYM_CONTAINERS = tuple(name for name, (redaction_class, _) in CONTAINER_SPEC.items() if redaction_class == "pseudonym")
+
+# Key names _substitute_key must never rewrite, however coincidentally a component's account_ids
+# value equals one of them: Predbat's own document structure (section names, container names, the
+# two fleet-wide keys), not user data, so an exact-match rewrite here would make the whole section
+# or container silently vanish from the published catalogue rather than merely hide one value.
+PROTECTED_KEY_NAMES = frozenset(SECTION_SPEC) | frozenset(CONTAINER_SPEC) | {"components", "observations"}
+
+# A clear-container value shaped like an identifier rather than a measurement, once separators a
+# component might have used to format one are stripped: unanchored so it matches an identifier
+# embedded in a longer string ("MPAN 1234567890123"), not only a value that is nothing else.
+# str() of a misfiled float ("1234567890123.0") still trips it, since the "." is one of the
+# stripped separators, so casting an API number through float() cannot launder it. Underscore and
+# comma are included alongside whitespace/hyphen/slash/dot - grouping digits with "_" (a Python-
+# style numeric literal) or "," (thousands separators) reads identically to a human as the same
+# identifier and was verified, in an adversarial pass, to otherwise slip through untouched.
+DIGIT_RUN_RE = re.compile(r"\d{10,}")
+SEPARATOR_RE = re.compile(r"[\s\-/.,_]")
+
+# Field names that name a location fact by themselves, regardless of what their value looks like.
+# A latitude/longitude pair cannot be recognised from one value in isolation - a plausible
+# latitude and an ordinary rating overlap in numeric range - so this checks what the field is
+# called instead of what it contains.
+LOCATION_KEY_NAMES = frozenset({"lat", "latitude", "lon", "lng", "longitude", "postcode", "post_code"})
+
+
+class Redactor:
+    """Applies the catalogue's redaction classes to an assembled document.
+
+    Pseudonymises everything in a pseudonym container (account_ids today) and anything
+    cross-linking to it, substitutes those originals wherever else they appear (entity ids and
+    dict keys included), and defensively pseudonymises identifier-shaped values misfiled into a
+    clear container or used as a container key - including one nested inside a descriptor dict
+    or a token list, not just a container's top-level scalars. Two asymmetries keep this from
+    over-reaching: substring replacement is reserved for genuine identifiers (never a whole dict
+    key, which is rewritten by exact match only - see _substitute_key), and a value inside
+    hardware_ids is only shape-flagged when it is nothing BUT digits, since a letter-prefixed
+    vendor serial with a long digit tail is that container's entire declared purpose.
+    """
+
+    # Minimum length of an original before it is substituted inside other strings; below this a
+    # substring replacement would corrupt unrelated text more often than it would hide anything.
+    # Applied to whole-string matches too, so a one- or two-character coincidence cannot trigger
+    # a false-positive rewrite of unrelated data.
+    MIN_SUBSTITUTE = 6
+
+    def __init__(self, salt, log=None):
+        """Hold the installation salt and an optional logger for misfiled values."""
+        self.salt = salt
+        self.log = log
+        self.originals = {}
+        # Subset of self.originals eligible for substring replacement inside a VALUE (never a
+        # dict key - see _substitute_key) - true identifiers: account_ids values, an
+        # identity-derived device_id (one whose record also carries account_ids - see _walk), and
+        # anything the shape or key guard catches. A device_id with no account_ids alongside it is
+        # never noted at all, so an ordinary word used as one (e.g. "charger") cannot corrupt
+        # unrelated text it happens to share a substring with.
+        self.substring_ok = set()
+        self._substring_order = []
+
+    def token(self, value):
+        """The stable pseudonym for one value under this installation's salt."""
+        digest = hashlib.sha256((self.salt + str(value)).encode("utf-8")).hexdigest()
+        return "#" + digest[:8]
+
+    def _note(self, value, substring=False):
+        """Record an original so it can later be swapped for its token wherever it appears.
+
+        Builds the FULL variant set (see _numeric_variants/_identifier_variants) before minting
+        anything, then reuses whichever token, if any, a previous _note() call already assigned to
+        one of those variants - only minting a fresh token when none of them has been seen before.
+        Without this, the same identifier noted twice in different textual forms (a string MPAN
+        then its float echo; "AB-12CD34" then "ab_12cd34") derived its token from whichever form
+        happened to be handed to THIS call and blindly overwrote any mapping an earlier call had
+        already made for a shared variant - two calls for one real-world identifier then produced
+        two different, order-dependent tokens, defeating the stability a maintainer relies on to
+        correlate records within one dump and across successive dumps from the same installation.
+
+        Registers every numeric variant of the value (see _numeric_variants) and every
+        case-folded / separator-swapped variant (see _identifier_variants), composed together -
+        every combination of the two axes - so an identifier noted once resolves to the same
+        token however a component later echoes it: as a string, an int, a float, upper- or
+        lower-cased, or with "-" and "_" interchanged. That last pair matters because
+        get_entity_name()-style helpers commonly lower-case an identifier and swap "-" for "_"
+        when folding it into an entity id, producing a DIFFERENT string from the noted original -
+        one neither the exact-match nor the substring pass would otherwise ever match.
+        substring=True additionally makes every one of those variants eligible for substring
+        replacement inside a VALUE (never a dict key - see _substitute_key); otherwise each is
+        only ever matched by whole-string equality. Registering a variant here unconditionally,
+        even one shorter than MIN_SUBSTITUTE, is safe: nothing is ever matched against it below
+        that floor - see _exact_match/_substitute_text.
+        """
+        text = str(value)
+        variants = {text} | self._numeric_variants(text)
+        for variant in list(variants):
+            variants |= self._identifier_variants(variant)
+        existing = next((self.originals[variant] for variant in variants if variant in self.originals), None)
+        token = existing if existing is not None else self.token(text)
+        for variant in variants:
+            self.originals[variant] = token
+            if substring:
+                self.substring_ok.add(variant)
+        return token
+
+    def _identifier_variants(self, text):
+        """Every case-folded / separator-swapped form of `text` a component might embed it under.
+
+        A helper shaped like Octopus's get_entity_name() - and Solcast's own entity naming embeds
+        a site id the same way - lower-cases an identifier and replaces "-" with "_" when folding
+        it into an entity id, so "A-1234ABCD" becomes "a_1234abcd": a string that is neither equal
+        to, nor contains as a literal substring, the noted original. Both fold directions are
+        registered, not just lower-casing: the canonical original noted first can itself be
+        lower-case (an entity_id, say), and a component elsewhere echoes an UPPER-cased form of the
+        same identifier (a account number as a user typed it) - folding down alone would leave that
+        upper-cased echo unmatched, since it is a case OTHER than the one that got registered.
+        Registering the lower-cased form, the upper-cased form, both separator directions and every
+        combination of the two axes closes that gap once, in shared code, rather than as a
+        per-component workaround.
+        """
+        variants = {text, text.lower(), text.upper()}
+        for source in list(variants):
+            variants.add(source.replace("-", "_"))
+            variants.add(source.replace("_", "-"))
+        return variants
+
+    def _numeric_variants(self, text):
+        """Every textual form representing the same integral value as `text`.
+
+        An identifier can be reported as a string, an int or a float depending on where a
+        component got it from ("123456" in account_ids, 123456.0 echoed in a ratings field), and
+        the exact-match substitution pass has to catch it whichever form it turns up in elsewhere
+        - a bare digit string and its "X.0" float repr must map to the same token in BOTH
+        directions, or the pair leaks each other's raw form right next to the one that got
+        tokenised.
+        """
+        variants = {text}
+        sign, body = ("-", text[1:]) if text.startswith("-") else ("", text)
+        if body.isdigit():
+            variants.add(sign + body + ".0")
+        elif body.endswith(".0") and body[:-2].isdigit():
+            variants.add(sign + body[:-2])
+        return variants
+
+    def _misfiled(self, value, strict_numeric=False):
+        """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
+
+        A NUMERIC value is judged on its INTEGER PART's digit count, not its stringified repr: a
+        genuine measurement computed as a float (an efficiency, a percentage, a unit conversion)
+        can easily carry ten-plus digits after the decimal point - str(1/3) is
+        "0.3333333333333" - and judging the whole repr would flag every one of those as a
+        misfiled identifier, silently turning a number into a string for every consumer of a
+        numbers-only container. int(1234567890123.0) is still 1234567890123, so a genuinely
+        misfiled float identifier is still caught. A STRING keeps the separator-stripped
+        digit-run search.
+
+        strict_numeric additionally requires a string to be nothing BUT digits before it counts -
+        used only inside hardware_ids, where a letter-prefixed serial with a long digit tail (the
+        industry-standard shape: "HV2160123456") is that container's entire declared purpose, not
+        a misfiling; a BARE all-digit string there is still genuinely suspicious, since an MPAN
+        misfiled where a serial belongs looks exactly like one.
+        """
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            try:
+                integer_part = abs(int(value))
+            except (ValueError, OverflowError):
+                return False
+            return len(str(integer_part)) >= 10
+        text = str(value)
+        if "@" in text:
+            return True
+        stripped = SEPARATOR_RE.sub("", text)
+        if strict_numeric:
+            return len(stripped) >= 10 and stripped.isdigit()
+        return bool(DIGIT_RUN_RE.search(stripped))
+
+    def _is_location_key(self, name):
+        """Whether a field name itself names a location fact, independent of its value's shape."""
+        if not name:
+            return False
+        return name.rsplit(".", 1)[-1].lower() in LOCATION_KEY_NAMES
+
+    def _guard_scalar(self, container, name, value):
+        """Pseudonymise one scalar value if it looks misfiled or sits under a location-named field, logging where it was found."""
+        if not (self._misfiled(value, strict_numeric=(container == "hardware_ids")) or self._is_location_key(name)):
+            return value
+        if self.log:
+            label = container if container == name else "{}.{}".format(container, name)
+            self.log("Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label))
+        return self._note(value, substring=True)
+
+    def _guard_value(self, container, name, value):
+        """Shape-guard one clear-container value, recursing through nested dicts and lists to reach every scalar.
+
+        Most clear containers (hardware_ids, info, ratings, coverage) hold a flat dict of
+        scalars, so guarding the top-level value would be enough for those. entities is the
+        exception every future reporter populates: its values are descriptor dicts (entity_id,
+        unit, min, max, options, ...), so a scalar-only guard would stringify a whole dict and
+        never match a shape pattern - an identifier misfiled into descriptor["max"] or
+        descriptor["unit"] would then reach the published catalogue untouched. Recursing into
+        dict and list values closes that gap for every present and future descriptor-shaped
+        container, not just entities.
+        """
+        if isinstance(value, dict):
+            return {key: self._guard_value(container, "{}.{}".format(name, key), entry) for key, entry in value.items()}
+        if isinstance(value, list):
+            return [self._guard_value(container, name, entry) for entry in value]
+        return self._guard_scalar(container, name, value)
+
+    def _guard_key(self, container, name):
+        """A container dict key, pseudonymised if the key text ITSELF looks like a misfiled identifier.
+
+        A component could key its data by a raw identifier-shaped string (hardware_ids keyed by
+        the serial itself, say) rather than only ever putting one in a value; being a dict key
+        rather than a value does not make it any less publishable.
+
+        Logs only the container name, never `name` itself - unlike a field label, the key here IS
+        the value being hidden, so writing it into the log would republish, in Predbat's own log
+        file, exactly what this guard exists to keep out of the debug dump attached to the same
+        public issue. Matches _guard_scalar, which never logs the raw value it pseudonymises either.
+        """
+        if not self._misfiled(name, strict_numeric=(container == "hardware_ids")):
+            return name
+        if self.log:
+            self.log("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container))
+        return self._note(name, substring=True)
+
+    def _has_pseudonym_container(self, node):
+        """Whether a pseudonym container (account_ids) sits anywhere in this record - the record
+        itself, or a nested sub-record (a meter's tariff, say) - not only its own top-level keys.
+
+        _validate_record accepts account_ids inside any sub-record CONTAINER_SPEC recognises, so
+        a component reporting its account identifier one level down (structurally legal even
+        though v1's own reporters put Octopus's account_ids at meter level) must still mark that
+        record's device_id as identity-derived - checking only node's direct keys left such a
+        device_id, and any free-text echo or cross-link pointing at it, published raw.
+        """
+        if isinstance(node, dict):
+            if any(name in node for name in PSEUDONYM_CONTAINERS):
+                return True
+            return any(self._has_pseudonym_container(value) for value in node.values())
+        if isinstance(node, list):
+            return any(self._has_pseudonym_container(entry) for entry in node)
+        return False
+
+    def _walk(self, node, container=None):
+        """Recursively redact a node: pseudonym containers by class, clear containers via the shape guard.
+
+        A record carrying a pseudonym container (account_ids), anywhere in it - see
+        _has_pseudonym_container - also has its own device_id noted as an original, alongside that
+        container's values. Nothing here has to know that "meter" or "measures_meter" are
+        cross-link field names: the later substitution pass rewrites any string equal to (or,
+        since the id is identity-derived, containing) a noted original wherever it appears, so
+        noting the owning record's device_id is what lets a cross-link field resolve to the same
+        token as the record it points to, even when that field merely repeats the device_id rather
+        than embedding the account identifier itself - and what catches the SAME device_id text
+        left in the clear elsewhere in that record (an entity_id, a free-text note) rather than
+        just tokenising the one place it was noted. A device_id with no pseudonym container
+        anywhere in its record is never noted at all, so an ordinary word used as one still cannot
+        corrupt unrelated text it happens to share a substring with. Every scalar reached through
+        the generic else branch - structural fields (device_id, serials, meter, measures_meter,
+        ...) included - is routed through the same shape guard as a clear container's values,
+        since a misfiled identifier does not stop being one just because it landed outside
+        CONTAINER_SPEC.
+        """
+        if isinstance(node, dict):
+            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node):
+                self._note(node["device_id"], substring=True)
+            out = {}
+            for key, value in node.items():
+                if key in PSEUDONYM_CONTAINERS:
+                    out[key] = {self._guard_key(key, name): self._note(entry, substring=True) for name, entry in value.items()}
+                elif key in CLEAR_CONTAINERS:
+                    out[key] = {self._guard_key(key, name): self._guard_value(key, name, entry) for name, entry in value.items()}
+                elif key in VOCAB_CONTAINERS:
+                    # Vocabulary lists are clear too, and a token is free-form enough (digits
+                    # are legal in the pattern) that a misfiled identifier can hide as one.
+                    out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
+                else:
+                    out[key] = self._walk(value, container=key)
+            return out
+        if isinstance(node, list):
+            return [self._walk(entry, container=container) for entry in node]
+        if container:
+            return self._guard_scalar(container, container, node)
+        return node
+
+    def _exact_match(self, text):
+        """The token for a noted original if `text` equals it exactly and clears the length floor, else None.
+
+        Exact equality is what lets a device_id with no account_ids alongside it (never
+        substring-eligible - see __init__) resolve nothing at all since it was never noted, what
+        lets a dict key resolve only when it wholly IS a noted original (see _substitute_key), and
+        what catches a non-string scalar echoed verbatim elsewhere (str(node) compared as text) -
+        none of those is a substring-corruption risk, since the entire value is being replaced
+        rather than a fragment of a larger string.
+        """
+        if len(text) >= self.MIN_SUBSTITUTE and text in self.originals:
+            return self.originals[text]
+        return None
+
+    def _substitute_text(self, text):
+        """Replace a VALUE string: an exact match first, then substring-eligible originals, longest first.
+
+        Longest-first matters when one noted original is itself a substring of another (a short
+        MSN inside a longer MPAN): substituting the longer one first replaces it whole, so the
+        shorter original no longer appears as a fragment afterwards. Substituting the shorter one
+        first would splice a token into the middle of the longer identifier and leave the
+        surrounding digits of the longer one exposed on either side. Never called for a dict key -
+        see _substitute_key, which does not do the substring pass at all.
+        """
+        exact = self._exact_match(text)
+        if exact is not None:
+            return exact
+        for original in self._substring_order:
+            if len(original) >= self.MIN_SUBSTITUTE and original in text:
+                text = text.replace(original, self.originals[original])
+        return text
+
+    def _substitute_key(self, key):
+        """Rewrite a dict key by exact match only - never by substring.
+
+        A key drawn from Predbat's own naming - a section name, a container name, a descriptor
+        field a component chose to call something - is short and structural enough that an
+        ordinary account_ids value (nothing stops a component reporting something as mundane as
+        "charge" for an account label) can coincidentally appear as a substring of one:
+        substring-rewriting keys turned exactly that coincidence into an entire published section
+        vanishing from the document. _guard_key (applied earlier, during _walk) is what catches a
+        key that IS ITSELF shaped like a misfiled identifier; this pass only catches a key that
+        happens to equal a noted original in full.
+
+        PROTECTED_KEY_NAMES is checked first for the same reason, one step further: an account_ids
+        value does not even need to be identifier-shaped to collide here, only to equal a structural
+        name byte-for-byte ("chargers", "account_ids", "observations", ...) - exact match alone
+        would still rewrite it away, deleting that whole section or container rather than a value.
+        Excluding Predbat's own structural vocabulary from rewriting closes that regardless of what
+        a component ever reports as an identifier.
+
+        Residual, deliberately accepted: an identifier embedded as a SUBSTRING of a
+        component-chosen key (an entities key like "pv_abcdef123456_today") is not substituted -
+        only whole-key equality is ever rewritten, keys are never substring-matched the way values
+        are (see above). The identifier still appears tokenised in the record's device_id/
+        account_ids, so nothing is lost that could not already be found there.
+        """
+        if key in PROTECTED_KEY_NAMES:
+            return key
+        exact = self._exact_match(key)
+        return exact if exact is not None else key
+
+    def _substitute(self, node):
+        """Replace every noted original wherever it appears: in string values, dict keys, and non-string scalars.
+
+        A dict key is rewritten by _substitute_key (exact match only, never substring - see its
+        docstring); a value string goes through the full exact-then-substring pass. A non-string
+        scalar (an int or float identifier echoed outside its guarded container) is matched by
+        exact equality against every noted numeric variant (see _numeric_variants), since a
+        numeric value cannot meaningfully contain a "substring" of another number the way a
+        longer string can.
+        """
+        if isinstance(node, dict):
+            return {(self._substitute_key(key) if isinstance(key, str) else key): self._substitute(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [self._substitute(entry) for entry in node]
+        if isinstance(node, str):
+            return self._substitute_text(node)
+        if isinstance(node, (int, float)) and not isinstance(node, bool):
+            return self._exact_match(str(node)) or node
+        return node
+
+    def redact(self, catalogue):
+        """Return a redacted copy of an assembled catalogue.
+
+        "generated" is restored verbatim afterwards: it is the catalogue's own timestamp, stamped
+        by assemble() itself rather than sourced from any component report, so it can never
+        legitimately hold a cross-link or an embedded identifier - only ever a coincidental digit
+        collision with an unrelated pseudonymised original, which the substitution pass would
+        otherwise be free to corrupt it with.
+        """
+        generated = catalogue.get("generated")
+        walked = self._walk(catalogue)
+        self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
+        substituted = self._substitute(walked)
+        if "generated" in catalogue:
+            substituted["generated"] = generated
+        return substituted
+
+
+class Coordinator:
+    """Collects component discovery reports and assembles them into one catalogue.
+
+    Thread-safe: components report from their own threads while assembly runs on the main
+    thread at startup.
+    """
+
+    def __init__(self, base):
+        """Create an empty coordinator."""
+        self.base = base
+        self.log = base.log
+        self.lock = threading.Lock()
+        self.reports = {}
+        # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
+        # "reported_at" for a status "ok" component in _component_status(). Kept apart from
+        # self.reports rather than folded into the cleaned report dict, since it describes when
+        # the coordinator heard from the component, not anything the component itself reported.
+        self.reported_at = {}
+        # The most recently assembled document, kept for in-process introspection only - neither
+        # catalogue() nor catalogue_raw() read this any more, since both re-assemble on every call
+        # (see catalogue()'s docstring for why a frozen snapshot missed every report filed after
+        # the original startup-barrier assemble() call).
+        self.assembled = None
+        self.salt = None
+
+    def report(self, component_name, report):
+        """Validate and store one component's discovery report, replacing any previous one."""
+        cleaned = validate_report(report, component_name, self.log)
+        with self.lock:
+            self.reports[component_name] = cleaned
+            self.reported_at[component_name] = datetime.now(timezone.utc).isoformat()
+        counts = ", ".join("{} {}".format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
+        self.log("Coordinator: {} reported {}".format(component_name, counts or "nothing"))
+
+    def assemble(self):
+        """Merge every report into one catalogue, with a status per component and the observation layer.
+
+        Unredacted: catalogue() is what consumers get. Cheap - a merge over a handful of dicts
+        under a lock briefly held just to copy self.reports/self.reported_at - so it is safe to
+        call on every catalogue()/catalogue_raw() request, not only once at the startup barrier
+        (predbat.py, straight after every component has started or timed out): a component keeps
+        reporting for the rest of the process's life (a retry, a rediscovered device, a changed
+        tariff), and only re-assembling on every read lets that later work ever reach a dump.
+        """
+        with self.lock:
+            reports = {name: report for name, report in self.reports.items()}
+            reported_at = dict(self.reported_at)
+        catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports, reported_at)}
+        for section in SECTION_SPEC:
+            merged = []
+            for name in sorted(reports):
+                for record in reports[name].get(section, []):
+                    entry = {"source": name}
+                    entry.update(record)
+                    merged.append(entry)
+            catalogue[section] = merged
+        catalogue["observations"] = {"conflicts": self._conflicts(catalogue), "resulting_config": self._resulting_config()}
+        self.assembled = catalogue
+        return catalogue
+
+    def _component_status(self, reports, reported_at):
+        """A status for every component that reported, plus every one that was expected to and did not.
+
+        Deliberately NOT a status for every component in the registry. COMPONENT_LIST holds 30
+        components and five of them can report at all, so listing the registry made the map ~30
+        entries of which a handful said anything - the rest were a static list already readable in
+        components.py, restated on every dump and in sensor.predbat_discovery's attributes. Two
+        kinds of entry are dropped, and they are dropped for the same reason: silence that carries
+        no information.
+
+        - A component the user never configured. Its absence from the map IS its status.
+        - An active component with no build_discovery() at all - storage, web, db, ha and most of
+          the rest. It is working exactly as intended and is never going to report, so "no_report"
+          against it says nothing. This is what separates it from the entry below.
+
+        What survives is the set worth reading: everything that reported, and everything that was
+        capable of reporting and did not. That second group is the whole point - a component
+        carrying a build_discovery() that never filed is either broken or starved, and it reads as
+        an anomaly here precisely because its silent, reporter-less neighbours are gone.
+
+        A "load_error" component is kept whatever it can do: construction failed, so there is no
+        instance to ask about a reporter, and a component that would not build is an anomaly on any
+        reading. Its status deliberately carries no message. components.load_error() is the raw
+        str() of whatever exception construction raised, which is free text this document has no
+        way to bound: every other value here reaches the catalogue through a typed container that
+        cannot hold a name or a credential however the schema grows, and one unbounded string
+        outside that boundary would be the single field a future component could leak a URL or an
+        account value through into a dump attached to a public issue. The message is not lost -
+        components.initialize() logs it (with a traceback for anything but an ImportError) and
+        inverter_source_status() puts it on the component-status entity - so a maintainer reading
+        a bug report still has it, just not from this document.
+
+        reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
+        lock as reports so the two agree with each other; it is only ever populated for a status
+        "ok" component - one the coordinator has actually heard from. "automatic" is included only
+        when the component's own report actually carried one (see validate_report()) - a component
+        with no such concept (Solcast: solar-forecast sourcing is a plain apps.yaml choice, never
+        something this catalogue auto-wires) must not have the catalogue claim `automatic: true`
+        for it just because every OTHER field here defaults to something.
+        """
+        components = getattr(self.base, "components", None)
+        names = components.get_all() if components else sorted(reports)
+        out = {}
+        for name in names:
+            if name in reports:
+                entry = {"status": "ok", "reported_at": reported_at.get(name)}
+                if "automatic" in reports[name]:
+                    entry["automatic"] = reports[name]["automatic"]
+                entry["counts"] = {section: len(reports[name][section]) for section in SECTION_SPEC if reports[name].get(section)}
+            elif components and components.load_error(name):
+                entry = {"status": "load_error", "reported_at": None}
+            elif components and components.is_active(name) and _can_report(components.get_component(name)):
+                entry = {"status": "no_report" if components.is_alive(name) else "not_started", "reported_at": None}
+            else:
+                continue
+            out[name] = entry
+        return out
+
+    def _conflicts(self, catalogue):
+        """Collisions that today resolve silently by component ordering - recorded, never resolved.
+
+        A duplicate_serial claim covers every serial a record speaks for, not only its own
+        hardware_ids.serial: a gateway record names the gateway in hardware_ids and the batteries
+        it fronts in the structural `serials` list (see gecloud.py's build_discovery). GE Cloud in
+        gateway composition and GivTCP therefore claim the SAME physical battery under different
+        record identities, which is exactly the collision this observation exists to count - and
+        grouping on hardware_ids alone missed it, since the two never share a top-level serial.
+        """
+        conflicts = []
+        serials = {}
+        for record in catalogue["inverters"]:
+            claimed = [record.get("hardware_ids", {}).get("serial")] + list(record.get("serials") or [])
+            for serial in claimed:
+                if serial:
+                    serials.setdefault(str(serial).casefold(), set()).add(record["source"])
+        for serial, sources in sorted(serials.items()):
+            if len(sources) > 1:
+                conflicts.append({"kind": "duplicate_serial", "serial": serial, "claimed_by": sorted(sources)})
+        inverter_sources = sorted({record["source"] for record in catalogue["inverters"]})
+        if len(inverter_sources) > 1:
+            conflicts.append({"kind": "multiple_inverter_sources", "claimed_by": inverter_sources})
+        import_sources = sorted({record["source"] for record in catalogue["meters"] if record.get("direction") == "import"})
+        if len(import_sources) > 1:
+            conflicts.append({"kind": "multiple_import_meters", "claimed_by": import_sources})
+        charger_sources = {record["source"] for record in catalogue["chargers"]}
+        car_sources = {record["source"] for record in catalogue["cars"]}
+        if charger_sources and (car_sources - charger_sources):
+            conflicts.append({"kind": "contested_car_slots", "claimed_by": sorted(car_sources | charger_sources)})
+        return conflicts
+
+    def _resulting_config(self):
+        """What apps.yaml actually ended up as, so every dump compares discovered against configured."""
+        return {key: self.base.get_arg(key, None) for key in ("num_inverters", "num_cars", "inverter_type")}
+
+    def load_salt(self):
+        """The per-installation pseudonym salt, generated and stored on first use.
+
+        Without Storage (MockBase, CLI harnesses) a per-process salt is generated instead, so
+        redaction never silently falls back to an unsalted digest - a 13-digit MPAN under one of
+        those is brute-forceable in seconds. ``ha`` is imported lazily here, and only once a
+        Storage component actually exists, rather than at module level: ha.py pulls in
+        aiohttp/requests via component_base, and a later task adds a module-level
+        "from coordinator import Coordinator" to components.py, so a module-level ha import here
+        would widen the startup import graph for every install - including the common case, this
+        method's other branch, where there is no Storage component to talk to at all.
+        """
+        if self.salt:
+            return self.salt
+        components = getattr(self.base, "components", None)
+        storage = components.get_component("storage") if components else None
+        if not storage:
+            self.salt = secrets.token_hex(16)
+            return self.salt
+        from ha import run_async
+
+        try:
+            stored = run_async(storage.load("coordinator", "salt"))
+            if isinstance(stored, dict) and stored.get("salt"):
+                self.salt = str(stored["salt"])
+                return self.salt
+        except Exception as e:
+            self.log("Warn: Coordinator: could not load the pseudonym salt: {}".format(e))
+        self.salt = secrets.token_hex(16)
+        try:
+            run_async(storage.save("coordinator", "salt", {"salt": self.salt}, format="json"))
+        except Exception as e:
+            self.log("Warn: Coordinator: could not save the pseudonym salt: {}".format(e))
+        return self.salt
+
+    def catalogue(self):
+        """The assembled catalogue, redacted. This is what every consumer gets.
+
+        Re-assembles on every call rather than reusing whatever self.assembled last held. A report
+        arrives from a component's own thread at any point in the process's life - a retry after a
+        transient failure, a rediscovered inverter, a changed tariff or vehicle, a newly-discovered
+        forecast site - and assemble() was previously called exactly once, at the startup barrier
+        (see predbat.py), so none of that later work could ever reach a dump: catalogue() returned
+        the same frozen document for the rest of the run. assemble() is a merge over a handful of
+        dicts under a lock briefly held to copy self.reports, so redoing it on every debug dump or
+        publish() call - its only two callers - costs milliseconds, not a measurable resource.
+        """
+        return Redactor(self.load_salt(), log=self.log).redact(self.assemble())
+
+    def catalogue_raw(self):
+        """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere.
+
+        Re-assembles on every call, consistent with catalogue() - see its docstring.
+        """
+        return self.assemble()
+
+    def publish(self):
+        """Publish a SUMMARY of the redacted catalogue as an entity, for HA users to glance at.
+
+        Deliberately not the full catalogue: folding every section straight into the entity's
+        attributes (as an earlier version of this method did via attributes.update(catalogue))
+        puts every inverter's full entity-descriptor map into a Home Assistant entity's
+        attributes, which the recorder stores to disk - tens of kilobytes of JSON per snapshot
+        for an install with only a few inverters, bloating the user's database for data nothing
+        reads back out of the entity. The full document already reaches its intended consumer
+        through the debug dump (create_debug_yaml() -> coordinator.catalogue()); the web viewer
+        that will eventually want the whole thing is out of scope for this release and, when
+        built, should ask the coordinator directly rather than parse it back out of an HA
+        entity's attributes - the better coupling anyway. Do not "helpfully" restore the section
+        record lists here.
+
+        The state is still the total record count, and the attributes still carry enough to be
+        useful at a glance: schema_version, generated, a per-section count map, the components
+        status map (small, and the first thing worth checking), and observations.conflicts
+        (small, and the thing a maintainer most wants to spot) - never a section's record list.
+        """
+        catalogue = self.catalogue()
+        counts = {section: len(catalogue.get(section, [])) for section in SECTION_SPEC}
+        attributes = {
+            "friendly_name": "Predbat discovery",
+            "icon": "mdi:sitemap",
+            "schema_version": catalogue.get("schema_version"),
+            "generated": catalogue.get("generated"),
+            "counts": counts,
+            "components": catalogue.get("components", {}),
+            "observations": {"conflicts": catalogue.get("observations", {}).get("conflicts", [])},
+        }
+        self.base.dashboard_item("sensor.{}_discovery".format(self.base.prefix), state=sum(counts.values()), attributes=attributes)
+
+
+def _validate_container(container_name, value, component_name, section, log):
+    """Clean one container's contents against its declared type, dropping and logging what does not fit.
+
+    The credential guard applies to every container, not only the dict-shaped ones in
+    CONTAINER_SPEC: an entities descriptor is keyed by Predbat's standard name, so that key is
+    checked exactly like a hardware_ids or ratings key, and a vocabulary token stands in as its
+    own key since a token list has no separate key/value split. No container can accept a key
+    whose name trips is_secret_key(), however it is nested.
+    """
+    if container_name in VOCAB_CONTAINERS:
+        if not isinstance(value, list):
+            return None
+        out = []
+        for entry in value:
+            token = _clean_token(entry)
+            if token is None:
+                continue
+            if is_secret_key(token):
+                log("Warn: Coordinator: {} {} {} token '{}' looks like a credential - refused".format(component_name, section, container_name, token))
+                continue
+            out.append(token)
+        return out
+    if not isinstance(value, dict):
+        return None
+    _, cleaner = CONTAINER_SPEC[container_name]
+    out = {}
+    for key, entry in value.items():
+        if not isinstance(key, str):
+            continue
+        if is_secret_key(key):
+            log("Warn: Coordinator: {} {} field '{}' looks like a credential - refused".format(component_name, section, key))
+            continue
+        cleaned = cleaner(entry)
+        if cleaned is None:
+            log("Warn: Coordinator: {} {}.{} value does not fit the container's type - dropped".format(component_name, container_name, key))
+            continue
+        out[key] = cleaned
+    return out
+
+
+def _validate_record(record, section, component_name, log):
+    """Clean one record: its structural fields, its containers and any nested sub-records."""
+    if not isinstance(record, dict) or not isinstance(record.get("device_id"), str):
+        log("Warn: Coordinator: {} {} record without a device_id - dropped".format(component_name, section))
+        return None
+    spec = SECTION_SPEC[section]
+    out = {}
+    for field in spec["structural"]:
+        if field not in record or record[field] is None:
+            continue
+        value = record[field]
+        if isinstance(value, list):
+            out[field] = [entry for entry in value if isinstance(entry, str) and len(entry) <= MAX_STRING]
+        elif isinstance(value, bool) or isinstance(value, (int, float)):
+            out[field] = value
+        elif isinstance(value, str) and len(value) <= MAX_STRING:
+            out[field] = value
+    for container_name in list(CONTAINER_SPEC) + list(VOCAB_CONTAINERS):
+        if container_name in record:
+            cleaned = _validate_container(container_name, record[container_name], component_name, section, log)
+            if cleaned:
+                out[container_name] = cleaned
+    for sub_name in spec["sub_records"]:
+        sub = record.get(sub_name)
+        if isinstance(sub, dict):
+            sub_out = {}
+            for container_name in list(CONTAINER_SPEC) + list(VOCAB_CONTAINERS):
+                if container_name in sub:
+                    cleaned = _validate_container(container_name, sub[container_name], component_name, section, log)
+                    if cleaned:
+                        sub_out[container_name] = cleaned
+            if sub_out:
+                out[sub_name] = sub_out
+    return out
+
+
+def _can_report(component):
+    """Whether this component instance is one the catalogue should ever expect a report from.
+
+    A component opts in to discovery by defining build_discovery() - the same test
+    ComponentBase.refresh_discovery() makes before doing anything. Anything else is working as
+    intended by staying silent, so _component_status() leaves it out rather than filing a
+    "no_report" against it.
+
+    An instance that cannot be resolved at all (None) counts as reportable. is_active() is true
+    exactly when get_component() returns a real object, so this should not arise in practice; if
+    it ever does, a redundant line in the map costs a reader a moment, whereas wrongly hiding a
+    component that failed to report costs them the bug.
+    """
+    return component is None or hasattr(component, "build_discovery")
+
+
+def inverter_record(
+    device_id,
+    *,
+    inverter_type=None,
+    control=None,
+    composition=None,
+    measures_meter=None,
+    serials=None,
+    functions=None,
+    capabilities=None,
+    flags=None,
+    effects=None,
+    hardware_ids=None,
+    account_ids=None,
+    info=None,
+    ratings=None,
+    coverage=None,
+    entities=None,
+):
+    """Assemble one inverters-section record, omitting every field that is unset or empty.
+
+    The parameter list IS the inverters section's schema, spelled out rather than taken as
+    **kwargs: a mistyped field name is then a TypeError a test catches at the call site, instead
+    of a key that reaches validate_report() and is silently dropped from a user's dump. Every
+    field after device_id is keyword-only for the same reason - fifteen optional parameters in a
+    row are easy to slip by one, and inverter_record("x:1", "direct", True) would otherwise build
+    inverter_type="direct", control=True without complaint.
+
+    Unset fields are omitted rather than written as None, {}, [] or "". Every reporter previously
+    carried its own `if info: record["info"] = info` ladder, which is how a record ends up
+    carrying `"ratings": {}` in one component and omitting it in another. A falsy value that is
+    real data is kept: a rating of 0 inside a container, and control=False, which is the fact
+    "monitor-only" rather than an absence. Only None, an empty string and an empty container are
+    dropped.
+
+    Every container is copied, never stored as the caller's own object. refresh_discovery()
+    compares each new build against the report it last filed, so a record holding a reporter's
+    live list (serials=self.serials) would change whenever that list did, the rebuilt report
+    would always compare equal to it, and the report would freeze at its first state. The copy is
+    shallow - the top level only - which is enough because reporters build nested descriptor
+    dicts fresh on every call rather than handing over long-lived ones.
+
+    Tuples become lists because validate_report() keeps only a list for a structural or
+    vocabulary field: a tuple `serials` or `functions` - a module-level constant, say - would be
+    silently dropped from the catalogue. A set or frozenset becomes a sorted list for the same
+    reason, sorted because string hashing is randomised per process, so list(some_set) comes out
+    in a different order after a restart and two dumps of the same hardware would diff for nothing.
+    """
+    fields = {
+        "inverter_type": inverter_type,
+        "control": control,
+        "composition": composition,
+        "measures_meter": measures_meter,
+        "serials": serials,
+        "functions": functions,
+        "capabilities": capabilities,
+        "flags": flags,
+        "effects": effects,
+        "hardware_ids": hardware_ids,
+        "account_ids": account_ids,
+        "info": info,
+        "ratings": ratings,
+        "coverage": coverage,
+        "entities": entities,
+    }
+    record = {"device_id": device_id}
+    for name, value in fields.items():
+        if isinstance(value, (set, frozenset)):
+            value = sorted(value)
+        elif isinstance(value, (list, tuple)):
+            value = list(value)
+        elif isinstance(value, dict):
+            value = dict(value)
+        # A bool is never dropped: it is not a str/list/dict, so control=False survives
+        if value is None or (isinstance(value, (str, list, dict)) and not value):
+            continue
+        record[name] = value
+    return record
+
+
+def validate_report(report, component_name, log):
+    """Return a cleaned copy of one component's report - never raises, drops what does not fit.
+
+    "automatic" is carried through only when the raw report actually provided one - a component
+    with no such concept (Solcast) omits the key entirely rather than have it default to True, so
+    the catalogue never claims an auto-config relationship for a component that has none. See
+    _component_status(), the only other place this key is read.
+
+    A section whose value is not a list is dropped whole rather than iterated. "Never raises" has
+    to hold for a malformed section exactly as it already does for a malformed report: a scalar
+    ({"inverters": 1}) is not iterable at all, and a bare string would iterate as its characters,
+    turning one component's mistake into a TypeError out of report() or a log line per character.
+    """
+    if not isinstance(report, dict):
+        log("Warn: Coordinator: {} report is a {}, not a dict - treated as empty".format(component_name, type(report).__name__))
+        report = {}
+    cleaned = {"schema_version": SCHEMA_VERSION}
+    if "automatic" in report:
+        cleaned["automatic"] = bool(report["automatic"])
+    for section in SECTION_SPEC:
+        raw = report.get(section) or []
+        if not isinstance(raw, list):
+            log("Warn: Coordinator: {} {} is a {}, not a list of records - dropped".format(component_name, section, type(raw).__name__))
+            continue
+        records = []
+        for record in raw:
+            validated = _validate_record(record, section, component_name, log)
+            if validated:
+                records.append(validated)
+        if records:
+            cleaned[section] = records
+    return cleaned
