@@ -39,6 +39,10 @@ class AutoConfigBase(MockBase):
             return self.entities
         return super().get_state_wrapper(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
 
+    def _invalidate_log_secret_pattern(self):
+        """No-op: auto_config() calls this unconditionally on change (GH#4770), but this mock
+        does no log redaction and carries none of hass.py's cache/lock machinery for it."""
+
 
 def test_two_sources_compose_into_two_slots():
     """The bug this registry exists to fix: two components, two chargers, two slots."""
