@@ -1554,10 +1554,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         and automatic_config() both register every serial, so there is no excluded-device case to
         mirror.
 
-        Ratings: inverter_limit() (ratePower, W) as inverter_w; battery_capacity() (kWh) as
-        battery_kwh; and the battery endpoint's capacity field as battery_capacity_ah, the raw Ah
-        the API returned. export_limit is reported as a capability exactly where
-        automatic_config() would bind it - export_limit() > 0.
+        Ratings: inverter_limit() (ratePower, W) as inverter_w; battery_capacity() (kWh, rounded to
+        2 dp) as battery_kwh; and the battery endpoint's capacity field as battery_capacity_ah, the
+        raw Ah the API returned. Both battery ratings follow the latest poll - battery_capacity()
+        derives from the battery endpoint read each cycle, the same fetch soc_max is derived from -
+        so a failed battery fetch changes them and re-files the report; accepted, since it is the
+        same derivation the component already relies on. export_limit is reported per device where
+        export_limit() > 0 - the per-device half of automatic_config()'s test, which binds the arg
+        only when every inverter passes it. export_limit() falls back to the inverter rating, so
+        this holds whenever inverter_w is known.
 
         Deliberately not reported: model, firmware and any station ID - none is held, and Sunsynk
         has no station grouping at all.
@@ -1573,7 +1578,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             rated_w = self.inverter_limit(sn)
             if rated_w > 0:
                 ratings["inverter_w"] = rated_w
-            battery_kwh = self.battery_capacity(sn)
+            battery_kwh = round(self.battery_capacity(sn), 2)
             if battery_kwh > 0:
                 ratings["battery_kwh"] = battery_kwh
             capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))

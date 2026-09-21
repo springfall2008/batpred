@@ -1237,7 +1237,10 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         config/battery's battCapacity as battery_capacity_ah, the raw Ah the API returned, so a
         reader can check the kWh against its inputs. derive_battery_capacity() is never called
         here: it logs and writes device_pack_voltage/device_capacity, whereas battery_capacity()
-        only reads them.
+        only reads them. Both battery ratings follow the latest poll - device_pack_voltage is set
+        from the BMS charge-voltage request each cycle, the same derivation soc_max already relies
+        on - so a changed request or a failed battery fetch changes them and re-files the report;
+        accepted, because it is the same derivation the component uses for soc_max.
 
         station_ids goes in account_ids only when the account has exactly one station:
         get_device_list() queries every station at once and flattens the result, so which device

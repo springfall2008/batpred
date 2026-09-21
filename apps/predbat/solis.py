@@ -1698,14 +1698,19 @@ class SolisAPI(ComponentBase, OAuthMixin):
         valid reading). "battery" in functions is the hardware fact alone - details read and
         Solis Cloud not saying "no battery" - so a battery inverter automatic_config() declines is
         still described. Every inverter reports "solar": automatic_config() puts every inverter in
-        pv_devices, battery or not.
+        pv_devices, battery or not. An inverter whose detail has not been read yet (empty, or a
+        failed fetch) reports no functions at all rather than a misleading solar-only guess - the
+        same "not read yet" state automatic_config() retries rather than treats as PV-only.
 
         Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
-        per-battery Ah, and parallel_battery_count the pack count; both are always reported for a
-        battery inverter. A kWh figure is reported only when get_capacity_voltage() returns the
-        configured solis_nominal_voltage: otherwise publish_entities() falls back to
-        get_nominal_voltage(), an inference that for an HV pack is still a live reading moving
-        dump to dump (GH#5090), and a derived kWh would present that estimate as a rating.
+        per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
+        parallel_battery_count, the same product publish_entities() uses - so it means the same
+        thing here as on every other reporter. battery_pack_count carries the pack count alongside
+        it, and both are always reported for a battery inverter. A kWh figure is reported only when
+        get_capacity_voltage() returns the configured solis_nominal_voltage: otherwise
+        publish_entities() falls back to get_nominal_voltage(), an inference that for an HV pack is
+        still a live reading moving dump to dump (GH#5090), and a derived kWh would present that
+        estimate as a rating.
 
         The inverter rating is inverterDetail's power in powerStr's unit - defaulted to "kW"
         exactly as publish_entities() does - and is reported only for a unit this code knows how
@@ -1754,18 +1759,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     capacity_ah = 0.0
                 if capacity_ah > 0:
                     pack_count = self.parallel_battery_count.get(sn, 1)
-                    ratings["battery_capacity_ah"] = capacity_ah
+                    ratings["battery_capacity_ah"] = capacity_ah * pack_count
                     ratings["battery_pack_count"] = pack_count
                     configured_volts = self.get_capacity_voltage(sn)
                     if configured_volts:
-                        ratings["battery_kwh"] = capacity_ah * pack_count * configured_volts / 1000.0
+                        ratings["battery_kwh"] = round(capacity_ah * pack_count * configured_volts / 1000.0, 2)
 
             inverters.append(
                 inverter_record(
                     "solis:{}".format(sn),
                     inverter_type="SolisCloud" if drives_it else None,
                     composition="direct",
-                    functions=["solar", "battery"] if has_battery else ["solar"],
+                    functions=(["solar", "battery"] if has_battery else ["solar"]) if detail else None,
                     capabilities=["schedule", "target_soc", "discharge_target", "charge_rate_power", "soh"] if drives_it else None,
                     flags=["tou_v2"] if self.is_tou_v2_mode(sn) else None,
                     hardware_ids={"serial": sn},

@@ -401,7 +401,7 @@ def test_sunsynk_catalogue_describes_each_inverter():
 
 
 def test_sunsynk_catalogue_export_limit_only_on_evidence():
-    """export_limit is a capability exactly where automatic_config() would bind it: export_limit() > 0."""
+    """export_limit is reported per device where export_limit() > 0 - the per-device half of automatic_config()'s test, which binds the arg only when every inverter passes it."""
     s = _sunsynk_fleet()
     s.device_rated_power = {}
     s.device_settings = {}

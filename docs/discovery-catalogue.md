@@ -67,9 +67,11 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 
 Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
 their automatic configuration treats every discovered inverter as a battery inverter. Their
-records say the same - `solar` and `battery` on every inverter - because the catalogue reports
-what Predbat believes about the hardware. If a PV-only unit has been configured as a battery
-inverter, that record is where the mistake shows.
+records follow that configuration - `solar` and `battery` on every inverter - rather than
+evidence about the hardware, and Solis's `solar` works the same way, since every Solis inverter
+is configured as a PV source. A PV-only unit that has been configured as a battery inverter will
+usually show it in its ratings: `battery` among its functions, but no `battery_kwh` or
+`battery_capacity_ah`.
 
 No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
