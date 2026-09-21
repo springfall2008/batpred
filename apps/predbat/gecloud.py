@@ -1546,9 +1546,13 @@ class GECloudDirect(ComponentBase):
         meter_serials = (devices.get("battery_meters") or {}).get(device) or []
         return meter_serials[0] if meter_serials else None
 
-    def _apply_meter_cross_link(self, devices, device, record):
+    def _meter_cross_link(self, devices, device):
         """
-        Set `record["measures_meter"]` from this device's own CT/meter serial, when GE Cloud reports one.
+        The `measures_meter` cross-link for this device, from its own CT/meter serial, or None when GE Cloud reports none.
+
+        Computed before the record is built and passed to inverter_record(), so the record's whole
+        shape is decided by the builder and nothing is patched into it afterwards. It reads only
+        this device's own entry in GE Cloud's device-connections data (see _device_meter_serial).
 
         Deliberately a dangling cross-link, not a fabricated `meters` record: a `meters` section
         record in this design is a utility supply point (a direction, an MPAN in `account_ids`, a
@@ -1560,12 +1564,12 @@ class GECloudDirect(ComponentBase):
         cross-link is set regardless; resolving it against a real supply-point meter once one is
         reported is exactly what the catalogue's `observations` layer is for, not this reporter.
         Devices GE Cloud never reported a meter serial for (PV-only devices, a gateway or EMS
-        device fronting others) are simply left without a measures_meter cross-link.
+        device fronting others) get None here, which the builder omits.
         """
         meter_serial = self._device_meter_serial(devices, device)
         if meter_serial is None:
-            return
-        record["measures_meter"] = "gecloud:meter:{}".format(meter_serial)
+            return None
+        return "gecloud:meter:{}".format(meter_serial)
 
     def build_discovery(self):
         """
@@ -1585,12 +1589,12 @@ class GECloudDirect(ComponentBase):
         else "direct". async_automatic_config() itself is not called or modified.
 
         `measures_meter` is set from the device's own CT/meter serial where GE Cloud's device
-        connections data reports one (see _apply_meter_cross_link) - the same data
+        connections data reports one (see _meter_cross_link) - the same data
         async_automatic_config()'s shared-CT detection reads - so two devices sharing a meter
         serial show up in the catalogue as two inverters measuring the same meter. It is
         deliberately a dangling cross-link: `meters` is always returned empty here, since a CT
         clamp serial is not a utility supply point and does not fit that section's identity model
-        (see _apply_meter_cross_link).
+        (see _meter_cross_link).
 
         Reporting is independent of self.automatic: the catalogue records what hardware GE Cloud
         found, not whether this component wired Predbat's apps.yaml to it - that distinction is
@@ -1617,22 +1621,20 @@ class GECloudDirect(ComponentBase):
 
         for device in controlled:
             info, ratings = self._device_info_and_ratings(device)
-            record = inverter_record(
-                "gecloud:{}".format(device),
-                inverter_type=inverter_type,
-                composition=composition,
-                functions=["solar", "battery"],
-                capabilities=self._device_capabilities(device),
-                hardware_ids={"serial": device},
-                serials=fronted_serials,
-                info=info,
-                ratings=ratings,
+            inverters.append(
+                inverter_record(
+                    "gecloud:{}".format(device),
+                    inverter_type=inverter_type,
+                    composition=composition,
+                    measures_meter=self._meter_cross_link(devices, device),
+                    functions=["solar", "battery"],
+                    capabilities=self._device_capabilities(device),
+                    hardware_ids={"serial": device},
+                    serials=fronted_serials,
+                    info=info,
+                    ratings=ratings,
+                )
             )
-            # Sets record["measures_meter"] in place when GE Cloud reports a CT/meter serial for
-            # this device - after the build, since it is a cross-link derived from other devices
-            # rather than a property of this one.
-            self._apply_meter_cross_link(devices, device, record)
-            inverters.append(record)
 
         for device in devices.get("pv") or []:
             info, ratings = self._device_info_and_ratings(device)
@@ -1647,7 +1649,7 @@ class GECloudDirect(ComponentBase):
                 )
             )
 
-        # Always empty - see _apply_meter_cross_link for why a CT clamp does not become a
+        # Always empty - see _meter_cross_link for why a CT clamp does not become a
         # fabricated meters record.
         return {"automatic": self.automatic, "inverters": inverters, "meters": []}
 
