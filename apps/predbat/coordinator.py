@@ -871,6 +871,50 @@ def _can_report(component):
     return component is None or hasattr(component, "build_discovery")
 
 
+def inverter_record(
+    device_id, inverter_type=None, control=None, composition=None, measures_meter=None, serials=None, functions=None, capabilities=None, flags=None, effects=None, hardware_ids=None, account_ids=None, info=None, ratings=None, coverage=None, entities=None
+):
+    """Assemble one inverters-section record, omitting every field that is unset or empty.
+
+    The parameter list IS the inverters section's schema, spelled out rather than taken as
+    **kwargs: a mistyped field name is then a TypeError a test catches at the call site, instead
+    of a key that reaches validate_report() and is silently dropped from a user's dump.
+
+    Empty containers are omitted rather than written as {} or []. Every reporter previously
+    carried its own `if info: record["info"] = info` ladder, which is how a record ends up
+    carrying `"ratings": {}` in one component and omitting it in another. A falsy value that is
+    real data - a rating of 0 - is kept: only None and empty containers are dropped.
+
+    Tuples are normalised to lists so a caller can pass a module-level constant without it
+    reaching the catalogue as a tuple, which neither JSON nor YAML serialises as a list.
+    """
+    fields = {
+        "inverter_type": inverter_type,
+        "control": control,
+        "composition": composition,
+        "measures_meter": measures_meter,
+        "serials": serials,
+        "functions": functions,
+        "capabilities": capabilities,
+        "flags": flags,
+        "effects": effects,
+        "hardware_ids": hardware_ids,
+        "account_ids": account_ids,
+        "info": info,
+        "ratings": ratings,
+        "coverage": coverage,
+        "entities": entities,
+    }
+    record = {"device_id": device_id}
+    for name, value in fields.items():
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple, set)) and not value:
+            continue
+        record[name] = list(value) if isinstance(value, (tuple, set)) else value
+    return record
+
+
 def validate_report(report, component_name, log):
     """Return a cleaned copy of one component's report - never raises, drops what does not fit.
 

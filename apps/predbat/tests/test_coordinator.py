@@ -5,7 +5,7 @@
 from datetime import datetime
 
 from mock_base import MockBase
-from coordinator import Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC
+from coordinator import Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC, inverter_record, validate_report
 
 
 def _coordinator():
@@ -287,6 +287,59 @@ class _StubRegistry:
     def get_component(self, name):
         """The stub component registered under this name, or None."""
         return self._components.get(name)
+
+
+def test_inverter_record_omits_empty_containers():
+    """An empty or unset container is left out of the record rather than written as {} or [].
+
+    Every reporter previously wrote its own `if info: record["info"] = info` ladder. Centralising
+    it means a reporter can pass whatever it gathered and let the builder decide, and the shape of
+    an inverters record lives in exactly one place.
+    """
+    record = inverter_record("fox:ABC123", inverter_type="FOX", composition="direct", functions=["solar", "battery"], info={}, ratings={}, entities={}, serials=[])
+    assert record == {"device_id": "fox:ABC123", "inverter_type": "FOX", "composition": "direct", "functions": ["solar", "battery"]}, record
+    print("PASS: inverter_record omits empty containers")
+    return 0
+
+
+def test_inverter_record_keeps_everything_populated():
+    """Every populated field survives, including a falsy-but-real rating like 0."""
+    record = inverter_record(
+        "fox:ABC123",
+        inverter_type="FOX",
+        composition="gateway",
+        serials=["S1", "S2"],
+        measures_meter="fox:meter:M1",
+        functions=["solar"],
+        capabilities=["export_limit"],
+        hardware_ids={"serial": "ABC123"},
+        info={"model": "H3-10.0"},
+        ratings={"battery_kwh": 10.4, "max_charge_w": 0},
+        entities={"charge_rate": {"entity_id": "number.fox_abc123_charge_rate", "domain": "number", "access": "rw"}},
+    )
+    assert record["serials"] == ["S1", "S2"]
+    assert record["measures_meter"] == "fox:meter:M1"
+    assert record["capabilities"] == ["export_limit"]
+    assert record["hardware_ids"] == {"serial": "ABC123"}
+    assert record["ratings"]["max_charge_w"] == 0, "a real zero rating is data, not an empty container"
+    assert record["entities"]["charge_rate"]["domain"] == "number"
+    print("PASS: inverter_record keeps every populated field")
+    return 0
+
+
+def test_inverter_record_round_trips_through_validation():
+    """A record the builder produced survives validate_report() unchanged.
+
+    The builder's whole job is producing something the coordinator will accept. If a field name
+    here ever drifts from SECTION_SPEC's structural list, validation silently drops it - so pin
+    that the two agree rather than trusting they do.
+    """
+    record = inverter_record("fox:ABC123", inverter_type="FOX", composition="direct", serials=["S1"], measures_meter="fox:meter:M1", functions=["solar"], hardware_ids={"serial": "ABC123"}, info={"model": "H3"}, ratings={"battery_kwh": 10.4})
+    cleaned = validate_report({"inverters": [record]}, "fox", print)["inverters"][0]
+    for field in ("device_id", "inverter_type", "composition", "serials", "measures_meter", "functions", "hardware_ids", "info", "ratings"):
+        assert field in cleaned, "{} was dropped by validate_report - builder and SECTION_SPEC disagree: {}".format(field, cleaned)
+    print("PASS: a built record survives validation with every field intact")
+    return 0
 
 
 def test_assemble_merges_sections_and_tags_source():
@@ -1433,6 +1486,9 @@ def test_coordinator_all(my_predbat=None):
     failures += test_assemble_merges_sections_and_tags_source()
     failures += test_catalogue_reassembles_so_a_post_assembly_report_reaches_it()
     failures += test_assemble_component_status()
+    failures += test_inverter_record_omits_empty_containers()
+    failures += test_inverter_record_keeps_everything_populated()
+    failures += test_inverter_record_round_trips_through_validation()
     failures += test_component_status_omits_components_that_cannot_report()
     failures += test_component_status_reported_at_set_only_for_ok()
     failures += test_observations_duplicate_serial()
