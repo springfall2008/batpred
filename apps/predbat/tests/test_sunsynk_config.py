@@ -12,6 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from unittest.mock import patch
 from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
+from coordinator import validate_report
 from sunsynk_const import SUNSYNK_TTL_STATIC
 from sunsynk import load_apps_yaml_credentials, _tou_test_window
 from tests.test_sunsynk_api import MockSunsynk
@@ -347,6 +348,156 @@ def test_run_first_cycle_polls_and_publishes():
         print(f"ERROR: run() should return True on a completed first cycle, got {result!r}")
         failed = True
     assert not failed, "test_run_first_cycle_polls_and_publishes"
+
+
+SUNSYNK_LIVE_SERIAL = "2405116013"
+
+
+def _sunsynk_fleet():
+    """A MockSunsynk holding one inverter built from sunsynk_const.py's CONFIRMED-live values only.
+
+    No captured inverter_detail or settings response exists in the repository (sunsynk_const.py
+    records that nobody on the project has a live account), so this is assembled from the values it
+    does mark confirmed live: ratePower 8000 with pvMaxLimit 7000; chargeVolt 58.4 with a 200 Ah pack
+    (10.24 kWh); and the serial the live telemetry sample was taken from.
+    """
+    s = MockSunsynk()
+    sn = SUNSYNK_LIVE_SERIAL
+    s.device_list = [sn]
+    s.device_rated_power = {sn: 8000.0}
+    s.device_values = {sn: {"capacity": 200, "chargeVolt": 58.4}}
+    s.device_settings = {sn: {"pvMaxLimit": 7000}}
+    return s
+
+
+def test_sunsynk_catalogue_describes_each_inverter():
+    """Each inverter is a SunsynkCloud record with the confirmed-live ratings."""
+    failed = False
+    s = _sunsynk_fleet()
+    record = s.build_discovery()["inverters"][0]
+    checks = [
+        (record["device_id"], "sunsynk:" + SUNSYNK_LIVE_SERIAL),
+        (record["inverter_type"], "SunsynkCloud"),
+        (record["composition"], "direct"),
+        (record["functions"], ["solar", "battery"]),
+        (record["hardware_ids"], {"serial": SUNSYNK_LIVE_SERIAL}),
+        (sorted(record["capabilities"]), ["charge_rate_power", "discharge_target", "export_limit", "schedule", "target_soc"]),
+        (record["ratings"]["inverter_w"], 8000.0),
+        (record["ratings"]["battery_capacity_ah"], 200.0),
+        (record["ratings"]["battery_kwh"], s.battery_capacity(SUNSYNK_LIVE_SERIAL)),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print("ERROR: expected {!r}, got {!r}".format(expected, actual))
+            failed = True
+    if abs(record["ratings"]["battery_kwh"] - 10.24) > 0.01:
+        print("ERROR: the confirmed-live pack is 10.24 kWh, got {}".format(record["ratings"]["battery_kwh"]))
+        failed = True
+    for absent in ("info", "account_ids"):
+        if absent in record:
+            print("ERROR: Sunsynk holds no model, firmware or station ID, so {} must be absent: {}".format(absent, record[absent]))
+            failed = True
+    return failed
+
+
+def test_sunsynk_catalogue_export_limit_only_on_evidence():
+    """export_limit is a capability exactly where automatic_config() would bind it: export_limit() > 0."""
+    s = _sunsynk_fleet()
+    s.device_rated_power = {}
+    s.device_settings = {}
+    record = s.build_discovery()["inverters"][0]
+    if "export_limit" in record.get("capabilities", []):
+        print("ERROR: with no rating and no pvMaxLimit, export_limit() is 0 and the capability must be absent")
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_none_before_discovery():
+    """With no inverters there is nothing to describe."""
+    if MockSunsynk().build_discovery() is not None:
+        print("ERROR: an empty device_list must report None")
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every Sunsynk record back unchanged."""
+    report = _sunsynk_fleet().build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "sunsynk", warnings.append)
+    if warnings or cleaned.get("inverters") != report["inverters"]:
+        print("ERROR: validation changed or warned on the report: {} {}".format(warnings, cleaned.get("inverters")))
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_filed_when_first_cycle_defers():
+    """run() files the report even on a first cycle that defers startup because the live poll failed.
+
+    `if first and not live_ok: return False` - and automatic_config() after it - would otherwise
+    swallow the report on exactly the installs whose dump most needs to say what hardware was found.
+    Built on test_run_first_cycle_polls_and_publishes(); fetch_device_data() fails and
+    automatic_config() is observed.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.automatic = True
+    reports = []
+    s.report_discovery = reports.append
+    configured = []
+
+    async def fake_restore():
+        """Restore nothing."""
+
+    async def fake_token():
+        """Log in successfully."""
+        return True
+
+    async def fake_device_list():
+        """Discover one inverter."""
+        s.device_list = ["INV1"]
+        return ["INV1"]
+
+    async def fake_detail(sn):
+        """Return the confirmed-live rating."""
+        return {"ratePower": 8000}
+
+    async def fake_device_data(sn):
+        """Fail the live poll: refresh_live() treats a falsy result as no data."""
+        return {}
+
+    async def fake_settings(sn):
+        """Return a minimal settings read."""
+        return {"batteryLowCap": "10"}
+
+    async def fake_publish():
+        """Publish nothing."""
+
+    async def fake_auto():
+        """Record that automatic_config() ran."""
+        configured.append(True)
+
+    with (
+        patch.object(s, "restore_state", side_effect=fake_restore),
+        patch.object(s, "fetch_token", side_effect=fake_token),
+        patch.object(s, "get_device_list", side_effect=fake_device_list),
+        patch.object(s, "fetch_device_detail", side_effect=fake_detail),
+        patch.object(s, "fetch_device_data", side_effect=fake_device_data),
+        patch.object(s, "fetch_settings", side_effect=fake_settings),
+        patch.object(s, "publish_data", side_effect=fake_publish),
+        patch.object(s, "automatic_config", side_effect=fake_auto),
+    ):
+        result = run_async_local(s.run(0, True))
+    if result is not False:
+        print("ERROR: run() should defer startup (return False) when the first live poll fails, got {!r}".format(result))
+        failed = True
+    if configured:
+        print("ERROR: automatic_config() must not run on a deferred first cycle")
+        failed = True
+    if len(reports) != 1 or reports[0]["inverters"][0]["device_id"] != "sunsynk:INV1":
+        print("ERROR: the report must be filed before the deferring return, got {}".format(reports))
+        failed = True
+    return failed
 
 
 def test_run_returns_false_on_login_failure():
@@ -919,6 +1070,11 @@ def run_sunsynk_config_tests(my_predbat):
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),
+        ("catalogue_describes_each_inverter", test_sunsynk_catalogue_describes_each_inverter),
+        ("catalogue_export_limit_only_on_evidence", test_sunsynk_catalogue_export_limit_only_on_evidence),
+        ("catalogue_none_before_discovery", test_sunsynk_catalogue_none_before_discovery),
+        ("catalogue_round_trips", test_sunsynk_catalogue_round_trips_through_validate_report),
+        ("catalogue_filed_when_first_cycle_defers", test_sunsynk_catalogue_filed_when_first_cycle_defers),
         ("run_login_failure", test_run_returns_false_on_login_failure),
         ("run_no_inverters", test_run_returns_false_with_no_inverters),
         ("run_publishes_every_tick", test_run_publishes_schedule_every_tick_not_only_first),

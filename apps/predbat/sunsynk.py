@@ -28,6 +28,7 @@ import time
 import aiohttp
 import yaml
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from tou_schedule import TouScheduleMixin, MINUTES_PER_DAY
@@ -1537,6 +1538,66 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    def build_discovery(self):
+        """
+        Describe the discovered Sunsynk inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, the rating, capacity and
+        export-limit accessors - so this adds no API calls and cannot change what Sunsynk does.
+        Reporting is independent of self.automatic.
+
+        Discovery applies no device-type filter and automatic_config() registers every serial as
+        "SunsynkCloud" with no further test, binding PV and battery entities for each. Nothing
+        Sunsynk returns tells a PV-only unit from a hybrid, so neither can this: every record
+        carries inverter_type "SunsynkCloud" and functions solar and battery, mirroring
+        automatic_config() as the source of truth. No device is excluded here either: discovery
+        and automatic_config() both register every serial, so there is no excluded-device case to
+        mirror.
+
+        Ratings: inverter_limit() (ratePower, W) as inverter_w; battery_capacity() (kWh) as
+        battery_kwh; and the battery endpoint's capacity field as battery_capacity_ah, the raw Ah
+        the API returned. export_limit is reported as a capability exactly where
+        automatic_config() would bind it - export_limit() > 0.
+
+        Deliberately not reported: model, firmware and any station ID - none is held, and Sunsynk
+        has no station grouping at all.
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.device_list:
+            ratings = {}
+            rated_w = self.inverter_limit(sn)
+            if rated_w > 0:
+                ratings["inverter_w"] = rated_w
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh > 0:
+                ratings["battery_kwh"] = battery_kwh
+            capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))
+            if capacity_ah > 0:
+                ratings["battery_capacity_ah"] = capacity_ah
+
+            capabilities = ["schedule", "target_soc", "discharge_target", "charge_rate_power"]
+            if self.export_limit(sn) > 0:
+                capabilities.append("export_limit")
+
+            inverters.append(
+                inverter_record(
+                    "sunsynk:{}".format(sn),
+                    inverter_type="SunsynkCloud",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=capabilities,
+                    hardware_ids={"serial": sn},
+                    ratings=ratings,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
     async def refresh_static(self):
         """Re-discover inverters and refresh their static detail. Returns True if discovery worked.
 
@@ -1685,6 +1746,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             await self.publish_schedule_settings_ha(sn)
 
         await self.publish_data()
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Sunsynk's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         if first and not live_ok:
             # Startup has not really succeeded without telemetry: automatic_config() runs on
