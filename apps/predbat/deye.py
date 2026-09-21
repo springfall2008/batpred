@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from tou_schedule import TouScheduleMixin
@@ -1216,6 +1217,71 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    def build_discovery(self):
+        """
+        Describe the discovered Deye inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, station_ids,
+        device_rated_power and the battery accessors - so this adds no API calls and cannot
+        change what Deye does. Reporting is independent of self.automatic.
+
+        automatic_config() registers every serial in device_list (already filtered to deviceType
+        "INVERTER") as "DeyeCloud" with no further test, and binds both PV and battery entities for
+        each. Deye's API offers no way to tell a PV-only unit from a hybrid, so neither can this:
+        every record carries inverter_type "DeyeCloud" and functions solar and battery, mirroring
+        automatic_config() as the source of truth. That is exactly what Predbat believes about the
+        device - and the fact a maintainer needs when a PV-only unit has been configured as a
+        battery inverter.
+
+        Ratings: RatedPower (W) as inverter_w; battery_capacity() (kWh) as battery_kwh; and
+        config/battery's battCapacity as battery_capacity_ah, the raw Ah the API returned, so a
+        reader can check the kWh against its inputs. derive_battery_capacity() is never called
+        here: it logs and writes device_pack_voltage/device_capacity, whereas battery_capacity()
+        only reads them.
+
+        station_ids goes in account_ids only when the account has exactly one station:
+        get_device_list() queries every station at once and flattens the result, so which device
+        belongs to which station is not held, and attributing one of several would be a guess.
+
+        Deliberately not reported: model and firmware (not held - device/measurePoints and
+        station/latest are fetched for debug logging and discarded, and reading them would be a
+        new API dependency).
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.device_list:
+            return None
+
+        account_ids = {"station_id": self.station_ids[0]} if len(self.station_ids) == 1 else None
+
+        inverters = []
+        for sn in self.device_list:
+            ratings = {}
+            rated_w = self._as_float(self.device_rated_power.get(sn), 0.0)
+            if rated_w > 0:
+                ratings["inverter_w"] = rated_w
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh > 0:
+                ratings["battery_kwh"] = battery_kwh
+            configured_ah = self._battery_config_value(sn, "capacity")
+            if configured_ah > 0:
+                ratings["battery_capacity_ah"] = configured_ah
+
+            inverters.append(
+                inverter_record(
+                    "deye:{}".format(sn),
+                    inverter_type="DeyeCloud",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=["schedule", "target_soc", "discharge_target", "charge_rate_power"],
+                    hardware_ids={"serial": sn},
+                    account_ids=account_ids,
+                    ratings=ratings,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
     @staticmethod
     def _age_text(age):
         """Render a cache age in minutes for logging, tolerating an unknown age."""
@@ -1528,6 +1594,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         await self.publish_data()
         for sn in self.device_list:
             await self.publish_schedule_settings_ha(sn)
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Deye's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Drain any control orders left pending by apply_dynamic_control() every cycle (not
         # just on first run) so a write that is HTTP-accepted but then fails to apply on the
