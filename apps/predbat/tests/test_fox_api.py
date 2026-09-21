@@ -7435,6 +7435,144 @@ def test_merge_fox_credentials_reports_what_it_used(my_predbat):
     return False
 
 
+def _fox_discovery_devices():
+    """One battery inverter and one PV-only device as the Fox cloud reports them: (device_list, device_detail, device_settings)."""
+    device_list = [{"deviceSN": "BATT001"}, {"deviceSN": "PVONLY1"}]
+    device_detail = {
+        "BATT001": {
+            "hasPV": True,
+            "hasBattery": True,
+            "thirdPartyGen": False,
+            "capacity": 10.0,
+            "deviceType": "H3-10.0",
+            "function": {"scheduler": True},
+            "batteryList": [{"capacity": 2.6}, {"capacity": 2.6}, {"capacity": 2.6}, {"capacity": 2.6}],
+        },
+        "PVONLY1": {"hasPV": True, "hasBattery": False, "capacity": 5.0, "deviceType": "S1-5.0", "function": {}},
+    }
+    # {deviceSN: {SettingName: {"value": ...}}} - the shape fox.py reads at line 1251
+    device_settings = {"BATT001": {"ExportLimit": {"value": 5000}, "WorkMode": {"value": "SelfUse"}}, "PVONLY1": {}}
+    return device_list, device_detail, device_settings
+
+
+def _fox_discovery_api(my_predbat):
+    """A FoxAPI carrying the _fox_discovery_devices() fleet."""
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+    fox.component_name = "fox"
+    fox.device_list, fox.device_detail, fox.device_settings = _fox_discovery_devices()
+    return fox
+
+
+def test_fox_build_discovery_describes_each_device(my_predbat):
+    """One record per discovered device, with the battery inverter and the PV-only device distinguished."""
+    print("**** test_fox_build_discovery_describes_each_device ****")
+    fox = _fox_discovery_api(my_predbat)
+
+    report = fox.build_discovery()
+
+    assert report["automatic"] is False, "the report carries the component's automatic flag, whatever it is"
+    by_id = {record["device_id"]: record for record in report["inverters"]}
+    assert set(by_id) == {"fox:BATT001", "fox:PVONLY1"}, by_id
+
+    battery = by_id["fox:BATT001"]
+    assert battery["inverter_type"] == "FoxCloud", "inverter_type is an INVERTER_DEF key - the one Fox's own automatic_config() writes"
+    assert sorted(battery["functions"]) == ["battery", "solar"]
+    assert battery["hardware_ids"] == {"serial": "BATT001"}
+    assert battery["info"]["model"] == "H3-10.0"
+    assert battery["ratings"]["inverter_w"] == 10000.0
+    assert "scheduler" in battery["capabilities"]
+    assert "export_limit" in battery["capabilities"]
+
+    pv = by_id["fox:PVONLY1"]
+    assert pv["functions"] == ["solar"], "a device with no battery is solar only"
+    assert "inverter_type" not in pv, "a PV-only device is not an inverter Predbat controls"
+
+    # A half-kW model: Fox reports a KH10.5's capacity truncated to 10. capacity_watts() restores
+    # the 500 W, so the catalogue agrees with the _inverter_capacity sensor publish_data() publishes.
+    fox.device_detail["BATT001"].update({"deviceType": "KH10.5", "capacity": 10})
+    battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
+    assert battery["ratings"]["inverter_w"] == 10500.0, "a half-kW model must go through capacity_watts(), not capacity * 1000"
+    print("PASS: Fox build_discovery describes each discovered device")
+    return 0
+
+
+def test_fox_build_discovery_counts_battery_entries_rather_than_summing_them(my_predbat):
+    """batteryList entries are counted, never summed into a capacity.
+
+    GH#4919: an AIO ESS returns one physical pack as four bmu entries all carrying the inverter's
+    own serial, so publish_data()'s sum comes out 4x the real capacity. Reporting that sum would
+    put a knowingly-wrong battery_kwh into every affected user's dump. The COUNT is the evidence
+    the bug needs - a fleet reporting four entries against one pack is exactly what a maintainer
+    wants to see - so report that and no capacity at all.
+    """
+    print("**** test_fox_build_discovery_counts_battery_entries_rather_than_summing_them ****")
+    fox = _fox_discovery_api(my_predbat)
+
+    battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
+
+    assert battery["ratings"]["battery_entries"] == 4
+    assert "battery_kwh" not in battery["ratings"], "the summed capacity is known to be wrong - do not report it"
+    assert 10.4 not in battery["ratings"].values(), "4 x 2.6 is the bug, not a rating"
+    print("PASS: Fox reports the battery entry count, not the known-wrong sum")
+    return 0
+
+
+def test_fox_build_discovery_returns_none_before_discovery(my_predbat):
+    """With no devices found yet there is nothing to describe, so nothing is reported."""
+    print("**** test_fox_build_discovery_returns_none_before_discovery ****")
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+    fox.device_list = []
+
+    assert fox.build_discovery() is None, "an empty device list means 'ask me again later', not an empty report"
+    print("PASS: Fox reports nothing before it has discovered anything")
+    return 0
+
+
+def test_fox_run_reports_discovery_and_survives_a_failure(my_predbat):
+    """The real run() files a report on every cycle, and a broken build_discovery() cannot degrade Fox.
+
+    Drives FoxAPI.run() itself rather than calling refresh_discovery() directly - the same reason
+    the GE Cloud discovery tests call the real run() (see _discovery_component() in
+    test_ge_cloud.py). A direct call passes whether or not run() ever makes it: a call placed
+    inside `if first and self.automatic:` (automatic is False here), inside an `if first:` block,
+    or after an early return would all go unnoticed. MockFoxAPIWithRunTracking stubs only the
+    network-facing calls run() makes, exactly as the test_run_* tests above use it, and its stubs
+    leave device_detail/device_settings alone, so the fixture seeded here is what run() reports.
+
+    The second cycle is first=False with a device added, so a call confined to the first cycle
+    fails it. The third cycle's build raises: run() must still succeed, had_errors must stay
+    unset (it would suppress record_status() - see ComponentBase.refresh_discovery()), and the
+    last filed report must stand.
+    """
+    print("**** test_fox_run_reports_discovery_and_survives_a_failure ****")
+    device_list, device_detail, device_settings = _fox_discovery_devices()
+    fox = MockFoxAPIWithRunTracking()
+    fox.automatic = False
+    fox.device_list = [device_list[0]]
+    fox.device_detail = {"BATT001": device_detail["BATT001"]}
+    fox.device_settings = {"BATT001": device_settings["BATT001"]}
+    reports = []
+    fox.report_discovery = lambda report: reports.append(report)
+
+    assert run_async(fox.run(0, first=True)) is True
+    assert len(reports) == 1, f"the first run() cycle should file a report, got {len(reports)}"
+    assert [record["device_id"] for record in reports[0]["inverters"]] == ["fox:BATT001"], reports[0]
+
+    # A second device appears; the next ordinary cycle must re-file the grown report
+    fox.device_list.append(device_list[1])
+    fox.device_detail["PVONLY1"] = device_detail["PVONLY1"]
+    assert run_async(fox.run(60, first=False)) is True
+    assert len(reports) == 2, f"a first=False cycle must re-file a report that has moved on, got {len(reports)}"
+    assert {record["device_id"] for record in reports[1]["inverters"]} == {"fox:BATT001", "fox:PVONLY1"}, reports[1]
+
+    fox.build_discovery = MagicMock(side_effect=Exception("boom"))
+    assert run_async(fox.run(120, first=False)) is True, "a discovery failure must not fail run()"
+    assert not getattr(fox.base, "had_errors", False), "a discovery failure must never set had_errors - that suppresses record_status()"
+    assert len(reports) == 2 and fox._discovery_report == reports[1], "a failed build must leave the last filed report standing"
+    print("PASS: Fox's run() reports on every cycle and contains a reporter failure")
+    return 0
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -7692,6 +7830,12 @@ def run_fox_api_tests(my_predbat):
         failed |= test_fox_rate_limiting_midnight_reset(my_predbat)
         failed |= test_fox_rate_limiting_30min_floor(my_predbat)
         failed |= test_fox_rate_limiting_variable_pattern(my_predbat)
+
+        # Discovery catalogue tests
+        failed |= test_fox_build_discovery_describes_each_device(my_predbat)
+        failed |= test_fox_build_discovery_counts_battery_entries_rather_than_summing_them(my_predbat)
+        failed |= test_fox_build_discovery_returns_none_before_discovery(my_predbat)
+        failed |= test_fox_run_reports_discovery_and_survives_a_failure(my_predbat)
     except Exception as e:
         print(f"ERROR: Fox API test failed with exception: {e}")
         import traceback

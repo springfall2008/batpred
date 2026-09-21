@@ -26,6 +26,7 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from utils import dp2, load_apps_yaml
@@ -601,6 +602,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         # Automatic configuration on first run
         if first and self.automatic:
             await self.automatic_config()
+
+        # Unconditional, once per cycle and outside any one-shot gate, so a transient failure is
+        # retried rather than lost - see ComponentBase.refresh_discovery(), which owns the
+        # compare/guard loop. Placed after the device poll above so it describes what this cycle
+        # actually read.
+        self.refresh_discovery()
 
         return True
 
@@ -2379,6 +2386,94 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
+
+    def build_discovery(self):
+        """
+        Describe the discovered Fox devices for the discovery catalogue.
+
+        Reads only what automatic_config() already gathers - self.device_list, self.device_detail
+        and self.device_settings - so this adds no API calls and cannot change what Fox does.
+        Reporting is independent of self.automatic: the catalogue records what hardware is there,
+        not whether this component wired apps.yaml to it, which is what the report's own
+        "automatic" flag is for.
+
+        A device with no battery is reported with functions ["solar"] and no inverter_type: it is
+        a generation source Predbat reads, not an inverter it controls. A battery device gets both
+        functions and inverter_type "FoxCloud" - the INVERTER_DEF key automatic_config() itself
+        writes, so the catalogue's resulting_config comparison matches rather than showing a
+        permanent mismatch.
+
+        The inverter's rating goes through capacity_watts(), never capacity * 1000: Fox reports a
+        half-kW model's capacity truncated (a KH10.5 says 10), and capacity_watts() is what
+        restores the 500 W for the _inverter_capacity sensor publish_data() publishes. Using it
+        here keeps the catalogue from disagreeing with that sensor.
+
+        batteryList entries are COUNTED, never summed. publish_data() sums them (fox.py:1852) and
+        that is a known live bug (GH#4919): an AIO ESS returns one physical pack as four bmu
+        entries all carrying the inverter's own serial, so the sum is 4x the real capacity.
+        Publishing that figure would put a knowingly-wrong battery_kwh in every affected user's
+        dump, whereas the entry count is the evidence the bug needs - a fleet reporting four
+        entries against one pack is exactly what a maintainer wants to see.
+
+        Returns None when nothing has been discovered yet, which refresh_discovery() treats as
+        "nothing to report, ask again next cycle".
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for device in self.device_list:
+            serial = device.get("deviceSN")
+            if not serial:
+                continue
+            detail = self.device_detail.get(serial, {}) or {}
+            has_battery = bool(detail.get("hasBattery", False))
+            has_pv = bool(detail.get("hasPV", False))
+
+            functions = []
+            if has_pv:
+                functions.append("solar")
+            if has_battery:
+                functions.append("battery")
+
+            capabilities = []
+            if detail.get("function", {}).get("scheduler", False):
+                capabilities.append("scheduler")
+            if detail.get("thirdPartyGen", False):
+                capabilities.append("third_party_gen")
+            settings = self.device_settings.get(serial, {}) or {}
+            if "ExportLimit" in settings:
+                capabilities.append("export_limit")
+
+            info = {}
+            device_type = detail.get("deviceType")
+            if device_type:
+                info["model"] = str(device_type)
+            product_type = detail.get("productType")
+            if product_type:
+                info["product_type"] = str(product_type)
+
+            ratings = {}
+            if detail.get("capacity"):
+                ratings["inverter_w"] = self.capacity_watts(detail)
+            battery_list = detail.get("batteryList") or []
+            if battery_list:
+                ratings["battery_entries"] = len(battery_list)
+
+            inverters.append(
+                inverter_record(
+                    "fox:{}".format(serial),
+                    inverter_type="FoxCloud" if has_battery else None,
+                    composition="direct",
+                    functions=functions,
+                    capabilities=capabilities,
+                    hardware_ids={"serial": serial},
+                    info=info,
+                    ratings=ratings,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
 
 async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
