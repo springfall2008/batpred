@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 
 
 # Save original sleep before any patching
@@ -772,6 +773,30 @@ def test_component_base_refresh_discovery_survives_a_component_built_without_ini
     return False
 
 
+def test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows(my_predbat):
+    """A report built with inverter_record() from live component state is re-filed when that state grows.
+
+    refresh_discovery() stores the report it filed and compares each rebuild against it with ==.
+    A reporter passing its own long-lived list (serials=self.serials) is the natural way to write
+    one, so the builder must not let that list into the stored report: if it did, appending to it
+    would change the stored report too, the rebuild would compare equal, and the grown fleet
+    would never reach the catalogue - the report frozen at its first state.
+    """
+    component, coordinator = _discovery_component()
+    component.fronted = ["battery001"]
+    component.build_discovery = lambda: {"inverters": [inverter_record("test:gateway", composition="gateway", serials=component.fronted)]}
+
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 1, f"The first report should be filed, got {len(coordinator.filed)}"
+
+    component.fronted.append("battery002")
+    component.refresh_discovery()
+    assert len(coordinator.filed) == 2, "A grown fleet must be re-filed - the stored report must not have grown along with the live list"
+    assert coordinator.filed[1][1]["inverters"][0]["serials"] == ["battery001", "battery002"], coordinator.filed[1][1]
+    print("PASS: refresh_discovery re-files a report once the live state behind inverter_record() grows")
+    return False
+
+
 def test_component_base_discovery_entities_keeps_only_what_exists(my_predbat):
     """Only entities Home Assistant has actually seen survive - a spec is not evidence of publication."""
     component, _coordinator = _discovery_component()
@@ -813,6 +838,7 @@ def test_component_base_all(my_predbat):
         ("discovery_refresh_failure", test_component_base_refresh_discovery_failure_is_contained_and_retried, "a build_discovery failure is contained and retried"),
         ("discovery_refresh_marker_order", test_component_base_refresh_discovery_marker_waits_for_the_report_to_land, "the marker advances only after the report is filed"),
         ("discovery_refresh_no_init", test_component_base_refresh_discovery_survives_a_component_built_without_init, "refresh_discovery does not raise on a component built without __init__"),
+        ("discovery_refresh_live_state", test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows, "a report built from live state is re-filed when that state grows"),
         ("discovery_entities_filter", test_component_base_discovery_entities_keeps_only_what_exists, "discovery_entities keeps only entities that exist"),
     ]
 
