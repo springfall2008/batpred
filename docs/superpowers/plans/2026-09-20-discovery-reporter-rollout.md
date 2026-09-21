@@ -4,7 +4,7 @@
 
 **Goal:** Extract a shared inverter-record builder from the two existing inverter reporters, then use it to add the first new one (Fox) — taking the discovery catalogue from GivEnergy-only to covering a third vendor.
 
-**Architecture:** `coordinator.py` gains a pure `inverter_record()` function that assembles one `inverters`-section record and drops every empty container, so the "only include this key if non-empty" ladder is written once rather than per reporter. GivTCP and GE Cloud are migrated onto it (no behaviour change, proven by their existing tests), and Fox becomes its first new consumer. Fox's reporter reads the data `automatic_config()` already gathers — `self.device_list`, `self.device_detail`, `self.device_settings` — so no new API calls are added.
+**Architecture:** `coordinator.py` gains a pure `inverter_record()` function that assembles one `inverters`-section record and drops every empty container, so the "only include this key if non-empty" ladder is written once rather than per reporter. GivTCP and GE Cloud are migrated onto it (no change to what reaches the catalogue, proven by their existing tests - see Amendments, R1), and Fox becomes its first new consumer. Fox's reporter reads the data `automatic_config()` already gathers — `self.device_list`, `self.device_detail`, `self.device_settings` — so no new API calls are added.
 
 **Tech Stack:** Python 3.14, no new dependencies. Tests via `coverage/run_all`, quality via `coverage/run_pre_commit`.
 
@@ -24,6 +24,16 @@
 - **`git add` new files BEFORE running pre-commit.** `--all-files` means git-tracked only, so an untracked new test file passes unchecked.
 - **Tests run from `coverage/`:** `./run_all --test <name>`. Save output to a file and grep it; do not pipe to grep directly.
 - **Scope `git add` to the files you changed.** A GitNexus re-index can regenerate banners into `CLAUDE.md`/`AGENTS.md`/`.claude/skills/**`; never commit those incidentally.
+
+## Amendments
+
+_Recorded 2026-09-21, after Tasks 1-3 were executed and the whole branch was reviewed. These rulings were made during execution and are copied here because the working notes they were made in are not committed. The task text below has been updated to match them._
+
+- **R1 - Tasks 2 and 3 are "identical in what reaches the catalogue", not byte-identical.** Records must be identical as dicts wherever a container is non-empty, and identical in what reaches the catalogue. Key order may change, and an empty container may be omitted from the raw `build_discovery()` return: GivTCP's hand-built record always wrote `"capabilities": capabilities` and `"entities": entities`, even when empty, whereas the builder omits an empty container. Why this is acceptable: the binding requirement is observe-only, meaning no change to what reaches the catalogue, and `validate_report()` already drops an empty container (`_validate_record()` writes a container only `if cleaned:`), so the assembled catalogue is unchanged. Keeping the empties would have meant special-casing the builder for one caller. The one visible difference - a GivTCP inverter with no capabilities now has no `capabilities` key in the raw return - is pinned by `test_build_discovery_omits_capabilities_when_no_probe_applies` in `test_givtcp_component.py`.
+- **R2 - the only test edit R1 permitted.** An existing GivTCP or GE Cloud test that failed *solely* because it indexed `record["capabilities"]` or `record["entities"]` on a now-empty container could change that one access to `.get("capabilities", [])` / `.get("entities", {})`. Assertions on a non-empty container's contents could not change, and a failure of any other kind meant the refactor was wrong. In the event, no test needed it.
+- **Task 4 corrections (Task 4 is not yet executed).** `inverter_type` is `"FoxCloud"`, the `INVERTER_DEF` key Fox's own `automatic_config()` writes (`fox.py`, `set_arg("inverter_type", ["FoxCloud" ...])`): `"FOX"` is not a key, and the catalogue's resulting-config comparison would show every Fox user a permanent false mismatch. `ratings["inverter_w"]` comes from `self.capacity_watts(detail)`, not `capacity * 1000`: Fox reports a half-kW model's capacity truncated (a KH10.5 says 10), and `capacity_watts()` restores the 500 W, so the catalogue agrees with Fox's own `_inverter_capacity` sensor - the test now asserts 10500 W for a KH10.5. The wiring test now drives the real `FoxAPI.run()` rather than calling `refresh_discovery()` directly, which passed whether or not `run()` ever made the call.
+- **The builder as it now stands (Task 1's code block is updated to match).** Every field after `device_id` is keyword-only; every container is copied (a shallow copy of the top level); a set or frozenset becomes a sorted list; tuples become lists; an empty string is dropped like `None`, while `control=False` is kept. The copy matters most: `refresh_discovery()` compares each build with the report it last filed, so a record holding a reporter's live list (`serials=self.serials`) would change along with that list, the rebuild would always compare equal, and the report would never be re-filed. `test_coordinator.py` gained a test for each (schema parity, keyword-only, copying, set/tuple normalisation, empty string, `control=False`, and an exact `validate_report()` round trip), and `test_component_base.py` a `refresh_discovery()`-level reproduction of the frozen report.
+- **GE Cloud passes `measures_meter` into the builder.** `_apply_meter_cross_link()`, which patched the finished record, became `_meter_cross_link()`, which returns the value, so a record's whole shape is decided by `inverter_record()` with nothing mutated afterwards - the pattern later reporters should copy. Task 3's code block is updated to match.
 
 ---
 
@@ -49,7 +59,7 @@
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `inverter_record(device_id, inverter_type=None, control=None, composition=None, measures_meter=None, serials=None, functions=None, capabilities=None, flags=None, effects=None, hardware_ids=None, account_ids=None, info=None, ratings=None, coverage=None, entities=None) -> dict`. Every parameter except `device_id` is optional; any that is `None` or empty is omitted from the returned dict. Tasks 2, 3 and 4 import it as `from coordinator import inverter_record`.
+- Produces: `inverter_record(device_id, *, inverter_type=None, control=None, composition=None, measures_meter=None, serials=None, functions=None, capabilities=None, flags=None, effects=None, hardware_ids=None, account_ids=None, info=None, ratings=None, coverage=None, entities=None) -> dict`. Every parameter except `device_id` is optional and keyword-only; any that is `None`, an empty string or an empty container is omitted from the returned dict, and every container is copied rather than stored as the caller's own object. Tasks 2, 3 and 4 import it as `from coordinator import inverter_record`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -63,17 +73,23 @@ def test_inverter_record_omits_empty_containers():
     it means a reporter can pass whatever it gathered and let the builder decide, and the shape of
     an inverters record lives in exactly one place.
     """
-    record = inverter_record("fox:ABC123", inverter_type="FOX", composition="direct", functions=["solar", "battery"], info={}, ratings={}, entities={}, serials=[])
-    assert record == {"device_id": "fox:ABC123", "inverter_type": "FOX", "composition": "direct", "functions": ["solar", "battery"]}, record
+    record = inverter_record("fox:ABC123", inverter_type="FoxCloud", composition="direct", functions=["solar", "battery"], info={}, ratings={}, entities={}, serials=[])
+    assert record == {"device_id": "fox:ABC123", "inverter_type": "FoxCloud", "composition": "direct", "functions": ["solar", "battery"]}, record
     print("PASS: inverter_record omits empty containers")
     return 0
 
 
 def test_inverter_record_keeps_everything_populated():
-    """Every populated field survives, including a falsy-but-real rating like 0."""
+    """Every populated field survives, including a falsy-but-real rating like 0 and control=False.
+
+    control is the one top-level field where a falsy value is itself the fact: False means a
+    monitor-only inverter. A drop rule "simplified" to `if not value: continue` would silently
+    turn every monitor-only inverter into one whose control is unknown, so it is pinned here.
+    """
     record = inverter_record(
         "fox:ABC123",
-        inverter_type="FOX",
+        inverter_type="FoxCloud",
+        control=False,
         composition="gateway",
         serials=["S1", "S2"],
         measures_meter="fox:meter:M1",
@@ -90,6 +106,7 @@ def test_inverter_record_keeps_everything_populated():
     assert record["hardware_ids"] == {"serial": "ABC123"}
     assert record["ratings"]["max_charge_w"] == 0, "a real zero rating is data, not an empty container"
     assert record["entities"]["charge_rate"]["domain"] == "number"
+    assert record["control"] is False, "control=False is a fact (monitor-only), not an empty value: {}".format(record)
     print("PASS: inverter_record keeps every populated field")
     return 0
 
@@ -101,20 +118,122 @@ def test_inverter_record_round_trips_through_validation():
     here ever drifts from SECTION_SPEC's structural list, validation silently drops it - so pin
     that the two agree rather than trusting they do.
     """
-    record = inverter_record("fox:ABC123", inverter_type="FOX", composition="direct", serials=["S1"], measures_meter="fox:meter:M1", functions=["solar"], hardware_ids={"serial": "ABC123"}, info={"model": "H3"}, ratings={"battery_kwh": 10.4})
+    record = inverter_record("fox:ABC123", inverter_type="FoxCloud", composition="direct", serials=["S1"], measures_meter="fox:meter:M1", functions=["solar"], hardware_ids={"serial": "ABC123"}, info={"model": "H3"}, ratings={"battery_kwh": 10.4})
     cleaned = validate_report({"inverters": [record]}, "fox", print)["inverters"][0]
     for field in ("device_id", "inverter_type", "composition", "serials", "measures_meter", "functions", "hardware_ids", "info", "ratings"):
         assert field in cleaned, "{} was dropped by validate_report - builder and SECTION_SPEC disagree: {}".format(field, cleaned)
+    assert cleaned == record, "validate_report() changed a built record:\n  built:   {}\n  cleaned: {}".format(record, cleaned)
     print("PASS: a built record survives validation with every field intact")
+    return 0
+
+
+def test_inverter_record_parameters_match_the_inverters_schema():
+    """inverter_record()'s parameters are exactly the inverters section's fields - no more, no fewer.
+
+    The builder spells the schema out as named parameters so a mistyped field is a TypeError at
+    the call site. That only holds while its parameter list and the coordinator's schema agree:
+    rename a container in CONTAINER_SPEC, or add a structural field to SECTION_SPEC, and the builder
+    would go on emitting the old name, which validate_report() then silently drops from every
+    reporter's records at once. This passes today; its job is to fail the day the two drift.
+    """
+    parameters = set(inspect.signature(inverter_record).parameters)
+    assert "device_id" in parameters, "device_id is the record's identity and must stay a parameter: {}".format(sorted(parameters))
+    schema = (set(SECTION_SPEC["inverters"]["structural"]) - {"device_id"}) | set(CONTAINER_SPEC) | set(VOCAB_CONTAINERS)
+    fields = parameters - {"device_id"}
+    assert fields == schema, "inverter_record() and the inverters schema disagree - missing from the builder: {}, not in the schema: {}".format(sorted(schema - fields), sorted(fields - schema))
+    print("PASS: inverter_record's parameters are exactly the inverters schema")
+    return 0
+
+
+def test_inverter_record_fields_are_keyword_only():
+    """Only device_id may be passed positionally; every other field must be named.
+
+    Fifteen optional parameters in a row are an easy place to slip by one: accepted positionally,
+    inverter_record("x:1", "direct", True) would quietly build inverter_type="direct",
+    control=True - a wrong record with nothing to say so.
+    """
+    try:
+        inverter_record("gecloud:x", "direct", True)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("a positional second argument must be a TypeError, not silently taken as inverter_type")
+    parameters = inspect.signature(inverter_record).parameters
+    positional = [name for name, parameter in parameters.items() if parameter.kind is not inspect.Parameter.KEYWORD_ONLY]
+    assert positional == ["device_id"], "only device_id may be positional, got {}".format(positional)
+    print("PASS: inverter_record's schema fields are keyword-only")
+    return 0
+
+
+def test_inverter_record_copies_the_callers_containers():
+    """The record holds its own copies of the containers, never the caller's live objects.
+
+    refresh_discovery() stores the report it filed and compares the next build against it with ==.
+    If the record held the caller's own list - a reporter passing serials=self.serials - then
+    growing that list would grow the STORED report too, the rebuilt report would compare equal to
+    it, and the change would never be filed: a report frozen at its first state, the exact bug
+    refresh_discovery() exists to prevent.
+    """
+    live_serials = ["S1"]
+    live_info = {"model": "GIV-GATEWAY"}
+    first = inverter_record("gecloud:gateway001", composition="gateway", serials=live_serials, info=live_info)
+
+    live_serials.append("S2")
+    live_info["firmware"] = "ARM 1"
+    second = inverter_record("gecloud:gateway001", composition="gateway", serials=live_serials, info=live_info)
+
+    assert first != second, "a rebuilt record must differ once the caller's live state has moved on: {}".format(first)
+    assert first["serials"] == ["S1"], "the first record's serials changed under it: {}".format(first["serials"])
+    assert first["info"] == {"model": "GIV-GATEWAY"}, "the first record's info changed under it: {}".format(first["info"])
+    print("PASS: inverter_record copies the caller's containers, so live state cannot freeze a report")
+    return 0
+
+
+def test_inverter_record_normalises_sets_and_tuples():
+    """A set or frozenset becomes a sorted list, a tuple becomes a list, and an empty frozenset is omitted.
+
+    validate_report() keeps only a list for a structural or vocabulary field, so anything else
+    would be silently dropped from the catalogue. A set is sorted rather than listed as-is: string
+    hashing is randomised per process, so list(some_set) comes out in a different order after a
+    restart and two dumps of the same hardware would diff for no reason.
+    """
+    record = inverter_record(
+        "gecloud:gateway001",
+        serials={"S5", "S3", "S1", "S4", "S2"},
+        functions=frozenset({"solar", "battery"}),
+        capabilities=frozenset(),
+        flags=("monitor_only",),
+    )
+    assert record["serials"] == ["S1", "S2", "S3", "S4", "S5"], "a set should become a sorted list: {}".format(record.get("serials"))
+    assert record["functions"] == ["battery", "solar"], "a frozenset should become a sorted list: {}".format(record.get("functions"))
+    assert "capabilities" not in record, "an empty frozenset is empty and must be omitted: {}".format(record)
+    assert record["flags"] == ["monitor_only"], "a tuple should become a list: {}".format(record.get("flags"))
+    print("PASS: inverter_record sorts sets, lists tuples and omits an empty frozenset")
+    return 0
+
+
+def test_inverter_record_drops_an_empty_string():
+    """An empty string is unset, like None - but control=False is a real value and is kept."""
+    record = inverter_record("fox:ABC123", inverter_type="", measures_meter="", composition="direct", control=False)
+    assert "inverter_type" not in record, "an empty inverter_type is unset and must be omitted: {}".format(record)
+    assert "measures_meter" not in record, "an empty measures_meter is unset and must be omitted: {}".format(record)
+    assert record["composition"] == "direct"
+    assert record["control"] is False, "control=False is a bool, not an empty string, and must be kept: {}".format(record)
+    print("PASS: inverter_record drops an empty string but keeps control=False")
     return 0
 ```
 
-Register all three in `run_coordinator_tests()`, immediately after the line `failures += test_assemble_component_status()`:
+Register all eight in `test_coordinator_all()`, immediately after the line `failures += test_assemble_component_status()`:
 
 ```python
     failures += test_inverter_record_omits_empty_containers()
     failures += test_inverter_record_keeps_everything_populated()
     failures += test_inverter_record_round_trips_through_validation()
+    failures += test_inverter_record_parameters_match_the_inverters_schema()
+    failures += test_inverter_record_fields_are_keyword_only()
+    failures += test_inverter_record_copies_the_callers_containers()
+    failures += test_inverter_record_normalises_sets_and_tuples()
+    failures += test_inverter_record_drops_an_empty_string()
 ```
 
 Extend the existing import at `apps/predbat/tests/test_coordinator.py:8` — it currently reads:
@@ -123,10 +242,10 @@ Extend the existing import at `apps/predbat/tests/test_coordinator.py:8` — it 
 from coordinator import Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC
 ```
 
-and must become:
+and must become (with `import inspect` added above it, for the schema-parity and keyword-only tests):
 
 ```python
-from coordinator import Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC, inverter_record, validate_report
+from coordinator import CONTAINER_SPEC, Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, inverter_record, validate_report
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -144,20 +263,53 @@ Expected: FAIL with `cannot import name 'inverter_record' from 'coordinator'`.
 In `apps/predbat/coordinator.py`, add immediately before `def validate_report(report, component_name, log):`
 
 ```python
-def inverter_record(device_id, inverter_type=None, control=None, composition=None, measures_meter=None, serials=None, functions=None, capabilities=None, flags=None, effects=None, hardware_ids=None, account_ids=None, info=None, ratings=None, coverage=None, entities=None):
+def inverter_record(
+    device_id,
+    *,
+    inverter_type=None,
+    control=None,
+    composition=None,
+    measures_meter=None,
+    serials=None,
+    functions=None,
+    capabilities=None,
+    flags=None,
+    effects=None,
+    hardware_ids=None,
+    account_ids=None,
+    info=None,
+    ratings=None,
+    coverage=None,
+    entities=None,
+):
     """Assemble one inverters-section record, omitting every field that is unset or empty.
 
     The parameter list IS the inverters section's schema, spelled out rather than taken as
     **kwargs: a mistyped field name is then a TypeError a test catches at the call site, instead
-    of a key that reaches validate_report() and is silently dropped from a user's dump.
+    of a key that reaches validate_report() and is silently dropped from a user's dump. Every
+    field after device_id is keyword-only for the same reason - fifteen optional parameters in a
+    row are easy to slip by one, and inverter_record("x:1", "direct", True) would otherwise build
+    inverter_type="direct", control=True without complaint.
 
-    Empty containers are omitted rather than written as {} or []. Every reporter previously
+    Unset fields are omitted rather than written as None, {}, [] or "". Every reporter previously
     carried its own `if info: record["info"] = info` ladder, which is how a record ends up
     carrying `"ratings": {}` in one component and omitting it in another. A falsy value that is
-    real data - a rating of 0 - is kept: only None and empty containers are dropped.
+    real data is kept: a rating of 0 inside a container, and control=False, which is the fact
+    "monitor-only" rather than an absence. Only None, an empty string and an empty container are
+    dropped.
 
-    Tuples are normalised to lists so a caller can pass a module-level constant without it
-    reaching the catalogue as a tuple, which neither JSON nor YAML serialises as a list.
+    Every container is copied, never stored as the caller's own object. refresh_discovery()
+    compares each new build against the report it last filed, so a record holding a reporter's
+    live list (serials=self.serials) would change whenever that list did, the rebuilt report
+    would always compare equal to it, and the report would freeze at its first state. The copy is
+    shallow - the top level only - which is enough because reporters build nested descriptor
+    dicts fresh on every call rather than handing over long-lived ones.
+
+    Tuples become lists because validate_report() keeps only a list for a structural or
+    vocabulary field: a tuple `serials` or `functions` - a module-level constant, say - would be
+    silently dropped from the catalogue. A set or frozenset becomes a sorted list for the same
+    reason, sorted because string hashing is randomised per process, so list(some_set) comes out
+    in a different order after a restart and two dumps of the same hardware would diff for nothing.
     """
     fields = {
         "inverter_type": inverter_type,
@@ -178,11 +330,16 @@ def inverter_record(device_id, inverter_type=None, control=None, composition=Non
     }
     record = {"device_id": device_id}
     for name, value in fields.items():
-        if value is None:
+        if isinstance(value, (set, frozenset)):
+            value = sorted(value)
+        elif isinstance(value, (list, tuple)):
+            value = list(value)
+        elif isinstance(value, dict):
+            value = dict(value)
+        # A bool is never dropped: it is not a str/list/dict, so control=False survives
+        if value is None or (isinstance(value, (str, list, dict)) and not value):
             continue
-        if isinstance(value, (dict, list, tuple, set)) and not value:
-            continue
-        record[name] = list(value) if isinstance(value, (tuple, set)) else value
+        record[name] = value
     return record
 
 
@@ -195,11 +352,11 @@ cd coverage
 python3 ../apps/predbat/unit_test.py --test coordinator > /tmp/t1.log 2>&1; grep -E "PASS: inverter_record|PASS: a built record|failures" /tmp/t1.log
 ```
 
-Expected: all three PASS lines.
+Expected: all eight PASS lines.
 
 - [ ] **Step 5: Verify the tests are load-bearing**
 
-Temporarily change `if isinstance(value, (dict, list, tuple, set)) and not value:` to `if False:`, re-run, and confirm `test_inverter_record_omits_empty_containers` fails. Restore the line afterwards and re-run to confirm green.
+Temporarily change `if value is None or (isinstance(value, (str, list, dict)) and not value):` to `if value is None:`, re-run, and confirm `test_inverter_record_omits_empty_containers` fails; then change it to `if not value:` and confirm `test_inverter_record_keeps_everything_populated` fails on `control`. Restore the line afterwards and re-run to confirm green.
 
 - [ ] **Step 6: Commit**
 
@@ -216,13 +373,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `apps/predbat/givtcp.py` (the record assembly inside `build_discovery()`)
-- Test: `apps/predbat/tests/test_givtcp_component.py` (existing tests must pass unchanged)
+- Test: `apps/predbat/tests/test_givtcp_component.py` (existing tests must pass; the only permitted edit is R2's, see Amendments)
 
 **Interfaces:**
 - Consumes: `inverter_record(...)` from Task 1.
-- Produces: no new interface. GivTCP's reported records must be byte-identical to before.
+- Produces: no new interface. GivTCP's reported records must be identical as dicts wherever a container is non-empty, and identical in what reaches the catalogue (Amendments, R1). Key order may change, and an empty `capabilities` or `entities` may be omitted from the raw `build_discovery()` return, since `validate_report()` drops an empty container anyway.
 
-This task is a refactor with no behaviour change. GivTCP's existing discovery tests are the proof — do not modify them. If one fails, the refactor is wrong, not the test.
+This task is a refactor with no change to what reaches the catalogue. GivTCP's existing discovery tests are the proof. The one test edit allowed is R2's: a test that fails *solely* because it indexes `record["capabilities"]` or `record["entities"]` on a now-empty container may change that one access to `.get(...)`. Any other failure means the refactor is wrong, not the test.
 
 - [ ] **Step 1: Confirm the existing tests pass before touching anything**
 
@@ -305,13 +462,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `apps/predbat/gecloud.py` (both record loops inside `build_discovery()`)
-- Test: `apps/predbat/tests/test_ge_cloud.py` (existing tests must pass unchanged)
+- Test: `apps/predbat/tests/test_ge_cloud.py` (existing tests must pass; the only permitted edit is R2's, see Amendments)
 
 **Interfaces:**
 - Consumes: `inverter_record(...)` from Task 1.
-- Produces: no new interface. GE Cloud's reported records must be byte-identical to before.
+- Produces: no new interface. GE Cloud's reported records must be identical as dicts wherever a container is non-empty, and identical in what reaches the catalogue (Amendments, R1); key order may change.
 
-GE Cloud is the harder migration because it builds two kinds of record and applies a cross-link via a helper that mutates the record in place. The `_apply_meter_cross_link` call sets `record["measures_meter"]`, so it must still run against the finished dict.
+GE Cloud is the harder migration because it builds two kinds of record plus a `measures_meter` cross-link. As first executed, a helper (`_apply_meter_cross_link`) patched `record["measures_meter"]` into the finished dict. The fix wave (see Amendments) replaced it with `_meter_cross_link(devices, device)`, which returns the value, so it is passed to `inverter_record()` like every other field and nothing is mutated after the build. The code below is the final form.
 
 - [ ] **Step 1: Confirm the existing tests pass before touching anything**
 
@@ -360,23 +517,23 @@ with:
 ```python
         for device in controlled:
             info, ratings = self._device_info_and_ratings(device)
-            record = inverter_record(
-                "gecloud:{}".format(device),
-                inverter_type=inverter_type,
-                composition=composition,
-                functions=["solar", "battery"],
-                capabilities=self._device_capabilities(device),
-                hardware_ids={"serial": device},
-                serials=fronted_serials,
-                info=info,
-                ratings=ratings,
+            inverters.append(
+                inverter_record(
+                    "gecloud:{}".format(device),
+                    inverter_type=inverter_type,
+                    composition=composition,
+                    measures_meter=self._meter_cross_link(devices, device),
+                    functions=["solar", "battery"],
+                    capabilities=self._device_capabilities(device),
+                    hardware_ids={"serial": device},
+                    serials=fronted_serials,
+                    info=info,
+                    ratings=ratings,
+                )
             )
-            # Sets record["measures_meter"] in place when GE Cloud reports a CT/meter serial for
-            # this device - after the build, since it is a cross-link derived from other devices
-            # rather than a property of this one.
-            self._apply_meter_cross_link(devices, device, record)
-            inverters.append(record)
 ```
+
+and turn `_apply_meter_cross_link(self, devices, device, record)` into `_meter_cross_link(self, devices, device)`, returning `"gecloud:meter:{serial}"` from `self._device_meter_serial(devices, device)`, or `None` when there is no meter serial (the builder omits a `None`). Keep its docstring's explanation of why a CT clamp does not become a fabricated `meters` record, and update the two `see _apply_meter_cross_link` references in `build_discovery()`'s docstring and closing comment.
 
 - [ ] **Step 4: Replace the PV-only loop**
 
@@ -452,7 +609,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 Fox already gathers everything the reporter needs, in the same data `automatic_config()` reads:
 
 - `self.device_list` — list of dicts, each with a `deviceSN` key.
-- `self.device_detail[sn]` — dict with `hasPV` (bool), `hasBattery` (bool), `thirdPartyGen` (bool), `capacity` (inverter kW, so `* 1000` for watts), `deviceType` (model string), `productType`, `stationName`, `function` (dict, `function["scheduler"]` is a bool), and `batteryList` (list of dicts each with `capacity`).
+- `self.device_detail[sn]` — dict with `hasPV` (bool), `hasBattery` (bool), `thirdPartyGen` (bool), `capacity` (inverter kW - but convert it with `FoxAPI.capacity_watts(detail)`, never `* 1000`: Fox truncates a half-kW model's capacity, a KH10.5 reporting 10, and `capacity_watts()` is what restores the 500 W for the `_inverter_capacity` sensor `publish_data()` publishes), `deviceType` (model string), `productType`, `stationName`, `function` (dict, `function["scheduler"]` is a bool), and `batteryList` (list of dicts each with `capacity`).
 - `self.device_settings[sn]` — settings the device has reported, keyed by name; `FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]`.
 
 **Do not sum `batteryList` capacities.** `publish_data()` does (`fox.py:1852`) and it is a known live bug (GH#4919): an AIO ESS returns one physical pack as four `bmu` entries all carrying the inverter's own serial, so the sum comes out 4× the real capacity. Report `batteryList` entry **count** as a `ratings` number instead, and let the catalogue show maintainers how often a fleet reports more battery entries than physical packs. That count is the evidence the bug needs, and reporting a knowingly-wrong capacity would put a 4×-too-large `battery_kwh` into users' dumps.
@@ -462,12 +619,10 @@ Fox already gathers everything the reporter needs, in the same data `automatic_c
 Add to `apps/predbat/tests/test_fox_api.py`, at the end of the file but before any `run_*_tests` aggregator:
 
 ```python
-def _fox_discovery_api(my_predbat):
-    """A FoxAPI carrying one battery inverter and one PV-only device, as the cloud would report them."""
-    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
-    fox.component_name = "fox"
-    fox.device_list = [{"deviceSN": "BATT001"}, {"deviceSN": "PVONLY1"}]
-    fox.device_detail = {
+def _fox_discovery_devices():
+    """One battery inverter and one PV-only device as the Fox cloud reports them: (device_list, device_detail, device_settings)."""
+    device_list = [{"deviceSN": "BATT001"}, {"deviceSN": "PVONLY1"}]
+    device_detail = {
         "BATT001": {
             "hasPV": True,
             "hasBattery": True,
@@ -480,7 +635,15 @@ def _fox_discovery_api(my_predbat):
         "PVONLY1": {"hasPV": True, "hasBattery": False, "capacity": 5.0, "deviceType": "S1-5.0", "function": {}},
     }
     # {deviceSN: {SettingName: {"value": ...}}} - the shape fox.py reads at line 1251
-    fox.device_settings = {"BATT001": {"ExportLimit": {"value": 5000}, "WorkMode": {"value": "SelfUse"}}, "PVONLY1": {}}
+    device_settings = {"BATT001": {"ExportLimit": {"value": 5000}, "WorkMode": {"value": "SelfUse"}}, "PVONLY1": {}}
+    return device_list, device_detail, device_settings
+
+
+def _fox_discovery_api(my_predbat):
+    """A FoxAPI carrying the _fox_discovery_devices() fleet."""
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+    fox.component_name = "fox"
+    fox.device_list, fox.device_detail, fox.device_settings = _fox_discovery_devices()
     return fox
 
 
@@ -496,7 +659,7 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     assert set(by_id) == {"fox:BATT001", "fox:PVONLY1"}, by_id
 
     battery = by_id["fox:BATT001"]
-    assert battery["inverter_type"] == "FOX"
+    assert battery["inverter_type"] == "FoxCloud", "inverter_type is an INVERTER_DEF key - the one Fox's own automatic_config() writes"
     assert sorted(battery["functions"]) == ["battery", "solar"]
     assert battery["hardware_ids"] == {"serial": "BATT001"}
     assert battery["info"]["model"] == "H3-10.0"
@@ -507,6 +670,12 @@ def test_fox_build_discovery_describes_each_device(my_predbat):
     pv = by_id["fox:PVONLY1"]
     assert pv["functions"] == ["solar"], "a device with no battery is solar only"
     assert "inverter_type" not in pv, "a PV-only device is not an inverter Predbat controls"
+
+    # A half-kW model: Fox reports a KH10.5's capacity truncated to 10. capacity_watts() restores
+    # the 500 W, so the catalogue agrees with the _inverter_capacity sensor publish_data() publishes.
+    fox.device_detail["BATT001"].update({"deviceType": "KH10.5", "capacity": 10})
+    battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
+    assert battery["ratings"]["inverter_w"] == 10500.0, "a half-kW model must go through capacity_watts(), not capacity * 1000"
     print("PASS: Fox build_discovery describes each discovered device")
     return 0
 
@@ -544,25 +713,47 @@ def test_fox_build_discovery_returns_none_before_discovery(my_predbat):
 
 
 def test_fox_run_reports_discovery_and_survives_a_failure(my_predbat):
-    """run() files a report, and a broken build_discovery() cannot degrade the component.
+    """The real run() files a report on every cycle, and a broken build_discovery() cannot degrade Fox.
 
-    refresh_discovery() owns the guard, so this pins the wiring rather than re-testing the loop:
-    a report reaches the coordinator on a normal cycle, and a raising build_discovery() neither
-    propagates out of run() nor sets had_errors.
+    Drives FoxAPI.run() itself rather than calling refresh_discovery() directly - the same reason
+    the GE Cloud discovery tests call the real run() (see _discovery_component() in
+    test_ge_cloud.py). A direct call passes whether or not run() ever makes it: a call placed
+    inside `if first and self.automatic:` (automatic is False here), inside an `if first:` block,
+    or after an early return would all go unnoticed. MockFoxAPIWithRunTracking stubs only the
+    network-facing calls run() makes, exactly as the test_run_* tests above use it, and its stubs
+    leave device_detail/device_settings alone, so the fixture seeded here is what run() reports.
+
+    The second cycle is first=False with a device added, so a call confined to the first cycle
+    fails it. The third cycle's build raises: run() must still succeed, had_errors must stay
+    unset (it would suppress record_status() - see ComponentBase.refresh_discovery()), and the
+    last filed report must stand.
     """
     print("**** test_fox_run_reports_discovery_and_survives_a_failure ****")
-    fox = _fox_discovery_api(my_predbat)
+    device_list, device_detail, device_settings = _fox_discovery_devices()
+    fox = MockFoxAPIWithRunTracking()
+    fox.automatic = False
+    fox.device_list = [device_list[0]]
+    fox.device_detail = {"BATT001": device_detail["BATT001"]}
+    fox.device_settings = {"BATT001": device_settings["BATT001"]}
     reports = []
     fox.report_discovery = lambda report: reports.append(report)
 
-    fox.refresh_discovery()
-    assert len(reports) == 1, f"expected the report to be filed, got {len(reports)}"
+    assert run_async(fox.run(0, first=True)) is True
+    assert len(reports) == 1, f"the first run() cycle should file a report, got {len(reports)}"
+    assert [record["device_id"] for record in reports[0]["inverters"]] == ["fox:BATT001"], reports[0]
 
-    my_predbat.had_errors = False
+    # A second device appears; the next ordinary cycle must re-file the grown report
+    fox.device_list.append(device_list[1])
+    fox.device_detail["PVONLY1"] = device_detail["PVONLY1"]
+    assert run_async(fox.run(60, first=False)) is True
+    assert len(reports) == 2, f"a first=False cycle must re-file a report that has moved on, got {len(reports)}"
+    assert {record["device_id"] for record in reports[1]["inverters"]} == {"fox:BATT001", "fox:PVONLY1"}, reports[1]
+
     fox.build_discovery = MagicMock(side_effect=Exception("boom"))
-    fox.refresh_discovery()  # must not raise
-    assert not my_predbat.had_errors, "a discovery failure must never set had_errors - that suppresses record_status()"
-    print("PASS: Fox reports on a normal cycle and contains a reporter failure")
+    assert run_async(fox.run(120, first=False)) is True, "a discovery failure must not fail run()"
+    assert not getattr(fox.base, "had_errors", False), "a discovery failure must never set had_errors - that suppresses record_status()"
+    assert len(reports) == 2 and fox._discovery_report == reports[1], "a failed build must leave the last filed report standing"
+    print("PASS: Fox's run() reports on every cycle and contains a reporter failure")
     return 0
 ```
 
@@ -575,7 +766,7 @@ Register them in `run_fox_api_tests(my_predbat)` (`apps/predbat/tests/test_fox_a
     failed |= test_fox_run_reports_discovery_and_survives_a_failure(my_predbat)
 ```
 
-`MagicMock` is already imported at `test_fox_api.py:15` — no import change is needed.
+`MagicMock` is already imported at `test_fox_api.py:15` and `run_async` at `:32`, so no import change is needed. The run() test uses `MockFoxAPIWithRunTracking` (defined at `test_fox_api.py:4345`, the stub the `test_run_*` tests drive `run()` through), so the new tests must sit after that class - the end of the file is.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -608,8 +799,15 @@ Add this method to `FoxAPI`, immediately after `automatic_config()`:
         "automatic" flag is for.
 
         A device with no battery is reported with functions ["solar"] and no inverter_type: it is
-        a generation source Predbat reads, not an inverter it controls. A battery device gets
-        inverter_type "FOX" and both functions.
+        a generation source Predbat reads, not an inverter it controls. A battery device gets both
+        functions and inverter_type "FoxCloud" - the INVERTER_DEF key automatic_config() itself
+        writes, so the catalogue's resulting_config comparison matches rather than showing a
+        permanent mismatch.
+
+        The inverter's rating goes through capacity_watts(), never capacity * 1000: Fox reports a
+        half-kW model's capacity truncated (a KH10.5 says 10), and capacity_watts() is what
+        restores the 500 W for the _inverter_capacity sensor publish_data() publishes. Using it
+        here keeps the catalogue from disagreeing with that sensor.
 
         batteryList entries are COUNTED, never summed. publish_data() sums them (fox.py:1852) and
         that is a known live bug (GH#4919): an AIO ESS returns one physical pack as four bmu
@@ -657,9 +855,8 @@ Add this method to `FoxAPI`, immediately after `automatic_config()`:
                 info["product_type"] = str(product_type)
 
             ratings = {}
-            capacity_kw = detail.get("capacity")
-            if capacity_kw:
-                ratings["inverter_w"] = capacity_kw * 1000.0
+            if detail.get("capacity"):
+                ratings["inverter_w"] = self.capacity_watts(detail)
             battery_list = detail.get("batteryList") or []
             if battery_list:
                 ratings["battery_entries"] = len(battery_list)
@@ -667,7 +864,7 @@ Add this method to `FoxAPI`, immediately after `automatic_config()`:
             inverters.append(
                 inverter_record(
                     "fox:{}".format(serial),
-                    inverter_type="FOX" if has_battery else None,
+                    inverter_type="FoxCloud" if has_battery else None,
                     composition="direct",
                     functions=functions,
                     capabilities=capabilities,
@@ -713,6 +910,8 @@ Expected: `All tests passed`, exit 0. If an unrelated suite fails, check it fail
 - [ ] **Step 7: Verify the tests are load-bearing**
 
 Temporarily change `ratings["battery_entries"] = len(battery_list)` to `ratings["battery_kwh"] = sum(b.get("capacity", 0) for b in battery_list)`, re-run `--test fox_api`, and confirm `test_fox_build_discovery_counts_battery_entries_rather_than_summing_them` fails. Restore and re-run green.
+
+Then do the same for the wiring: wrap the `self.refresh_discovery()` call in `run()` in `if first:` and confirm `test_fox_run_reports_discovery_and_survives_a_failure` fails on its second cycle. Restore and re-run green.
 
 - [ ] **Step 8: Commit**
 
