@@ -266,6 +266,7 @@ class GatewayMQTT(ComponentBase):
         self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
+        self._last_empty_telemetry_time = 0
         self._last_plan_data = None
         self._last_plan_publish_time = 0
         # Entries and timezone of the last built plan, kept so the periodic re-publish
@@ -816,10 +817,17 @@ class GatewayMQTT(ComponentBase):
         self._debug_dump("RX telemetry", status, raw=data)
 
         if len(status.inverters) == 0:
+            # Record that the device actively reported an empty topology, distinct
+            # from simply not having heard from it. _last_status/_last_telemetry_time
+            # deliberately stay untouched here: overwriting them would wipe a good
+            # binding and could trigger a spurious reconfigure. _check_control_target
+            # uses this timestamp to tell "no fresh news" from "fresh news is bad".
+            self._last_empty_telemetry_time = time.time()
             return
 
         self._last_status = status
         self._last_telemetry_time = time.time()
+        self._last_empty_telemetry_time = 0
         self.update_success_timestamp()
 
         self._inject_entities(status)
@@ -1762,6 +1770,13 @@ class GatewayMQTT(ComponentBase):
             raise ComponentWriteError("GatewayMQTT: inverter command rejected: MQTT disconnected")
         if not self._gateway_online:
             raise ComponentWriteError("GatewayMQTT: inverter command rejected: Hub offline")
+        # A fresh empty-inverters frame is stronger evidence than "no news": the device
+        # actively reported it currently has no inverters, so a still-fresh prior
+        # topology snapshot must not keep validating writes against it. Only a frame
+        # newer than our last good status counts — an empty frame older than the good
+        # one we already have (e.g. delivered out of order) says nothing new.
+        if self._last_empty_telemetry_time > self._last_telemetry_time and time.time() - self._last_empty_telemetry_time < _TELEMETRY_STALE_THRESHOLD:
+            raise ComponentWriteError(f"GatewayMQTT: inverter command rejected: no_inverters_reported ({serial})")
         status = self._last_status
         if status is None or time.time() - self._last_telemetry_time >= _TELEMETRY_STALE_THRESHOLD:
             raise ComponentWriteError("GatewayMQTT: inverter command rejected: telemetry stale")

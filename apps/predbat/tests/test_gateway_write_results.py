@@ -308,6 +308,20 @@ class TestGatewayWriteResults:
             assert not inv.write_and_poll_value("reserve", base.args["reserve"][0], 10)
             assert published == []
 
+    def test_fresh_empty_telemetry_blocks_write_despite_recently_healthy_cache(self):
+        """A device actively reporting zero inverters must not keep validating writes
+        against the last topology it reported before that — the empty frame is
+        stronger evidence than silence, so it must not be dropped as a no-op."""
+        status = make_status()
+        with write_path(status) as (base, gateway, inv, published, states):
+            time.sleep(0.01)
+            empty_status = pb.GatewayStatus(device_id=status.device_id, firmware=status.firmware, timestamp=int(time.time()), schema_version=1)
+            gateway._process_telemetry(empty_status.SerializeToString())
+            # The cache itself must be untouched — this is a fresh-signal check, not a wipe.
+            assert gateway._last_status is not None and len(gateway._last_status.inverters) > 0
+            assert not inv.write_and_poll_value("reserve", base.args["reserve"][0], 10)
+            assert published == []
+
     def test_old_retained_status_blocks_write(self):
         """Recent MQTT receipt does not make an old device snapshot fresh."""
         status = make_status()
