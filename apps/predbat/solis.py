@@ -364,15 +364,27 @@ SOLIS_API_CODES = {
     "10404": "Not found",
     "10500": "Internal server error",
     "B0115": "Datalogger offline or disconnected",
+    "B0600": "Datalogger returns data abnormally",
     "R0000": "Daily API request allowance exhausted",
 }
 
 # Response codes that are settled for this cycle: retrying cannot change the answer, and every
 # attempt still spends one of the 200 daily requests. B0115 means the datalogger is offline, not
 # that the request was throttled, and R0000 means the daily allowance is already gone (issue #5087).
+# B0600 came back on every remote read and every retry, across days, on the account in issue #5177,
+# from a datalogger the owner could see online in SolisCloud.
 SOLIS_API_CODE_QUOTA_EXCEEDED = "R0000"
 SOLIS_API_CODE_DATALOGGER_OFFLINE = "B0115"
-SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALOGGER_OFFLINE}
+SOLIS_API_CODE_DATALOGGER_ABNORMAL = "B0600"
+SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALOGGER_OFFLINE, SOLIS_API_CODE_DATALOGGER_ABNORMAL}
+
+# Codes that put one inverter into the datalogger cooldown, and how the log and run status describe
+# each. Both back off the same way; B0600 just must not be reported as offline, because the owner can
+# see the datalogger online in SolisCloud (issue #5177).
+SOLIS_DATALOGGER_COOLDOWN_REASONS = {
+    SOLIS_API_CODE_DATALOGGER_OFFLINE: "offline or disconnected",
+    SOLIS_API_CODE_DATALOGGER_ABNORMAL: "returning data abnormally (B0600)",
+}
 
 # Time options for selectors (HH:MM:SS format)
 BASE_TIME = datetime(2000, 1, 1, 0, 0, 0)
@@ -455,6 +467,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slots_reset = set()  # Track which inverters had slots reset
         self.quota_exhausted_until = None  # UTC time the daily API allowance pause lifts, None when not paused
         self.datalogger_offline_until = {}  # {inverter_sn: UTC time that inverter's reads resume}
+        self.datalogger_cooldown_code = {}  # {inverter_sn: API code that started its cooldown}
         self.automatic_config_done = False  # Auto-config succeeded, so it does not need re-running
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
@@ -564,36 +577,46 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log("Solis API: SolisCloud daily API request allowance has been restored, resuming normal polling")
 
     def datalogger_offline(self, inverter_sn):
-        """Whether this inverter's datalogger is in its offline cooldown and should not be polled"""
+        """Whether this inverter's datalogger is in its cooldown (B0115 or B0600) and should not be polled"""
         offline_until = self.datalogger_offline_until.get(inverter_sn)
         return bool(offline_until) and self.now_utc_exact.astimezone(UTC) < offline_until
 
-    def note_datalogger_offline(self, inverter_sn):
-        """Back off this inverter's reads after SolisCloud reports its datalogger is offline.
+    def note_datalogger_offline(self, inverter_sn, code=SOLIS_API_CODE_DATALOGGER_OFFLINE):
+        """Back off this inverter's reads after SolisCloud refuses them with a datalogger code.
 
         Not retrying a B0115 is only half the cure: run() polls every inverter every minute, so an
         offline datalogger left in the rotation still spends a request a minute out of the 200 a day
-        and is how the account in issue #5087 reached R0000 in the first place.
+        and is how the account in issue #5087 reached R0000 in the first place. A B0600 is backed
+        off the same way, but code keeps it from being reported as offline (issue #5177).
         """
         if not inverter_sn or self.datalogger_offline(inverter_sn):
             # Already backed off - don't extend the cooldown or re-log on each refused read
             return
         resume_at = self.now_utc_exact.astimezone(UTC) + timedelta(seconds=SOLIS_DATALOGGER_OFFLINE_SECONDS)
         self.datalogger_offline_until[inverter_sn] = resume_at
-        self.log("Warn: Solis API: Datalogger for inverter {} is offline or disconnected, pausing its reads until {}".format(inverter_sn, resume_at.strftime("%H:%M:%S UTC")))
+        self.datalogger_cooldown_code[inverter_sn] = code
+        self.log("Warn: Solis API: Datalogger for inverter {} is {}, pausing its reads until {}".format(inverter_sn, SOLIS_DATALOGGER_COOLDOWN_REASONS.get(code, code), resume_at.strftime("%H:%M:%S UTC")))
 
     def note_datalogger_online(self, inverter_sn):
-        """Clear an inverter's offline cooldown after one of its reads succeeds"""
+        """Clear an inverter's datalogger cooldown after one of its reads succeeds"""
         if inverter_sn and self.datalogger_offline_until.pop(inverter_sn, None):
-            self.log("Solis API: Datalogger for inverter {} is back online".format(inverter_sn))
+            self.datalogger_cooldown_code.pop(inverter_sn, None)
+            self.log("Solis API: Datalogger for inverter {} is answering requests again".format(inverter_sn))
 
     def health_message(self):
         """Name the reason Solis is unhealthy so the run status says more than 'component errors: Solis'"""
         if self.quota_exhausted_until:
             return "Solis Cloud daily API limit reached, paused until {}".format(self.quota_exhausted_until.strftime("%H:%M UTC"))
-        offline = sorted(sn for sn in self.datalogger_offline_until if self.datalogger_offline(sn))
-        if offline:
-            return "datalogger offline for inverter {}".format(", ".join(offline))
+        # Every inverter still carrying a cooldown entry, expired or not: like the quota diagnostic it is
+        # only cleared by a request that succeeds. A component stuck in startup backoff re-probes up to
+        # two hours apart, far longer than the cooldown, so tying this to the cooldown would leave the run
+        # status blank for most of that time (issue #5177).
+        by_reason = {}
+        for sn in sorted(self.datalogger_offline_until):
+            code = self.datalogger_cooldown_code.get(sn, SOLIS_API_CODE_DATALOGGER_OFFLINE)
+            by_reason.setdefault(SOLIS_DATALOGGER_COOLDOWN_REASONS.get(code, code), []).append(sn)
+        if by_reason:
+            return "; ".join("datalogger {} for inverter {}".format(reason, ", ".join(sns)) for reason, sns in by_reason.items())
         return None
 
     async def _execute_request(self, endpoint, payload):
@@ -650,10 +673,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         record_api_call("solis", False, "server_error")
                         if str(code) == SOLIS_API_CODE_QUOTA_EXCEEDED:
                             self.note_quota_exhausted()
-                        elif str(code) == SOLIS_API_CODE_DATALOGGER_OFFLINE:
+                        elif str(code) in SOLIS_DATALOGGER_COOLDOWN_REASONS:
                             # Not throttling, whatever the old 10 second sleep assumed: the datalogger
-                            # is offline, so this inverter is backed off rather than retried.
-                            self.note_datalogger_offline(request_inverter_sn)
+                            # won't answer, so this inverter is backed off rather than retried.
+                            self.note_datalogger_offline(request_inverter_sn, str(code))
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
@@ -3563,7 +3586,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     self.log(f"Solis API: Inverter {sn} is in standard Time of Use mode")
                 if self.control_enable:
                     if self.is_battery_inverter(sn):
-                        await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                        # Best effort: it only lowers one setting. Left to raise, a datalogger that refuses the
+                        # read (B0600, B0115) aborted every startup attempt, so the inverter was never
+                        # configured at all (issue #5177).
+                        try:
+                            await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                        except Exception as e:
+                            self.log(f"Warn: Solis API: Startup register reset failed for inverter {sn}, continuing without it: {e}")
                     else:
                         # automatic_config() logs its own version of this, but only when auto-config is on
                         self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will poll it but not write any control registers to it")

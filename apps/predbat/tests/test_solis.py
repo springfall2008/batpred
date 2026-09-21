@@ -84,6 +84,7 @@ class MockSolisAPI(SolisAPI):
         self.slots_reset = set()
         self.quota_exhausted_until = None
         self.datalogger_offline_until = {}
+        self.datalogger_cooldown_code = {}
         self.automatic_config_done = False
 
         # Timezone for now_utc_exact property (from ComponentBase)
@@ -1457,6 +1458,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_health_message_names_the_quota_limit())
         failed |= asyncio.run(test_quota_diagnostic_survives_until_a_request_succeeds())
         failed |= asyncio.run(test_offline_datalogger_stops_being_polled())
+        failed |= asyncio.run(test_run_survives_startup_register_reset_refusal())
+        failed |= asyncio.run(test_b0600_backs_off_without_calling_the_datalogger_offline())
         failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
         failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
         failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
@@ -5940,10 +5943,10 @@ async def test_quota_pause_expires_and_requests_resume():
 
 
 async def test_with_retry_does_not_retry_settled_codes():
-    """R0000 and B0115 get one attempt: retrying them cannot help and each attempt costs a request."""
+    """R0000, B0115 and B0600 get one attempt: retrying them cannot help and each attempt costs a request."""
     failed = False
 
-    for code in ("R0000", "B0115"):
+    for code in ("R0000", "B0115", "B0600"):
         api = MockSolisAPI()
         attempts = {"n": 0}
 
@@ -6193,6 +6196,138 @@ async def test_offline_datalogger_stops_being_polled():
 
     if not failed:
         print("PASSED: an offline datalogger is skipped until its cooldown expires, then re-probed")
+    return failed
+
+
+# ==================== Datalogger refusing remote reads (issue #5177) ====================
+
+
+async def test_run_survives_startup_register_reset_refusal():
+    """A refused startup register read must not abort the whole first cycle.
+
+    startup_reset_registers() only lowers the over-discharge SoC, but its read was unguarded, so a
+    datalogger that refuses every remote read (B0600, and B0115 the same way) killed each startup
+    attempt before automatic_config() could bind the args, and Predbat ran with no inverter at all
+    (issue #5177). This drives the real reset against a canned SolisCloud refusal.
+    """
+    failed = False
+    sn = "INV001"
+    refusals = (
+        ("B0600", "Datalogger returns data abnormally. Please try again later"),
+        ("B0115", "Sending failure ,the current datalogger is offline or disconnected"),
+    )
+    for code, msg in refusals:
+        api = _make_run_api(configured_sns=[sn], control_enable=True, automatic=True)
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC)
+        del api.startup_reset_registers  # The real reset, not _make_run_api's no-op
+        session = _RecordingSession(_FakeResponse(status=200, payload={"code": code, "msg": msg}))
+        api.session = session  # run() reuses an existing session rather than opening one
+
+        async def mock_get_inverter_list():
+            """Discovery succeeds, as it did on the reporting account."""
+            return [{"sn": sn}]
+
+        api.get_inverter_list = mock_get_inverter_list
+
+        try:
+            await api.run(0, True)
+        except solis_module.SolisAPIError as err:
+            print("ERROR: {} on the startup register read aborted run(): {}".format(code, err))
+            failed = True
+            continue
+
+        if len(session.post_calls) != 1:
+            print("ERROR: {} on the startup register read should be sent once, got {} requests".format(code, len(session.post_calls)))
+            failed = True
+        if not any("Startup register reset failed for inverter {}".format(sn) in m for m in api.log_messages):
+            print("ERROR: expected a warning naming the failed startup reset for {}, got {}".format(code, api.log_messages))
+            failed = True
+        if api.automatic_config_calls != 1:
+            print("ERROR: auto-config should still be attempted after a {} startup reset, got {} calls".format(code, api.automatic_config_calls))
+            failed = True
+        if api.publish_entities_calls != 1:
+            print("ERROR: entities should still be published after a {} startup reset, got {} calls".format(code, api.publish_entities_calls))
+            failed = True
+        if not api.datalogger_offline(sn):
+            print("ERROR: {} should back off the inverter for the rest of the cycle".format(code))
+            failed = True
+        message = api.health_message()
+        if not message or sn not in message:
+            print("ERROR: expected the run status to name {} for {}, got {}".format(sn, code, message))
+            failed = True
+
+    if not failed:
+        print("PASSED: a refused startup register read is logged and startup carries on")
+    return failed
+
+
+async def test_b0600_backs_off_without_calling_the_datalogger_offline():
+    """B0600 is backed off like B0115, but the log and run status must not call it offline.
+
+    The owner in issue #5177 could see the datalogger online in SolisCloud; it just would not answer
+    remote reads. The run status also has to outlast the cooldown, because a component stuck in
+    startup backoff re-probes up to two hours apart.
+    """
+    failed = False
+    sn = "INV001"
+    other_sn = "INV002"
+    api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "B0600", "msg": "Datalogger returns data abnormally. Please try again later"}))
+
+    try:
+        await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": sn, "cid": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC})
+        print("ERROR: expected SolisAPIError for the B0600 response")
+        failed = True
+    except solis_module.SolisAPIError as err:
+        if err.response_code != "B0600":
+            print("ERROR: expected response_code B0600, got {}".format(err.response_code))
+            failed = True
+        if "Unknown code" in str(err):
+            print("ERROR: B0600 should be a known code, got {}".format(err))
+            failed = True
+
+    if not api.datalogger_offline(sn):
+        print("ERROR: B0600 should back off that inverter's reads")
+        failed = True
+    if api.quota_exhausted_until is not None:
+        print("ERROR: B0600 is not a quota failure and must not pause requests")
+        failed = True
+    pause_logs = [m for m in api.log_messages if sn in m and "pausing its reads" in m]
+    if not pause_logs or "offline" in pause_logs[0] or "abnormally" not in pause_logs[0]:
+        print("ERROR: expected a pause log naming B0600 as abnormal data rather than offline, got {}".format(pause_logs))
+        failed = True
+    message = api.health_message()
+    if not message or sn not in message or "B0600" not in message or "offline" in message:
+        print("ERROR: expected the health message to name B0600 for {} without calling it offline, got {}".format(sn, message))
+        failed = True
+
+    # A second inverter that is genuinely offline is reported under its own reason
+    api.note_datalogger_offline(other_sn)
+    message = api.health_message() or ""
+    if "offline or disconnected for inverter {}".format(other_sn) not in message or "B0600) for inverter {}".format(sn) not in message:
+        print("ERROR: expected each inverter under its own reason, got {}".format(message))
+        failed = True
+
+    # The cooldown lapses, but nothing has succeeded yet, so the run status still names it
+    api._test_now_utc_exact = datetime(2026, 9, 7, 13, 0, 0, tzinfo=UTC)
+    if api.datalogger_offline(sn):
+        print("ERROR: the B0600 cooldown should have lapsed after an hour")
+        failed = True
+    message = api.health_message()
+    if not message or sn not in message:
+        print("ERROR: the diagnostic should outlast the cooldown until a request succeeds, got {}".format(message))
+        failed = True
+
+    # A read that succeeds clears it
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {"msg": "20"}}))
+    await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": sn, "cid": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC})
+    message = api.health_message() or ""
+    if sn in message or sn in api.datalogger_cooldown_code:
+        print("ERROR: a successful read should clear the B0600 diagnostic, got {}".format(message))
+        failed = True
+
+    if not failed:
+        print("PASSED: B0600 backs off the inverter and is reported as abnormal data, not offline")
     return failed
 
 
