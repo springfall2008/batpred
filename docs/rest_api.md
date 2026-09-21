@@ -46,3 +46,15 @@ You must post in 'json' with the service name and the service data, as per Home 
 ```
 
 The response body is `true` on success, `false`/`null` on failure (via Home Assistant) or when the call was made in standalone mode against a service Predbat doesn't simulate itself.
+
+For a write that a Hub-connected component (e.g. the Gateway) rejected, or could not confirm, the response body is instead a JSON object:
+
+```json
+{
+    "success": false,
+    "error": "GatewayMQTT: inverter command rejected: not_polled (CH0000A001)",
+    "outcome_unknown": false
+}
+```
+
+`error` is a human-readable reason for the failure. `outcome_unknown` tells you whether the write may still have taken effect: `false` means the write was rejected before anything was sent to the device (e.g. the target wasn't found, or telemetry was stale), so it's safe to fix the underlying condition and retry. `true` means the outcome is genuinely unknown — for example the device's acknowledgement timed out, or the publish itself failed — and the write may or may not have landed. **Do not blindly retry when `outcome_unknown` is `true`**; check the entity's state first, since retrying an unconfirmed write can repeat one that already succeeded.
