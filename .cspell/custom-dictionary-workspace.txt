@@ -673,6 +673,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable
