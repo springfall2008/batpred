@@ -505,6 +505,25 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ Defaults are unchanged and never warn")
 
+    # Test 20: car_charging_now set to a static literal (e.g. "off", a documented valid config -
+    # apps.yaml:357-361 ships exactly this as a commented example, and car_charging_now's schema
+    # allows sensor_type string|boolean) must still warn under 'started', the same as leaving it
+    # unconfigured - a literal can never report a real charging edge, so it must not satisfy the
+    # sensor gate (Copilot review on #5110).
+    print("\n*** Test 20: car_charging_now set to a static literal still warns under 'started' ***")
+    my_predbat.args = dict(saved_args_16)  # num_cars stays at the fixture default (1)
+    my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = "started"
+    my_predbat.args["car_charging_now"] = "off"
+    clear_trust_warned_flags()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    assert 0 in my_predbat.trust_iog_no_sensor_warned, "car 0 should be flagged as warned when car_charging_now is a static literal, not a real sensor"
+    assert my_predbat.had_errors is True, "had_errors should be set - a static literal cannot back the 'started' trust gate"
+
+    print("✓ A static car_charging_now literal still warns, same as unconfigured")
+
     # Restore state for any tests appended after this one
     my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = saved_trust_value_16
     my_predbat.config_index["octopus_intelligent_limit_future_slots"]["value"] = saved_limit_value_16

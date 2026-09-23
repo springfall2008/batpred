@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, is_entity_id
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -2569,7 +2569,12 @@ class Fetch:
 
     def has_car_charging_now_sensor(self, car_n):
         """
-        True if car_n has a real car_charging_now sensor configured in apps.yaml.
+        True if car_n has a real car_charging_now HA entity configured in apps.yaml, as opposed to
+        being unconfigured or set to a static literal (car_charging_now supports sensor_type
+        string|boolean, so e.g. "car_charging_now: off" is valid config with no entity behind it -
+        apps.yaml:357-361 ships exactly that as a commented example). A static value can never
+        report a real edge, so it must not satisfy the "started" trust gate any more than an
+        unconfigured sensor does (Copilot review on #5110).
 
         Deliberately reads raw config presence (self.args) rather than the resolved
         self.car_charging_now list: the resolved list defaults every car to False, so it can't
@@ -2589,8 +2594,8 @@ class Fetch:
             # value, list) and index is not None"), so a single sensor resolves identically for
             # every car_n. Returning car_n == 0 here would wrongly degrade car 1+ to "none" on
             # a single-sensor multi-car install whose sensor does in fact cover them.
-            return True
-        return car_n < len(configured) and configured[car_n] not in (None, "")
+            return is_entity_id(configured)
+        return car_n < len(configured) and is_entity_id(configured[car_n])
 
     def get_car_charging_planned(self):
         """
@@ -2619,7 +2624,13 @@ class Fetch:
         # of a sensor reading from the day before.
         if self.car_charging_now_confirmed_midnight_utc != self.midnight_utc:
             if self.car_charging_now_confirmed_midnight_utc is not None:
-                day_shift_minutes = int((self.midnight_utc - self.car_charging_now_confirmed_midnight_utc).total_seconds() / 60)
+                # midnight_utc is local wall-clock midnight (tz-aware, not actually UTC - see
+                # update_time()), so subtracting two of them as a timedelta measures elapsed
+                # absolute time, not calendar days: across a DST transition consecutive local
+                # midnights are 23h or 25h apart, not 24h, which corrupted this rebase (Copilot
+                # review on #5110). Use the calendar-date difference instead, which is exactly
+                # the number of local calendar days regardless of any DST shift within them.
+                day_shift_minutes = (self.midnight_utc.date() - self.car_charging_now_confirmed_midnight_utc.date()).days * 24 * 60
                 for car_n in range(PREDBAT_MAX_CARS):
                     self.car_charging_now_confirmed_slots[car_n] = {s - day_shift_minutes for s in self.car_charging_now_confirmed_slots[car_n]}
                     if self.car_charging_now_streak_last_read[car_n] is not None:

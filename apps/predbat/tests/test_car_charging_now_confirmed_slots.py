@@ -43,7 +43,17 @@ def test_car_charging_now_confirmed_slots(my_predbat):
     print("**** Running car_charging_now_confirmed_slots tests ****")
     failed = False
 
-    # No state to save/restore here: each test gets a fresh PredBat (#5102).
+    # my_predbat is the one PredBat instance shared across the whole test run (unit_test.py builds
+    # it once and passes it to every registered test), not a fresh fixture per test - so every field
+    # this test mutates must be restored, or later tests inherit this test's 2026 clock, car count
+    # and car_charging_now config (Copilot review on #5110).
+    saved_num_cars = my_predbat.num_cars
+    saved_midnight_utc = my_predbat.midnight_utc
+    saved_minutes_now = my_predbat.minutes_now
+    saved_car_charging_now_arg = my_predbat.args.get("car_charging_now", None)
+    saved_confirmed_slots = my_predbat.car_charging_now_confirmed_slots
+    saved_streak_last_read = my_predbat.car_charging_now_streak_last_read
+    saved_confirmed_midnight_utc = my_predbat.car_charging_now_confirmed_midnight_utc
 
     def reset_streak_state():
         """
@@ -57,7 +67,32 @@ def test_car_charging_now_confirmed_slots(my_predbat):
 
     my_predbat.num_cars = 1
     my_predbat.midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    my_predbat.car_charging_now_confirmed_midnight_utc = my_predbat.midnight_utc
     reset_streak_state()
+
+    try:
+        failed = _run_car_charging_now_confirmed_slots_tests(my_predbat, reset_streak_state)
+    finally:
+        my_predbat.num_cars = saved_num_cars
+        my_predbat.midnight_utc = saved_midnight_utc
+        my_predbat.minutes_now = saved_minutes_now
+        if saved_car_charging_now_arg is None:
+            my_predbat.args.pop("car_charging_now", None)
+        else:
+            my_predbat.args["car_charging_now"] = saved_car_charging_now_arg
+        my_predbat.car_charging_now_confirmed_slots = saved_confirmed_slots
+        my_predbat.car_charging_now_streak_last_read = saved_streak_last_read
+        my_predbat.car_charging_now_confirmed_midnight_utc = saved_confirmed_midnight_utc
+
+    return failed
+
+
+def _run_car_charging_now_confirmed_slots_tests(my_predbat, reset_streak_state):
+    """
+    The body of test_car_charging_now_confirmed_slots(), split out so the caller can wrap it in a
+    try/finally that restores every field it mutates on the shared my_predbat fixture.
+    """
+    failed = False
 
     # Test 1: a True reading well inside a slot (10:00, 30 minutes to go) confirms that slot.
     print("*** Test 1: car_charging_now True with plenty of the slot left confirms the slot")
@@ -389,10 +424,45 @@ def test_car_charging_now_confirmed_slots_midnight_rollover(my_predbat):
     print("**** Running car_charging_now_confirmed_slots_midnight_rollover tests ****")
     failed = False
 
+    # my_predbat is the one PredBat instance shared across the whole test run, not a fresh fixture
+    # per test - restore everything this test mutates (Copilot review on #5110).
+    saved_num_cars = my_predbat.num_cars
+    saved_midnight_utc = my_predbat.midnight_utc
+    saved_minutes_now = my_predbat.minutes_now
+    saved_car_charging_now_arg = my_predbat.args.get("car_charging_now", None)
+    saved_confirmed_slots = my_predbat.car_charging_now_confirmed_slots
+    saved_streak_last_read = my_predbat.car_charging_now_streak_last_read
+    saved_confirmed_midnight_utc = my_predbat.car_charging_now_confirmed_midnight_utc
+
     my_predbat.num_cars = 1
     my_predbat.midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    my_predbat.car_charging_now_confirmed_midnight_utc = my_predbat.midnight_utc
     my_predbat.car_charging_now_confirmed_slots = [set() for _ in range(PREDBAT_MAX_CARS)]
     my_predbat.car_charging_now_streak_last_read = [None for _ in range(PREDBAT_MAX_CARS)]
+
+    try:
+        failed = _run_car_charging_now_confirmed_slots_midnight_rollover_tests(my_predbat)
+    finally:
+        my_predbat.num_cars = saved_num_cars
+        my_predbat.midnight_utc = saved_midnight_utc
+        my_predbat.minutes_now = saved_minutes_now
+        if saved_car_charging_now_arg is None:
+            my_predbat.args.pop("car_charging_now", None)
+        else:
+            my_predbat.args["car_charging_now"] = saved_car_charging_now_arg
+        my_predbat.car_charging_now_confirmed_slots = saved_confirmed_slots
+        my_predbat.car_charging_now_streak_last_read = saved_streak_last_read
+        my_predbat.car_charging_now_confirmed_midnight_utc = saved_confirmed_midnight_utc
+
+    return failed
+
+
+def _run_car_charging_now_confirmed_slots_midnight_rollover_tests(my_predbat):
+    """
+    The body of test_car_charging_now_confirmed_slots_midnight_rollover(), split out so the caller
+    can wrap it in a try/finally that restores every field it mutates on the shared fixture.
+    """
+    failed = False
 
     # Day 1: confirm slot 840 (14:00) and end the streak there with an explicit False read, so
     # nothing is left active to roll forward across the rollover below - isolating this test to the
@@ -432,5 +502,90 @@ def test_car_charging_now_confirmed_slots_midnight_rollover(my_predbat):
         print("**** All car_charging_now_confirmed_slots_midnight_rollover tests PASSED ****")
     else:
         print("**** Some car_charging_now_confirmed_slots_midnight_rollover tests FAILED ****")
+
+    return failed
+
+
+def test_car_charging_now_confirmed_slots_dst_rollover(my_predbat):
+    """
+    The midnight rebase in get_car_charging_planned() must use calendar days, not elapsed absolute
+    time, or a spring DST transition corrupts it (Copilot review on #5110).
+
+    midnight_utc is local wall-clock midnight (an aware datetime in the configured timezone, not
+    actually UTC despite the name - see update_time()). Subtracting two such values as a plain
+    timedelta measures elapsed absolute time: across the UK's spring-forward, 2026-03-29 00:00 to
+    2026-03-30 00:00 local time is only 23 real hours apart (1380 minutes), not the 1440 a calendar
+    day should shift confirmed-slot numbers by. Rebasing by 1380 instead of 1440 shifts every
+    stored slot number 30 minutes too little, so a slot confirmed at 23:30 the day before (minute
+    1410) lands on minute 30 (00:30) today instead of being pushed out of today's range - a slot
+    Predbat never actually confirmed today would then read as confirmed.
+    """
+    print("**** Running car_charging_now_confirmed_slots_dst_rollover tests ****")
+    failed = False
+
+    saved_num_cars = my_predbat.num_cars
+    saved_midnight_utc = my_predbat.midnight_utc
+    saved_minutes_now = my_predbat.minutes_now
+    saved_car_charging_now_arg = my_predbat.args.get("car_charging_now", None)
+    saved_confirmed_slots = my_predbat.car_charging_now_confirmed_slots
+    saved_streak_last_read = my_predbat.car_charging_now_streak_last_read
+    saved_confirmed_midnight_utc = my_predbat.car_charging_now_confirmed_midnight_utc
+
+    london = pytz.timezone("Europe/London")
+
+    try:
+        my_predbat.num_cars = 1
+        my_predbat.car_charging_now_confirmed_slots = [set() for _ in range(PREDBAT_MAX_CARS)]
+        my_predbat.car_charging_now_streak_last_read = [None for _ in range(PREDBAT_MAX_CARS)]
+
+        # Day 1 (2026-03-29, still GMT): confirm slot 1410 (23:30), then explicitly end the streak
+        # in the same slot so nothing rolls forward into day 2 on its own merits.
+        print("*** Test 1: slot 1410 (23:30) confirmed the day before a spring DST transition ***")
+        my_predbat.midnight_utc = london.localize(datetime(2026, 3, 29, 0, 0, 0))
+        my_predbat.car_charging_now_confirmed_midnight_utc = my_predbat.midnight_utc
+        my_predbat.minutes_now = 23 * 60 + 30  # 23:30 - slot 1410
+        my_predbat.args["car_charging_now"] = "yes"
+        my_predbat.get_car_charging_planned()
+        my_predbat.minutes_now = 23 * 60 + 50  # still within slot 1410, ends the streak
+        my_predbat.args["car_charging_now"] = "no"
+        my_predbat.get_car_charging_planned()
+
+        if 1410 not in my_predbat.car_charging_now_confirmed_slots[0]:
+            print("ERROR: slot 1410 should be confirmed from the day-1 reading")
+            failed = True
+
+        # Day 2 (2026-03-30, BST): midnight_utc advances to the next calendar day, but only 23 real
+        # hours after day 1's midnight because of the spring-forward. minutes_now lands at 00:30
+        # (slot 30) with no reading yet today - the buggy elapsed-time rebase (1380 minutes) would
+        # shift yesterday's slot 1410 down to exactly 30, making it collide with today's slot 30 and
+        # falsely confirm it; the correct calendar-day rebase (1440 minutes) shifts it to -30, well
+        # outside today's range.
+        print("*** Test 2: DST-shifted midnight must not let 23:30 yesterday confirm 00:30 today ***")
+        my_predbat.midnight_utc = london.localize(datetime(2026, 3, 30, 0, 0, 0))
+        my_predbat.minutes_now = 30  # 00:30 - slot 30
+        del my_predbat.args["car_charging_now"]  # no reading yet today - get_arg() falls back to "no"
+        my_predbat.get_car_charging_planned()
+
+        if 30 in my_predbat.car_charging_now_confirmed_slots[0]:
+            print("ERROR: slot 30 (00:30) is confirmed on day 2 with no positive reading - the DST-shortened day corrupted the midnight rebase")
+            failed = True
+        else:
+            print("Test 2 passed - the DST transition did not corrupt the midnight rebase")
+
+        if not failed:
+            print("**** All car_charging_now_confirmed_slots_dst_rollover tests PASSED ****")
+        else:
+            print("**** Some car_charging_now_confirmed_slots_dst_rollover tests FAILED ****")
+    finally:
+        my_predbat.num_cars = saved_num_cars
+        my_predbat.midnight_utc = saved_midnight_utc
+        my_predbat.minutes_now = saved_minutes_now
+        if saved_car_charging_now_arg is None:
+            my_predbat.args.pop("car_charging_now", None)
+        else:
+            my_predbat.args["car_charging_now"] = saved_car_charging_now_arg
+        my_predbat.car_charging_now_confirmed_slots = saved_confirmed_slots
+        my_predbat.car_charging_now_streak_last_read = saved_streak_last_read
+        my_predbat.car_charging_now_confirmed_midnight_utc = saved_confirmed_midnight_utc
 
     return failed
