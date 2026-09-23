@@ -3814,16 +3814,20 @@ class Octopus:
                                 # fetch_octopus_rates() may already have delivered the discounted rate
                                 # from the feed, which would otherwise survive the rejection.
                                 #
-                                # Two things this must not touch. A slot rejected only by
+                                # Three things this must not touch. A slot rejected only by
                                 # octopus_slot_max (needed and trusted both still True) may be a
                                 # genuine dispatch Predbat is simply not counting against its own
-                                # budget - rewriting it would be wrong (#4483 review). And an elapsed
+                                # budget - rewriting it would be wrong (#4483 review). An elapsed
                                 # minute records what the tariff actually charged, not a prediction;
                                 # rewriting it would inflate today_cost() without changing any plan.
                                 # `needed` exempts past slots already, `trusted` deliberately does
                                 # not, so the minute test is what protects an unconfirmed past
-                                # dispatch here.
-                                if (not needed or not trusted) and minute >= self.minutes_now:
+                                # dispatch here. And a minute another car's own octopus_slots already
+                                # got accepted for this same rates dict - this function runs once per
+                                # car into one shared dict (fetch.py), so a later car's rejection must
+                                # not undo an earlier car's genuine dispatch at the same minute (two
+                                # IOG-enabled cars can have overlapping dispatch windows).
+                                if (not needed or not trusted) and minute >= self.minutes_now and minute not in self.trusted_dynamic_minutes:
                                     rates[minute] = self.rate_max_base
                                     self.io_adjusted.pop(minute, None)
                         else:
@@ -3834,7 +3838,7 @@ class Octopus:
                             # cleared here too, not just slot_start.
                             if slot_start in slots_added_set:
                                 rates[minute] = assumed_price
-                            elif (not needed or not trusted) and minute >= self.minutes_now:
+                            elif (not needed or not trusted) and minute >= self.minutes_now and minute not in self.trusted_dynamic_minutes:
                                 rates[minute] = self.rate_max_base
                                 self.io_adjusted.pop(minute, None)
 

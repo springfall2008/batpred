@@ -828,6 +828,32 @@ def run_rate_add_io_slots_tests(my_predbat):
             failed = True
     my_predbat.io_adjusted = saved_io_adjusted_44
 
+    print("\n**** Test 45: a later car's rejected slot must not undo an earlier car's accepted slot at the same minute ****")
+    # rate_add_io_slots() is called once per car (fetch.py), each call mutating the same shared rates
+    # dict in sequence - unlike the old pre-#4516 function (purely additive, never restored a minute
+    # once discounted), the reject-and-restore path this PR added (rates[minute] = rate_max_base) can
+    # actively undo a discount a previous call already applied. Two IOG-enabled cars can genuinely have
+    # overlapping dispatch windows, so car 1's own rejected/untrusted slot at the same minute car 0's
+    # slot was accepted for must not clobber car 0's genuine discount (Copilot-style review on #5110).
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 12
+    my_predbat.car_charging_now_confirmed_slots = [set(range(840, 870)), set()]  # car 0 corroborated, car 1 not
+    slot_start_45 = midnight_utc_26 + timedelta(hours=14)  # 14:00-14:30, both cars dispatched here
+    slot_end_45 = slot_start_45 + timedelta(minutes=30)
+    slots_car0_45 = [{"start": slot_start_45.strftime(TIME_FORMAT), "end": slot_end_45.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}]
+    slots_car1_45 = [{"start": slot_start_45.strftime(TIME_FORMAT), "end": slot_end_45.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}]
+
+    rates_45 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    my_predbat.trusted_dynamic_minutes = set()
+    rates_45 = my_predbat.rate_add_io_slots(0, rates_45, slots_car0_45)  # car 0: corroborated, accepted
+    rates_45 = my_predbat.rate_add_io_slots(1, rates_45, slots_car1_45)  # car 1: not corroborated, rejected
+
+    for minute in range(840, 870):
+        if rates_45.get(minute) != 4.0:
+            print("ERROR: minute {} should keep car 0's accepted 4.0 rate after car 1's rejected pass, got {}".format(minute, rates_45.get(minute)))
+            failed = True
+
     # Restore original state
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
     my_predbat.octopus_intelligent_limit_future_slots = saved_limit_future_slots
