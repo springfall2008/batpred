@@ -7681,6 +7681,48 @@ def test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_woul
     return 0
 
 
+def test_fox_build_discovery_survives_a_capacity_that_is_not_a_number(my_predbat):
+    """A capacity that is not a positive number drops the rating, not the whole report.
+
+    capacity_watts() multiplies the raw field by 1000.0, so a non-empty string would raise inside
+    build_discovery(); refresh_discovery() would catch that and file nothing for any Fox device.
+    The rating is read under the same test drives_it applies: a positive int or float.
+    """
+    print("**** test_fox_build_discovery_survives_a_capacity_that_is_not_a_number ****")
+    for capacity in ("8", "unknown", -8, None):
+        fox = _fox_discovery_api(my_predbat)
+        fox.device_detail["BATT001"]["capacity"] = capacity
+
+        report = fox.build_discovery()
+
+        by_id = {record["device_id"]: record for record in report["inverters"]}
+        assert set(by_id) == {"fox:BATT001", "fox:PVONLY1"}, f"capacity {capacity!r}: every device is still reported"
+        battery = by_id["fox:BATT001"]
+        assert "inverter_w" not in battery.get("ratings", {}), f"capacity {capacity!r} is not a rating: {battery.get('ratings')}"
+        assert "inverter_type" not in battery, f"capacity {capacity!r}: automatic_config() would not drive this device"
+        assert sorted(battery["functions"]) == ["battery", "solar"], "the rest of the record is unaffected"
+        assert by_id["fox:PVONLY1"]["ratings"]["inverter_w"] == 5000.0, "the other device keeps its rating"
+    print("PASS: Fox reports every device when a capacity is not a number")
+    return 0
+
+
+def test_fox_build_discovery_matches_export_limit_as_automatic_config_does(my_predbat):
+    """export_limit is found by the same case-insensitive match automatic_config() uses for hasExportLimit."""
+    print("**** test_fox_build_discovery_matches_export_limit_as_automatic_config_does ****")
+    for name in ("ExportLimit", "exportlimit", "EXPORTLIMIT"):
+        fox = _fox_discovery_api(my_predbat)
+        fox.device_settings["BATT001"] = {name: {"value": 12000.0}}
+        battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
+        assert "export_limit" in battery["capabilities"], f"setting {name!r}: {battery['capabilities']}"
+
+    fox = _fox_discovery_api(my_predbat)
+    fox.device_settings["BATT001"] = {"WorkMode": {"value": "SelfUse"}}
+    battery = {record["device_id"]: record for record in fox.build_discovery()["inverters"]}["fox:BATT001"]
+    assert "export_limit" not in battery["capabilities"], "no ExportLimit setting, no capability"
+    print("PASS: Fox matches ExportLimit as automatic_config() does")
+    return 0
+
+
 def test_fox_build_discovery_returns_none_before_discovery(my_predbat):
     """With no devices found yet there is nothing to describe, so nothing is reported."""
     print("**** test_fox_build_discovery_returns_none_before_discovery ****")
@@ -8043,6 +8085,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_fox_build_discovery_round_trips_through_validate_report(my_predbat)
         failed |= test_fox_build_discovery_battery_ratings_tell_the_aio_bug_from_a_healthy_stack(my_predbat)
         failed |= test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would(my_predbat)
+        failed |= test_fox_build_discovery_survives_a_capacity_that_is_not_a_number(my_predbat)
+        failed |= test_fox_build_discovery_matches_export_limit_as_automatic_config_does(my_predbat)
         failed |= test_fox_build_discovery_returns_none_before_discovery(my_predbat)
         failed |= test_fox_run_reports_discovery_and_survives_a_failure(my_predbat)
         failed |= test_fox_run_reports_discovery_when_automatic_config_fails(my_predbat)

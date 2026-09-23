@@ -2469,7 +2469,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             if has_scheduler:
                 capabilities.append("schedule")
             settings = self.device_settings.get(serial, {}) or {}
-            if "ExportLimit" in settings:
+            # Matched case-insensitively, as automatic_config() does when it sets hasExportLimit
+            if any(str(name).lower() == "exportlimit" for name in settings):
                 capabilities.append("export_limit")
             flags = []
             if detail.get("thirdPartyGen", False):
@@ -2490,8 +2491,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
             if firmware:
                 info["firmware"] = firmware
 
+            # capacity_watts() multiplies the raw field, so only a positive number reaches it -
+            # the same test drives_it applies below. Anything else drops the rating, not the report.
+            capacity = detail.get("capacity", 0)
+            capacity_is_rating = isinstance(capacity, (int, float)) and capacity > 0
             ratings = {}
-            if detail.get("capacity"):
+            if capacity_is_rating:
                 ratings["inverter_w"] = self.capacity_watts(detail)
             battery_list = detail.get("batteryList") or []
             summed = [entry for entry in battery_list if isinstance(entry, dict) and "capacity" in entry] if isinstance(battery_list, list) else []
@@ -2504,8 +2509,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             # all hold. Duplicated here, not shared, so this observer does not touch that control
             # path; test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would
             # runs the real automatic_config() to keep the two in step.
-            capacity = detail.get("capacity", 0)
-            drives_it = has_battery and has_scheduler and isinstance(capacity, (int, float)) and capacity > 0
+            drives_it = has_battery and has_scheduler and capacity_is_rating
 
             inverters.append(
                 inverter_record(
