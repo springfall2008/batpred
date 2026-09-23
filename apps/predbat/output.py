@@ -1325,7 +1325,10 @@ class Output:
             # prediction.py enforces during the plan itself (car charging slot active, car not
             # allowed to draw from the battery, charge windows in use) - so the plan explains the
             # same held SoC that a non-read-only user would see labelled "Hold for car" live.
-            holding_for_car = self.set_charge_window and (not self.car_charging_from_battery) and (self.car_charge_slot_kwh(minute_start, minute_end) > 0.0)
+            # car_charging_hold_active() also gates on car capacity the same way execute.py and
+            # prediction.py do, so a car that's already full does not show the hold reason for a
+            # slot it no longer actually holds the battery for (Copilot review on #5147).
+            holding_for_car = self.set_charge_window and (not self.car_charging_from_battery) and self.car_charging_hold_active(minute_start, minute_end)
 
             state = "&#128663;" if holding_for_car else soc_sym
             state_color = "#FFFFFF"
@@ -1452,12 +1455,24 @@ class Output:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
+                        # holding_for_car above was computed for the whole 30-minute row, but this
+                        # branch only describes the pre-export segment (minute_start to start) - a
+                        # car held for only during that segment must still get the car icon/reason
+                        # here, not lose it to the pre-export arrow below (Copilot review on
+                        # #5147). Same "car icon replaces the trend arrow/reason" convention as the
+                        # whole-row case above, so this takes priority over the trend below rather
+                        # than being shown alongside it.
+                        holding_for_car_segment = self.set_charge_window and (not self.car_charging_from_battery) and self.car_charging_hold_active(minute_start, start)
+
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
                         split_time_str = (self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M")
+                        if holding_for_car_segment:
+                            state = "&#128663;"
+                            reason_parts.append({"code": "hold_for_car", "params": {}})
                         # Same near-flat tolerance as the whole-slot demand arrow above - testing
                         # soc_change_this >= 0 first would make the steady case unreachable and
                         # render a flat pre-window period as rising
-                        if abs(soc_change_this) < 0.05:
+                        elif abs(soc_change_this) < 0.05:
                             state = " &rarr;"
                             reason_parts.append({"code": "demand_before_export_steady", "params": {"split_time": split_time_str}})
                         elif soc_change_this >= 0:

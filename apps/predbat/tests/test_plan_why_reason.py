@@ -464,6 +464,68 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.charge_window_best = window
     my_predbat.charge_limit_best = [8.0]
 
+    # --- Test 10f: a car already at/above its charging limit does not show hold_for_car, matching
+    # execute.py's real gate (car_charging_soc[car_n] >= car_charging_limit[car_n] skips the hold
+    # entirely) and prediction.py's own simulated clamp (car_load_scale floored at 0 once full) -
+    # a planned slot's kwh is what was originally planned, not adjusted once the car finishes
+    # early, so the plan must not claim a hold that neither execute.py nor the simulation applies
+    # (Copilot review on #5147) ---
+    print("Test a full car does not show hold_for_car even with a positive-kwh planned slot")
+    saved_car_charging_soc = my_predbat.car_charging_soc
+    saved_car_charging_limit = my_predbat.car_charging_limit
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_from_battery = False
+    my_predbat.car_charging_slots = [[{"start": minutes_now, "end": minutes_now + 30, "kwh": 1.0, "average": 8.0, "octopus": True}]]
+    my_predbat.car_charging_soc = [100.0]
+    my_predbat.car_charging_limit = [100.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["demand_steady"]:
+        print("ERROR: full-car reasons unexpected, should read as plain demand not hold_for_car: {}".format(row and _codes(row)))
+        failed = True
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_slots = []
+    my_predbat.car_charging_soc = saved_car_charging_soc
+    my_predbat.car_charging_limit = saved_car_charging_limit
+    my_predbat.charge_window_best = window
+    my_predbat.charge_limit_best = [8.0]
+
+    # --- Test 10g: a split demand-then-export row still shows hold_for_car for the pre-export
+    # segment when the car is held during that segment specifically - holding_for_car was
+    # previously computed once for the whole 30-minute row, so a car slot overlapping only the
+    # demand portion produced no hold_for_car reason once the export-split branch overwrote state/
+    # reason_parts with the plain pre-export arrow (Copilot review on #5147) ---
+    print("Test split demand-before-export row shows hold_for_car for the held pre-export segment")
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_from_battery = False
+    my_predbat.car_charging_slots = [[{"start": minutes_now, "end": minutes_now + 15, "kwh": 1.0, "average": 8.0, "octopus": True}]]
+    my_predbat.export_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 15.0}]
+    my_predbat.export_limits_best = [50.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["hold_for_car", "export_high_rate"]:
+        print("ERROR: split pre-export hold reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#128663;" not in row["state_html"]:
+        print("ERROR: split pre-export hold state cell should show the car icon, got: {}".format(row["state_html"]))
+        failed = True
+    elif "Hold for car" not in _render(row, templates):
+        print("ERROR: split pre-export hold rendered text unexpected: {}".format(_render(row, templates)))
+        failed = True
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_from_battery = False
+    my_predbat.car_charging_slots = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.charge_window_best = window
+    my_predbat.charge_limit_best = [8.0]
+
     # --- Test 11: reason_templates has an entry for every code used across all scenarios ---
     print("Test reason_templates covers every code used")
     all_codes = set()

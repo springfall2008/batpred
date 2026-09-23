@@ -5781,6 +5781,38 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def car_charging_hold_active(self, minute_start, minute_end):
+        """
+        True if a car with a planned charging slot covering this window still wants the battery
+        held - i.e. matches execute.py's real "Hold for car" gate (lines 596-601), not just "is
+        there a positive-kwh planned slot here".
+
+        execute.py only holds while car_charging_soc[car_n] < car_charging_limit[car_n]: once a
+        car has reached its target, execute.py stops holding for it even though its planned slot
+        may still show positive kwh (that kwh is the amount originally planned, not adjusted once
+        the car finishes early). prediction.py's own simulation does the same thing internally -
+        car_load_scale is clamped to car_charging_limit[car_n] - car_soc[car_n], floored at 0 -
+        so a full car draws no simulated load and the battery is not actually held for it either.
+        Mirroring only the "positive planned kwh" half of that here would show the hold_for_car
+        icon/reason for a slot where neither execute.py nor the plan simulation is actually
+        holding (Copilot review on #5147).
+
+        Like execute.py, this checks car_charging_soc/car_charging_limit once per car (the current
+        live values at plan-render time), not a per-minute simulated SoC - car_charge_slot_kwh()'s
+        per-minute window overlap is enough to know a car is relevant to this window; whether that
+        car is already full is a single live fact, not something that changes minute to minute
+        within one render.
+        """
+        if self.num_cars == 0:
+            return False
+        for car_n in range(self.num_cars):
+            if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
+                continue
+            for window in self.car_charging_slots[car_n]:
+                if window["start"] < minute_end and window["end"] > minute_start and window.get("kwh", 0) > 0:
+                    return True
+        return False
+
     def car_charge_slot_kwh(self, minute_start, minute_end):
         """
         Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot
