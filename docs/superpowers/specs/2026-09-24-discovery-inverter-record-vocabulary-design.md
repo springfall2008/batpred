@@ -61,6 +61,8 @@ is the first to change behaviour.
 | D4 | Protocol detail (time formats, units, option-vs-string time entities) is derived from the entity map, not stated separately. |
 | D5 | `capabilities` is a dictionary of `INVERTER_DEF` keys to `True`/`False`, shaped like an `INVERTER_DEF` row. |
 | D6 | `ratings` are keyed by Predbat setting name, in Predbat's units. A sensor binding for a rating lives in `entities` under the same key. |
+| D7 | A site-wide export limit is reported as each inverter's share of it. Predbat sums `export_limit` across inverters, so the shares add back up to the site figure. |
+| D8 | `functions` reports what the component believes the device is, whether probed or assumed. There is no marker for an assumed value. |
 
 ## 1. The inverter record
 
@@ -116,7 +118,9 @@ Keyed by Predbat setting name, in the units that setting takes:
 
 Each value is the configured or rated figure as the device reports it. In particular Sunsynk reports
 the raw `pvMaxLimit` as `export_limit` and `importPower` as `import_limit`, not the lower of either and the
-inverter rating.
+inverter rating. The one exception is a limit that applies to the whole site: GE Cloud reports each
+inverter's equal share of the site figure (D7), the same value `publish_site_export_limit()` already
+publishes.
 
 Descriptive vendor figures that are not a Predbat setting (`battery_capacity_ah`, `battery_pack_count`,
 `battery_capacity_entries`, `battery_capacity_serials`, `pv_w`) stay in `ratings` under their current
@@ -230,13 +234,3 @@ are amended to match.
   entity id and the right `access`. The check runs `automatic_config()` against a fixture and compares
   the `set_arg` calls with the record.
 - A round trip through `validate_report()` for each reporter.
-
-## Open questions
-
-1. **GE Cloud's export limit is site-wide.** `publish_site_export_limit()` divides the site budget equally
-   between inverters, so each inverter's `export_limit` would be Predbat's arithmetic rather than a
-   configured figure (D1). Options: report the raw site figure on each inverter as a separate rating,
-   `site_export_limit`; or put it on a site-level record.
-2. **Assumed `functions`.** Deye, Sunsynk and GivTCP report `["solar", "battery"]` because their APIs cannot
-   tell a PV-only unit from a hybrid. Should those records carry a `functions_assumed` flag so a reader
-   can tell belief from a probed fact?
