@@ -602,10 +602,11 @@ If a date is specified then the rate override applies to that specific date, oth
 
 ## Net settlement of import and export
 
-Some tariffs do not bill every import and every export separately. Instead they net import against export within a fixed
-settlement period, typically each clock hour or quarter hour, and only the net direction is charged or paid. For example, the
-hourly balancing used in Poland for households with their own generation works this way: if you import 1 kWh and export 0.4 kWh in the same hour you pay for
-0.6 kWh of import and nothing is paid for the export.
+Some tariffs do not bill every import and every export separately. Instead, **import and export kWh cancel each other out within
+a fixed settlement window**, typically each clock hour or quarter hour, and only the energy left over after cancelling is charged
+(if it is import) or paid (if it is export). For example, the hourly balancing used in Poland for households with their own
+generation works this way: if you import 1 kWh and export 0.4 kWh in the same hour, 0.4 kWh of the import is cancelled by the
+export, so you pay for 0.6 kWh of import and nothing is paid for the export.
 
 By default Predbat prices every import and export independently. To model a settlement period, set
 **metric_net_settlement_window_minutes** in `apps.yaml` to its length in minutes:
@@ -615,12 +616,13 @@ By default Predbat prices every import and export independently. To model a sett
 ```
 
 - `0` (the default, or leaving the setting out) disables netting and gives exactly the same results as before.
-- The value must be a multiple of 5 that divides a day evenly (e.g. 15, 30 or 60), otherwise Predbat logs a warning and disables netting.
+- The value must be a multiple of 5 that divides a day evenly (e.g. 15, 30 or 60), otherwise Predbat disables netting, logs a warning
+  and reports the error on **predbat.status**.
 - Windows are aligned to the clock from midnight, so `60` settles 10:00-11:00, 11:00-12:00 and so on.
 
-Within each window Predbat adds up the import and export energy. If you imported more than you exported, the net amount is
-charged at the import rate; otherwise the net amount is paid at the export rate. If the rate changes within a window, the average
-rate of the winning direction (weighted by energy) is used.
+Within each window Predbat adds up the import and export energy, and the import and export kWh cancel each other out. If you
+imported more than you exported, the import left over is charged at the import rate; otherwise the export left over is paid at the
+export rate. If the rate changes within a window, the average rate of that direction (weighted by energy) is used.
 
 Only the cost is netted. The planned import and export energy, carbon figures, standing charge and car charging premiums are
 unchanged. The optimiser plans against the netted cost, and **predbat.cost_today** reports the netted cost of the energy metered so
@@ -634,6 +636,10 @@ Things to be aware of:
   later slot's cost in the plan shows the import it cancelled, priced at the import rate.
 - The setting applies to every tariff Predbat prices, including the tariffs in [Energy Comparison](compare.md), even ones that
   don't net in reality.
+- Only the plan's cost is netted. Decisions that Predbat makes by comparing each slot's own rate against a threshold still use
+  the plain per-slot rates. That covers when the iBoost diverter runs (its rate thresholds, gas comparisons and smart iBoost
+  slots) and which slots car charging picks. For example, in an hour that is mostly import, solar diverted to iBoost is really
+  worth the import rate, because it would otherwise have cancelled import, but iBoost still judges it at the export rate.
 - Netting doesn't always lower the cost. If your export rate is higher than your import rate in the same window, netting takes
   away the profit of importing and exporting in that window, and the plan changes to match.
 

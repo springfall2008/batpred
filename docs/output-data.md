@@ -461,6 +461,9 @@ These are useful for automations if for example, you want to turn off car chargi
 - predbat.rates_export - The current energy export rates in Pence (also can be charted)
 - predbat.rates_gas - The current gas rates in Pence (also can be charted)
 - predbat.cost_today - The total cost of energy so far today (since midnight) with attributes of the total cost every 5 minutes since midnight today
+    - With [net settlement](energy-rates.md#net-settlement-of-import-and-export) enabled this is the netted cost, so it no longer
+    equals predbat.cost_today_import plus predbat.cost_today_export (which stay gross). The attribute `cost_net_settlement_adjust`
+    holds the difference.
 - predbat.cost_today_export - Same as predbat.cost_today, but for all export income since midnight today
 - predbat.cost_today_import - Same as predbat.cost_today, but for all import costs since midnight today
 - predbat.cost_hour - The total cost of energy averaged over the last hour

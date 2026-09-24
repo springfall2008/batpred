@@ -34,6 +34,7 @@ from utils import (
     export_target_of,
     pack_export_limit,
     net_settlement_value,
+    net_settlement_seed_from,
 )
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
@@ -128,7 +129,7 @@ class Prediction(PredictionBatch):
             # Net settlement window in minutes (0 = off), see the import/export accounting in run_prediction
             self.metric_net_settlement_window_minutes = getattr(base, "metric_net_settlement_window_minutes", 0)
             # Import/export already metered in the current window, from today_cost() in output.py
-            self.net_settlement_seed = getattr(base, "net_settlement_seed", None)
+            self.net_settlement_seed = net_settlement_seed_from(getattr(base, "net_settlement_seed", None))
             self.set_charge_freeze = base.set_charge_freeze
             self.set_reserve_enable = base.set_reserve_enable
             self.set_export_freeze = base.set_export_freeze
@@ -746,8 +747,13 @@ class Prediction(PredictionBatch):
         # forecast part of this hour nets against the part that already happened. net_applied is the
         # settled value today_cost already put into cost_today_sofar for that elapsed part.
         net_seed = self.net_settlement_seed
-        if net_window > 0 and net_seed and net_seed[0] == self.minutes_now // net_window:
-            net_window_id, net_import_kwh, net_import_cost, net_export_kwh, net_export_credit, net_applied = net_seed
+        if net_window > 0 and net_seed and net_seed.window == self.minutes_now // net_window:
+            net_window_id = net_seed.window
+            net_import_kwh = net_seed.import_kwh
+            net_import_cost = net_seed.import_cost
+            net_export_kwh = net_seed.export_kwh
+            net_export_credit = net_seed.export_credit
+            net_applied = net_seed.applied
 
         # Simulate each forward minute
         minute = 0

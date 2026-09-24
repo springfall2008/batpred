@@ -23,6 +23,7 @@ from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp1, dp2, dp3, net_settlement_value, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from utils import NetSettlementSeed
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -2197,7 +2198,14 @@ class Output:
         # Hand the current window's metered totals to the prediction (see Prediction.run_prediction)
         self.net_settlement_seed = None
         if net_window > 0 and net_window_id == self.minutes_now // net_window:
-            self.net_settlement_seed = (net_window_id, net_import_kwh, net_import_cost, net_export_kwh, net_export_credit, net_settled)
+            self.net_settlement_seed = NetSettlementSeed(
+                window=net_window_id,
+                import_kwh=net_import_kwh,
+                import_cost=net_import_cost,
+                export_kwh=net_export_kwh,
+                export_credit=net_export_credit,
+                applied=net_settled,
+            )
 
         # Add beyond-cap IOG rate premium for day and hour car cost.
         # The per-minute loops above charged car energy at house import rate (correct base).

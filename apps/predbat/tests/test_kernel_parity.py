@@ -36,7 +36,7 @@ import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
-from utils import remove_intersecting_windows, unpack_export_limit, net_settlement_value
+from utils import remove_intersecting_windows, unpack_export_limit, net_settlement_value, NetSettlementSeed
 from tests.test_infra import reset_inverter, reset_rates, FIXTURE_MINUTES_NOW
 from tests.test_model import run_model_tests
 
@@ -1077,6 +1077,9 @@ def run_net_settlement_today_cost_tests(my_predbat):
                 current = windows_by_size[window][minutes_now // window]
                 expected_seed = (minutes_now // window, current[0], current[1], current[2], current[3], expected_window_settlement(*current))
                 seed = my_predbat.net_settlement_seed
+                if not isinstance(seed, NetSettlementSeed):
+                    print("ERROR: today_cost seed is not a NetSettlementSeed: {!r}".format(seed))
+                    failed = True
                 if not seed or seed[0] != expected_seed[0] or any(abs(a - b) > 1e-9 for a, b in zip(seed[1:], expected_seed[1:])):
                     print("ERROR: today_cost seed {} expected {}".format(seed, expected_seed))
                     failed = True

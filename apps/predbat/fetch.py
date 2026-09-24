@@ -3090,8 +3090,9 @@ class Fetch:
     def fetch_net_settlement_config(self):
         """Read and validate metric_net_settlement_window_minutes (apps.yaml only), 0 = net settlement off.
 
-        An invalid value logs a warning and disables netting rather than raising. The warning and the
-        enabled message are logged once per change of the setting, not every cycle.
+        An invalid value disables netting rather than raising. The warning and the enabled message are
+        logged once per change of the setting, while an invalid value is flagged on predbat.status
+        (had_errors) every cycle, like other configuration errors.
         """
         # No typed default: get_arg would truncate 60.5 to a valid-looking 60, so validate the raw value here
         net_window_arg = self.get_arg("metric_net_settlement_window_minutes", None)
@@ -3103,6 +3104,9 @@ class Fetch:
             elif net_window:
                 self.log("Net settlement of import/export enabled over {} minute windows".format(net_window))
             self.net_settlement_window_arg = net_window_arg
+        if net_window is None:
+            # had_errors is reset every cycle, so flag it every cycle to keep it on predbat.status
+            self.record_status("Warn: metric_net_settlement_window_minutes {} is invalid - net settlement disabled".format(net_window_arg), had_errors=True)
         self.metric_net_settlement_window_minutes = net_window or 0
 
     def fetch_config_options(self):

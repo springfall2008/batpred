@@ -40,6 +40,7 @@ from const import (
 )
 import copy
 import json
+from collections import namedtuple
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -3025,6 +3026,21 @@ def allocate_export_rates(needs, max_rates, p_fleet):
             remaining = 0.0
 
     return alloc
+
+
+# Import and export already metered in the current net settlement window, handed by today_cost()
+# (output.py) to the prediction so the rest of the window nets against them. window is the window id
+# (minutes since midnight // window length); applied is the settled value of these totals, already
+# included in cost_today_sofar. A debug dump replays it as a plain list, so readers rebuild it with
+# net_settlement_seed_from().
+NetSettlementSeed = namedtuple("NetSettlementSeed", ["window", "import_kwh", "import_cost", "export_kwh", "export_credit", "applied"])
+
+
+def net_settlement_seed_from(value):
+    """Return value as a NetSettlementSeed, or None when there is no seed (value is None or empty)"""
+    if not value:
+        return None
+    return NetSettlementSeed(*value)
 
 
 def net_settlement_value(import_kwh, import_cost, export_kwh, export_credit):
