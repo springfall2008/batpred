@@ -64,6 +64,7 @@ def test_load_ml(my_predbat=None):
         ("component_stale_midnight_baseline", _test_component_stale_midnight_baseline, "LoadMLComponent baseline handling when publishing crosses midnight"),
         ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
         ("component_run_data_merge", _test_component_run_data_merge, "LoadMLComponent run() data fetch, save and merge across two runs"),
+        ("component_retrain_interval", _test_component_retrain_interval, "Configurable ML retraining interval and live changes"),
         ("component_init_predictor_last_train_time", _test_component_init_predictor_sets_last_train_time, "LoadMLComponent _init_predictor sets last_train_time from embedded training_timestamp"),
         ("nan_inf_robustness", _test_nan_inf_robustness, "LoadPredictor handles NaN, Inf, and None across input channels without NaN loss"),
         ("database_zero_preservation", _test_database_zero_preservation, "Database save/load preserves 0.0 values across roundtrip"),
@@ -981,6 +982,86 @@ def _test_prediction_with_temp():
         assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
 
 
+def _test_component_retrain_interval():
+    """Check retraining boundaries, live configuration, startup and prediction cadence."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from config import CONFIG_ITEMS
+    from load_ml_component import LoadMLComponent, PREDICTION_INTERVAL_SECONDS
+
+    async def run_test():
+        """Exercise the real run loop without performing expensive ML work."""
+        settings = {}
+        base = SimpleNamespace(
+            log=Mock(),
+            local_tz=timezone.utc,
+            prefix="predbat",
+            args={},
+            config_root=None,
+            now_utc=datetime(2026, 1, 3, 12, tzinfo=timezone.utc),
+            midnight_utc=datetime(2026, 1, 3, tzinfo=timezone.utc),
+            prediction_started=False,
+            get_arg=lambda key, default=None, **kwargs: settings.get(key, default),
+        )
+        # Start disabled to avoid requiring real load sensors in this scheduling test.
+        component = LoadMLComponent(base, load_ml_enable=False, load_ml_database_days=0)
+        component.ml_enable = True
+        component.data_ready = True
+        component.load_data_age_days = 7
+        component.initial_training_done = True
+        component._do_fetch = AsyncMock()
+        component._do_training = AsyncMock()
+        component._update_model_status = Mock()
+        component._get_predictions = Mock()
+        component._publish_entity = Mock()
+
+        # A missing setting retains the two-hour default; longer intervals must not
+        # train at the old threshold. Both sides of each boundary catch unit mistakes.
+        for interval in (None, 1, 24, 48):
+            if interval is not None:
+                settings["ml_retrain_interval_hours"] = interval
+            hours = 2 if interval is None else interval
+            for age, expected in ((hours * 3600 - 1, 0), (hours * 3600, 1)):
+                component.last_train_time = base.now_utc - timedelta(seconds=age)
+                component._do_training.reset_mock()
+                assert await component.run(seconds=30, first=False)
+                assert component._do_training.await_count == expected, f"Interval {interval}, age {age}: unexpected training"
+                if expected:
+                    assert any(f"({hours}h interval)" in call.args[0] for call in base.log.call_args_list), "Training log must show the configured interval"
+
+        # Changing the setting on the same component takes effect without a restart.
+        settings["ml_retrain_interval_hours"] = 24
+        component.last_train_time = base.now_utc - timedelta(hours=3)
+        component._do_training.reset_mock()
+        component._get_predictions.reset_mock()
+        assert await component.run(seconds=PREDICTION_INTERVAL_SECONDS, first=False)
+        component._do_training.assert_not_awaited()
+        component._get_predictions.assert_called_once()
+        settings["ml_retrain_interval_hours"] = 2
+        assert await component.run(seconds=30, first=False)
+        component._do_training.assert_awaited_once_with(False)
+
+        # A long configured interval must not delay the first-ever training, but
+        # the startup pass must still defer it until the component has started.
+        settings["ml_retrain_interval_hours"] = 24
+        component.last_train_time = None
+        component.initial_training_done = False
+        component._do_training.reset_mock()
+        assert await component.run(seconds=0, first=True)
+        component._do_training.assert_not_awaited()
+        assert await component.run(seconds=30, first=False)
+        component._do_training.assert_awaited_once_with(True)
+
+        item = next(item for item in CONFIG_ITEMS if item["name"] == "ml_retrain_interval_hours")
+        assert item["type"] == "input_number"
+        assert item["unit"] == "hours"
+        assert (item["default"], item["min"], item["max"], item["step"]) == (2, 1, 48, 1)
+        assert item["max"] <= component.ml_max_model_age_hours, "Interval must not exceed the model staleness limit"
+
+    asyncio.run(run_test())
+
+
 def _test_component_run_data_merge():
     """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
     1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save).
@@ -1104,7 +1185,7 @@ def _test_component_run_data_merge():
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
 
         # ── Run 2 (first=False, seconds=30) ─────────────────────────────────────
-        # last_train_time is None -> retrain_age_seconds = RETRAIN_INTERVAL_SECONDS -> should_train=True
+        # last_train_time is None -> retrain_age_seconds = retrain_interval_seconds -> should_train=True
         # Expect: shift old keys, merge fresh data, run initial training, save once.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_2, 7, 3.0, None, None, None, None))
 
@@ -1133,7 +1214,7 @@ def _test_component_run_data_merge():
 
         # ── Run 3 (first=False, seconds=PREDICTION_INTERVAL_SECONDS) ─────────────
         # last_train_time = 30 min ago (set in mock_do_training to component.now_utc of Run 2).
-        # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) -> should_train=False.
+        # retrain_age_seconds = 30*60 = 1800 < retrain_interval_seconds (7200 by default) -> should_train=False.
         # seconds % PREDICTION_INTERVAL_SECONDS == 0 -> should_fetch=True.
         # Expect: fetch+predict+save only, no training.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_3, 7, 3.0, None, None, None, None))

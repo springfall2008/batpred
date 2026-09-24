@@ -1689,7 +1689,7 @@ This provides more accurate load predictions than simple averaging, especially f
 - Optionally incorporates PV generation and temperature forecast data
 - Trains a multi-layer neural network on your historical patterns
 - Makes autoregressive predictions for 48 hours ahead in 5-minute intervals
-- Fine-tunes periodically (every 2 hours) to adapt to changing patterns
+- Fine-tunes periodically (every 2 hours by default) to adapt to changing patterns; adjust the [ML Retrain Interval](load-ml.md#retraining-interval) config entity to change this
 - Validates predictions and falls back gracefully if accuracy is poor
 - Publishes predictions to `sensor.predbat_load_ml_forecast`
 
