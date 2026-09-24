@@ -95,6 +95,7 @@ class DebugYamlDumper(yaml.Dumper):
 # wants from one anyway. That includes a tuple used as a dict key, and a sequence cannot be a dict
 # key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
 # dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
+# Any other tuple (e.g. net_settlement_seed) also replays as a list, so its readers must only index or unpack it.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
 
