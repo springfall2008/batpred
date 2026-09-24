@@ -147,9 +147,14 @@ wherever it is nested; a value that looks like a misfiled identifier is pseudony
 container that is not supposed to hold one - a 10-or-more-digit run is enough anywhere it turns up
 in a clear container's value (embedded in a longer string too, e.g. `"MPAN 1234567890123"`), except
 inside `hardware_ids`, where a value is only flagged when it is *nothing but* digits, so a
-letter-prefixed vendor serial like `HV2160123456` stays readable; and a field literally named
-`latitude`, `longitude` or `postcode` is pseudonymised regardless of what it contains, since a
-location cannot otherwise be recognised from one value alone. A debug dump is safe to attach to a
+letter-prefixed vendor serial like `HV2160123456` stays readable. A serial a record declares -
+`hardware_ids.serial`, or an entry in `serials` - is never flagged, whatever its shape: Solis, Deye
+and Sunsynk serials are nothing but digits, and they stay readable wherever they appear as a whole
+token, in a `device_id` built from one or a `duplicate_serial` observation that names one. Only the
+serial itself is let through - a digit run left beside it, or one it merely sits inside, is still
+checked. Finally, a field literally named `latitude`, `longitude` or `postcode` is pseudonymised
+regardless of what it contains, since a location cannot otherwise be recognised from one value
+alone. A debug dump is safe to attach to a
 public issue; **the equivalent in-process, unredacted view exists only for Predbat's own internal
 diagnostics and must never be written anywhere.**
 
@@ -160,6 +165,8 @@ pseudonymised one loses its `"octopus:"` prefix entirely and reads as a bare `#`
 `device_id` in most other sections. Nothing is lost functionally - cross-links between records still
 resolve to the same token, and the record is still tagged with its `source` - but a maintainer
 comparing sections will notice the inconsistency and should not have to wonder whether it is a bug.
+A `device_id` built from the record's own serial is not replaced, even when the record also carries
+`account_ids`: Deye's `"deye:{serial}"` stays readable beside its pseudonymised station id.
 
 ## For developers: the report schema
 

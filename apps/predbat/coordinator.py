@@ -185,6 +185,11 @@ class Redactor:
     key, which is rewritten by exact match only - see _substitute_key), and a value inside
     hardware_ids is only shape-flagged when it is nothing BUT digits, since a letter-prefixed
     vendor serial with a long digit tail is that container's entire declared purpose.
+
+    A hardware serial is not secret, so a serial a record declares - hardware_ids.serial or an
+    entry in the structural serials list - is clear wherever it appears as a whole token, however
+    many digits it has (Solis, Deye and Sunsynk serials are nothing but digits): in hardware_ids,
+    in a device_id built from it, in a duplicate_serial observation. See _collect_serials.
     """
 
     # Minimum length of an original before it is substituted inside other strings; below this a
@@ -206,6 +211,8 @@ class Redactor:
         # unrelated text it happens to share a substring with.
         self.substring_ok = set()
         self._substring_order = []
+        # Whole-token patterns for every serial the document's records declare - see _collect_serials
+        self._serial_patterns = []
 
     def token(self, value):
         """The stable pseudonym for one value under this installation's salt."""
@@ -290,6 +297,76 @@ class Redactor:
             variants.add(sign + body[:-2])
         return variants
 
+    @staticmethod
+    def _declared_serials(record):
+        """The serials one record declares for itself: hardware_ids.serial and every entry in serials."""
+        declared = set()
+        hardware_ids = record.get("hardware_ids")
+        if isinstance(hardware_ids, dict) and hardware_ids.get("serial") not in (None, ""):
+            declared.add(str(hardware_ids["serial"]))
+        serials = record.get("serials")
+        if isinstance(serials, list):
+            declared |= {str(serial) for serial in serials if serial not in (None, "")}
+        return declared
+
+    def _collect_serials(self, node):
+        """Every serial any record in the document declares, anywhere in it.
+
+        Collected before the walk so the shape guard can leave a serial readable wherever it
+        turns up - a device_id built from it, the duplicate_serial observation that names it -
+        not only inside the record that declared it.
+        """
+        found = set()
+        if isinstance(node, dict):
+            found |= self._declared_serials(node)
+            for value in node.values():
+                found |= self._collect_serials(value)
+        elif isinstance(node, list):
+            for entry in node:
+                found |= self._collect_serials(entry)
+        return found
+
+    def _strip_serials(self, text):
+        """`text` with every declared serial removed where it stands as a whole token.
+
+        Whole-token only - bounded by a non-alphanumeric character or the string's ends, matched
+        case-insensitively as entity ids fold case - so "solis:1031260253072197" and
+        "sensor.predbat_solis_1031260253072197_soc" lose the serial, but a short serial that
+        happens to sit inside a longer number does not split that number's digit run and let a
+        misfiled MPAN through.
+        """
+        for pattern in self._serial_patterns:
+            text = pattern.sub("", text)
+        return text
+
+    def _pseudonym_values(self, node):
+        """Every value held in a pseudonym container (account_ids) anywhere in this record."""
+        values = set()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in PSEUDONYM_CONTAINERS and isinstance(value, dict):
+                    values |= {str(entry) for entry in value.values()}
+                else:
+                    values |= self._pseudonym_values(value)
+        elif isinstance(node, list):
+            for entry in node:
+                values |= self._pseudonym_values(entry)
+        return values
+
+    def _serial_derived(self, record):
+        """Whether a record's device_id is built from its own serial rather than from an account identifier.
+
+        True only when the device_id contains a serial the record declares and none of the
+        record's own pseudonym values (of MIN_SUBSTITUTE characters or more, the floor below which
+        a match is coincidence). Deye's "deye:{serial}" beside a station id in account_ids is
+        serial-derived; Octopus's "octopus:{mpan}" declares no serial and a device_id that embeds
+        an account id does, so both stay identity-derived exactly as before.
+        """
+        device_id = record["device_id"].casefold()
+        if not any(serial.casefold() in device_id for serial in self._declared_serials(record)):
+            return False
+        return not any(len(value) >= self.MIN_SUBSTITUTE and value.casefold() in device_id for value in self._pseudonym_values(record))
+
     def _misfiled(self, value, strict_numeric=False):
         """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
 
@@ -307,6 +384,10 @@ class Redactor:
         industry-standard shape: "HV2160123456") is that container's entire declared purpose, not
         a misfiling; a BARE all-digit string there is still genuinely suspicious, since an MPAN
         misfiled where a serial belongs looks exactly like one.
+
+        A serial some record declares is never a misfiling: it is removed (as a whole token - see
+        _strip_serials) before any of the above is judged, so a declared all-digit serial and a
+        device_id built from one stay readable while anything left beside them is still checked.
         """
         if isinstance(value, bool):
             return False
@@ -315,8 +396,10 @@ class Redactor:
                 integer_part = abs(int(value))
             except (ValueError, OverflowError):
                 return False
+            if not self._strip_serials(str(integer_part)):
+                return False
             return len(str(integer_part)) >= 10
-        text = str(value)
+        text = self._strip_serials(str(value))
         if "@" in text:
             return True
         stripped = SEPARATOR_RE.sub("", text)
@@ -414,7 +497,7 @@ class Redactor:
         CONTAINER_SPEC.
         """
         if isinstance(node, dict):
-            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node):
+            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
                 self._note(node["device_id"], substring=True)
             out = {}
             for key, value in node.items():
@@ -527,6 +610,9 @@ class Redactor:
         otherwise be free to corrupt it with.
         """
         generated = catalogue.get("generated")
+        # Longest first, so a serial that contains a shorter one is removed whole
+        serials = sorted(self._collect_serials(catalogue), key=len, reverse=True)
+        self._serial_patterns = [re.compile(r"(?<![0-9A-Za-z]){}(?![0-9A-Za-z])".format(re.escape(serial)), re.IGNORECASE) for serial in serials]
         walked = self._walk(catalogue)
         self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
         substituted = self._substitute(walked)
