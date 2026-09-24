@@ -185,6 +185,11 @@ class Redactor:
     key, which is rewritten by exact match only - see _substitute_key), and a value inside
     hardware_ids is only shape-flagged when it is nothing BUT digits, since a letter-prefixed
     vendor serial with a long digit tail is that container's entire declared purpose.
+
+    A hardware serial is not secret, so a serial a record declares - hardware_ids.serial or an
+    entry in the structural serials list - is clear wherever it appears as a whole token, however
+    many digits it has (Solis, Deye and Sunsynk serials are nothing but digits): in hardware_ids,
+    in a device_id built from it, in a duplicate_serial observation. See _collect_serials.
     """
 
     # Minimum length of an original before it is substituted inside other strings; below this a
@@ -206,6 +211,8 @@ class Redactor:
         # unrelated text it happens to share a substring with.
         self.substring_ok = set()
         self._substring_order = []
+        # Whole-token patterns for every serial the document's records declare - see _collect_serials
+        self._serial_patterns = []
 
     def token(self, value):
         """The stable pseudonym for one value under this installation's salt."""
@@ -290,6 +297,88 @@ class Redactor:
             variants.add(sign + body[:-2])
         return variants
 
+    @staticmethod
+    def _declared_serials(record):
+        """The serials one record declares for itself: hardware_ids.serial and every entry in serials."""
+        declared = set()
+        hardware_ids = record.get("hardware_ids")
+        if isinstance(hardware_ids, dict) and hardware_ids.get("serial") not in (None, ""):
+            declared.add(str(hardware_ids["serial"]))
+        serials = record.get("serials")
+        if isinstance(serials, list):
+            declared |= {str(serial) for serial in serials if serial not in (None, "")}
+        return declared
+
+    def _collect_serials(self, node):
+        """Every serial any record in the document declares, anywhere in it.
+
+        Collected before the walk so the shape guard can leave a serial readable wherever it
+        turns up - a device_id built from it, the duplicate_serial observation that names it -
+        not only inside the record that declared it.
+        """
+        found = set()
+        if isinstance(node, dict):
+            found |= self._declared_serials(node)
+            for value in node.values():
+                found |= self._collect_serials(value)
+        elif isinstance(node, list):
+            for entry in node:
+                found |= self._collect_serials(entry)
+        return found
+
+    def _strip_serials(self, text):
+        """`text` with every declared serial removed where it stands as a whole token.
+
+        Whole-token only - bounded by a non-alphanumeric character or the string's ends, matched
+        case-insensitively as entity ids fold case - so "solis:1031260253072197" and
+        "sensor.predbat_solis_1031260253072197_soc" lose the serial, but a short serial that
+        happens to sit inside a longer number does not split that number's digit run and let a
+        misfiled MPAN through.
+        """
+        for pattern in self._serial_patterns:
+            text = pattern.sub("", text)
+        return text
+
+    def _pseudonym_values(self, node):
+        """Every value held in a pseudonym container (account_ids) anywhere in this record."""
+        values = set()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in PSEUDONYM_CONTAINERS and isinstance(value, dict):
+                    values |= {str(entry) for entry in value.values()}
+                else:
+                    values |= self._pseudonym_values(value)
+        elif isinstance(node, list):
+            for entry in node:
+                values |= self._pseudonym_values(entry)
+        return values
+
+    @staticmethod
+    def _whole_token(text):
+        """A case-insensitive pattern matching `text` only where it stands as a whole token.
+
+        Bounded by a non-alphanumeric character or the string's ends, so "2306178123" is found in
+        "deye:2306178123" and "sensor.predbat_solis_2306178123_soc" but not inside "inv98765432".
+        """
+        return re.compile(r"(?<![0-9A-Za-z]){}(?![0-9A-Za-z])".format(re.escape(text)), re.IGNORECASE)
+
+    def _serial_derived(self, record):
+        """Whether a record's device_id is built from its own serial rather than from an account identifier.
+
+        True only when a serial the record declares stands in the device_id as a whole token and
+        none of the record's own pseudonym values does - whole tokens both ways, as the shape
+        guard matches serials (see _strip_serials). A serial merely sitting inside a longer token
+        is coincidence, not construction; and an account id counts however short it is, since one
+        under MIN_SUBSTITUTE is not otherwise caught by the substring pass. Deye's "deye:{serial}"
+        beside a station id in account_ids is serial-derived; Octopus's "octopus:{mpan}" declares
+        no serial and a device_id that embeds an account id does, so both stay identity-derived
+        exactly as before.
+        """
+        device_id = record["device_id"]
+        if not any(self._whole_token(serial).search(device_id) for serial in self._declared_serials(record)):
+            return False
+        return not any(self._whole_token(value).search(device_id) for value in self._pseudonym_values(record) if value)
+
     def _misfiled(self, value, strict_numeric=False):
         """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
 
@@ -307,6 +396,10 @@ class Redactor:
         industry-standard shape: "HV2160123456") is that container's entire declared purpose, not
         a misfiling; a BARE all-digit string there is still genuinely suspicious, since an MPAN
         misfiled where a serial belongs looks exactly like one.
+
+        A serial some record declares is never a misfiling: it is removed (as a whole token - see
+        _strip_serials) before any of the above is judged, so a declared all-digit serial and a
+        device_id built from one stay readable while anything left beside them is still checked.
         """
         if isinstance(value, bool):
             return False
@@ -315,8 +408,10 @@ class Redactor:
                 integer_part = abs(int(value))
             except (ValueError, OverflowError):
                 return False
+            if not self._strip_serials(str(integer_part)):
+                return False
             return len(str(integer_part)) >= 10
-        text = str(value)
+        text = self._strip_serials(str(value))
         if "@" in text:
             return True
         stripped = SEPARATOR_RE.sub("", text)
@@ -414,7 +509,7 @@ class Redactor:
         CONTAINER_SPEC.
         """
         if isinstance(node, dict):
-            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node):
+            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
                 self._note(node["device_id"], substring=True)
             out = {}
             for key, value in node.items():
@@ -527,6 +622,9 @@ class Redactor:
         otherwise be free to corrupt it with.
         """
         generated = catalogue.get("generated")
+        # Longest first, so a serial that contains a shorter one is removed whole
+        serials = sorted(self._collect_serials(catalogue), key=len, reverse=True)
+        self._serial_patterns = [self._whole_token(serial) for serial in serials]
         walked = self._walk(catalogue)
         self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
         substituted = self._substitute(walked)
@@ -916,8 +1014,9 @@ def inverter_record(
     Tuples become lists because validate_report() keeps only a list for a structural or
     vocabulary field: a tuple `serials` or `functions` - a module-level constant, say - would be
     silently dropped from the catalogue. A set or frozenset becomes a sorted list for the same
-    reason, sorted because string hashing is randomised per process, so list(some_set) comes out
-    in a different order after a restart and two dumps of the same hardware would diff for nothing.
+    reason, sorted by string form so that a set mixing types cannot raise and withhold the whole
+    report, and sorted because string hashing is randomised per process, so list(some_set) comes
+    out in a different order after a restart and two dumps of the same hardware would diff for nothing.
     """
     fields = {
         "inverter_type": inverter_type,
@@ -939,7 +1038,7 @@ def inverter_record(
     record = {"device_id": device_id}
     for name, value in fields.items():
         if isinstance(value, (set, frozenset)):
-            value = sorted(value)
+            value = sorted(value, key=str)
         elif isinstance(value, (list, tuple)):
             value = list(value)
         elif isinstance(value, dict):

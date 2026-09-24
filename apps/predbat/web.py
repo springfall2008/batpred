@@ -4171,7 +4171,7 @@ chart.render();
                 self.args.update(live_args)
                 # A credential value or the redact_strings/redact_strings_labelled denylists
                 # themselves can change in this batch, so log()'s cached redaction pattern
-                # (hass.py, held on self.base - the PredBat instance, not this web component)
+                # (log_secrets.py, held on self.base - the PredBat instance, not this web component)
                 # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
                 # the log under the stale pattern until the restart below completes (GH#4770 review).
                 self.base._invalidate_log_secret_pattern()
