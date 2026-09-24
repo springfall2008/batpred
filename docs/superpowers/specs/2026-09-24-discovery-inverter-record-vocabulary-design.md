@@ -64,6 +64,12 @@ is the first to change behaviour.
 | D7 | A site-wide export limit is reported as each inverter's share of it. Predbat sums `export_limit` across inverters, so the shares add back up to the site figure. |
 | D8 | `functions` reports what the component believes the device is, whether probed or assumed. There is no marker for an assumed value. |
 | D9 | SolisCloud does not write the reserve (it often won't change); it presents the battery minimum SoC instead. Its record reports `battery_min_soc` and no `reserve` (section 3). |
+| D10 | A record describes its own device, not the fleet. `automatic_config()` today binds some settings only when every inverter has them (GE Cloud: when any has them); the record states what this device has, and piece 3's coordinator applies whatever fleet rule it keeps. |
+| D11 | A record describes the device, not the user's opt-outs. Settings that stop a binding (`automatic_ignore_pv`, `givtcp_rest_power_ignore`) do not remove entities from the record; piece 3's coordinator applies them. |
+| D12 | A PV-only device's record carries its `pv_power` and `pv_today` as `access: r` entities - still with no `inverter_type` and no `capabilities` - so its generation is not lost when the coordinator configures from records (the GH#4922 regression). |
+| D13 | GEC and GEE `soc_units` become `"%"`: GE Cloud binds `soc_percent`, and `inv_soc_units` is never read, so this changes no behaviour. `clock_time_format` stays as it is on GE, GEC and GEE, because those rows also serve installs that do not use the components (the GivTCP add-on and GE Cloud templates) and the row's format is their last-resort parse; GivTCP and GE Cloud records describe the ISO format their sensors really publish, and their completeness tests carry that one named exception. |
+| D14 | A rating is a figure the device reports. A value Predbat derives or the user overrides (AlphaESS's and Solis's `battery_rate_max`) is bound as an entity but not given as a rating. |
+| D15 | A site-wide setting bound once from the first driven inverter (`battery_temperature_history`) goes on that inverter's record only. |
 
 ## 1. The inverter record
 
@@ -280,6 +286,14 @@ then False, matching the row. Piece 3 removes the unused `reserve` binding.
 records generically. Its test fixtures (`test_web_discovery.py`) use the old tokens and rating names and
 are updated, and a dict-valued `capabilities` must render. `docs/discovery-catalogue.md` and the catalogue
 design spec are amended to match.
+
+**Found while prototyping, for piece 3** (none changes piece 1):
+
+- `automatic_config()` can bind entities its component never publishes: GivTCP claims `discharge_target_soc` for every v3 inverter but publishes it only for supported models, and `charge_limit`/`soc_kw` only when non-None; GE Cloud's "any device has the register" rule binds pause and percentage-rate entities on devices without them.
+- A GivTCP v2 user who pointed `pause_mode` at their own entity keeps timed pause today because the GE row says True; deriving `has_timed_pause` from the record would lose it.
+- GE Cloud writes `inverter_hybrid` with `set_state_external`, outside `set_arg`, so a coordinator that only replays records would miss it.
+- Fox's `automatic_config()` builds the PV lists over PV devices rather than driven ones, so in a mixed fleet a battery inverter with no PV can be given a PV-only inverter's `pvpower` as its `pv_power`, and a second third-party meter lands beyond the driven indexes.
+- Site totals (`load_today`, `import_today`, `export_today`) behind a shared CT or an EMS shrink to one entry on index 0.
 
 **Testing.**
 
