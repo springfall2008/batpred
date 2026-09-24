@@ -3364,7 +3364,13 @@ class Fetch:
             # hasn't built yet this cycle. Per-car: a multi-car install may have the sensor for some
             # cars and not others, so each car's warning (and its actual fallback, in
             # rate_add_io_slots()) is independent rather than the whole install falling back together.
-            for car_n in range(max(self.num_cars, 1)):
+            # range(self.num_cars), not max(..., 1): with num_cars 0 (explicitly allowed - "zero":
+            # True in the schema) there is no car for this trust level to govern, so warning about
+            # "car 0" and raising had_errors would put a red status on an install that has nothing
+            # wrong with it. The max(..., 1) idiom elsewhere in this file sizes per-car LISTS, where
+            # a spare slot avoids an IndexError on a later indexed read; copying it into an
+            # iteration that emits user-facing warnings was wrong (#5110 review).
+            for car_n in range(self.num_cars):
                 if not self.has_car_charging_now_sensor(car_n):
                     if car_n not in self.trust_iog_no_sensor_warned:
                         self.log(

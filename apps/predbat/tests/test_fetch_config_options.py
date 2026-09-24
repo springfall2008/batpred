@@ -524,6 +524,28 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ A static car_charging_now literal still warns, same as unconfigured")
 
+    # Test 21: num_cars 0 must not warn about a car that does not exist. The schema allows it
+    # explicitly ("zero": True), and the block is gated only on trust_future_dynamic_iog_slots being
+    # 'started' - not on having any cars - so iterating max(num_cars, 1) put a red status on a
+    # no-car install for "car 0". The max(..., 1) idiom elsewhere in fetch.py sizes per-car LISTS,
+    # where a spare slot avoids an IndexError; it does not belong in an iteration that warns the
+    # user (#5110 review).
+    print("\n*** Test 21: num_cars 0 does not warn about a non-existent car ***")
+    my_predbat.args = dict(saved_args_16)
+    my_predbat.args.pop("car_charging_now", None)
+    # In args, not on the object: fetch_config_options() re-reads num_cars from args itself.
+    my_predbat.args["num_cars"] = 0
+    my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = "started"
+    clear_trust_warned_flags()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    assert not my_predbat.trust_iog_no_sensor_warned, "no car should be flagged as warned when num_cars is 0, got {}".format(my_predbat.trust_iog_no_sensor_warned)
+    assert my_predbat.had_errors is False, "had_errors must not be set for a no-car install - there is no car for 'started' to govern"
+
+    print("✓ num_cars 0 warns about nothing")
+
     # Restore state for any tests appended after this one
     my_predbat.config_index["trust_future_dynamic_iog_slots"]["value"] = saved_trust_value_16
     my_predbat.config_index["octopus_intelligent_limit_future_slots"]["value"] = saved_limit_value_16
