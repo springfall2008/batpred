@@ -2640,6 +2640,17 @@ class JournalFlushInvocationTests(DaemonPathsTestCase):
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], triage_daemon.ALLOWED_TOOLS_JOURNAL)
         self.assertEqual(cmd[cmd.index("--disallowedTools") + 1], triage_daemon.DISALLOWED_TOOLS_JOURNAL)
 
+    def test_the_flush_gets_a_turn_budget_matching_the_other_write_flows(self):
+        """80 turns stopped being enough on 2026-09-13, and every run from then to 2026-09-19
+        died on `Error: Reached max turns (80)`. The flush reads a journal that grew from 73KB
+        to 130KB in a week and verifies every candidate against main, so it is not the cheap
+        flow the old budget assumed - issue-pr and pr-cleanup have had 150 all along."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-07")
+            cmd = mock_run.call_args_list[0][0][0]
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "150")
+
     def test_tells_the_skill_where_the_queue_is(self):
         """The queue lives outside the clone, so the path has to be passed in and added to the
         session's directory scope for Read/Grep."""
@@ -2728,6 +2739,102 @@ class JournalQueueArchiveTests(DaemonPathsTestCase):
         self._queue("4931-a.md")
         triage_daemon.archive_journal_queue(triage_daemon.journal_queue_entries())
         self.assertFalse(triage_daemon.should_flush_journal({}, "2026-09-06"))
+
+
+class JournalPrGateTests(DaemonPathsTestCase):
+    """Whether the PR gets opened turns on the branch reaching the remote, not the exit code."""
+
+    def setUp(self):
+        """Stub open_journal_pr() so these tests observe whether it was called rather than what
+        it does - its own behaviour is covered by JournalPrBodyTests."""
+        super().setUp()
+        patcher = patch.object(triage_daemon, "open_journal_pr")
+        self.open_pr = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _queue(self, *names):
+        """Put candidate files in the queue directory."""
+        triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (triage_daemon.QUEUE_DIR / name).write_text("finding")
+
+    def test_a_flush_that_ran_out_of_turns_still_gets_its_pr_opened(self):
+        """The stall that cost six nights. On 2026-09-14 the flush folded in 14 findings, ran
+        pre-commit, committed and pushed bot/debug-journal-2026-09-14 - then exhausted
+        --max-turns on the way out and exited 1. The old exit-code gate skipped
+        open_journal_pr(), so a finished branch sat on the remote with no pull request, and
+        because archiving waits for a PR every later flush re-did the same work against a
+        queue that grew from 7 entries to 62."""
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="")
+            triage_daemon.flush_journal("2026-09-14")
+        self.open_pr.assert_called_once_with("2026-09-14")
+
+    def test_findings_are_archived_when_the_pr_exists_despite_a_nonzero_exit(self):
+        """The other half of the same run: once the PR is open the findings have landed, so
+        they have to leave the queue or tomorrow folds them in a second time."""
+        self._queue("5063-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run, patch.object(triage_daemon, "journal_pr_opened", return_value=True):
+            mock_run.return_value = MagicMock(returncode=1, stdout="")
+            triage_daemon.flush_journal("2026-09-14")
+        self.assertEqual(triage_daemon.journal_queue_entries(), [])
+        self.assertTrue((triage_daemon.QUEUE_DIR / "processed" / "5063-a.md").exists())
+
+    def test_no_pr_still_means_no_archive(self):
+        """The 2026-09-07 protection is unchanged by widening the PR gate: the pull request,
+        never the exit code, is what says the findings reached somewhere a maintainer sees."""
+        self._queue("5063-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run, patch.object(triage_daemon, "journal_pr_opened", return_value=False):
+            mock_run.return_value = MagicMock(returncode=0, stdout="[]")
+            triage_daemon.flush_journal("2026-09-14")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["5063-a.md"])
+
+
+class JournalCandidateCapTests(DaemonPathsTestCase):
+    """One flush takes a bounded slice of the queue."""
+
+    def setUp(self):
+        """Stub open_journal_pr(): these tests are about which candidates a run consumes."""
+        super().setUp()
+        patcher = patch.object(triage_daemon, "open_journal_pr")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _queue(self, *names):
+        """Put candidate files in the queue directory."""
+        triage_daemon.QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (triage_daemon.QUEUE_DIR / name).write_text("finding")
+
+    def test_the_skill_is_told_the_cap(self):
+        """The daemon archives exactly the slice it asked for, so the skill has to fold in the
+        same one - the prompt is the only place that agreement is written down."""
+        self._queue("5063-a.md")
+        with patch("triage_daemon.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-14")
+            cmd = mock_run.call_args_list[0][0][0]
+        self.assertIn(f"limit={triage_daemon.JOURNAL_MAX_CANDIDATES_PER_FLUSH}", cmd[cmd.index("-p") + 1])
+
+    def test_a_flush_consumes_at_most_the_cap(self):
+        """A backlog must not make every run harder than the one before it. The queue drains a
+        slice at a time rather than growing past what one run's turn budget can carry - the
+        feedback loop that turned a single 2026-09-13 failure into six."""
+        self._queue("1-a.md", "2-b.md", "3-c.md")
+        with patch("triage_daemon.subprocess.run") as mock_run, patch.object(triage_daemon, "JOURNAL_MAX_CANDIDATES_PER_FLUSH", 2):
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-14")
+        self.assertEqual([p.name for p in triage_daemon.journal_queue_entries()], ["3-c.md"])
+
+    def test_the_slice_is_taken_from_the_front_of_the_queue(self):
+        """Filename order, the same order journal_queue_entries() returns, so a candidate that
+        missed one flush is at the front of the next rather than skipped forever."""
+        self._queue("1-a.md", "2-b.md", "3-c.md")
+        with patch("triage_daemon.subprocess.run") as mock_run, patch.object(triage_daemon, "JOURNAL_MAX_CANDIDATES_PER_FLUSH", 2):
+            mock_run.return_value = MagicMock(returncode=0, stdout=OPENED_PR_JSON)
+            triage_daemon.flush_journal("2026-09-14")
+        archived = sorted(path.name for path in (triage_daemon.QUEUE_DIR / "processed").glob("*.md"))
+        self.assertEqual(archived, ["1-a.md", "2-b.md"])
 
 
 if __name__ == "__main__":

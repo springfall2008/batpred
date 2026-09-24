@@ -16,8 +16,8 @@ reserve level adjustments, and multi-inverter balancing.
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta, datetime
-from const import MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
+from const import MINUTE_WATT, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
@@ -93,6 +93,23 @@ def build_status_extra(status_extra_parts):
     return status_extra
 
 
+def export_target_percent_or_zero(export_limit):
+    """The SoC percentage an export instruction targets, or 0 where it carries no target.
+
+    Only EXPORT_MODE_TARGET has a target; export_target_of returns None for the other two modes so a
+    caller cannot use their sentinels as if they were one. Every value this feeds here - the
+    discharge floor, the displayed target, the inverter target register - is a percentage, so the
+    two modes resolve to the bottom of the range rather than to None.
+
+    Spelled out rather than written `or 0` at each site: that reads as a guard against a falsy
+    target, which is not what is being guarded. The distinction matters because the callers all sit
+    inside a target-mode branch already, so the fallback is unreachable for them and a reader needs
+    to see that it is a type normalisation and not a live default.
+    """
+    target = export_target_of(export_limit)
+    return 0 if target is None else target
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -121,6 +138,161 @@ class Execute:
         if self.control_ledger.records:
             self.log("Control ledger: dropping ownership of {} control(s) - {}".format(len(self.control_ledger.records), reason))
         self.control_ledger.clear()
+
+    def build_inverter_snapshot(self):
+        """
+        Build the plain per-inverter readings that balance_inverters() consumes.
+
+        Keeping the readings as plain scalars is what lets the balancing algorithm live in utils as
+        a pure function, testable without a PredBat instance or a mock Home Assistant.
+
+        Returns:
+        - list: one dict per inverter, indexed by inverter id
+        """
+        snapshot = []
+        for inverter in self.inverters:
+            snapshot.append(
+                {
+                    "soc_percent": inverter.soc_percent,
+                    "reserve_percent": inverter.reserve_current,
+                    "battery_power": inverter.battery_power,
+                    "pv_power": inverter.pv_power,
+                    "grid_power": inverter.grid_power,
+                    "charge_rate_now": inverter.charge_rate_now * MINUTE_WATT,
+                    "discharge_rate_now": inverter.discharge_rate_now * MINUTE_WATT,
+                    "battery_rate_max_charge": inverter.battery_rate_max_charge * MINUTE_WATT,
+                    "battery_rate_max_discharge": inverter.battery_rate_max_discharge * MINUTE_WATT,
+                    "in_calibration": inverter.in_calibration,
+                }
+            )
+        return snapshot
+
+    def balance_inverter_rates(self, intent):
+        """
+        Apply fleet balancing to the executor's rate intent, if it is enabled.
+
+        Args:
+            intent (dict): inverter id -> rate intent, mutated in place
+        """
+        if not self.balance_inverters_enable or self.set_read_only:
+            return
+        if len(self.inverters) < 2:
+            return
+        balance_inverters(
+            intent,
+            self.build_inverter_snapshot(),
+            self.balance_inverters_charge,
+            self.balance_inverters_discharge,
+            self.balance_inverters_crosscharge,
+            self.balance_inverters_threshold_charge,
+            self.balance_inverters_threshold_discharge,
+            log_to=self.log,
+        )
+
+    def allocate_fleet_export_rates(self):
+        """
+        Split the planned fleet export power across the inverters, by how much each has to shed.
+
+        A fleet-level pre-pass because it needs every inverter's target, which is why it cannot
+        live inside execute_plan's per-inverter loop. adjust_battery_target_multi(check=True) is
+        the existing non-writing probe, so nothing is written here.
+
+        Outside low power mode the planned power equals the sum of the ceilings, so every inverter
+        clamps at its own maximum and this reproduces today's uniform scaling exactly.
+
+        Returns:
+        - dict: inverter id -> export rate in W, empty when no export is planned
+        """
+        if not self.export_limits_best or not self.set_export_window:
+            return {}
+        if export_mode_of(self.export_limits_best[0]) != EXPORT_MODE_TARGET:
+            return {}
+
+        export_rate_adjust = export_power_of(self.export_limits_best[0]) if self.set_export_low_power else 1.0
+        export_target_percent = self.export_target_soc_percent()
+
+        needs = []
+        max_rates = []
+        for inverter in self.inverters:
+            inv_target_percent = self.adjust_battery_target_multi(inverter, export_target_percent, False, True, check=True)
+            target_kwh = inv_target_percent * inverter.soc_max / 100.0
+            needs.append(max(0.0, inverter.soc_kw - target_kwh))
+            max_rates.append(inverter.battery_rate_max_export * MINUTE_WATT)
+
+        allocation = allocate_export_rates(needs, max_rates, sum(max_rates) * export_rate_adjust)
+        result = {}
+        for index, inverter in enumerate(self.inverters):
+            result[inverter.id] = allocation[index]
+        self.log("Export allocation: needs {}kWh ceilings {}W adjust {} -> {}W".format([dp2(need) for need in needs], [dp0(rate) for rate in max_rates], export_rate_adjust, [dp0(rate) for rate in allocation]))
+        return result
+
+    def apply_rate_intent(self, intent):
+        """
+        Apply a balanced intent across the fleet, keeping balancing's own changes silent.
+
+        A rate balancing overrides is written without notifying, and so is the write that takes it
+        back off again - the release edge matters as much as the hold, or a fleet drifting in and
+        out of balance notifies on every transition. Which rates were overridden last pass is
+        remembered for exactly that reason.
+
+        Args:
+            intent (dict): inverter id -> rate intent, already balanced
+        """
+        baseline = self.inverter_rate_intent
+        overridden_now = {}
+        for inverter in self.inverters:
+            if inverter.id not in intent:
+                continue
+            entry = intent[inverter.id]
+            base = baseline.get(inverter.id, {})
+            previously = self.inverter_balance_overridden.get(inverter.id, ())
+            charge_overridden = entry.get("charge_rate", None) != base.get("charge_rate", None)
+            discharge_overridden = entry.get("discharge_rate", None) != base.get("discharge_rate", None)
+            overridden_now[inverter.id] = {direction for direction, flag in (("charge", charge_overridden), ("discharge", discharge_overridden)) if flag}
+            self.apply_inverter_rates(
+                inverter,
+                entry,
+                notify_charge=not (charge_overridden or "charge" in previously),
+                notify_discharge=not (discharge_overridden or "discharge" in previously),
+            )
+        self.inverter_balance_overridden = overridden_now
+
+    def apply_inverter_rates(self, inverter, intent, notify_charge=True, notify_discharge=True):
+        """
+        Write one inverter's charge and discharge rates from its intent.
+
+        The single point at which a rate reaches the hardware. A rate of None means no branch of
+        execute_plan claimed it, so the inverter returns to its own maximum - which is what the
+        resetCharge / resetDischarge flags used to express at the end of the per-inverter loop.
+
+        Because "max" is resolved here rather than produced by the balancer, a deliberate hold of
+        rate 0 can no longer be overwritten by a second writer (F5 / #829).
+
+        Args:
+            inverter: the Inverter to write to
+            intent (dict): keys charge_rate and discharge_rate (W, or None for max)
+            notify_charge (bool): whether a charge rate change should notify the user
+            notify_discharge (bool): likewise for discharge. apply_rate_intent() decides both;
+                balancing's own changes are silent on BOTH edges, as the old timer-based balancer
+                was, since it runs on a minute cadence.
+        """
+        charge_rate = intent.get("charge_rate", None)
+        discharge_rate = intent.get("discharge_rate", None)
+
+        # A rate nobody claimed is only reset to maximum where the executor is actually driving
+        # the windows. With both off - Monitor, Control SoC only - an unclaimed rate is left
+        # exactly as it is. A rate something DID claim, executor or balancer, is always written.
+        reset_rates = intent.get("reset_rates", True)
+        if charge_rate is None:
+            if reset_rates:
+                inverter.adjust_charge_rate(int(inverter.battery_rate_max_charge * MINUTE_WATT), notify=notify_charge)
+        else:
+            inverter.adjust_charge_rate(int(charge_rate), notify=notify_charge)
+        if discharge_rate is None:
+            if reset_rates:
+                inverter.adjust_discharge_rate(int(inverter.battery_rate_max_discharge * MINUTE_WATT), notify=notify_discharge)
+        else:
+            inverter.adjust_discharge_rate(int(discharge_rate), notify=notify_discharge)
 
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
@@ -168,6 +340,8 @@ class Execute:
 
         isCharging = False
         isExporting = False
+        intent = {}
+        export_rate_alloc = self.allocate_fleet_export_rates()
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -193,10 +367,23 @@ class Execute:
                 # A value found moved next cycle is the inverter calibrating, not a third
                 # party, so ownership is dropped after the writes rather than before them.
                 self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
+                # Inverters processed before this one already recorded their planned intent.
+                # Applying it now would write those rates straight back over the full-rate
+                # calibration settings above, and keeping it as the poll baseline would have the
+                # 60s poll re-apply them for as long as calibration lasts.
+                intent.clear()
                 break
 
-            resetDischarge = self.set_charge_window or self.set_export_window
-            resetCharge = self.set_charge_window or self.set_export_window
+            charge_rate = None
+            discharge_rate = None
+            rate_owner = "demand"
+            # Whether an unclaimed rate should be reset to maximum at all. This is what the
+            # resetCharge / resetDischarge flags carried: in Monitor and Control-SoC-only modes
+            # both windows are off and they started FALSE, so no rate was written. Predbat is
+            # watching in those modes, not controlling.
+            reset_rates = self.set_charge_window or self.set_export_window
+            pause_charge_requested = False
+            pause_discharge_requested = False
             resetPause = self.set_charge_window or self.set_export_window
             resetReserve = self.set_charge_window or self.set_export_window
             disabled_charge_window = False
@@ -285,15 +472,26 @@ class Execute:
                             )
                         )
 
-                        # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
+                        # No deadband here: adjust_charge_rate already suppresses a change below
+                        # 5% of max, which lines up with the GE power steps. The 10% that used to
+                        # live here came from the same PR (#1676) as that 5% and was never
+                        # reconciled with it; being the stricter of the two it was the only one
+                        # that ever fired. Intent now carries the rate we actually want rather
+                        # than one a deadband has rounded off.
+                        #
+                        # That 5% governs the power register. Inverters with
+                        # inv_output_charge_control == "current" drive a timed-current register as
+                        # their real control and re-assert it every cycle by design (#4415), with
+                        # write_and_poll_value's own read-compare deciding whether a write is
+                        # needed - so on those types a sub-5% change can still write. That is
+                        # deliberate: deadbanding the real control would cost precision, not
+                        # writes.
                         max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
-                        if abs(new_charge_rate - current_charge_rate) > (0.1 * max_rate) or (new_charge_rate == max_rate):
-                            inverter.adjust_charge_rate(new_charge_rate)
-                        resetCharge = False
+                        charge_rate = new_charge_rate
+                        rate_owner = "charge"
 
                         if inverter.inv_charge_discharge_with_rate:
-                            inverter.adjust_discharge_rate(0)
-                            resetDischarge = False
+                            discharge_rate = 0
 
                         # Can only freeze charge for this inverter if its SoC is above reserve and it can hold via reserve/pause
                         can_freeze_charge = True
@@ -313,10 +511,10 @@ class Execute:
 
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_discharge=True)
+                                pause_discharge_requested = True
                                 resetPause = False
                             else:
-                                inverter.adjust_discharge_rate(0)
-                                resetDischarge = False
+                                discharge_rate = 0
 
                             status = "Freeze charging"
                             status_per_inverter[inverter.id] = status
@@ -352,10 +550,10 @@ class Execute:
                                     if inverter.soc_percent <= inv_target_soc_percent:
                                         if inverter.inv_has_timed_pause:
                                             inverter.adjust_pause_mode(pause_discharge=True)
+                                            pause_discharge_requested = True
                                             resetPause = False
                                         else:
-                                            inverter.adjust_discharge_rate(0)
-                                            resetDischarge = False
+                                            discharge_rate = 0
                                     # Else we will be holding on reserve
                                 else:
                                     # Still charging or we have no way to hold on either reserve or pause the discharge
@@ -371,10 +569,10 @@ class Execute:
                             # Do we discharge discharge during charge
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_discharge=True)
+                                pause_discharge_requested = True
                                 resetPause = False
                             else:
-                                inverter.adjust_discharge_rate(0)
-                                resetDischarge = False
+                                discharge_rate = 0
                             self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
 
                         isCharging = True
@@ -478,25 +676,28 @@ class Execute:
                 # Turn minutes into time
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
-                discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
+                discharge_soc = max((export_target_percent_or_zero(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
-                if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < EXPORT_LIMIT_IDLE):
-                    if not self.set_export_freeze_only and self.export_limits_best[0] < EXPORT_LIMIT_FREEZE and (self.soc_kw > discharge_soc):
+                if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (export_mode_of(self.export_limits_best[0]) != EXPORT_MODE_IDLE):
+                    if not self.set_export_freeze_only and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_TARGET and (self.soc_kw > discharge_soc):
                         if self.set_export_low_power:
-                            export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
+                            export_rate_adjust = export_power_of(self.export_limits_best[0])
                         else:
                             export_rate_adjust = 1.0
 
                         self.log("Exporting now - current SoC {}kWh and target {}kWh and power adjust {}".format(self.soc_kw, dp2(discharge_soc), export_rate_adjust))
 
-                        inverter.adjust_discharge_rate(inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
-                        resetDischarge = False
+                        discharge_rate = export_rate_alloc.get(inverter.id, inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
+                        rate_owner = "export"
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
-                            inverter.adjust_charge_rate(0)
-                            resetCharge = False
+                            charge_rate = 0
                         isExporting = True
-                        target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                        # The window carries a plain-number target once clipped; fall back to the
+                        # instruction's own target rather than to the instruction itself
+                        target = self.export_window_best[0].get("target")
+                        if target is None:
+                            target = export_target_percent_or_zero(self.export_limits_best[0])
                         self.isExporting_Target = int(target)
 
                         status = "Exporting"
@@ -506,17 +707,16 @@ class Execute:
                     else:
                         inverter.adjust_force_export(False)
                         disabled_export = True
-                        if self.set_export_freeze and self.export_limits_best[0] == EXPORT_LIMIT_FREEZE:
+                        if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                             # In export freeze mode we disable charging during export slots
                             if inverter.inv_charge_discharge_with_rate:
-                                inverter.adjust_charge_rate(0)
-                                resetCharge = False
+                                charge_rate = 0
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_charge=True)
+                                pause_charge_requested = True
                                 resetPause = False
                             else:
-                                inverter.adjust_charge_rate(0)
-                                resetCharge = False
+                                charge_rate = 0
 
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
@@ -524,17 +724,21 @@ class Execute:
                             # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             status_extra_parts.append((inverter.id, "current SoC", status, "{}%".format(inverter.soc_percent)))  # append multi-inverter target SoC's together
                             isExporting = True
-                            target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                            target = self.export_window_best[0].get("target")
+                            if target is None:
+                                target = export_target_percent_or_zero(self.export_limits_best[0])
                             self.isExporting_Target = int(target)
                         else:
                             status = "Hold exporting"
                             status_per_inverter[inverter.id] = status
-                            target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                            target = self.export_window_best[0].get("target")
+                            if target is None:
+                                target = export_target_percent_or_zero(self.export_limits_best[0])
                             status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inverter.soc_percent)))  # append multi-inverter target SoC's together
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < EXPORT_LIMIT_FREEZE):
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_TARGET):
                         # We can't schedule freeze export only full export
                         # Don't turn off ECO mode for GE inverters except when we are within the export window as it will stop the battery being used
                         ge_inverters = inverter.inv_has_ge_eco_toggle or inverter.inv_has_ge_inverter_mode
@@ -552,14 +756,13 @@ class Execute:
 
                 # In export freeze mode we disable charging
                 if inverter.inv_charge_discharge_with_rate:
-                    inverter.adjust_charge_rate(0)
-                    resetCharge = False
+                    charge_rate = 0
                 if inverter.inv_has_timed_pause:
                     inverter.adjust_pause_mode(pause_charge=True)
+                    pause_charge_requested = True
                     resetPause = False
                 else:
-                    inverter.adjust_charge_rate(0)
-                    resetCharge = False
+                    charge_rate = 0
 
                 status_freeze_export = " [Freeze exporting]"
 
@@ -581,11 +784,11 @@ class Execute:
                                 if inverter.inv_has_timed_pause:
                                     if resetPause:
                                         inverter.adjust_pause_mode(pause_discharge=True)
+                                        pause_discharge_requested = True
                                         resetPause = False
                                 else:
-                                    if resetDischarge:
-                                        inverter.adjust_discharge_rate(0)
-                                        resetDischarge = False
+                                    if discharge_rate is None:
+                                        discharge_rate = 0
                                     # Not while actually charging: the battery is being filled from the grid, so it
                                     # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
                                     # write for every 1% of the climb (#3899). Left to reset below for the duration,
@@ -614,11 +817,11 @@ class Execute:
                     if inverter.inv_has_timed_pause:
                         if resetPause:
                             inverter.adjust_pause_mode(pause_discharge=True)
+                            pause_discharge_requested = True
                             resetPause = False
                     else:
-                        if resetDischarge:
-                            inverter.adjust_discharge_rate(0)
-                            resetDischarge = False
+                        if discharge_rate is None:
+                            discharge_rate = 0
                         if self.set_reserve_enable:
                             inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                             resetReserve = False
@@ -630,13 +833,18 @@ class Execute:
                         else:
                             status_hold_iboost = ", Hold for iBoost"
 
-            # Reset charge/discharge rate
+            # Reset pause mode; rates are resolved once by the apply pass after the loop
             if resetPause:
                 inverter.adjust_pause_mode()
-            if resetDischarge:
-                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
-            if resetCharge:
-                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+
+            intent[inverter.id] = {
+                "charge_rate": charge_rate,
+                "discharge_rate": discharge_rate,
+                "pause_charge": pause_charge_requested,
+                "pause_discharge": pause_discharge_requested,
+                "owner": rate_owner,
+                "reset_rates": reset_rates,
+            }
 
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
@@ -657,7 +865,7 @@ class Execute:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
 
                     # Immediate controls
-                    if self.set_export_freeze and self.export_limits_best[0] == EXPORT_LIMIT_FREEZE:
+                    if self.set_export_freeze and export_mode_of(self.export_limits_best[0]) == EXPORT_MODE_FREEZE:
                         inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                     elif not disabled_export:
                         inverter.adjust_export_immediate(export_target_percent)
@@ -743,7 +951,12 @@ class Execute:
                             inverter.adjust_charge_immediate(inv_target_soc_percent, freeze=True)
 
             # Charging/Discharging off via service
-            if not isCharging and self.set_charge_window:
+            # Skipped while exporting: adjust_export_immediate() above already issues its own
+            # charge_stop as part of starting the export, so this unconditional charge-off call adds
+            # nothing but a second, later charge_stop_service write - on service-template inverters
+            # (e.g. Tesla) that write a shared mode-select entity, this trailing call clobbered the
+            # mode discharge_start_service had just set (GH#4165, GH#4641).
+            if not isCharging and not isExporting and self.set_charge_window:
                 if carHolding or boostHolding:
                     inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                 else:
@@ -755,7 +968,21 @@ class Execute:
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
 
-            # Count register writes
+        # Keep the EXECUTOR's intent as the poll's baseline, captured before balancing mutates it.
+        # Storing the balanced intent instead would bake temporary holds into the baseline, and the
+        # poll would re-apply them every cycle - the balancer returns without touching a rate once
+        # the fleet is back in balance, so the hold would stick until the next plan run.
+        self.inverter_rate_intent = {inverter_id: dict(value) for inverter_id, value in intent.items()}
+
+        self.balance_inverter_rates(intent)
+
+        # Single point at which rates reach the hardware. Runs after the loop so a balancer can see
+        # the whole fleet before anything is written. Inverters that were skipped by the read-only
+        # branch (continue) or the calibration branch (break) recorded no intent and are not written.
+        self.apply_rate_intent(intent)
+
+        # Count register writes - after the apply pass so the rate writes land in this cycle's count
+        for inverter in self.inverters:
             self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
             if inverter.count_register_writes > 0:
                 metrics().inverter_register_writes_total.inc(inverter.count_register_writes)
@@ -835,7 +1062,7 @@ class Execute:
         Returns:
         - int: export target as a percentage of the battery
         """
-        target = int(self.export_limits_best[0])
+        target = export_target_percent_or_zero(self.export_limits_best[0])
         if not self.set_reserve_enable:
             target = max(target, calc_percent_limit(max(self.reserve, self.best_soc_min), self.soc_max))
         return target
@@ -1101,8 +1328,52 @@ class Execute:
             self.control_ledger.begin_cycle()
         if self.fetch_inverter_data(create=False):
             self.publish_inverter_data()
+            self.rebalance_inverter_rates()
             return True
         return False
+
+    def rebalance_inverter_rates(self):
+        """
+        Re-derive the balance skew against fresh SoC and re-apply the executor's intent.
+
+        The second caller of the single write path. execute_plan() owns the intent; this only
+        adjusts a COPY of it, so the poll can never invent a rate the executor did not ask for and
+        successive polls cannot compound their own skew on top of each other.
+
+        Does nothing until execute_plan() has run at least once, so a poll that beats the first
+        plan run cannot write anything.
+        """
+        if not self.inverter_rate_intent:
+            return
+        if not self.balance_inverters_enable or self.set_read_only:
+            return
+
+        # A poll can land between an inverter entering calibration and the next plan run, with the
+        # previous plan's intent still stored. balance_inverters() declines to act on a calibrating
+        # fleet, but applying the stale intent would still write planned rates over the full-rate
+        # calibration settings - every 60s until execute_plan next clears it. Drop it here instead.
+        if any(inverter.in_calibration for inverter in self.inverters):
+            self.log("Balance: an inverter is calibrating, discarding the stored rate intent")
+            self.inverter_rate_intent = {}
+            return
+        intent = {inverter_id: dict(value) for inverter_id, value in self.inverter_rate_intent.items()}
+
+        # The stored intent carries explicit watt targets from the last plan run, but the limits
+        # were just re-read - some configurations source inverter_limit_charge/_discharge from
+        # live BMS sensors, so a ceiling can drop between plan runs. Clamp before balancing, or
+        # the poll re-applies an above-ceiling rate and the capacity guard overestimates what the
+        # fleet can deliver on top of it.
+        for inverter in self.inverters:
+            entry = intent.get(inverter.id)
+            if not entry:
+                continue
+            if entry.get("charge_rate") is not None:
+                entry["charge_rate"] = min(entry["charge_rate"], inverter.battery_rate_max_charge * MINUTE_WATT)
+            if entry.get("discharge_rate") is not None:
+                entry["discharge_rate"] = min(entry["discharge_rate"], inverter.battery_rate_max_discharge * MINUTE_WATT)
+
+        self.balance_inverter_rates(intent)
+        self.apply_rate_intent(intent)
 
     def update_car_charging_power(self):
         """
@@ -1252,170 +1523,3 @@ class Execute:
                 "plan_interval_minutes": self.plan_interval_minutes,
             },
         )
-
-    def balance_inverters(self, test_mode=False):
-        """
-        Attempt to balance multiple inverters
-        """
-        # Charge rate resets
-        balance_reset_charge = {}
-        balance_reset_discharge = {}
-
-        self.log(
-            "BALANCE: Enabled balance charge {} discharge {} crosscharge {} threshold charge {} discharge {}".format(
-                self.balance_inverters_charge,
-                self.balance_inverters_discharge,
-                self.balance_inverters_crosscharge,
-                self.balance_inverters_threshold_charge,
-                self.balance_inverters_threshold_discharge,
-            )
-        )
-        self.update_time(print=False)
-
-        # For each inverter get the details
-        num_inverters = int(self.get_arg("num_inverters", 1))
-
-        inverters = []
-        for id in range(num_inverters):
-            if test_mode:
-                inverter = self.inverters[id]
-            else:
-                inverter = Inverter(self, id, quiet=True)
-                inverter.update_status(self.minutes_now, quiet=True)
-            if inverter.in_calibration:
-                self.log("Inverter {} is in calibration mode, not balancing".format(id))
-                return False
-            inverters.append(inverter)
-
-        out_of_balance = False  # Are all the SoC % the same
-        total_battery_power = 0  # Total battery power across inverters
-        total_max_rate = 0  # Total battery max rate across inverters
-        total_charge_rates = 0  # Current total charge rates
-        total_discharge_rates = 0  # Current total discharge rates
-        total_pv_power = 0  # Current total PV power
-        total_load_power = 0  # Current load power
-        socs = []
-        reserves = []
-        battery_powers = []
-        pv_powers = []
-        battery_max_rates = []
-        charge_rates = []
-        discharge_rates = []
-        load_powers = []
-        for inverter in inverters:
-            socs.append(inverter.soc_percent)
-            reserves.append(inverter.reserve_current)
-            if inverter.soc_percent != inverters[0].soc_percent:
-                out_of_balance = True
-            battery_powers.append(inverter.battery_power)
-            pv_powers.append(inverter.pv_power)
-            load_powers.append(inverter.load_power)
-            total_battery_power += inverter.battery_power
-            total_pv_power += inverter.pv_power
-            total_load_power += inverter.load_power
-            battery_max_rates.append(inverter.battery_rate_max_discharge * MINUTE_WATT)
-            total_max_rate += inverter.battery_rate_max_discharge * MINUTE_WATT
-            charge_rates.append(inverter.charge_rate_now * MINUTE_WATT)
-            total_charge_rates += inverter.charge_rate_now * MINUTE_WATT
-            discharge_rates.append(inverter.discharge_rate_now * MINUTE_WATT)
-            total_discharge_rates += inverter.discharge_rate_now * MINUTE_WATT
-        self.log(
-            "BALANCE: SoCs {}% reserves {}% battery_powers {}W total {}W battery_max_rates {}W charge_rates {}W pv_power {}W load_power {}W total {}W discharge_rates {}W total {}W".format(
-                socs,
-                reserves,
-                battery_powers,
-                total_battery_power,
-                [dp0(x) for x in battery_max_rates],
-                [dp0(x) for x in charge_rates],
-                [dp0(x) for x in pv_powers],
-                [dp0(x) for x in load_powers],
-                dp0(total_charge_rates),
-                [dp0(x) for x in discharge_rates],
-                dp0(total_discharge_rates),
-            )
-        )
-
-        # Are we discharging
-        during_discharge = total_battery_power >= 0.0
-        during_charge = total_battery_power < 0.0
-
-        # Work out min and max socs
-        soc_min = min(socs)
-        soc_max = max(socs)
-
-        # Work out which inverters have low and high Soc
-        soc_low = []
-        soc_high = []
-        for inverter in inverters:
-            soc_low.append(inverter.soc_percent < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_threshold_discharge))
-            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_threshold_charge))
-
-        above_reserve = []  # Is the battery above reserve?
-        below_full = []  # Is the battery below full?
-        can_power_house = []  # Could this inverter power the house alone?
-        can_store_pv = []  # Can store the PV for the house alone?
-        power_enough_discharge = []  # Inverter drawing enough power to be worth balancing
-        power_enough_charge = []  # Inverter drawing enough power to be worth balancing
-        for id in range(num_inverters):
-            above_reserve.append((socs[id] - reserves[id]) >= 4.0)
-            below_full.append(socs[id] < 100.0)
-            can_power_house.append((total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power)
-            can_store_pv.append(total_pv_power <= (total_charge_rates - charge_rates[id]))
-            power_enough_discharge.append(battery_powers[id] >= 50.0)
-            power_enough_charge.append(inverters[id].battery_power <= -50.0)
-
-        self.log(
-            "BALANCE: out_of_balance {} above_reserve {} below_full {} can_power_house {} can_store_pv {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(
-                out_of_balance, above_reserve, below_full, can_power_house, can_store_pv, power_enough_discharge, power_enough_charge, soc_low, soc_high
-            )
-        )
-        for this_inverter in range(num_inverters):
-            other_inverter = (this_inverter + 1) % num_inverters
-            if (
-                self.balance_inverters_discharge
-                and total_discharge_rates > 0
-                and out_of_balance
-                and during_discharge
-                and soc_low[this_inverter]
-                and above_reserve[other_inverter]
-                and can_power_house[this_inverter]
-                and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0)
-            ):
-                self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
-                balance_reset_discharge[this_inverter] = True
-                inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-            elif (
-                self.balance_inverters_charge
-                and total_charge_rates > 0
-                and out_of_balance
-                and during_charge
-                and soc_high[this_inverter]
-                and below_full[other_inverter]
-                and can_store_pv[this_inverter]
-                and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0)
-            ):
-                self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
-                balance_reset_charge[this_inverter] = True
-                inverters[this_inverter].adjust_charge_rate(0, notify=False)
-            elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
-                self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
-                if soc_low[this_inverter] and can_power_house[other_inverter]:
-                    balance_reset_charge[this_inverter] = True
-                    inverters[this_inverter].adjust_charge_rate(0, notify=False)
-                elif can_power_house[this_inverter]:
-                    balance_reset_discharge[other_inverter] = True
-                    inverters[other_inverter].adjust_discharge_rate(0, notify=False)
-            elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
-                self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
-                balance_reset_discharge[this_inverter] = True
-                inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-
-        for id in range(num_inverters):
-            if not balance_reset_charge.get(id, False) and total_charge_rates > 0 and charge_rates[id] == 0:
-                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverters[id].battery_rate_max_charge * MINUTE_WATT))
-                inverters[id].adjust_charge_rate(inverters[id].battery_rate_max_charge * MINUTE_WATT, notify=False)
-            if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id] == 0:
-                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverters[id].battery_rate_max_discharge * MINUTE_WATT))
-                inverters[id].adjust_discharge_rate(inverters[id].battery_rate_max_discharge * MINUTE_WATT, notify=False)
-
-        self.log("BALANCE: Completed this run")

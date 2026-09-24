@@ -692,7 +692,9 @@ but if you are using the Solcast integration then the Predbat sensors mirror the
 - sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the total today, remaining amount today and the half-hourly data
 - sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
-- sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
+- sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in kW (calibrated while PV calibration is on), attributes give the 10% and 90% power now forecast
+- sensor.predbat_pv_forecast_h0_uncalibrated - The PV 'power now' forecast in kW exactly as your solar provider gave it, before PV calibration and `pv_scaling`.
+PV calibration measures your actual generation against its history, so [keep it in your recorder](faq.md#predbat-is-causing-exceed-maximum-size-warning-messages-in-the-home-assistant-core-log).
 
 The solar sensor attributes include:
 
@@ -703,7 +705,7 @@ The solar sensor attributes include:
 - remaining/remaining10/remaining90/remainingCL - forecast solar generation for the remainder of the day
 - detailedForecast - a half hourly breakdown of solar forecast for the day, with similar PV estimate, 10% estimate, 90% estimate and calibrated estimate values
 
-- binary_sensor.predbat_dawn - Set to 'on' when the current time is past dawn (forecast solar power at or above [low_power_pv_threshold_w](customisation.md#inverter-control-options)), 'off' before dawn or when the underlying split (which requires **switch.predbat_combine_charge_slots**) isn't in use. This reflects the same dawn boundary Predbat uses to split a low-power charge window at sunrise, not whether solar is producing enough to be useful right now.
+- binary_sensor.predbat_dawn - Set to 'on' when the current time is past dawn (forecast solar power at or above [low_power_pv_threshold_w](customisation.md#inverter-control-options)), 'off' before dawn or when no PV forecast is available. This reflects the same dawn boundary Predbat uses to split a low-power charge window at sunrise, not whether solar is producing enough to be useful right now.
 
 ## Dummy inverter sensors
 

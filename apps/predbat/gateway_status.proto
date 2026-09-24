@@ -70,6 +70,10 @@ message ControlStatus {
   uint32 force_power_w      = 8;
   uint32 command_expires    = 9;  // unix timestamp
   uint32 export_limit_w     = 10; // W — grid port max power output (HR 26); 99999 = not read (unlimited)
+  // Highest reserve % this inverter accepts — PredBat must bound its reserve
+  // target to this (GivEnergy refuses 100, see gateway issue #346). 0 = not
+  // reported (gateway firmware predating this field): assume 100.
+  uint32 reserve_soc_max    = 11;
 }
 
 message ScheduleStatus {

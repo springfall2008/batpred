@@ -74,9 +74,6 @@ pred_bat:
     - 'GEC'
   #  - 'GEC'
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 0
-  #
   # Set the Control here, one entry for each inverter. REST is not involved in this setup - that is
   # the GivTCP template (givenergy_givtcp.yaml), where Predbat configures itself from the local
   # REST API instead of the cloud.

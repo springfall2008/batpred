@@ -63,7 +63,6 @@ pred_bat:
     has_time_window: false
     support_charge_freeze: false
     support_discharge_freeze: false
-  balance_inverters_seconds: 0
   # ─── Hanchu iESS control surface (write) ──────────────────────────────────
   # All four hooks call the same queued script, passing mode_action so it
   # knows which state to apply. See inverter-setup docs for the full script.

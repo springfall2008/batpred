@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.0.3"
+THIS_VERSION = "v9.2.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -76,7 +76,21 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, minutes_since_midnight, dp1, dp2, dp3, find_unmasked_secret_paths, is_entity_id, mask_secret_args, malloc_trim, limit_malloc_arenas, MALLOC_ARENA_LIMIT
+from utils import (
+    minutes_since_yesterday,
+    minutes_since_midnight,
+    dp1,
+    dp2,
+    dp3,
+    find_unmasked_secret_paths,
+    is_entity_id,
+    mask_secret_args,
+    malloc_trim,
+    limit_malloc_arenas,
+    MALLOC_ARENA_LIMIT,
+    export_limits_to_stored,
+    export_limits_from_stored,
+)
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -358,6 +372,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plugin_system = None
         self.calculate_plan_every = 5
         self.prediction_started = False
+        self.inverter_rate_intent = {}
+        self.inverter_balance_overridden = {}
         self.update_pending = True
         self.midnight_utc = None
         self.difference_minutes = 0
@@ -755,13 +771,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "charge_window_best": self.charge_window_best,
             "charge_limit_best": self.charge_limit_best,
             "export_window_best": self.export_window_best,
-            "export_limits_best": self.export_limits_best,
+            "export_limits_best": export_limits_to_stored(self.export_limits_best),
             "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
         }
         try:
-            expiry = self.now_utc + timedelta(hours=8)
+            # storage.load() checks expiry against real wall-clock time (datetime.now(timezone.utc)),
+            # the same convention every other expiry-bearing storage.save() call in the codebase
+            # uses (github.py, octopus.py, enphase.py, fox.py, kraken.py, solax.py, etc.) - self.now_utc
+            # is Predbat's own simulated/plan clock, which is deliberately not real time during a
+            # debug-file replay or a test, and can drift from it. Using it here made a freshly-saved
+            # plan look already-expired the instant it was written whenever that drift exceeded 8
+            # hours (#5079).
+            expiry = datetime.now(timezone.utc) + timedelta(hours=8)
             run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
             self.log("Saved plan to storage")
         except Exception as e:
@@ -807,11 +830,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_window_best = plan_data.get("charge_window_best", [])
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
-        self.export_limits_best = plan_data.get("export_limits_best", [])
+        # Accepts the self-describing mapping form, the 3-element sequences a JSON round trip makes
+        # of the tuples, and the bare packed floats written by versions before the split.
+        self.export_limits_best = export_limits_from_stored(plan_data.get("export_limits_best", []))
         # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
         # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
         preclip = plan_data.get("plan_preclip")
-        self.plan_preclip = tuple(preclip) if isinstance(preclip, (list, tuple)) and len(preclip) == 4 else None
+        if isinstance(preclip, (list, tuple)) and len(preclip) == 4:
+            preclip_parts = list(preclip)
+            preclip_parts[3] = export_limits_from_stored(preclip_parts[3])
+            self.plan_preclip = tuple(preclip_parts)
+        else:
+            self.plan_preclip = None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
@@ -1663,6 +1693,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                     self.arg_errors[name] = "Invalid type, element {} expected dict".format(item)
                                     errors += 1
                                     break
+
+                                # scalar_value_dict (e.g. redact_strings_labelled): warn when a
+                                # mapping value isn't a plain string, because quoting affects what
+                                # the value actually is - an unquoted numeric MPAN loses a leading
+                                # zero in YAML before Predbat ever sees it, which no amount of
+                                # redaction can recover. Warn, don't error, and don't rely on this
+                                # to keep the value safe: collect_log_secret_values() flattens and
+                                # str()s any shape (see _flatten_denylist_value), so redaction
+                                # holds whether or not the user acts on this (#5053 review).
+                                if spec.get("scalar_value_dict", False):
+                                    for key, sub_value in item.items():
+                                        if not isinstance(sub_value, str):
+                                            # The value is deliberately not interpolated: this
+                                            # branch exists for redact_strings_labelled, whose
+                                            # values are the very credentials that must never
+                                            # reach the log, and this warning runs before the
+                                            # redaction pattern has been built from them
+                                            # (#5053 review). The key alone identifies the entry.
+                                            self.log(
+                                                "Warn: Validation of apps.yaml found configuration item '{}' entry '{}' value is a {}, not a string - quote it to keep its exact formatting (e.g. a leading zero)".format(name, key, type(sub_value).__name__)
+                                            )
                     elif expected_type == "int_float_dict":
                         if spec.get("or_auto", False) and value == "auto":
                             matches = True
@@ -2002,6 +2053,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.log("Error: Some components failed to start (phase 2)")
                 self.record_status("Error: Some components failed to start (phase 2)", had_errors=True)
 
+            # Discovery barrier: every component has now started or timed out, so assemble what
+            # they reported into the catalogue. Observe only - nothing here changes configuration.
+            try:
+                self.components.coordinator.assemble()
+                self.components.coordinator.publish()
+            except Exception as e:
+                self.log("Warn: Failed to assemble the discovery catalogue: {}".format(e))
+
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
             self.validate_config_schedule_retry(self.validate_config())
@@ -2038,13 +2097,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.update_time_loop(None)
 
         # Balance inverters
-        run_every_balance = self.get_arg("balance_inverters_seconds", 60)
-        if run_every_balance > 0:
-            self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
-            seconds_offset_balance = seconds_now % run_every_balance
-            seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
-            next_time_balance = host_midnight + timedelta(seconds=seconds_next_balance)
-            self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
         # Predheat
         predheat = self.args.get("predheat", {})
@@ -2070,7 +2122,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         Called every 15 seconds
         """
         if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
-            self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
+            # Only report db_primary when there is an interface to read it from - when ha_interface is None
+            # reading it here raised AttributeError before fatal_error could be set below (#5135)
+            if self.ha_interface:
+                self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
+            else:
+                self.log("Error: HA interface not active")
             self.fatal_error = True
             raise Exception("HA interface not active")
 
@@ -2176,22 +2233,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 # Always clear the active flag, even on early return or exception, so the
                 # web spinner and predbat.active switch don't get stuck on
                 self.expose_config("active", False)
-
-    def run_time_loop_balance(self, cb_args):
-        """
-        Called every N second for balance inverters
-        """
-        if self.is_template_mode():
-            return
-
-        if not self.prediction_started and self.balance_inverters_enable and not self.set_read_only:
-            try:
-                self.balance_inverters()
-            except Exception as e:
-                self.log("Error: Exception raised {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
-                raise e
 
     def register_hook(self, hook_name, callback):
         """
