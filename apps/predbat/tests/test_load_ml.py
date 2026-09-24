@@ -59,6 +59,11 @@ def test_load_ml(my_predbat=None):
         ("training_stop_callback", _test_training_stops_on_stop_callback, "Training abandons a run when the stop hook trips"),
         ("training_off_event_loop", _test_component_training_does_not_block_event_loop, "Component training leaves its event loop free to run"),
         ("training_abandoned_on_stop", _test_component_training_abandons_run_on_stop, "Component abandons an in-flight training run when stopping"),
+        ("training_abort_restores_norm", _test_training_abort_restores_normalisation, "An aborted train() restores normalisation statistics with the weights"),
+        ("curriculum_mid_abort_rollback", _test_curriculum_mid_abort_rolls_back_stamps, "An abandoned curriculum rolls back the completed passes' published stamps"),
+        ("untrained_model_not_valid", _test_untrained_model_is_not_valid, "A model that never completed a training does not read as valid"),
+        ("training_watchdog_cancel", _test_component_training_survives_watchdog_cancel, "A cancelled run() stops the training thread instead of orphaning it"),
+        ("training_failure_not_abandon", _test_component_training_failure_is_not_reported_as_abandoned, "An all-passes-failed run is reported as a failure, not an abandonment"),
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
@@ -3389,6 +3394,7 @@ def _make_training_component(predictor, now_utc):
         def __init__(self):
             """Expose only what _do_training touches."""
             self.now_utc = now_utc
+            self.fatal_error = False
 
         def log(self, msg, **kwargs):
             """Swallow component logging."""
@@ -3422,6 +3428,9 @@ def _make_training_component(predictor, now_utc):
     component.model_status = "not_initialized"
     component.last_train_time = None
     component.initial_training_done = False
+    component.run_timeout = 2 * 60 * 60
+    component.training_running = False
+    component.training_cancelled = False
     return component
 
 
@@ -3486,15 +3495,25 @@ def _test_component_training_does_not_block_event_loop():
     import threading
 
     now_utc = datetime.now(timezone.utc)
-    loop_made_progress = threading.Event()
+    # Two round trips, each gated on the trainer having reached that point. A single one-shot event
+    # released unconditionally would pass spuriously: any earlier await in _do_training that happens
+    # to yield once sets it before the trainer is entered, after which a regression back to a
+    # synchronous loop-pinning call still finds it set. Each of these is only set by a loop task
+    # that ran *after* the trainer said it was inside the call.
+    trainer_reached = [threading.Event(), threading.Event()]
+    loop_released = [threading.Event(), threading.Event()]
     observed = {}
 
     class BlockingPredictor:
         """Blocks inside training the way a real curriculum pass does."""
 
         def train_curriculum(self, *args, **kwargs):
-            """Wait for the loop to prove it is still running, then finish the 'run'."""
-            observed["loop_ran_during_training"] = loop_made_progress.wait(timeout=10.0)
+            """Hand control to the loop twice from inside the 'run', then finish it."""
+            released = []
+            for round_index in range(2):
+                trainer_reached[round_index].set()
+                released.append(loop_released[round_index].wait(timeout=10.0))
+            observed["loop_ran_during_training"] = all(released)
             return 0.05
 
     component = _make_training_component(BlockingPredictor(), now_utc)
@@ -3503,8 +3522,17 @@ def _test_component_training_does_not_block_event_loop():
         """Queue a loop task, train, and see whether the task ever got a chance to run."""
 
         async def releaser():
-            """Release the trainer, which only happens if the loop is still being serviced."""
-            loop_made_progress.set()
+            """Answer each of the trainer's handshakes, giving up rather than spinning forever."""
+            for round_index in range(2):
+                for _ in range(200000):
+                    if trainer_reached[round_index].is_set():
+                        break
+                    await asyncio.sleep(0)
+                else:
+                    observed["gave_up_on_round"] = round_index
+                    return
+                loop_released[round_index].set()
+            observed["loop_answered_both_rounds"] = True
 
         task = asyncio.create_task(releaser())
         await component._do_training(is_initial=False)
@@ -3513,6 +3541,7 @@ def _test_component_training_does_not_block_event_loop():
     asyncio.run(scenario())
 
     assert observed.get("loop_ran_during_training") is True, "the event loop made no progress while training ran - training is still running on the loop, so a shutdown landing mid-training cannot be answered"
+    assert observed.get("loop_answered_both_rounds") is True, "a loop task did not run between the trainer's two handshakes, so the loop is not being serviced for the duration of the training call"
 
     return True
 
@@ -3554,6 +3583,229 @@ def _test_component_training_abandons_run_on_stop():
     assert component.model_valid is False, "an abandoned run must not be published as a valid model"
     assert component.initial_training_done is False, "an abandoned run must not count as a completed training"
     assert component.last_train_time is None, "an abandoned run must not stamp last_train_time, or the retrain interval skips the next real run"
+
+    return True
+
+
+def _test_training_abort_restores_normalisation():
+    """An aborted train() must put back the normalisation statistics along with the weights.
+
+    Weights and normalisation are one model. train() refits the statistics before the first epoch
+    check, so restoring only best_weights would leave restored weights paired with statistics fitted
+    for the run that was abandoned, and every subsequent predict() would scale its inputs by numbers
+    those weights were never trained against. Only reachable while the component survives the abort
+    - a cancelled run(), not a process shutdown - which is exactly the run_timeout watchdog path.
+    """
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(11)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+
+    predictor = LoadPredictor(learning_rate=0.01)
+    assert predictor.train(load_data, now_utc, epochs=2, patience=3) is not None, "the baseline run must succeed so there is a fitted model to abort against"
+
+    before = {
+        "feature_mean": predictor.feature_mean.copy(),
+        "feature_std": predictor.feature_std.copy(),
+        "target_mean": predictor.target_mean,
+        "target_std": predictor.target_std,
+        "weights": [w.copy() for w in predictor.weights],
+    }
+
+    # Fine-tune on plainly different data so the EMA refit moves the statistics by an amount no
+    # tolerance could absorb, then abort at the very first epoch check - after the refit has
+    # already happened
+    other_data = {minute: value * 5.0 for minute, value in load_data.items()}
+    aborted_mae = predictor.train(other_data, now_utc, epochs=5, patience=3, stop_callback=lambda: True)
+
+    assert aborted_mae is None, "an aborted fine-tune must report None"
+    assert np.allclose(predictor.feature_mean, before["feature_mean"]), "an aborted run must restore feature_mean, or predictions are normalised by statistics the restored weights never saw"
+    assert np.allclose(predictor.feature_std, before["feature_std"]), "an aborted run must restore feature_std"
+    assert predictor.target_mean == before["target_mean"], "an aborted run must restore target_mean"
+    assert predictor.target_std == before["target_std"], "an aborted run must restore target_std"
+    for n, (restored, original) in enumerate(zip(predictor.weights, before["weights"])):
+        assert np.allclose(restored, original), f"an aborted run must restore layer {n} weights unchanged"
+
+    return True
+
+
+def _test_curriculum_mid_abort_rolls_back_stamps():
+    """A curriculum abandoned mid-run must not leave a completed pass's stamps published.
+
+    train() stamps training_timestamp/validation_mae/epochs_trained at the end of every pass,
+    including the intermediate curriculum windows. is_valid() judges purely on those two, so without
+    a rollback a model trained on only the first window of the curriculum reports "active" and its
+    fresh timestamp suppresses the staleness retrain that is the only route back to a full model.
+    """
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(13)
+    load_data = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
+
+    stale_timestamp = now_utc - timedelta(hours=100)
+    predictor = LoadPredictor(learning_rate=0.01)
+    predictor.model_initialized = True
+    predictor.model_trained = True
+    predictor.weights = [np.zeros((1, 1), dtype=np.float32)]
+    predictor.training_timestamp = stale_timestamp
+    predictor.validation_mae = 0.4
+    predictor.validation_bias = 0.05
+    predictor.epochs_trained = 42
+
+    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (False, "stale"), "the starting model must be due a retrain, so the abandonment cannot be mistaken for it"
+
+    passes = {"count": 0}
+
+    def fake_train(*args, **kwargs):
+        """Stand in for a completed pass, stamping the model the way the real train() does."""
+        passes["count"] += 1
+        predictor.model_trained = True
+        predictor.training_timestamp = now_utc
+        predictor.validation_mae = 0.3
+        predictor.validation_bias = 0.01
+        predictor.epochs_trained += 3
+        return 0.3
+
+    predictor.train = fake_train
+    # Trips only once a pass has completed, so the run is abandoned between passes rather than
+    # before the first one - the path the existing stop-callback test never reaches
+    curriculum_mae = predictor.train_curriculum(load_data, now_utc, epochs=3, patience=3, curriculum_window_days=7, curriculum_step_days=7, stop_callback=lambda: passes["count"] >= 1)
+
+    assert passes["count"] == 1, f"exactly one pass should complete before the hook trips, got {passes['count']}"
+    assert curriculum_mae is None, "an abandoned curriculum must not return the completed intermediate pass's val_mae as a finished result"
+    assert predictor.training_timestamp == stale_timestamp, "an abandoned curriculum must roll back training_timestamp, or a partial model's fresh stamp suppresses the staleness retrain"
+    assert predictor.validation_mae == 0.4, "an abandoned curriculum must roll back validation_mae"
+    assert predictor.validation_bias == 0.05, "an abandoned curriculum must roll back validation_bias"
+    assert predictor.epochs_trained == 42, "an abandoned curriculum must roll back epochs_trained"
+    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (False, "stale"), "the model must still read as due a retrain after an abandoned curriculum"
+
+    return True
+
+
+def _test_untrained_model_is_not_valid():
+    """A model whose weights exist but which has never completed a training must not read as active.
+
+    _initialize_weights() sets model_initialized before the first epoch, so an initial run abandoned
+    part-way leaves random He-initialised weights behind. model_trained is the separate signal that
+    a training actually landed - kept apart from training_timestamp, which a model saved before
+    timestamps were stored legitimately lacks while still being a properly trained model.
+    """
+    predictor = LoadPredictor(learning_rate=0.01)
+    predictor.model_initialized = True
+    predictor.weights = [np.zeros((1, 1), dtype=np.float32)]
+    predictor.training_timestamp = None
+    predictor.validation_mae = None
+
+    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (False, "not_trained"), "a model that has never completed a training must not be published as valid"
+
+    # A legacy saved model has no timestamp but has been trained, and must keep serving forecasts
+    predictor.model_trained = True
+    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (True, None), "a trained model without an embedded timestamp must still be valid"
+
+    return True
+
+
+def _test_component_training_survives_watchdog_cancel():
+    """A cancelled run() must stop the training thread, not orphan it (#5075 follow-up).
+
+    Now that training is off the loop, ComponentBase.start()'s run_timeout watchdog can actually
+    fire, and its task.cancel() reaches the coroutine awaiting to_thread - not the worker thread
+    already inside train_curriculum. api_stop is still False on that path, so without the
+    component's own cancel signal the thread would train on unwatched, and the next 60s tick would
+    start a second curriculum mutating the same predictor's weights and Adam state in place.
+    """
+    import asyncio
+    import threading
+    import time
+
+    now_utc = datetime.now(timezone.utc)
+    entered = threading.Event()
+    allow_exit = threading.Event()
+    observed = {"calls": 0}
+
+    class CancelWatchPredictor:
+        """Polls the stop hook until it trips, then holds the thread open so the guard can be seen."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record that the hook tripped, and stay 'in training' until released."""
+            stop_callback = kwargs.get("stop_callback")
+            observed["calls"] += 1
+            entered.set()
+            for _ in range(1000):
+                if stop_callback():
+                    observed["hook_tripped"] = True
+                    break
+                time.sleep(0.01)
+            allow_exit.wait(timeout=10.0)
+            return None
+
+    component = _make_training_component(CancelWatchPredictor(), now_utc)
+
+    async def scenario():
+        """Cancel the training coroutine mid-run, then try to start another cycle."""
+        task = asyncio.ensure_future(component._do_training(is_initial=False))
+        for _ in range(200000):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0)
+        assert entered.is_set(), "the trainer was never entered, so there is nothing to cancel"
+
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            observed["cancelled"] = True
+
+        # The worker thread is still inside train_curriculum here. The next run() tick must not
+        # start a second one on the same predictor.
+        await component._do_training(is_initial=False)
+        allow_exit.set()
+
+        for _ in range(1000):
+            if not component.training_running:
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+
+    assert observed.get("cancelled") is True, "cancelling the run() task must propagate out of _do_training rather than being swallowed"
+    assert component.training_cancelled is True, "a cancelled run must raise the component's own cancel signal, or the worker thread never learns to abandon"
+    assert observed.get("hook_tripped") is True, "the stop hook must report True after the coroutine is cancelled, so the orphaned training thread abandons its run"
+    assert observed["calls"] == 1, f"a second training must not start while the previous worker thread is still running, got {observed['calls']} calls"
+    assert component.training_running is False, "the worker thread must clear training_running when it returns, or training never runs again"
+    assert component.last_train_time is None, "a cancelled run must not stamp last_train_time"
+
+    return True
+
+
+def _test_component_training_failure_is_not_reported_as_abandoned():
+    """A genuinely failed training must be reported as a failure even if a stop lands afterwards.
+
+    train_curriculum() returns None both for "aborted" and for "every pass failed", so re-reading
+    api_stop after the fact files a real data problem as an abandonment - and then never warns about
+    it or counts the error. The component has to remember whether its stop hook actually answered
+    True during the run.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    logged = []
+
+    class FailingPredictor:
+        """Fails every pass without the stop hook ever tripping, then a stop lands at the end."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Return the all-passes-failed None, with api_stop set just as the run finishes."""
+            component.api_stop = True
+            return None
+
+    component = _make_training_component(FailingPredictor(), now_utc)
+    component.log = lambda msg, **kwargs: logged.append(msg)
+
+    asyncio.run(component._do_training(is_initial=False))
+
+    joined = " | ".join(logged)
+    assert "Training failed" in joined, f"an all-passes-failed run must still be reported as a failure, logged: {joined}"
+    assert "Training abandoned" not in joined, f"a run whose stop hook never tripped must not be filed as an abandonment, logged: {joined}"
+    assert component.last_train_time is None, "a failed run must not stamp last_train_time"
 
     return True
 

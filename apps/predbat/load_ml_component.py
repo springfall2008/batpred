@@ -121,6 +121,13 @@ class LoadMLComponent(ComponentBase):
         self.initial_training_done = False
         self.database_history_loaded = False
 
+        # In-flight training state. training_running is owned by the worker thread (it clears it
+        # when the synchronous curriculum truly returns, not when the awaiting coroutine goes away),
+        # and training_cancelled is the component's own cancel signal for a run whose coroutine has
+        # been cancelled out from under it - see _do_training.
+        self.training_running = False
+        self.training_cancelled = False
+
         # Predictions cache
         self.current_predictions = {}
 
@@ -768,21 +775,26 @@ class LoadMLComponent(ComponentBase):
             # via is_calculating() and logged by calculate_plan().
             if self.base.prediction_started:
                 self.log("ML Component: Waiting for current prediction cycle to complete before running ML work")
-                while self.base.prediction_started:
+                # api_stop is part of the condition because a plan cycle is itself minutes long: a
+                # stop landing while one runs would otherwise be held here until it finished, which
+                # is the same delay class #5075 set out to remove.
+                while self.base.prediction_started and not self.api_stop:
                     await asyncio.sleep(0.5)
             try:
                 self.load_ml_calculating = True
 
-                if should_train:
+                if should_train and not self.api_stop:
                     self.log("ML Component: Doing training...")
                     await self._do_training(is_initial)
 
-                    if self.api_stop:
-                        # Training abandoned for shutdown - a re-fetch and a prediction cycle here
-                        # would just add their own delay to the stop we are already answering
-                        self.log("ML Component: Stopping, skipping the post-training prediction cycle")
-                        return True
-
+                if self.api_stop:
+                    # A re-fetch and a prediction cycle here would just add their own delay to the
+                    # stop we are already answering. The model status below still runs: training may
+                    # have completed successfully before the stop landed, and skipping it entirely
+                    # would leave that fresh model unpublished.
+                    self.log("ML Component: Stopping, skipping the post-training prediction cycle")
+                    should_fetch = False
+                elif should_train:
                     # Training can run for many minutes, during which the data fetched above
                     # goes stale - both the lookback window feeding the prediction and the
                     # load_minutes_now baseline still refer to the pre-training time. Re-fetch
@@ -952,8 +964,14 @@ class LoadMLComponent(ComponentBase):
             self.data_ready = False
 
     def training_stop_requested(self):
-        """Return True when the component is stopping, so an in-flight training run abandons itself."""
-        return self.api_stop
+        """Return True when this training run has been cancelled, so the worker thread abandons it.
+
+        Three sources, because a training run outlives its coroutine: api_stop for an ordinary
+        shutdown, fatal_error because ComponentBase.start() exits on it without ever calling stop(),
+        and training_cancelled for a run() the run_timeout watchdog has cancelled - in that last case
+        api_stop is still False, so without this the worker thread would train on unwatched.
+        """
+        return self.api_stop or self.fatal_error or self.training_cancelled
 
     async def _do_training(self, is_initial):
         """
@@ -962,6 +980,15 @@ class LoadMLComponent(ComponentBase):
         Args:
             is_initial: True for full training, False for fine-tuning
         """
+        if self.training_running:
+            # A previous run()'s worker thread is still inside train_curriculum. That happens when
+            # the run_timeout watchdog cancelled the coroutine awaiting it: the coroutine went away,
+            # the thread did not. Starting a second curriculum here would have two threads mutating
+            # the same LoadPredictor's weights, biases, Adam moments and normalisation statistics in
+            # place, and both racing to save() over the same model file.
+            self.log("Warn: ML Component: Previous training run is still finishing, skipping this training cycle")
+            return
+
         # Snapshot data under the lock so we can release it before the CPU-bound
         # training call.  A curriculum run is many passes of many epochs and routinely takes
         # minutes, so it must NOT run while holding data_lock, and must not run on the event
@@ -997,33 +1024,67 @@ class LoadMLComponent(ComponentBase):
                 max_intermediate_passes = self.ml_curriculum_max_passes
         # Lock released
 
+        # Tracks whether the stop hook ever actually answered True during this run. train() and
+        # train_curriculum() both return None for "aborted" and for "every pass failed", so reading
+        # the hook again after the fact would file a genuine data failure as an abandonment whenever
+        # a stop happened to land in between - and then never count the error or warn about it.
+        stop_signalled = {"tripped": False}
+
+        def stop_hook():
+            """Answer the trainer's abort question, remembering a True so the caller can tell why."""
+            if self.training_stop_requested():
+                stop_signalled["tripped"] = True
+                return True
+            return False
+
+        def run_training():
+            """Run the curriculum on this worker thread, owning the in-flight flag for its lifetime.
+
+            The flag is raised and cleared here rather than in the awaiting coroutine because a
+            cancelled coroutine never reaches its own cleanup, while this thread always finishes.
+            """
+            self.training_running = True
+            try:
+                return self.predictor.train_curriculum(
+                    load_data_snap,
+                    now_utc_snap,
+                    pv_minutes=pv_data_snap,
+                    temp_minutes=temp_data_snap,
+                    import_rates=import_rates_snap,
+                    export_rates=export_rates_snap,
+                    epochs=epochs,
+                    time_decay_days=time_decay,
+                    validation_holdout_hours=holdout_hours,
+                    patience=patience,
+                    curriculum_window_days=window_days,
+                    curriculum_step_days=step_days,
+                    max_intermediate_passes=max_intermediate_passes,
+                    progress_callback=self.update_success_timestamp,
+                    stop_callback=stop_hook,
+                )
+            finally:
+                self.training_running = False
+
+        self.training_cancelled = False
         try:
             # Run the curriculum on a worker thread. It is synchronous, CPU-bound and minutes long,
             # so calling it directly would pin this component's event loop for its whole duration:
             # api_stop would go unnoticed, the run_timeout watchdog could never fire, and a shutdown
             # landing mid-training would sit waiting on this component's thread (#5075).
-            val_mae = await asyncio.to_thread(
-                self.predictor.train_curriculum,
-                load_data_snap,
-                now_utc_snap,
-                pv_minutes=pv_data_snap,
-                temp_minutes=temp_data_snap,
-                import_rates=import_rates_snap,
-                export_rates=export_rates_snap,
-                epochs=epochs,
-                time_decay_days=time_decay,
-                validation_holdout_hours=holdout_hours,
-                patience=patience,
-                curriculum_window_days=window_days,
-                curriculum_step_days=step_days,
-                max_intermediate_passes=max_intermediate_passes,
-                progress_callback=self.update_success_timestamp,
-                stop_callback=self.training_stop_requested,
-            )
+            try:
+                val_mae = await asyncio.to_thread(run_training)
+            except asyncio.CancelledError:
+                # Now that the loop is free the run_timeout watchdog can fire, and cancelling this
+                # coroutine does nothing to the worker thread already inside train_curriculum.
+                # Trip our own stop signal so the thread abandons itself at its next epoch check
+                # instead of training on unwatched, then let the cancellation propagate.
+                self.training_cancelled = True
+                self.log("Warn: ML Component: Training run was cancelled (run_timeout is {}s) - asking the training thread to abandon the run".format(self.run_timeout))
+                raise
 
-            if val_mae is None and self.training_stop_requested():
+            if val_mae is None and stop_signalled["tripped"]:
                 # Abandoned on purpose, not a failure - and nothing to save, the model is partial
-                self.log("ML Component: Training abandoned because the component is stopping")
+                self.log("ML Component: Training abandoned because the run was cancelled or the component is stopping")
                 return
 
             if val_mae is not None:
