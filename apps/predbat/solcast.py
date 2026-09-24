@@ -74,13 +74,13 @@ class SolarAPI(ComponentBase):
         pv_forecast_tomorrow,
         pv_forecast_d3,
         pv_forecast_d4,
-        pv_clearsky_today,
-        pv_clearsky_tomorrow,
-        pv_clearsky_d3,
-        pv_clearsky_d4,
         pv_scaling,
         open_meteo_forecast,
         open_meteo_forecast_max_age,
+        pv_clearsky_today=None,
+        pv_clearsky_tomorrow=None,
+        pv_clearsky_d3=None,
+        pv_clearsky_d4=None,
     ):
         """Initialise the Solar API component"""
         self.solcast_host = solcast_host
