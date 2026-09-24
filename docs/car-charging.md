@@ -299,7 +299,7 @@ Just keep the single-sensor config (or provide a one-entry list) and car 1 will 
   octopus_charge_limit: 'number.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_charge_target'
 ```
 
-*Note:* The `octopus_slot_max` limit applies per-car, so with two cars on IOG each car is subject to its own slot-count cap.
+*Note:* `octopus_slot_max` is a single install-wide setting, but Predbat currently counts it separately for each car, so with two cars on IOG up to twice the limit can be applied in a day. The cap it defaults from is a property of the account's tariff rather than of a vehicle, so this is a known bug rather than intended behaviour - see [#5215](https://github.com/springfall2008/batpred/issues/5215).
 
 #### How Predbat picks which car goes in which slot (octopus_automatic)
 
