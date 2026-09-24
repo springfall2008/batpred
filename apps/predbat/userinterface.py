@@ -70,8 +70,8 @@ class DebugYamlDumper(yaml.Dumper):
 
 # An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
 # which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
-# to load with plain YAML tooling. Written as an ordinary sequence instead. Nothing else in a dump
-# is a tuple today, and a sequence is what a reader wants from one anyway.
+# to load with plain YAML tooling. Written as an ordinary sequence instead, so any
+# other tuple (e.g. net_settlement_seed) replays as a list and its readers must only index or unpack it.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
 
