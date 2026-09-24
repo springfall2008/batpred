@@ -17,6 +17,7 @@ import copy
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
@@ -364,15 +365,27 @@ SOLIS_API_CODES = {
     "10404": "Not found",
     "10500": "Internal server error",
     "B0115": "Datalogger offline or disconnected",
+    "B0600": "Datalogger returns data abnormally",
     "R0000": "Daily API request allowance exhausted",
 }
 
 # Response codes that are settled for this cycle: retrying cannot change the answer, and every
 # attempt still spends one of the 200 daily requests. B0115 means the datalogger is offline, not
 # that the request was throttled, and R0000 means the daily allowance is already gone (issue #5087).
+# B0600 came back on every remote read and every retry, across days, on the account in issue #5177,
+# from a datalogger the owner could see online in SolisCloud.
 SOLIS_API_CODE_QUOTA_EXCEEDED = "R0000"
 SOLIS_API_CODE_DATALOGGER_OFFLINE = "B0115"
-SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALOGGER_OFFLINE}
+SOLIS_API_CODE_DATALOGGER_ABNORMAL = "B0600"
+SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALOGGER_OFFLINE, SOLIS_API_CODE_DATALOGGER_ABNORMAL}
+
+# Codes that put one inverter into the datalogger cooldown, and how the log and run status describe
+# each. Both back off the same way; B0600 just must not be reported as offline, because the owner can
+# see the datalogger online in SolisCloud (issue #5177).
+SOLIS_DATALOGGER_COOLDOWN_REASONS = {
+    SOLIS_API_CODE_DATALOGGER_OFFLINE: "offline or disconnected",
+    SOLIS_API_CODE_DATALOGGER_ABNORMAL: "returning data abnormally (B0600)",
+}
 
 # Time options for selectors (HH:MM:SS format)
 BASE_TIME = datetime(2000, 1, 1, 0, 0, 0)
@@ -455,6 +468,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slots_reset = set()  # Track which inverters had slots reset
         self.quota_exhausted_until = None  # UTC time the daily API allowance pause lifts, None when not paused
         self.datalogger_offline_until = {}  # {inverter_sn: UTC time that inverter's reads resume}
+        self.datalogger_cooldown_code = {}  # {inverter_sn: API code of its latest datalogger refusal}
         self.automatic_config_done = False  # Auto-config succeeded, so it does not need re-running
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
@@ -564,36 +578,67 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log("Solis API: SolisCloud daily API request allowance has been restored, resuming normal polling")
 
     def datalogger_offline(self, inverter_sn):
-        """Whether this inverter's datalogger is in its offline cooldown and should not be polled"""
+        """Whether this inverter's datalogger is in its cooldown (B0115 or B0600) and should not be polled"""
         offline_until = self.datalogger_offline_until.get(inverter_sn)
         return bool(offline_until) and self.now_utc_exact.astimezone(UTC) < offline_until
 
-    def note_datalogger_offline(self, inverter_sn):
-        """Back off this inverter's reads after SolisCloud reports its datalogger is offline.
+    def note_datalogger_offline(self, inverter_sn, code):
+        """Back off this inverter's reads after SolisCloud refuses them with a datalogger code.
 
         Not retrying a B0115 is only half the cure: run() polls every inverter every minute, so an
         offline datalogger left in the rotation still spends a request a minute out of the 200 a day
-        and is how the account in issue #5087 reached R0000 in the first place.
+        and is how the account in issue #5087 reached R0000 in the first place. A B0600 is backed
+        off the same way, but code keeps it from being reported as offline (issue #5177).
         """
-        if not inverter_sn or self.datalogger_offline(inverter_sn):
+        if not inverter_sn:
+            return
+        # Always the latest refusal, so the run status follows a B0115 that turns into a B0600
+        self.datalogger_cooldown_code[inverter_sn] = code
+        if self.datalogger_offline(inverter_sn):
             # Already backed off - don't extend the cooldown or re-log on each refused read
             return
         resume_at = self.now_utc_exact.astimezone(UTC) + timedelta(seconds=SOLIS_DATALOGGER_OFFLINE_SECONDS)
         self.datalogger_offline_until[inverter_sn] = resume_at
-        self.log("Warn: Solis API: Datalogger for inverter {} is offline or disconnected, pausing its reads until {}".format(inverter_sn, resume_at.strftime("%H:%M:%S UTC")))
+        self.log("Warn: Solis API: Datalogger for inverter {} is {}, pausing its reads until {}".format(inverter_sn, self.datalogger_cooldown_reason(inverter_sn), resume_at.strftime("%H:%M:%S UTC")))
+
+    def datalogger_cooldown_reason(self, inverter_sn):
+        """How the log and run status describe this inverter's latest datalogger refusal"""
+        code = self.datalogger_cooldown_code.get(inverter_sn, SOLIS_API_CODE_DATALOGGER_OFFLINE)
+        return SOLIS_DATALOGGER_COOLDOWN_REASONS.get(code, code)
 
     def note_datalogger_online(self, inverter_sn):
-        """Clear an inverter's offline cooldown after one of its reads succeeds"""
+        """Clear an inverter's datalogger cooldown after one of its reads succeeds"""
         if inverter_sn and self.datalogger_offline_until.pop(inverter_sn, None):
-            self.log("Solis API: Datalogger for inverter {} is back online".format(inverter_sn))
+            self.datalogger_cooldown_code.pop(inverter_sn, None)
+            self.log("Solis API: Datalogger for inverter {} is answering requests again".format(inverter_sn))
+
+    def forget_expired_datalogger_cooldown(self, inverter_sn):
+        """Drop an expired cooldown once a request for its inverter fails for a reason that is not a datalogger refusal.
+
+        The run status keeps a datalogger reason past its cooldown until a request succeeds, but once a
+        re-probe fails for something else - an HTTP error, a timeout, R0000 - the datalogger is no
+        longer the latest explanation, and reporting it would hide e.g. a SolisCloud outage.
+        """
+        if inverter_sn and inverter_sn in self.datalogger_offline_until and not self.datalogger_offline(inverter_sn):
+            self.datalogger_offline_until.pop(inverter_sn, None)
+            self.datalogger_cooldown_code.pop(inverter_sn, None)
 
     def health_message(self):
         """Name the reason Solis is unhealthy so the run status says more than 'component errors: Solis'"""
         if self.quota_exhausted_until:
             return "Solis Cloud daily API limit reached, paused until {}".format(self.quota_exhausted_until.strftime("%H:%M UTC"))
-        offline = sorted(sn for sn in self.datalogger_offline_until if self.datalogger_offline(sn))
-        if offline:
-            return "datalogger offline for inverter {}".format(", ".join(offline))
+        # Every inverter still carrying a cooldown entry, expired or not: like the quota diagnostic it is
+        # cleared by a request that succeeds, not by the cooldown expiring (or, once it has, by a re-probe
+        # that fails for some other reason). A component stuck in startup backoff re-probes up to
+        # two hours apart, far longer than the cooldown, so tying this to the cooldown would leave the run
+        # status blank for most of that time (issue #5177).
+        # Only inverters still being polled, since no request will ever clear one that has left the
+        # rotation (dropped by discovery or by the inverter_sn setting).
+        by_reason = {}
+        for sn in sorted(sn for sn in self.datalogger_offline_until if sn in self.inverter_sn):
+            by_reason.setdefault(self.datalogger_cooldown_reason(sn), []).append(sn)
+        if by_reason:
+            return "; ".join("datalogger {} for inverter {}".format(reason, ", ".join(sns)) for reason, sns in by_reason.items())
         return None
 
     async def _execute_request(self, endpoint, payload):
@@ -602,7 +647,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # are refused but still counted, so sending them is what keeps it exhausted (issue #5087).
         if self.quota_paused():
             raise SolisAPIError("SolisCloud daily API request allowance exhausted, requests paused until {}".format(self.quota_exhausted_until.strftime("%Y-%m-%d %H:%M:%S UTC")), response_code=SOLIS_API_CODE_QUOTA_EXCEEDED)
-        # Which inverter this request is for, so a B0115 backs off that one rather than the fleet.
+        # Which inverter this request is for, so a datalogger refusal (B0115, B0600) backs off that one rather than the fleet.
         # The read/control endpoints name it "inverterSn", the detail endpoint "sn"; the account-wide
         # inverter list names neither, and has no single inverter to blame.
         request_inverter_sn = payload.get("inverterSn") or payload.get("sn")
@@ -635,6 +680,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                             await self.handle_oauth_401()
                         reason = "auth_error" if response.status in (401, 403) else "server_error"
                         record_api_call("solis", False, reason)
+                        self.forget_expired_datalogger_cooldown(request_inverter_sn)
                         raise SolisAPIError(f"HTTP error: {error_text}", status_code=response.status)
 
                     # Parse JSON response
@@ -648,12 +694,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
-                        if str(code) == SOLIS_API_CODE_QUOTA_EXCEEDED:
-                            self.note_quota_exhausted()
-                        elif str(code) == SOLIS_API_CODE_DATALOGGER_OFFLINE:
+                        if str(code) in SOLIS_DATALOGGER_COOLDOWN_REASONS:
                             # Not throttling, whatever the old 10 second sleep assumed: the datalogger
-                            # is offline, so this inverter is backed off rather than retried.
-                            self.note_datalogger_offline(request_inverter_sn)
+                            # won't answer, so this inverter is backed off rather than retried.
+                            self.note_datalogger_offline(request_inverter_sn, str(code))
+                        else:
+                            self.forget_expired_datalogger_cooldown(request_inverter_sn)
+                            if str(code) == SOLIS_API_CODE_QUOTA_EXCEEDED:
+                                self.note_quota_exhausted()
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
@@ -664,9 +712,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         except asyncio.TimeoutError as err:
             record_api_call("solis", False, "connection_error")
+            self.forget_expired_datalogger_cooldown(request_inverter_sn)
             raise SolisAPIError(f"Timeout accessing {url}") from err
         except aiohttp.ClientError as err:
             record_api_call("solis", False, "connection_error")
+            self.forget_expired_datalogger_cooldown(request_inverter_sn)
             raise SolisAPIError(f"Network error accessing {url}: {str(err)}") from err
 
     async def _with_retry(self, operation, max_retry_time=SOLIS_MAX_RETRY_TIME):
@@ -683,8 +733,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 # burning the full retry window hitting the API with a known-bad token.
                 if self.oauth_failed:
                     raise err
-                # An exhausted allowance or an offline datalogger will answer every retry the same
-                # way, and each attempt still costs one of the 200 daily requests (issue #5087).
+                # An exhausted allowance, or a datalogger that is offline (B0115) or refusing reads
+                # (B0600), will answer every retry the same way, and each attempt still costs one of
+                # the 200 daily requests (issues #5087, #5177).
                 if err.response_code in SOLIS_API_CODES_NO_RETRY:
                     raise err
                 elapsed_time = time.monotonic() - start_time
@@ -763,6 +814,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         first_slot = time_windows.get(1, time_windows.get(min(time_windows.keys())))
         field_length = first_slot.get("field_length", 18)  # Default to variant 1
 
+        # Never encode a current above what the inverter can deliver at its rated power (issue #5187)
+        rated_current = self.get_rated_current(inverter_sn)
+
+        def encoded_current(slot_data, key):
+            """Return a slot current as CID 103 holds it, in whole amps and no higher than the inverter's rating."""
+            current = int(slot_data.get(key, 0))
+            if rated_current is not None:
+                current = min(current, int(rated_current))
+            return str(current)
+
         fields = []
 
         if field_length == 18:
@@ -772,8 +833,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 slot_data = time_windows.get(slot_index, {})
 
                 # Extract fields with defaults
-                charge_current = str(int(slot_data.get("charge_current", 0)))
-                discharge_current = str(int(slot_data.get("discharge_current", 0)))
+                charge_current = encoded_current(slot_data, "charge_current")
+                discharge_current = encoded_current(slot_data, "discharge_current")
                 charge_start = slot_data.get("charge_start_time", "00:00")
                 charge_end = slot_data.get("charge_end_time", "00:00")
                 discharge_start = slot_data.get("discharge_start_time", "00:00")
@@ -789,8 +850,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 slot_data = time_windows.get(slot_index, {})
 
                 # Extract fields with defaults
-                charge_current = str(int(slot_data.get("charge_current", 0)))
-                discharge_current = str(int(slot_data.get("discharge_current", 0)))
+                charge_current = encoded_current(slot_data, "charge_current")
+                discharge_current = encoded_current(slot_data, "discharge_current")
                 charge_start = slot_data.get("charge_start_time", "00:00")
                 charge_end = slot_data.get("charge_end_time", "00:00")
                 discharge_start = slot_data.get("discharge_start_time", "00:00")
@@ -891,6 +952,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         over-discharge SOC is never written here, leaving the battery protection floor
         where the user set it.
 
+        A recovery SOC reading at or below the over-discharge SOC, or above 100, cannot be
+        right, yet most inverters report one - 0, 1, the over-discharge SOC itself or 65521
+        (issue #5187). Such a reading is replaced by over-discharge + 1, where the inverter
+        holds the recovery SOC, and is never written back.
+
         Args:
             inverter_sn: Inverter serial number
             target_soc: Cut-off SOC Predbat wants for the discharge slot, as a percentage
@@ -902,11 +968,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Cache only - the infrequent poll runs before the first control write, so a missing
         # value means we cannot tell where the floor is and the target is left alone
         recovery_soc = parse_cid_int(values.get(SOLIS_CID_BATTERY_RECOVERY_SOC))
-        if recovery_soc is None or target_soc >= recovery_soc:
-            return target_soc
-
         # The inverter will not accept a recovery SOC at or below the over-discharge SOC
         over_discharge_soc = parse_cid_int(values.get(SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC))
+
+        recovery_reading = recovery_soc
+        if recovery_soc is not None and (recovery_soc > 100 or (over_discharge_soc is not None and recovery_soc <= over_discharge_soc)):
+            recovery_soc = (over_discharge_soc + 1) if over_discharge_soc is not None else None
+        if recovery_soc is None or target_soc >= recovery_soc:
+            return target_soc
+        if recovery_soc != recovery_reading:
+            self.log(f"Solis API: Recovery SOC on {inverter_sn} reads {recovery_reading}%, which cannot be right with over-discharge SOC at {over_discharge_soc}%, so taking it as {recovery_soc}%")
+
         hard_floor = (over_discharge_soc + 1) if over_discharge_soc is not None else recovery_soc
 
         wanted_recovery = max(target_soc, hard_floor)
@@ -922,6 +994,28 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log(f"Solis API: Clamping discharge slot SOC from {target_soc}% to {recovery_soc}% on {inverter_sn}, the inverter will not discharge below its recovery SOC")
             return recovery_soc
         return target_soc
+
+    def get_rated_current(self, inverter_sn):
+        """Return the battery current the inverter can deliver at its rated power, in whole amps, or None if its size is unknown.
+
+        The rating is inverterDetail power - the sensor published as inverter_size and bound to
+        inverter_limit - converted at get_nominal_voltage(), which holds still on an LV pack.
+        Floored to whole amps so the capped value is never above the rating, and so an HV pack,
+        converted at its live voltage, does not produce a new value to write every cycle.
+        """
+        detail = self.inverter_details.get(inverter_sn, {})
+        try:
+            power = float(detail.get("power"))
+        except (ValueError, TypeError):
+            return None
+        unit = str(detail.get("powerStr") or "kW").strip().lower()
+        if unit == "kw":
+            power *= 1000.0
+        elif unit != "w":
+            return None
+        if power <= 0:
+            return None
+        return float(int(round(power / self.get_nominal_voltage(inverter_sn), 6)))
 
     async def write_time_windows_if_changed(self, inverter_sn):
         """Write charge/discharge time windows, SOC, and current to inverter, only if values changed from cache.
@@ -958,6 +1052,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     max_charge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_charge_current_amps), max_charge_current_amps)
                     current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
                     max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
+
+                # Then cap both at what the inverter can deliver at its rated power. CID 7224/7226 are battery limits: a
+                # 3.6kW inverter reading 100A there refused every 100A write and left its discharge slot at 0A (issue #5187)
+                rated_current = self.get_rated_current(inverter_sn)
+                if rated_current is not None and rated_current < max(max_charge_current_amps, max_discharge_current_amps):
+                    self.log(f"Solis API: Capping slot currents on {inverter_sn} at {rated_current}A, the most the inverter can deliver at its rated power")
+                    max_charge_current_amps = min(max_charge_current_amps, rated_current)
+                    max_discharge_current_amps = min(max_discharge_current_amps, rated_current)
 
                 # Prep: extract active currents from slot 1 and zero out times for disabled slots
                 # so that the two-pass write below has clean data to compare against.
@@ -1682,6 +1784,103 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         self.log("Solis API: Automatic configuration complete")
         return True
+
+    def build_discovery(self):
+        """
+        Describe the discovered Solis inverters for the discovery catalogue.
+
+        Reads only what the component already holds - self.inverter_sn, self.inverter_details,
+        self.cached_values and self.parallel_battery_count - so this adds no API calls and cannot
+        change what Solis does. Reporting is independent of self.automatic.
+
+        inverter_type "SolisCloud" is set with automatic_config()'s own test for a battery inverter
+        it configures, duplicated here rather than shared so the control path is untouched:
+        _reports_no_battery() must be false AND batteryHealthSoh must parse as a number (0 is a
+        valid reading). "battery" in functions is the hardware fact alone - details read and
+        Solis Cloud not saying "no battery" - so a battery inverter automatic_config() declines is
+        still described. Every inverter reports "solar": automatic_config() puts every inverter in
+        pv_devices, battery or not. An inverter whose detail has not been read yet (empty, or a
+        failed fetch) reports no functions at all rather than a misleading solar-only guess - the
+        same "not read yet" state automatic_config() retries rather than treats as PV-only.
+
+        Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
+        per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
+        parallel_battery_count, the same product publish_entities() uses - so it means the same
+        thing here as on every other reporter. battery_pack_count carries the pack count alongside
+        it, and both are always reported for a battery inverter. A kWh figure is reported only when
+        get_capacity_voltage() returns the configured solis_nominal_voltage: otherwise
+        publish_entities() falls back to get_nominal_voltage(), an inference that for an HV pack is
+        still a live reading moving dump to dump (GH#5090), and a derived kWh would present that
+        estimate as a rating.
+
+        The inverter rating is inverterDetail's power in powerStr's unit - defaulted to "kW"
+        exactly as publish_entities() does - and is reported only for a unit this code knows how
+        to convert, never guessed.
+
+        Deliberately not reported: inverterName (user-set free text that can hold an address);
+        firmware (inverterDetail carries none); any station or account ID (none is held).
+        The TOU V2 register layout is reported as the flag "tou_v2" - how the inverter is driven,
+        not something it can do.
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.inverter_sn:
+            return None
+
+        inverters = []
+        for sn in self.inverter_sn:
+            detail = self.inverter_details.get(sn, {}) or {}
+            has_battery = bool(detail) and not self._reports_no_battery(detail)
+            try:
+                float(detail.get("batteryHealthSoh"))
+                reports_soh = True
+            except (TypeError, ValueError):
+                reports_soh = False
+            # automatic_config()'s own predicate for an inverter it configures - the source of truth.
+            drives_it = not self._reports_no_battery(detail) and reports_soh
+
+            info = {}
+            if detail.get("productModel"):
+                info["model"] = str(detail["productModel"])
+
+            ratings = {}
+            try:
+                power = float(detail.get("power"))
+            except (TypeError, ValueError):
+                power = 0.0
+            power_unit = str(detail.get("powerStr", "kW")).strip()
+            if power > 0 and power_unit == "kW":
+                ratings["inverter_w"] = power * 1000.0
+            elif power > 0 and power_unit == "W":
+                ratings["inverter_w"] = power
+            if has_battery:
+                try:
+                    capacity_ah = float(self.cached_values.get(sn, {}).get(SOLIS_CID_BATTERY_CAPACITY))
+                except (TypeError, ValueError):
+                    capacity_ah = 0.0
+                if capacity_ah > 0:
+                    pack_count = self.parallel_battery_count.get(sn, 1)
+                    ratings["battery_capacity_ah"] = capacity_ah * pack_count
+                    ratings["battery_pack_count"] = pack_count
+                    configured_volts = self.get_capacity_voltage(sn)
+                    if configured_volts:
+                        ratings["battery_kwh"] = round(capacity_ah * pack_count * configured_volts / 1000.0, 2)
+
+            inverters.append(
+                inverter_record(
+                    "solis:{}".format(sn),
+                    inverter_type="SolisCloud" if drives_it else None,
+                    composition="direct",
+                    functions=(["solar", "battery"] if has_battery else ["solar"]) if detail else None,
+                    capabilities=["schedule", "target_soc", "discharge_target", "charge_rate_power", "soh"] if drives_it else None,
+                    flags=["tou_v2"] if self.is_tou_v2_mode(sn) else None,
+                    hardware_ids={"serial": sn},
+                    info=info,
+                    ratings=ratings,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
     async def poll_inverter_data(self, inverter_sn, cid_list, batch=True):
         """Poll CID values for specific inverter"""
@@ -3555,15 +3754,33 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
             # Get inverter details for all inverters
             for sn in self.inverter_sn:
+                # An inverter whose datalogger is in its cooldown is left to the first startup attempt after the
+                # cooldown expires: early backoff re-runs this block every 2-8 minutes, well inside the cooldown,
+                # and every request sent here would be refused yet still count against the 200 a day (issue #5177).
+                # Failing the poll keeps the component in startup, so that later attempt does come.
+                if self.datalogger_offline(sn):
+                    poll_success = False
+                    continue
                 await self.fetch_inverter_details(sn)
-                await self.poll_inverter_data(sn, [SOLIS_CID_TOU_V2_MODE])  # Get TOU V2 mode status
+                if not self.datalogger_offline(sn):
+                    await self.poll_inverter_data(sn, [SOLIS_CID_TOU_V2_MODE])  # Get TOU V2 mode status
+                if self.datalogger_offline(sn):
+                    # Refused on this attempt, so its TOU mode and startup reset wait for the next one
+                    poll_success = False
+                    continue
                 if self.is_tou_v2_mode(sn):
                     self.log(f"Solis API: Inverter {sn} is in Time of Use V2 mode")
                 else:
                     self.log(f"Solis API: Inverter {sn} is in standard Time of Use mode")
                 if self.control_enable:
                     if self.is_battery_inverter(sn):
-                        await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                        # Best effort: it only lowers one setting. Left to raise, a datalogger that refuses the
+                        # read (B0600, B0115) aborted every startup attempt, so the inverter was never
+                        # configured at all (issue #5177).
+                        try:
+                            await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                        except Exception as e:
+                            self.log(f"Warn: Solis API: Startup register reset failed for inverter {sn}, continuing without it: {e}")
                     else:
                         # automatic_config() logs its own version of this, but only when auto-config is on
                         self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will poll it but not write any control registers to it")
@@ -3684,6 +3901,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Publish entities after polling
         if first or (seconds % 60 == 0):
             await self.publish_entities()
+
+        # Filed every cycle, right after this cycle's publish and before the automatic_config()
+        # gate below. Solis's automatic_config() never raises, but it runs only when
+        # self.automatic is set and automatic_config_done is not, so a report filed after it
+        # would depend on unrelated auto-config state. refresh_discovery() owns the
+        # compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Auto-configure Predbat if enabled. Retried on later cycles rather than being a
         # first-cycle-only step: when the first cycle can't read the inverter details (an exhausted

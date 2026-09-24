@@ -214,7 +214,7 @@ class UserInterface:
             else:
                 self.args[arg] = value
         # A credential value or the redact_strings/redact_strings_labelled denylists themselves
-        # can change here, so log()'s cached redaction pattern (hass.py) must be rebuilt on next
+        # can change here, so log()'s cached redaction pattern (log_secrets.py) must be rebuilt on next
         # use - otherwise a newly added/changed secret keeps leaking into the log under the stale
         # pattern until Predbat restarts (GH#4770 review).
         self._invalidate_log_secret_pattern()
@@ -898,6 +898,19 @@ class UserInterface:
         # rather than guessing from the data. Absent in dumps written before versioning.
         debug["debug_schema_version"] = DEBUG_SCHEMA_VERSION
 
+        # Explicit: "components" is in DEBUG_EXCLUDE_LIST so nothing under it is dumped
+        # automatically, and a plain redacted dict avoids the object-graph walk described above.
+        # getattr, not a bare attribute access: several tests stand self.components in for a
+        # minimal registry double that does not model .coordinator at all, and this function is
+        # what a real user's bug-report download runs - it must degrade to no discovery section
+        # rather than raise on an attribute a stand-in never promised to have.
+        coordinator = getattr(self.components, "coordinator", None) if self.components else None
+        if coordinator:
+            try:
+                debug["discovery"] = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Failed to add the discovery catalogue to the debug dump: {}".format(e))
+
         if write_file:
             with open(filename, "w") as file:
                 dump_debug_yaml(debug, file)
@@ -1535,15 +1548,14 @@ class UserInterface:
         if values:
             values = "+" + values
 
-        # Create the new dropdown
-        time_values = []
+        # Create the new dropdown, off first so cancelling everything doesn't mean scrolling the whole list (#5105)
+        time_values = ["off"]
         for minute_str in time_overrides:
             minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
 
         if values not in time_values:
             time_values.append(values)
-        time_values.append("off")
         item["options"] = time_values
         if not values:
             values = "off"
@@ -1631,9 +1643,9 @@ class UserInterface:
         if values:
             values = "+" + values
 
-        # Create the new dropdown
+        # Create the new dropdown, off first so cancelling everything doesn't mean scrolling the whole list (#5105)
         if update:
-            time_values = []
+            time_values = ["off"]
             for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
                 minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
                 if minute in rate_overrides_minutes:
@@ -1644,7 +1656,6 @@ class UserInterface:
 
             if values not in time_values:
                 time_values.append(values)
-            time_values.append("off")
             item["options"] = time_values
             if not values:
                 values = "off"
@@ -1711,9 +1722,9 @@ class UserInterface:
         if values:
             values = "+" + values
 
-        # Create the new dropdown
+        # Create the new dropdown, off first so cancelling everything doesn't mean scrolling the whole list (#5105)
         if update:
-            time_values = []
+            time_values = ["off"]
             for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
                 minute_str = (midnight_utc + timedelta(minutes=minute)).strftime("%a %H:%M")
                 if minute in time_overrides:
@@ -1722,7 +1733,6 @@ class UserInterface:
 
             if values not in time_values:
                 time_values.append(values)
-            time_values.append("off")
             item["options"] = time_values
             if not values:
                 values = "off"

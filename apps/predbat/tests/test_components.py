@@ -240,6 +240,116 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     return False
 
 
+def test_registry_bool_default_survives_an_empty_apps_yaml_value(my_predbat):
+    """A registry default must reach the component when the apps.yaml key is absent OR present but empty.
+
+    This is the layer a default flip actually changes for users, and it was not covered: the existing
+    teslemetry tests feed the registry constant straight into initialize(), which cannot see a
+    resolution bug. A bare "teslemetry_tbc_control:" in apps.yaml is a YAML null, and get_arg's bool
+    branch only coerces strings - unlike its int and float branches it has no None fallback - so the
+    null reached the component as tbc_control=None, falsy, and the documented "on by default" silently
+    did not apply with nothing logged (GH#5186). An explicit False must still be honoured, and an arg
+    with no declared default must still resolve to None, which is how "not set" is signalled.
+    """
+
+    class _Recording(ComponentBase):
+        """Records the kwargs the registry resolved, standing in for the real component class."""
+
+        def initialize(self, **kwargs):
+            """Keep the resolved arguments for the assertions."""
+            self.resolved = kwargs
+
+    class _FakeModule:
+        """Answers any class name with the recording stub."""
+
+        def __getattr__(self, name):
+            return _Recording
+
+    def _resolve(args):
+        """Initialise the teslemetry entry with these apps.yaml args and return the resolved kwargs."""
+        base = LoggingMockBase()
+        base.args.update(args)
+        comps = Components(base)
+        _with_import_module(lambda _name: _FakeModule(), lambda: comps.initialize(only="teslemetry", phase=1))
+        component = comps.components.get("teslemetry")
+        assert component is not None, f"teslemetry must initialise for args {args}: {comps.load_error('teslemetry')}"
+        return component.resolved
+
+    registry_default = COMPONENT_LIST["teslemetry"]["args"]["tbc_control"]["default"]
+    assert registry_default is True, "this test is pinning the on-by-default resolution (GH#5186)"
+
+    absent = _resolve({"teslemetry_key": "token"})
+    assert absent["tbc_control"] is True, f"an unset key must take the registry default: {absent['tbc_control']!r}"
+
+    empty = _resolve({"teslemetry_key": "token", "teslemetry_tbc_control": None})
+    assert empty["tbc_control"] is True, f"an empty (YAML null) key is not a setting, so the default stands: {empty['tbc_control']!r}"
+
+    opted_out = _resolve({"teslemetry_key": "token", "teslemetry_tbc_control": False})
+    assert opted_out["tbc_control"] is False, f"an explicit False must still opt out: {opted_out['tbc_control']!r}"
+
+    # An arg the registry gives no default keeps resolving to None rather than being invented.
+    assert absent.get("token_expires_at") is None, absent.get("token_expires_at")
+    return False
+
+
+def test_inverter_source_status_lists_components_and_errors(my_predbat):
+    """inverter_source_status() names every configured inverter component and whether it is in error.
+
+    Issue #4990: on a Solis install with no inverter_type in apps.yaml, a SolisCloud comms failure
+    surfaced as "check the GivEnergy credentials" - the assumed inverter type was the only thing
+    Predbat could name. The window warnings now list the inverter components that really are
+    configured, so this is the data those messages are built from.
+
+    Health is judged from is_alive() (task + last successful update), not the lifetime error
+    counter or api_started alone: a component that needed boot retries and then polled cleanly for
+    a week must read OK, and one that declared itself started without ever delivering data must
+    not.
+    """
+    base = LoggingMockBase()
+    comps = Components(base)
+    # The reported case: still in its startup retry loop, so never started and never delivered
+    # data, but errors have been counted - the count is what must be reported, or a live comms
+    # failure reads as "starting".
+    comps.components["solis"] = FakeInverterComponent(errors=3, api_started=False, updated_recently=False)
+    comps.component_tasks["solis"] = FakeComponentTask()
+    # Healthy and answering: OK, whatever the lifetime counter says. This is the shape the counter
+    # alone got wrong - 30 retries at boot and then a clean week still read "in error, 30 errors".
+    comps.components["gecloud"] = FakeInverterComponent(errors=30, api_started=True, updated_recently=True)
+    comps.component_tasks["gecloud"] = FakeComponentTask()
+    # Never polled yet: no errors, so "still starting" rather than an error claim.
+    comps.components["alphaess"] = FakeInverterComponent(api_started=False, updated_recently=False)
+    comps.component_tasks["alphaess"] = FakeComponentTask()
+    # Declared itself started but has gone quiet: the gateway shape, where run() returned truthy
+    # with no data delivered - must not read OK.
+    comps.components["sunsynk"] = FakeInverterComponent(errors=1, api_started=True, updated_recently=False)
+    comps.component_tasks["sunsynk"] = FakeComponentTask()
+    # Failed to construct: inactive, so absent from inverter_source_names(), but exactly the
+    # component a user needs told about. An empty error message is still a failure.
+    comps.components["fox"] = None
+    comps.component_errors["fox"] = ""
+    # Failed to construct with a real message.
+    comps.components["gateway"] = None
+    comps.component_errors["gateway"] = "No module named 'foo'"
+    # Active but not an inverter source - must not be listed as one.
+    comps.components["storage"] = FakeInverterComponent(errors=5)
+    comps.component_tasks["storage"] = FakeComponentTask()
+
+    status = comps.inverter_source_status()
+
+    assert "Solis Cloud API (in error, 3 errors so far)" in status, status
+    assert "GivEnergy Cloud Direct (OK)" in status, status
+    assert "AlphaESS Cloud API (still starting, no data yet)" in status, status
+    assert "Sunsynk Cloud (in error, 1 error so far)" in status, status
+    assert "Fox API (failed to start: )" in status, status
+    assert "PredBat Gateway (failed to start: No module named 'foo')" in status, status
+    assert not [entry for entry in status if entry.startswith("Storage")], status
+    # Nothing configured at all must be an empty list, not a line claiming health.
+    assert Components(base).inverter_source_status() == [], "an unconfigured registry must report no inverter components"
+
+    print("✓ Test passed: inverter_source_status lists configured inverter components with their error state")
+    return False
+
+
 class _RecordingComponent:
     """Fake component that just records which events it received."""
 
@@ -336,6 +446,8 @@ def test_components_all(my_predbat):
         ("gecloud_data_no_warning_from_global_days_previous", test_gecloud_data_no_warning_from_global_days_previous, "days_previous alone must not trigger a GE Cloud Data warning"),
         ("gecloud_data_warns_when_actually_misconfigured", test_gecloud_data_warns_when_actually_misconfigured, "GE Cloud Data still warns once genuinely (partially) configured"),
         ("event_dispatch_respects_configured_prefix", test_event_dispatch_respects_configured_prefix, "event dispatch matches the configured prefix, not the literal word 'predbat' (#4939)"),
+        ("inverter_source_status_lists_components_and_errors", test_inverter_source_status_lists_components_and_errors, "configured inverter components are listed with whether each is in error (#4990)"),
+        ("registry_bool_default_survives_an_empty_apps_yaml_value", test_registry_bool_default_survives_an_empty_apps_yaml_value, "a registry default applies to an absent or empty apps.yaml key, and an explicit False still opts out (#5186)"),
     ]
 
     failed = []
