@@ -424,7 +424,9 @@ def test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll():
     s = _sunsynk_fleet()
     sn = SUNSYNK_LIVE_SERIAL
     full = s.build_discovery()
-    for name, partial in (("no capacity", {"chargeVolt": 58.4}), ("no chargeVolt", {"capacity": 200}), ("no battery fields", {})):
+    # A new capacity with no chargeVolt cannot give a kWh for it, so the kept Ah and kWh stay
+    # together rather than a new Ah being filed beside the old kWh
+    for name, partial in (("no capacity", {"chargeVolt": 58.4}), ("no chargeVolt", {"capacity": 200}), ("new capacity, no chargeVolt", {"capacity": 280}), ("no battery fields", {})):
         s.device_values = {sn: dict(partial)}
         if s.build_discovery() != full:
             print("ERROR: {}: the report changed on a partial poll: {}".format(name, s.build_discovery()))
@@ -435,6 +437,20 @@ def test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll():
     ratings = s.build_discovery()["inverters"][0]["ratings"]
     if ratings.get("battery_capacity_ah") != 280.0 or ratings.get("battery_kwh") != 14.34:
         print("ERROR: fresh battery fields must replace the kept ratings: {}".format(ratings))
+        failed = True
+
+    # An install that has never reported a chargeVolt still reports the Ah it states, with no kWh,
+    # and gains the kWh once a poll carries both
+    ah_only = _sunsynk_fleet()
+    ah_only.device_values = {sn: {"capacity": 200}}
+    ratings = ah_only.build_discovery()["inverters"][0]["ratings"]
+    if ratings.get("battery_capacity_ah") != 200.0 or "battery_kwh" in ratings:
+        print("ERROR: an Ah-only install must report its Ah and no kWh: {}".format(ratings))
+        failed = True
+    ah_only.device_values = {sn: {"capacity": 200, "chargeVolt": 58.4}}
+    ratings = ah_only.build_discovery()["inverters"][0]["ratings"]
+    if ratings.get("battery_capacity_ah") != 200.0 or ratings.get("battery_kwh") != 10.24:
+        print("ERROR: a poll carrying both fields must add the kWh: {}".format(ratings))
         failed = True
 
     # Nothing is invented for an inverter whose battery fields have never been seen

@@ -1424,6 +1424,38 @@ def test_declared_serials_do_not_shelter_a_misfiled_identifier():
     return 0
 
 
+def test_serial_derived_device_id_needs_whole_tokens():
+    """A device_id is only treated as built from its serial on whole-token matches, both ways.
+
+    The serial must stand as a whole token in the device_id - merely sitting inside a longer token
+    is coincidence, not construction - and any account_ids value that stands as a whole token in it
+    marks the device_id as identity-derived however short that value is, since a short account id
+    is not otherwise caught by the substring pass (MIN_SUBSTITUTE).
+    """
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "deye",
+        {
+            "inverters": [
+                # the serial only sits inside "inv98765432", so nothing says the device_id is built from it
+                {"device_id": "deye:inv98765432", "hardware_ids": {"serial": "98765"}, "account_ids": {"account": "XY12"}},
+                # built from the serial, but a short station id stands in it as a whole token too
+                {"device_id": "deye:2306178123:ST42", "hardware_ids": {"serial": "2306178123"}, "account_ids": {"station_id": "ST42"}},
+            ]
+        },
+    )
+
+    catalogue = coordinator.catalogue()
+
+    first, second = catalogue["inverters"]
+    assert str(first["device_id"]).startswith("#"), "a serial inside a longer token does not make the device_id serial-derived: {}".format(first["device_id"])
+    assert str(second["device_id"]).startswith("#"), "a short account id in the device_id makes it identity-derived: {}".format(second["device_id"])
+    assert "ST42" not in str(catalogue), "the station id must not survive"
+    assert second["hardware_ids"]["serial"] == "2306178123", "the serial itself stays readable"
+    print("PASS: serial-derived device_ids need whole-token matches, both ways")
+    return 0
+
+
 def test_misfiled_identifier_used_as_a_container_key_caught():
     """Adversarial: a component keys hardware_ids by the serial itself instead of naming the field.
     Before this fix only VALUES were shape-guarded and only NOTED originals were substituted into
@@ -1719,6 +1751,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_hardware_ids_only_flags_all_digit_values_not_prefixed_serials()
     failures += test_declared_serials_stay_readable_wherever_they_appear()
     failures += test_declared_serials_do_not_shelter_a_misfiled_identifier()
+    failures += test_serial_derived_device_id_needs_whole_tokens()
     failures += test_pseudonymised_value_substituted_inside_entity_id_value()
     failures += test_account_ids_value_does_not_corrupt_structural_or_descriptor_keys()
     failures += test_account_ids_value_equal_to_a_structural_name_does_not_delete_it()

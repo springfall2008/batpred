@@ -353,19 +353,31 @@ class Redactor:
                 values |= self._pseudonym_values(entry)
         return values
 
+    @staticmethod
+    def _whole_token(text):
+        """A case-insensitive pattern matching `text` only where it stands as a whole token.
+
+        Bounded by a non-alphanumeric character or the string's ends, so "2306178123" is found in
+        "deye:2306178123" and "sensor.predbat_solis_2306178123_soc" but not inside "inv98765432".
+        """
+        return re.compile(r"(?<![0-9A-Za-z]){}(?![0-9A-Za-z])".format(re.escape(text)), re.IGNORECASE)
+
     def _serial_derived(self, record):
         """Whether a record's device_id is built from its own serial rather than from an account identifier.
 
-        True only when the device_id contains a serial the record declares and none of the
-        record's own pseudonym values (of MIN_SUBSTITUTE characters or more, the floor below which
-        a match is coincidence). Deye's "deye:{serial}" beside a station id in account_ids is
-        serial-derived; Octopus's "octopus:{mpan}" declares no serial and a device_id that embeds
-        an account id does, so both stay identity-derived exactly as before.
+        True only when a serial the record declares stands in the device_id as a whole token and
+        none of the record's own pseudonym values does - whole tokens both ways, as the shape
+        guard matches serials (see _strip_serials). A serial merely sitting inside a longer token
+        is coincidence, not construction; and an account id counts however short it is, since one
+        under MIN_SUBSTITUTE is not otherwise caught by the substring pass. Deye's "deye:{serial}"
+        beside a station id in account_ids is serial-derived; Octopus's "octopus:{mpan}" declares
+        no serial and a device_id that embeds an account id does, so both stay identity-derived
+        exactly as before.
         """
-        device_id = record["device_id"].casefold()
-        if not any(serial.casefold() in device_id for serial in self._declared_serials(record)):
+        device_id = record["device_id"]
+        if not any(self._whole_token(serial).search(device_id) for serial in self._declared_serials(record)):
             return False
-        return not any(len(value) >= self.MIN_SUBSTITUTE and value.casefold() in device_id for value in self._pseudonym_values(record))
+        return not any(self._whole_token(value).search(device_id) for value in self._pseudonym_values(record) if value)
 
     def _misfiled(self, value, strict_numeric=False):
         """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
@@ -612,7 +624,7 @@ class Redactor:
         generated = catalogue.get("generated")
         # Longest first, so a serial that contains a shorter one is removed whole
         serials = sorted(self._collect_serials(catalogue), key=len, reverse=True)
-        self._serial_patterns = [re.compile(r"(?<![0-9A-Za-z]){}(?![0-9A-Za-z])".format(re.escape(serial)), re.IGNORECASE) for serial in serials]
+        self._serial_patterns = [self._whole_token(serial) for serial in serials]
         walked = self._walk(catalogue)
         self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
         substituted = self._substitute(walked)

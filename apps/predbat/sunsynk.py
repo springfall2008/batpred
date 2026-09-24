@@ -1566,8 +1566,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         raw Ah the API returned. Both come from the battery endpoint, which fetch_device_data()
         re-reads every poll and which can omit a field; publish_data() then leaves the
         battery_capacity sensor, and so soc_max, at its last value. The battery ratings do the
-        same: a poll that omits them keeps the last values seen (_discovery_battery_ratings), so a
-        partial poll neither thins the report nor re-files it. Nothing is reported for an inverter
+        same, kept as one pair (_discovery_battery_ratings): a poll that omits them, or brings a new
+        Ah with no chargeVolt to derive its kWh, keeps the last pair, so a partial poll neither
+        thins the report nor files an Ah beside a kWh derived from a different one. An install that
+        never reports a chargeVolt still reports its Ah alone. Nothing is reported for an inverter
         whose battery fields have never been seen. export_limit is reported per device where
         export_limit() > 0 - the per-device half of automatic_config()'s test, which binds the arg
         only when every inverter passes it. export_limit() falls back to the inverter rating, so
@@ -1587,16 +1589,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             rated_w = self.inverter_limit(sn)
             if rated_w > 0:
                 ratings["inverter_w"] = rated_w
-            # Only a poll that carries the battery fields updates these; one that omits them
-            # keeps the last values, as the battery_capacity sensor (and so soc_max) does.
-            battery = self._discovery_battery_ratings.setdefault(sn, {})
-            battery_kwh = round(self.battery_capacity(sn), 2)
-            if battery_kwh > 0:
-                battery["battery_kwh"] = battery_kwh
+            # The Ah and the kWh derived from it are kept as one pair, replaced only by a poll that
+            # carries them: a poll that omits them keeps the last pair, as the battery_capacity
+            # sensor (and so soc_max) does, and a new Ah with no chargeVolt to turn it into kWh
+            # does not replace a pair that has one - that would file a new Ah beside the old kWh.
             capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))
-            if capacity_ah > 0:
-                battery["battery_capacity_ah"] = capacity_ah
-            ratings.update(battery)
+            battery_kwh = round(self.battery_capacity(sn), 2)
+            kept = self._discovery_battery_ratings.get(sn, {})
+            if capacity_ah > 0 and battery_kwh > 0:
+                self._discovery_battery_ratings[sn] = {"battery_capacity_ah": capacity_ah, "battery_kwh": battery_kwh}
+            elif capacity_ah > 0 and "battery_kwh" not in kept:
+                self._discovery_battery_ratings[sn] = {"battery_capacity_ah": capacity_ah}
+            ratings.update(self._discovery_battery_ratings.get(sn, {}))
 
             capabilities = ["schedule", "target_soc", "discharge_target", "charge_rate_power"]
             if self.export_limit(sn) > 0:
