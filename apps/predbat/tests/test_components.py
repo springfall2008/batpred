@@ -20,7 +20,7 @@ import components
 from components import COMPONENT_LIST, Components, load_component_class
 from component_base import ComponentBase
 from mock_base import MockBase
-from tests.test_infra import run_async
+from tests.test_infra import run_async, FakeComponentTask, FakeInverterComponent
 
 
 def _skip_warnings(base):
