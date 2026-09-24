@@ -1110,7 +1110,7 @@ def run_net_settlement_edge_tests(my_predbat):
             ("net60_negative_export", 60, 10, "negative", {"soc_kw": 20.0}, [], [], [], [], forecast_minutes),
             ("net30_charge_export", 30, 10, "half", {"soc_kw": 50.0}, [(0, 180)], [100.0], [(300, 480)], [0.0], forecast_minutes),
             ("net15", 15, 5, "flat", {"soc_kw": 50.0}, [(60, 120)], [80.0], [(200, 260)], [20.0], forecast_minutes),
-            ("net45_not_divisor", 45, 0, "half", {"soc_kw": 30.0}, [], [], [(100, 400)], [10.0], forecast_minutes),
+            ("net45_off_hour", 45, 0, "half", {"soc_kw": 30.0}, [], [], [(100, 400)], [10.0], forecast_minutes),
             ("net7_not_step_multiple", 7, 0, "flat", {"soc_kw": 30.0}, [(0, 120)], [60.0], [], [], forecast_minutes),
             ("net60_end_record_mid_window", 60, 25, "half", {"soc_kw": 20.0}, [(0, 120)], [60.0], [(240, 300)], [0.0], forecast_minutes // 2 + 35),
             ("net60_end_record_zero", 60, 25, "flat", {"soc_kw": 20.0}, [], [], [], [], 0),

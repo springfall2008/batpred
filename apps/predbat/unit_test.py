@@ -33,6 +33,7 @@ from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
+from tests.test_net_settlement_config import run_net_settlement_config_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
@@ -447,6 +448,7 @@ def main():
         ("inverter_config_sensor", test_inverter_config_sensor, "Aggregated static prediction inputs published as sensor.<prefix>_inverter_config", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
+        ("net_settlement_config", run_net_settlement_config_tests, "metric_net_settlement_window_minutes parsing and logging tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
         ("execute", run_execute_tests, "Execute tests", False),

@@ -163,6 +163,7 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.manual_export_times = [4]
     my_predbat.manual_all_times = [5]
     my_predbat.cost_today_sofar = 123.0
+    my_predbat.net_settlement_seed = (10, 1.0, 20.0, 0.5, 2.5, 10.0)
     my_predbat.import_today_now = 4.0
     my_predbat.export_today_now = 5.0
     my_predbat.iboost_today = 6.0
@@ -205,6 +206,7 @@ def test_annual_bootstrap(my_predbat):
         ("manual_export_times", []),
         ("manual_all_times", []),
         ("cost_today_sofar", 0),
+        ("net_settlement_seed", None),
         ("import_today_now", 0),
         ("export_today_now", 0),
         ("iboost_today", 0),

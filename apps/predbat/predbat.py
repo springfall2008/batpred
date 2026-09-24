@@ -693,6 +693,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_forecast_history = False
         self.prediction_kernel_enable = False
         self.metric_net_settlement_window_minutes = 0
+        # Last raw metric_net_settlement_window_minutes seen by fetch_config_options, so it only logs on change
+        self.net_settlement_window_arg = None
         self.net_settlement_seed = None
 
         for root in CONFIG_ROOTS:

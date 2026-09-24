@@ -628,6 +628,15 @@ far today (the attribute `cost_net_settlement_adjust` shows the difference from 
 in the current window are carried into the plan, so the rest of the window is netted against them. **predbat.cost_hour** is a
 rolling 60 minutes that spans two settlement windows, so it stays gross.
 
+Things to be aware of:
+
+- Netting can move cost between plan slots in the same window. If one slot imports and a later slot in the same hour exports, the
+  later slot's cost in the plan shows the import it cancelled, priced at the import rate.
+- The setting applies to every tariff Predbat prices, including the tariffs in [Energy Comparison](compare.md), even ones that
+  don't net in reality.
+- Netting doesn't always lower the cost. If your export rate is higher than your import rate in the same window, netting takes
+  away the profit of importing and exporting in that window, and the plan changes to match.
+
 ## Rate offsets
 
 If you are on an Agile or Tracker tariff you can tune future unknown energy rates by adjusting the entities **input_number.predbat_metric_future_rate_offset_import** (*expert mode*)
