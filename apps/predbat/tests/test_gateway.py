@@ -294,6 +294,8 @@ class TestInjectEntities:
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
         gw._suffix_to_serial = {}  # set by automatic_config; empty = nothing bound yet
+        gw._last_read_only = None  # no set_read_only command sent yet
+        gw._read_only_mismatch_logged = False
         gw._dashboard_calls = {}  # entity_id → (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
@@ -373,6 +375,87 @@ class TestInjectEntities:
         # Table attributes should also be merged in
         for k, v in GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}).items():
             assert attrs[k] == v
+
+    def test_gateway_read_only_entity_true(self):
+        """A gateway reporting read_only=true publishes the binary sensor True with table attributes."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.read_only = True
+        gw._inject_entities(status)
+
+        entity = "binary_sensor.predbat_gateway_read_only"
+        assert entity in gw._dashboard_calls
+        state, attrs = gw._dashboard_calls[entity]
+        assert state is True
+        for k, v in GATEWAY_ATTRIBUTE_TABLE.get("gateway_read_only", {}).items():
+            assert attrs[k] == v
+        # The online sensor carries the same value as an attribute
+        _, online_attrs = gw._dashboard_calls["binary_sensor.predbat_gateway_online"]
+        assert online_attrs["read_only"] is True
+
+    def test_gateway_read_only_entity_false(self):
+        """read_only present and false publishes False, not an absent entity."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.read_only = False
+        gw._inject_entities(status)
+
+        state, _ = gw._dashboard_calls["binary_sensor.predbat_gateway_read_only"]
+        assert state is False
+        _, online_attrs = gw._dashboard_calls["binary_sensor.predbat_gateway_online"]
+        assert online_attrs["read_only"] is False
+
+    def test_gateway_read_only_absent_is_unknown(self):
+        """Firmware predating the field reports nothing: no entity, and the attribute is None."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        assert not status.HasField("read_only")
+        gw._inject_entities(status)
+
+        assert "binary_sensor.predbat_gateway_read_only" not in gw._dashboard_calls
+        _, online_attrs = gw._dashboard_calls["binary_sensor.predbat_gateway_online"]
+        assert online_attrs["read_only"] is None
+
+    def test_gateway_read_only_mismatch_warns_once(self):
+        """A gateway disagreeing with the last set_read_only warns once, and agreement clears the latch."""
+        gw = self._make_gateway()
+        gw._last_read_only = True  # PredBat asked for read-only
+
+        status = self._make_status()
+        status.read_only = False  # gateway is not enforcing it
+        gw._inject_entities(status)
+
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert len(warnings) == 1, warnings
+        assert warnings[0].startswith("Warn:")
+        assert "requested True" in warnings[0]
+        assert gw._read_only_mismatch_logged is True
+
+        # A second identical status must not repeat the warning
+        gw._inject_entities(status)
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert len(warnings) == 1, warnings
+
+        # Once the gateway agrees the latch clears, so a later mismatch warns again
+        status.read_only = True
+        gw._inject_entities(status)
+        assert gw._read_only_mismatch_logged is False
+        status.read_only = False
+        gw._inject_entities(status)
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert len(warnings) == 2, warnings
+
+    def test_gateway_read_only_no_mismatch_before_first_send(self):
+        """Nothing sent yet (_last_read_only None) means nothing to compare, so no warning."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.read_only = True
+        gw._inject_entities(status)
+
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert warnings == []
 
     def test_inverter_time_sensor(self):
         """Inverter time sensor is published using the primary inverter serial suffix."""
