@@ -50,6 +50,8 @@ from web_helper import (
     get_apps_css,
     get_html_config_css,
     get_apps_js,
+    get_apps_filter_js,
+    get_filter_css,
     get_components_css,
     get_discovery_css,
     get_entity_modal_css,
@@ -3778,12 +3780,16 @@ chart.render();
             self.log(f"Error serializing all_states for web interface: {e}")
             all_states_json = "{}"
 
-        # Add CSS styles for edit functionality
+        # Add CSS styles for edit functionality and for the filter box
         text += get_apps_css()
+        text += get_filter_css()
         text += "<body>\n"
 
         # JavaScript for edit functionality
         text += get_apps_js(all_states_json)
+
+        # JavaScript for the filter box
+        text += get_apps_filter_js()
 
         # Add message container
         text += '<div id="messageContainer" class="message-container"></div>\n'
@@ -3796,6 +3802,15 @@ chart.render();
     </div>
     <button id="saveAllButton" class="save-all-button" onclick="saveAllChanges()" disabled>Save All Changes</button>
     <button id="discardAllButton" class="discard-all-button" onclick="discardAllChanges()" disabled>Discard Changes</button>
+</div>
+"""
+
+        # Filter box, matching the one on the Config page (issue #5210)
+        text += """
+<div class="filter-container">
+    <label for="appsFilter"><strong>Filter settings:</strong></label>
+    <input type="text" id="appsFilter" class="filter-input" placeholder="Type to filter settings..." oninput="filterApps()" />
+    <button type="button" style="margin-left: 10px; padding: 8px 12px;" onclick="document.getElementById('appsFilter').value=''; filterApps();">Clear</button>
 </div>
 """
 

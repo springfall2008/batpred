@@ -16,6 +16,7 @@ Follows the FakeRequest pattern of test_web_debug_history_routes.py.
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 
@@ -506,4 +507,97 @@ def run_web_apps_edit_tests(my_predbat):
 
     if failed:
         print("**** ERROR: {} apps.yaml editor add/delete test(s) failed ****".format(failed))
+    return failed
+
+
+def _parent_row_path(path):
+    """Return the path of the row a nested path sits under, or '' when it sits at the top level."""
+    if path.endswith("]"):
+        return path[: path.rindex("[")]
+    if "." in path:
+        return path.rsplit(".", 1)[0]
+    return ""
+
+
+def _render_apps_page(my_predbat):
+    """Render the /apps page against the nested fixture args and return its HTML."""
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    web_interface = WebInterface(my_predbat, web_port=5053)
+    # Render the fixture's nested structures rather than whatever the live test args hold
+    web_interface.args = yaml.load(APPS_YAML_FIXTURE)["pred_bat"]
+    return asyncio.run(web_interface.html_apps(None)).text
+
+
+def run_web_apps_filter_tests(my_predbat):
+    """Unit tests for the apps.yaml page filter box (issue #5210)."""
+    failed = 0
+    print("**** Running apps.yaml page filter tests ****")
+
+    text = _render_apps_page(my_predbat)
+
+    # -------------------------------------------------------------------------
+    print("Test: the apps page carries a filter box wired to filterApps()")
+    for expected in ('id="appsFilter"', 'class="filter-input"', 'oninput="filterApps()"'):
+        if expected not in text:
+            print("  ERROR: the apps page should carry {} so the long settings list can be filtered".format(expected))
+            failed += 1
+    if "function filterApps(" not in text:
+        print("  ERROR: the apps page should define filterApps()")
+        failed += 1
+    if "document.getElementById('appsFilter').value=''; filterApps();" not in text:
+        print("  ERROR: the filter box should have a Clear button, as the Config page does")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the filter box is styled on the apps page, not only on the config page")
+    # .filter-container / .filter-input were defined only in get_html_config_css(), which the
+    # apps page does not load - an unstyled box would be the whole of the bug here
+    for style in (".filter-container {", ".filter-input {"):
+        if style not in text:
+            print("  ERROR: the apps page is missing the {} styling for its filter box".format(style))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the filter survives the apps page's own auto-refresh")
+    if "localStorage.setItem('appsFilterValue'" not in text or "localStorage.getItem('appsFilterValue')" not in text:
+        print("  ERROR: the filter value should persist in localStorage, as the apps page refreshes every 5 minutes")
+        failed += 1
+    if "document.addEventListener('DOMContentLoaded', restoreAppsFilterValue)" not in text:
+        print("  ERROR: the saved filter should be re-applied once the page has loaded")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the rows the filter selects on are the rows the page renders")
+    if "tr[data-arg-name], tr[data-nested-path]" not in text:
+        print("  ERROR: filterApps() should select rows by the data-arg-name / data-nested-path attributes the page renders")
+        failed += 1
+
+    arg_rows = set(re.findall(r'data-arg-name="([^"]+)"', text))
+    nested_rows = set(re.findall(r"data-nested-path='([^']+)'", text))
+    for expected in ("compare_list", "chat", "forecast_solar", "nested_matrix"):
+        if expected not in arg_rows:
+            print("  ERROR: expected a top-level row for {}, got: {}".format(expected, sorted(arg_rows)))
+            failed += 1
+    # The deeply nested rows are exactly the ones scrolling makes hardest to find
+    for expected in ("chat.providers.openrouter.api_key", "forecast_solar[0].declination", "nested_matrix[0][1]"):
+        if expected not in nested_rows:
+            print("  ERROR: expected a nested row for {}, got: {}".format(expected, sorted(nested_rows)))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: every nested row sits under a row of its own prefix")
+    # filterApps() leaves the subtree of a matching row alone and only walks back up to re-show
+    # parents, which holds because a nested path always extends the path of the row above it
+    for path in sorted(nested_rows):
+        parent = _parent_row_path(path)
+        if parent and parent not in nested_rows and parent not in arg_rows:
+            print("  ERROR: nested row {} has no row for its parent {} - filtering on a parent name would hide it".format(path, parent))
+            failed += 1
+        if not path.startswith(parent):
+            print("  ERROR: nested row {} does not extend its parent path {}".format(path, parent))
+            failed += 1
+
+    if failed:
+        print("**** ERROR: {} apps.yaml page filter test(s) failed ****".format(failed))
     return failed
