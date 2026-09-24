@@ -65,7 +65,15 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 | `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
-No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox) populates `programmes` yet - it is part of
+Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
+their automatic configuration treats every discovered inverter as a battery inverter. Their
+records follow that configuration - `solar` and `battery` on every inverter - rather than
+evidence about the hardware, and Solis's `solar` works the same way, since every Solis inverter
+is configured as a PV source. A PV-only unit that has been configured as a battery inverter will
+usually show it in its ratings: `battery` among its functions, but no `battery_kwh` or
+`battery_capacity_ah`.
+
+No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
 rather than missing from the document.
 
@@ -139,9 +147,14 @@ wherever it is nested; a value that looks like a misfiled identifier is pseudony
 container that is not supposed to hold one - a 10-or-more-digit run is enough anywhere it turns up
 in a clear container's value (embedded in a longer string too, e.g. `"MPAN 1234567890123"`), except
 inside `hardware_ids`, where a value is only flagged when it is *nothing but* digits, so a
-letter-prefixed vendor serial like `HV2160123456` stays readable; and a field literally named
-`latitude`, `longitude` or `postcode` is pseudonymised regardless of what it contains, since a
-location cannot otherwise be recognised from one value alone. A debug dump is safe to attach to a
+letter-prefixed vendor serial like `HV2160123456` stays readable. A serial a record declares -
+`hardware_ids.serial`, or an entry in `serials` - is never flagged, whatever its shape: Solis, Deye
+and Sunsynk serials are nothing but digits, and they stay readable wherever they appear as a whole
+token, in a `device_id` built from one or a `duplicate_serial` observation that names one. Only the
+serial itself is let through - a digit run left beside it, or one it merely sits inside, is still
+checked. Finally, a field literally named `latitude`, `longitude` or `postcode` is pseudonymised
+regardless of what it contains, since a location cannot otherwise be recognised from one value
+alone. A debug dump is safe to attach to a
 public issue; **the equivalent in-process, unredacted view exists only for Predbat's own internal
 diagnostics and must never be written anywhere.**
 
@@ -152,6 +165,8 @@ pseudonymised one loses its `"octopus:"` prefix entirely and reads as a bare `#`
 `device_id` in most other sections. Nothing is lost functionally - cross-links between records still
 resolve to the same token, and the record is still tagged with its `source` - but a maintainer
 comparing sections will notice the inconsistency and should not have to wonder whether it is a bug.
+A `device_id` built from the record's own serial is not replaced, even when the record also carries
+`account_ids`: Deye's `"deye:{serial}"` stays readable beside its pseudonymised station id.
 
 ## For developers: the report schema
 

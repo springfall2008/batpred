@@ -14,6 +14,7 @@ import pytz
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from alphaess import AlphaESSAPI
+from coordinator import validate_report
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -1196,6 +1197,124 @@ def test_alphaess_run_defers_startup_without_telemetry():
     assert not failed, "test_alphaess_run_defers_startup_without_telemetry"
 
 
+def _alphaess_discovered(payload):
+    """A MockAlphaESS whose get_device_list() has run against the given getEssList payload, as refresh_static() does."""
+    client = MockAlphaESS()
+    session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, payload)))
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        run_async_local(client.get_device_list())
+    return client
+
+
+def test_alphaess_catalogue_describes_each_system():
+    """Each battery system becomes one AlphaESSCloud record carrying getEssList's own ratings and models.
+
+    Built from the real ESS_LIST_SAMPLE plus the two battery-less VT1000 entries the discovery tests
+    already use: get_device_list() drops those at discovery, so they must never be reported.
+    """
+    failed = False
+    payload = list(ESS_LIST_SAMPLE) + [
+        {"sysSn": "VT100000000001", "minv": "VT1000", "poinv": 0.8, "popv": 0.8, "cobat": 0},
+        {"sysSn": "VT100000000002", "minv": "VT1000", "poinv": 0.8, "popv": 0.8},
+    ]
+    client = _alphaess_discovered(payload)
+    report = client.build_discovery()
+    by_id = {record["device_id"]: record for record in report["inverters"]}
+    if set(by_id) != {"alphaess:AL70110230306xx", "alphaess:AL70110230302xx"}:
+        print("ERROR: expected exactly the two battery systems, got {}".format(sorted(by_id)))
+        return True
+    first = by_id["alphaess:AL70110230306xx"]
+    checks = [
+        (first["inverter_type"], "AlphaESSCloud"),
+        (first["composition"], "direct"),
+        (first["functions"], ["solar", "battery"]),
+        (first["hardware_ids"], {"serial": "AL70110230306xx"}),
+        (first["info"], {"model": "SMILE5-INV", "battery_model": "SMILE-BAT-13.3P"}),
+        (first["ratings"], {"inverter_w": 5000.0, "pv_w": 9000.0, "battery_kwh": 13.34}),
+        (sorted(first["capabilities"]), ["charge_rate_power", "discharge_target", "schedule", "target_soc"]),
+        (by_id["alphaess:AL70110230302xx"]["ratings"]["battery_kwh"], 10.1),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print("ERROR: expected {!r}, got {!r}".format(expected, actual))
+            failed = True
+    for record in report["inverters"]:
+        if "account_ids" in record or "firmware" in record.get("info", {}):
+            print("ERROR: AlphaESS holds no station ID or firmware, so none may be reported: {}".format(record))
+            failed = True
+        flat = str(record)
+        for held_but_unreported in ("emsStatus", "Normal", "usCapacity", "surplusCobat"):
+            if held_but_unreported in flat:
+                print("ERROR: {} is a changing status or an ambiguous SoC figure and must not be reported: {}".format(held_but_unreported, record))
+                failed = True
+    return failed
+
+
+def test_alphaess_catalogue_ev_charger_only_when_seen():
+    """An EV charger is a flag only once live telemetry has seen one; an unseen charger reports nothing either way."""
+    failed = False
+    client = _alphaess_discovered(ESS_LIST_SAMPLE)
+    sn = "AL70110230306xx"
+    for present, expect_flag in ((True, True), (False, False), (None, False)):
+        client._ev_present = {} if present is None else {sn: present}
+        record = {r["device_id"]: r for r in client.build_discovery()["inverters"]}["alphaess:" + sn]
+        has_flag = "ev_charger" in record.get("flags", [])
+        if has_flag != expect_flag:
+            print("ERROR: _ev_present {!r} should give ev_charger flag {}, got {}".format(present, expect_flag, has_flag))
+            failed = True
+    return failed
+
+
+def test_alphaess_catalogue_none_before_discovery():
+    """With nothing discovered there is nothing to describe, so nothing is reported."""
+    client = MockAlphaESS()
+    if client.build_discovery() is not None:
+        print("ERROR: an empty device_list must report None, meaning ask again next cycle")
+        return True
+    return False
+
+
+def test_alphaess_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every AlphaESS record back unchanged, so nothing is silently dropped."""
+    failed = False
+    client = _alphaess_discovered(ESS_LIST_SAMPLE)
+    client._ev_present = {"AL70110230306xx": True}
+    report = client.build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "alphaess", warnings.append)
+    if warnings:
+        print("ERROR: validation warned: {}".format(warnings))
+        failed = True
+    if cleaned.get("inverters") != report["inverters"]:
+        print("ERROR: validation changed the records:\n{}\n{}".format(report["inverters"], cleaned.get("inverters")))
+        failed = True
+    return failed
+
+
+def test_alphaess_catalogue_filed_when_first_cycle_defers():
+    """run() files the report even on a first cycle that defers startup for want of telemetry.
+
+    Same setup as test_alphaess_run_defers_startup_without_telemetry: real getEssList, then every
+    telemetry call answers "system offline", so run() publishes and then returns False from
+    `if first and not live_ok:` before automatic_config(). That early exit is exactly the install
+    whose dump most needs to say what hardware was found, so the report must already be filed.
+    """
+    failed = False
+    client = MockAlphaESS(automatic=True)
+    reports = []
+    client.report_discovery = reports.append
+    responses = [create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))] + [create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")) for _ in range(20)]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.run(seconds=0, first=True))
+    if ok:
+        print("ERROR: run() should defer startup (return False) with no telemetry")
+        failed = True
+    if len(reports) != 1 or len(reports[0]["inverters"]) != 2:
+        print("ERROR: expected one report describing both systems despite the deferred startup, got {}".format(reports))
+        failed = True
+    return failed
+
+
 def test_alphaess_run_returns_false_when_the_account_has_no_systems():
     """Deliberately explicit rather than falling through to an implicit None.
 
@@ -1481,6 +1600,11 @@ def run_alphaess_api_tests(my_predbat):
         ("run_reads_controls_first_tick", test_alphaess_run_reads_control_entities_on_every_tick_including_the_first),
         ("run_automatic_config_first_cycle_only", test_alphaess_run_only_calls_automatic_config_on_the_first_cycle),
         ("final_persists_all_caches", test_alphaess_final_persists_all_four_caches),
+        ("catalogue_describes_each_system", test_alphaess_catalogue_describes_each_system),
+        ("catalogue_ev_charger_only_when_seen", test_alphaess_catalogue_ev_charger_only_when_seen),
+        ("catalogue_none_before_discovery", test_alphaess_catalogue_none_before_discovery),
+        ("catalogue_round_trips", test_alphaess_catalogue_round_trips_through_validate_report),
+        ("catalogue_filed_when_first_cycle_defers", test_alphaess_catalogue_filed_when_first_cycle_defers),
     ]:
         try:
             if fn():

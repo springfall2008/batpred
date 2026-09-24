@@ -632,7 +632,7 @@ COMPONENT_LIST = {
             "site_id": {"required": False, "secret": True, "config": "teslemetry_site_id"},
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
-            "tbc_control": {"required": False, "default": False, "config": "teslemetry_tbc_control"},
+            "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
@@ -803,7 +803,16 @@ class Components:
                     have_all_args = False
                     missing_config.append(arg_info["config"])
                 else:
-                    arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
+                    value = self.base.get_arg(arg_info["config"], default, indirect=indirect)
+                    if value is None and default is not None:
+                        # A key present in apps.yaml but empty (a bare "teslemetry_tbc_control:") resolves
+                        # to a YAML null, and get_arg's bool branch only coerces strings - unlike its int
+                        # and float branches it has no None fallback, so the null would be passed straight
+                        # to the component and a registry "default": True would silently not apply (GH#5186).
+                        # An empty value is not a setting, so the registry default stands. Args with no
+                        # declared default keep resolving to None, which is how they signal "not set".
+                        value = default
+                    arg_dict[arg] = value
             required_or = component_info.get("required_or", [])
             # If required_or is set we must have at least one of the listed args
             if required_or:

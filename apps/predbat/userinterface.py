@@ -214,7 +214,7 @@ class UserInterface:
             else:
                 self.args[arg] = value
         # A credential value or the redact_strings/redact_strings_labelled denylists themselves
-        # can change here, so log()'s cached redaction pattern (hass.py) must be rebuilt on next
+        # can change here, so log()'s cached redaction pattern (log_secrets.py) must be rebuilt on next
         # use - otherwise a newly added/changed secret keeps leaking into the log under the stale
         # pattern until Predbat restarts (GH#4770 review).
         self._invalidate_log_secret_pattern()

@@ -1347,6 +1347,115 @@ def test_shorter_original_does_not_fragment_a_longer_one():
 # --- Review round 2: adversarial pass - a raw identifier used as a dict key, not a value ---
 
 
+def test_declared_serials_stay_readable_wherever_they_appear():
+    """A hardware serial is not secret, so an all-digit one stays readable - and so does what is built from it.
+
+    Solis, Deye and Sunsynk serials are nothing but digits (these are real shapes: 16, 10 and 10
+    digits), which the misfiled-identifier guard used to treat as a possible MPAN. That hid the
+    serial, the device_id built from it and the duplicate_serial observation naming it, and logged
+    a Warn per inverter on every catalogue read. A serial a record declares - hardware_ids.serial
+    or an entry in serials - is now clear everywhere it appears as a whole token.
+
+    Deye also reports its station id in account_ids, which used to mark the record's device_id as
+    identity-derived and replace it wholesale. That rule is for a device_id built from an account
+    identifier (Octopus's "octopus:{mpan}"); "deye:{serial}" is built from the serial, contains no
+    account identifier, and stays readable while the station id itself is still pseudonymised.
+    """
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+    coordinator.report("solis", {"inverters": [{"device_id": "solis:1031260253072197", "hardware_ids": {"serial": "1031260253072197"}}]})
+    coordinator.report("sunsynk", {"inverters": [{"device_id": "sunsynk:2405116013", "hardware_ids": {"serial": "2405116013"}}]})
+    coordinator.report("deye", {"inverters": [{"device_id": "deye:2306178123", "hardware_ids": {"serial": "2306178123"}, "account_ids": {"station_id": 61234567}}]})
+    # A gateway fronting all-digit battery serials, one of which Sunsynk also claims
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:GW2242G123", "composition": "gateway", "hardware_ids": {"serial": "GW2242G123"}, "serials": ["2405116013", "7700112233"]}]})
+
+    catalogue = coordinator.catalogue()
+
+    by_id = {record["device_id"]: record for record in catalogue["inverters"]}
+    assert set(by_id) == {"solis:1031260253072197", "sunsynk:2405116013", "deye:2306178123", "gecloud:GW2242G123"}, sorted(by_id)
+    assert by_id["solis:1031260253072197"]["hardware_ids"] == {"serial": "1031260253072197"}
+    assert by_id["sunsynk:2405116013"]["hardware_ids"] == {"serial": "2405116013"}
+    assert by_id["deye:2306178123"]["hardware_ids"] == {"serial": "2306178123"}
+    assert by_id["gecloud:GW2242G123"]["serials"] == ["2405116013", "7700112233"]
+    station = by_id["deye:2306178123"]["account_ids"]["station_id"]
+    assert station != 61234567 and str(station).startswith("#"), "the station id is an account identifier and is still pseudonymised"
+    duplicates = [entry for entry in catalogue["observations"]["conflicts"] if entry.get("kind") == "duplicate_serial"]
+    assert [entry["serial"] for entry in duplicates] == ["2405116013"], duplicates
+    assert not [message for message in messages if "looks like an identifier" in message], messages
+    print("PASS: declared serials, and the device_ids and observations built from them, stay readable")
+    return 0
+
+
+def test_declared_serials_do_not_shelter_a_misfiled_identifier():
+    """Keeping serials readable must not let anything else through.
+
+    A serial is only ignored where it appears as a whole token: a short serial that happens to sit
+    inside a longer number must not break that number's digit run and let an MPAN through. A value
+    under any other hardware_ids key is still guarded as before, and a device_id that is built from
+    an account identifier is still replaced wholesale even when the record also declares a serial.
+    """
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "solis",
+        {
+            "inverters": [
+                {
+                    "device_id": "solis:inv1",
+                    "hardware_ids": {"serial": "123456", "mpan_misfiled": "1234567890123"},
+                    "info": {"note": "MPAN 1234567890123"},
+                },
+                {"device_id": "solis:SERIAL01:ACCT123456", "hardware_ids": {"serial": "SERIAL01"}, "account_ids": {"account": "ACCT123456"}},
+            ]
+        },
+    )
+
+    catalogue = coordinator.catalogue()
+
+    text = str(catalogue)
+    assert "1234567890123" not in text, "a serial inside a longer number must not unhide it"
+    first = catalogue["inverters"][0]
+    assert first["hardware_ids"]["serial"] == "123456"
+    assert str(first["hardware_ids"]["mpan_misfiled"]).startswith("#"), "another hardware_ids key is still guarded"
+    assert "ACCT123456" not in text, "the account identifier is still hidden"
+    assert str(catalogue["inverters"][1]["device_id"]).startswith("#"), "a device_id built from an account identifier is still replaced wholesale"
+    assert catalogue["inverters"][1]["hardware_ids"]["serial"] == "SERIAL01"
+    print("PASS: declared serials shelter nothing but themselves")
+    return 0
+
+
+def test_serial_derived_device_id_needs_whole_tokens():
+    """A device_id is only treated as built from its serial on whole-token matches, both ways.
+
+    The serial must stand as a whole token in the device_id - merely sitting inside a longer token
+    is coincidence, not construction - and any account_ids value that stands as a whole token in it
+    marks the device_id as identity-derived however short that value is, since a short account id
+    is not otherwise caught by the substring pass (MIN_SUBSTITUTE).
+    """
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "deye",
+        {
+            "inverters": [
+                # the serial only sits inside "inv98765432", so nothing says the device_id is built from it
+                {"device_id": "deye:inv98765432", "hardware_ids": {"serial": "98765"}, "account_ids": {"account": "XY12"}},
+                # built from the serial, but a short station id stands in it as a whole token too
+                {"device_id": "deye:2306178123:ST42", "hardware_ids": {"serial": "2306178123"}, "account_ids": {"station_id": "ST42"}},
+            ]
+        },
+    )
+
+    catalogue = coordinator.catalogue()
+
+    first, second = catalogue["inverters"]
+    assert str(first["device_id"]).startswith("#"), "a serial inside a longer token does not make the device_id serial-derived: {}".format(first["device_id"])
+    assert str(second["device_id"]).startswith("#"), "a short account id in the device_id makes it identity-derived: {}".format(second["device_id"])
+    assert "ST42" not in str(catalogue), "the station id must not survive"
+    assert second["hardware_ids"]["serial"] == "2306178123", "the serial itself stays readable"
+    print("PASS: serial-derived device_ids need whole-token matches, both ways")
+    return 0
+
+
 def test_misfiled_identifier_used_as_a_container_key_caught():
     """Adversarial: a component keys hardware_ids by the serial itself instead of naming the field.
     Before this fix only VALUES were shape-guarded and only NOTED originals were substituted into
@@ -1640,6 +1749,9 @@ def test_coordinator_all(my_predbat=None):
     failures += test_location_shaped_key_pseudonymised_regardless_of_value_shape()
     failures += test_legitimate_long_float_survives_unchanged_and_still_numeric()
     failures += test_hardware_ids_only_flags_all_digit_values_not_prefixed_serials()
+    failures += test_declared_serials_stay_readable_wherever_they_appear()
+    failures += test_declared_serials_do_not_shelter_a_misfiled_identifier()
+    failures += test_serial_derived_device_id_needs_whole_tokens()
     failures += test_pseudonymised_value_substituted_inside_entity_id_value()
     failures += test_account_ids_value_does_not_corrupt_structural_or_descriptor_keys()
     failures += test_account_ids_value_equal_to_a_structural_name_does_not_delete_it()

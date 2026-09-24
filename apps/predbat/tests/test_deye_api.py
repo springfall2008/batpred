@@ -12,6 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+from coordinator import validate_report
 from deye import DeyeAPI
 from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS
 from tests.test_infra import run_async as run_async_local
@@ -624,6 +625,162 @@ def test_run_first_cycle_publishes_and_configures():
     assert not failed, "test_run_first_cycle_publishes_and_configures"
 
 
+DEYE_LIVE_BATTERY_CONFIG = {"maxChargeCurrent": 185, "maxDischargeCurrent": 185, "battLowCapacity": 14, "battShutDownCapacity": 9, "battCapacity": 1200}
+
+
+def _deye_fleet(station_ids=(10,)):
+    """A MockDeye holding one inverter populated from the live device/latest and config/battery samples.
+
+    The pack voltage and derived capacity come from the component's own derive_battery_capacity()
+    run on LIVE_DATA_LIST - test setup is allowed its side effects; the reporter never calls it.
+    """
+    d = MockDeye()
+    sn = "INV1"
+    d.device_list = [sn]
+    d.station_ids = list(station_ids)
+    flat = d._datalist_to_dict(LIVE_DATA_LIST)
+    d.device_rated_power[sn] = d._as_float(flat.get("RatedPower"), 0.0)
+    d.device_battery_config[sn] = dict(DEYE_LIVE_BATTERY_CONFIG)
+    d.derive_battery_capacity(sn, flat)
+    return d
+
+
+def test_deye_catalogue_describes_each_inverter():
+    """Each inverter is a DeyeCloud record with the live sample's own ratings."""
+    failed = False
+    d = _deye_fleet()
+    record = d.build_discovery()["inverters"][0]
+    checks = [
+        (record["device_id"], "deye:INV1"),
+        (record["inverter_type"], "DeyeCloud"),
+        (record["composition"], "direct"),
+        (record["functions"], ["solar", "battery"]),
+        (record["hardware_ids"], {"serial": "INV1"}),
+        (record["account_ids"], {"station_id": 10}),
+        (sorted(record["capabilities"]), ["charge_rate_power", "discharge_target", "schedule", "target_soc"]),
+        (record["ratings"]["inverter_w"], 8000.0),
+        (record["ratings"]["battery_capacity_ah"], 1200.0),
+        (record["ratings"]["battery_kwh"], d.battery_capacity("INV1")),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print("ERROR: expected {!r}, got {!r}".format(expected, actual))
+            failed = True
+    if "info" in record:
+        print("ERROR: Deye holds no model or firmware, so info must be absent: {}".format(record["info"]))
+        failed = True
+    return failed
+
+
+def test_deye_catalogue_station_id_only_when_unambiguous():
+    """A station ID is attributed only when the account has exactly one station: devices are not held per station."""
+    failed = False
+    for stations, expect in (((10,), {"station_id": 10}), ((10, 11), None), ((), None)):
+        record = _deye_fleet(station_ids=stations).build_discovery()["inverters"][0]
+        if record.get("account_ids") != expect:
+            print("ERROR: stations {} should give account_ids {!r}, got {!r}".format(stations, expect, record.get("account_ids")))
+            failed = True
+    return failed
+
+
+def test_deye_catalogue_does_not_derive_capacity():
+    """The reporter reads battery_capacity() and never calls derive_battery_capacity(), which logs and writes state."""
+    d = _deye_fleet()
+    d.derive_battery_capacity = MagicMock(side_effect=AssertionError("the reporter must not call derive_battery_capacity()"))
+    d.log_messages.clear()
+    d.build_discovery()
+    if d.log_messages:
+        print("ERROR: build_discovery() logged: {}".format(d.log_messages))
+        return True
+    return False
+
+
+def test_deye_catalogue_none_before_discovery():
+    """With no inverters there is nothing to describe."""
+    if MockDeye().build_discovery() is not None:
+        print("ERROR: an empty device_list must report None")
+        return True
+    return False
+
+
+def test_deye_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every Deye record back unchanged."""
+    report = _deye_fleet().build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "deye", warnings.append)
+    if warnings or cleaned.get("inverters") != report["inverters"]:
+        print("ERROR: validation changed or warned on the report: {} {}".format(warnings, cleaned.get("inverters")))
+        return True
+    return False
+
+
+def test_deye_catalogue_filed_when_first_cycle_defers():
+    """run() files the report even on a first cycle that defers startup because the live poll failed.
+
+    `if first and not live_ok: return False` - and automatic_config() after it - would otherwise
+    swallow the report on exactly the installs whose dump most needs to say what hardware was found.
+    Built on test_run_first_cycle_publishes_and_configures(); only fetch_device_data() differs.
+    """
+    from unittest.mock import patch
+
+    failed = False
+    d = MockDeye(auth_method="oauth")
+    d.access_token = "tok"
+    d.automatic = True
+    seq = {"configured": 0}
+    reports = []
+    d.report_discovery = reports.append
+
+    async def fake_dev_list():
+        """Discover one inverter."""
+        d.device_list = ["INV1"]
+        return ["INV1"]
+
+    async def fake_data(sn):
+        """Fail the live poll: refresh_live() treats a falsy result as no data."""
+        return {}
+
+    async def fake_batt(sn):
+        """Return no battery config."""
+        return {}
+
+    async def fake_publish():
+        """Publish nothing."""
+
+    async def fake_pub_sched(sn):
+        """Publish no schedule."""
+
+    async def fake_get_sched(sn):
+        """Read no schedule."""
+        return {}
+
+    async def fake_auto():
+        """Record that automatic_config() ran."""
+        seq["configured"] += 1
+
+    with patch.multiple(
+        d,
+        get_device_list=fake_dev_list,
+        fetch_device_data=fake_data,
+        fetch_battery_config=fake_batt,
+        publish_data=fake_publish,
+        publish_schedule_settings_ha=fake_pub_sched,
+        get_schedule_settings_ha=fake_get_sched,
+        automatic_config=fake_auto,
+    ):
+        ok = run_async_local(d.run(0, True))
+    if ok:
+        print("ERROR: run() should defer startup (return False) when the first live poll fails")
+        failed = True
+    if seq["configured"]:
+        print("ERROR: automatic_config() must not run on a deferred first cycle")
+        failed = True
+    if len(reports) != 1 or reports[0]["inverters"][0]["device_id"] != "deye:INV1":
+        print("ERROR: the report must be filed before the deferring return, got {}".format(reports))
+        failed = True
+    return failed
+
+
 def run_deye_api_tests(my_predbat):
     """Run all DEYE API tests."""
     failed = False
@@ -647,6 +804,12 @@ def run_deye_api_tests(my_predbat):
         ("fetch_battery_config_success", test_fetch_battery_config_caches_on_success),
         ("fetch_battery_config_failure", test_fetch_battery_config_failure_returns_empty),
         ("run_first_cycle", test_run_first_cycle_publishes_and_configures),
+        ("catalogue_describes_each_inverter", test_deye_catalogue_describes_each_inverter),
+        ("catalogue_station_id_only_when_unambiguous", test_deye_catalogue_station_id_only_when_unambiguous),
+        ("catalogue_does_not_derive_capacity", test_deye_catalogue_does_not_derive_capacity),
+        ("catalogue_none_before_discovery", test_deye_catalogue_none_before_discovery),
+        ("catalogue_round_trips", test_deye_catalogue_round_trips_through_validate_report),
+        ("catalogue_filed_when_first_cycle_defers", test_deye_catalogue_filed_when_first_cycle_defers),
     ]:
         try:
             if fn():

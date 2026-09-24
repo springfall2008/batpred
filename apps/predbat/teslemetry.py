@@ -124,8 +124,13 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     EXPORT_SELL_RATE = 0.50  # GBP/kWh synthetic high sell price to force export now.
     DEFAULT_IMPORT_RATE = 0.28
     DEFAULT_EXPORT_RATE = 0.15
+    # Single source of truth for teslemetry_tbc_control's default (GH#5186), used by initialize() and by
+    # the defensive getattr() fallbacks in evaluate_schedule/sync_tariff so they cannot drift apart and
+    # silently select the non-default path. COMPONENT_LIST's "default" must match; the registry keeps a
+    # literal because components.py imports component modules lazily, and a test pins the two together.
+    DEFAULT_TBC_CONTROL = True
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=False, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
@@ -137,8 +142,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection;
                 in oauth mode set this to the regional Fleet endpoint).
             automatic: Automatically configure Predbat's inverter args to use this component (fox-style).
-            tbc_control: Trial setting (teslemetry_tbc_control). When set, evaluate_schedule and
-                sync_tariff switch to the signal-tariff / Time-Based Control path - see GH#4892.
+            tbc_control: teslemetry_tbc_control, on by default (GH#5186). When set, evaluate_schedule and
+                sync_tariff take the signal-tariff / Time-Based Control path - see GH#4892; False opts
+                back into the real-rate tariff and reserve-driven charging.
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
                 refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
             token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
@@ -589,7 +595,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         With teslemetry_tbc_control set this delegates to evaluate_schedule_tbc, which drives Tesla's
         own optimiser through the tariff instead of asserting a charge directly - see GH#4892.
         """
-        if getattr(self, "tbc_control", False):
+        if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
             return self.evaluate_schedule_tbc(minutes_now, soc)
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
@@ -617,8 +623,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         `set_reserve_min` anywhere in 81-99 (a plausible Powerwall value on its own), which lands here
         too and then holds grid charging off in every state, permanently. A request of exactly 100 is
         already honoured and passes through without a diagnostic; only a value the device would have
-        silently moved is logged, once rather than every cycle, so a trial user can see why nothing
-        is charging.
+        silently moved is logged, once rather than every cycle, so a user can see why nothing is
+        charging. It is a Warn rather than an Info because this path is on by default (GH#5186), so
+        it is reached by a plausible set_reserve_min rather than only by a trial opt-in; it stays
+        one-shot per instance, since the condition is a standing config value and not a per-cycle event.
         """
         percent = int(percent)
         if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
@@ -628,7 +636,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         # and silence the real 81-99 case later, which is the case the diagnostic exists for.
         if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
             self._reserve_band_warned = True
-            self.log("Info: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging".format(percent))
+            self.log("Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging until set_reserve_min moves out of that band".format(percent))
         return SIGNAL_HOLD_RESERVE
 
     def evaluate_schedule_tbc(self, minutes_now, soc):
@@ -1411,7 +1419,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """
         if self._is_read_only():
             return True
-        if getattr(self, "tbc_control", False):
+        if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
             tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
         else:
             tariff = self.build_tariff(self._discharge_window())
@@ -1489,7 +1497,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: TeslemetryAPI shutdown")
 
 
-async def test_teslemetry_api(key, site_id=None, base_url=None, control=False, auth_method=None, token_expires_at=None, token_hash=None, user_id=None, supabase_url=None, supabase_key=None):
+async def test_teslemetry_api(key, site_id=None, base_url=None, control=False, auth_method=None, token_expires_at=None, token_hash=None, user_id=None, supabase_url=None, supabase_key=None, tbc_control=None):
     """Run a standalone test of the Teslemetry component against the live API.
 
     site_id is optional and acts as a filter over the sites discovered from /api/1/products; when
@@ -1497,6 +1505,12 @@ async def test_teslemetry_api(key, site_id=None, base_url=None, control=False, a
     and prints/publishes the entities and status but sends no control commands - the scheduler
     emulator and any crash-recovery writes are suppressed via set_read_only. Pass control=True to
     let the component send commands.
+
+    tbc_control selects which control path a control=True run drives, and defaults to the component's
+    own default (on, GH#5186) so the diagnostic matches production. That default means a --control run
+    pushes the signal tariff and puts the Powerwall in autonomous mode; pass tbc_control=False to drive
+    the real-rate tariff and reserve path instead. It has no effect on a read-only run, which sends
+    nothing either way.
 
     auth_method="oauth" exercises the direct-Fleet-API OAuth path (mirrors Fox/Kraken/Solis) instead
     of the default static api_key mode: key is then the OAuth access token, token_expires_at/token_hash
@@ -1516,7 +1530,13 @@ async def test_teslemetry_api(key, site_id=None, base_url=None, control=False, a
     if supabase_key:
         os.environ["SUPABASE_KEY"] = supabase_key
 
-    mode = "READ-WRITE (controls may change)" if control else "READ-ONLY (status only, no controls changed)"
+    if control:
+        # Name the control path as well as the mode: on the default the run pushes the signal tariff and
+        # switches the Powerwall to autonomous mode, which is a bigger change than "controls may change".
+        path = "signal tariff + autonomous mode" if (TeslemetryAPI.DEFAULT_TBC_CONTROL if tbc_control is None else tbc_control) else "real-rate tariff + reserve"
+        mode = "READ-WRITE (controls may change: {})".format(path)
+    else:
+        mode = "READ-ONLY (status only, no controls changed)"
     print("Testing Teslemetry API for site {} - {} - auth={}".format(site_id or "auto-discover", mode, auth_method or "api_key"))
 
     mock_base = MockBase()
@@ -1526,6 +1546,8 @@ async def test_teslemetry_api(key, site_id=None, base_url=None, control=False, a
         mock_base.args["user_id"] = user_id
 
     arg_dict = {"key": key, "site_id": site_id or "", "automatic": True}
+    if tbc_control is not None:
+        arg_dict["tbc_control"] = tbc_control
     if base_url:
         arg_dict["base_url"] = base_url
     if auth_method:
@@ -1593,6 +1615,13 @@ def main():  # pragma: no cover
     parser.add_argument("--site-id", default=None, help="Optional Tesla energy site id to filter the sites discovered from /api/1/products (default: use the first site on the account)")
     parser.add_argument("--base-url", default=None, help="REST API base URL (default {})".format(TESLEMETRY_DEFAULT_URL))
     parser.add_argument("--control", action="store_true", help="Allow control commands to be sent (default is read-only: report status only, change nothing)")
+    parser.add_argument(
+        "--tbc-control",
+        dest="tbc_control",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Which control path a --control run drives: --tbc-control pushes the signal tariff and autonomous mode, --no-tbc-control drives the real-rate tariff and reserve (default: the component's own default, currently on)",
+    )
     parser.add_argument("--auth-method", default=None, choices=["api_key", "oauth"], help="'api_key' (default) for a static Teslemetry token, or 'oauth' for a direct Fleet API OAuth access token")
     parser.add_argument("--token-expires-at", default=None, help="OAuth access token expiry (ISO timestamp) - oauth mode only")
     parser.add_argument("--token-hash", default=None, help="Server-computed OAuth token hash for refresh dedup - oauth mode only")
@@ -1627,6 +1656,7 @@ def main():  # pragma: no cover
             user_id=user_id,
             supabase_url=supabase_url,
             supabase_key=supabase_key,
+            tbc_control=args.tbc_control,
         )
     )
     sys.exit(0 if ok else 1)
