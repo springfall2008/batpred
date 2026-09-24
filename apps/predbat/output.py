@@ -57,6 +57,7 @@ from utils import (
     pack_export_limit,
     export_limit_from_stored,
 )
+from utils import NetSettlementSeed
 from prediction import Prediction
 from billing import attach_billing, billing_entity_id, parse_axle_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
 
@@ -2518,7 +2519,14 @@ class Output:
         # Hand the current window's metered totals to the prediction (see Prediction.run_prediction)
         self.net_settlement_seed = None
         if net_window > 0 and net_window_id == self.minutes_now // net_window:
-            self.net_settlement_seed = (net_window_id, net_import_kwh, net_import_cost, net_export_kwh, net_export_credit, net_settled)
+            self.net_settlement_seed = NetSettlementSeed(
+                window=net_window_id,
+                import_kwh=net_import_kwh,
+                import_cost=net_import_cost,
+                export_kwh=net_export_kwh,
+                export_credit=net_export_credit,
+                applied=net_settled,
+            )
 
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
