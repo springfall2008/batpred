@@ -916,8 +916,9 @@ def inverter_record(
     Tuples become lists because validate_report() keeps only a list for a structural or
     vocabulary field: a tuple `serials` or `functions` - a module-level constant, say - would be
     silently dropped from the catalogue. A set or frozenset becomes a sorted list for the same
-    reason, sorted because string hashing is randomised per process, so list(some_set) comes out
-    in a different order after a restart and two dumps of the same hardware would diff for nothing.
+    reason, sorted by string form so that a set mixing types cannot raise and withhold the whole
+    report, and sorted because string hashing is randomised per process, so list(some_set) comes
+    out in a different order after a restart and two dumps of the same hardware would diff for nothing.
     """
     fields = {
         "inverter_type": inverter_type,
@@ -939,7 +940,7 @@ def inverter_record(
     record = {"device_id": device_id}
     for name, value in fields.items():
         if isinstance(value, (set, frozenset)):
-            value = sorted(value)
+            value = sorted(value, key=str)
         elif isinstance(value, (list, tuple)):
             value = list(value)
         elif isinstance(value, dict):
