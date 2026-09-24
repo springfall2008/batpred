@@ -2880,6 +2880,10 @@ chart.render();
             text += "<table>"
             for idx, item in enumerate(value):
                 nested_path = f"{list_path}[{idx}]"
+                # An apps.yaml key can hold any character, including the quotes the attributes
+                # below are delimited with - escape once here so a key such as "it's" cannot
+                # truncate data-nested-path/data-path and hand the browser a wrong path
+                nested_path_attr = html_module.escape(nested_path, quote=True)
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
@@ -2893,9 +2897,9 @@ chart.render();
                     if can_edit:
                         if isinstance(item, bool):
                             toggle_class = "toggle-button active" if item else "toggle-button"
-                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path_attr}"></button>'
                         else:
-                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
                         # Store the nested value info for later processing
                         if not hasattr(self, "_nested_values"):
@@ -2908,7 +2912,7 @@ chart.render();
                 raw_value = self.resolve_value_raw(arg, item)
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
             text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
@@ -2918,6 +2922,7 @@ chart.render();
             text += "<table>"
             for key in value:
                 nested_path = f"{dict_path}.{key}"
+                nested_path_attr = html_module.escape(nested_path, quote=True)
                 nested_value = value[key]
 
                 # Check if this nested value is editable
@@ -2932,9 +2937,9 @@ chart.render();
                     if can_edit:
                         if isinstance(nested_value, bool):
                             toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path_attr}"></button>'
                         else:
-                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
                         # Store the nested value info for later processing
                         if not hasattr(self, "_nested_values"):
@@ -2947,7 +2952,7 @@ chart.render();
                 raw_value = self.resolve_value_raw(key, nested_value)
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
@@ -3842,6 +3847,9 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             arg_errors = self.base.arg_errors.get(arg, "")
+            # The filter box and the editor both read the row back through data-arg-name, so an
+            # apps.yaml key holding a quote must not be able to truncate the attribute
+            arg_attr = html_module.escape(str(arg), quote=True)
 
             # Determine if this value can be edited
             # Lists should not be editable at the top level - only their individual items
@@ -3849,7 +3857,7 @@ chart.render();
 
             if arg_errors:
                 text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
+                    row_id, arg_attr, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
                 )
             else:
                 actions_cell = ""
@@ -3863,7 +3871,7 @@ chart.render();
                         actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
 
                 text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                    row_id, arg_attr, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
                 )
             row_id += 1
 
@@ -3872,7 +3880,7 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
-                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
+                row_id, html_module.escape(str(arg), quote=True), html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
             )
             row_id += 1
 

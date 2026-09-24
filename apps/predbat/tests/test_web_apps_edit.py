@@ -14,6 +14,7 @@ Follows the FakeRequest pattern of test_web_debug_history_routes.py.
 """
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -512,20 +513,37 @@ def run_web_apps_edit_tests(my_predbat):
 
 def _parent_row_path(path):
     """Return the path of the row a nested path sits under, or '' when it sits at the top level."""
+    # A dict key may itself end in ']' (giving "parent.weird]", which has no '[' to split on),
+    # so index rather than assume - the helper must report a parent, never raise
     if path.endswith("]"):
-        return path[: path.rindex("[")]
+        bracket = path.rfind("[")
+        if bracket != -1:
+            return path[:bracket]
     if "." in path:
         return path.rsplit(".", 1)[0]
     return ""
 
 
-def _render_apps_page(my_predbat):
-    """Render the /apps page against the nested fixture args and return its HTML."""
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    web_interface = WebInterface(my_predbat, web_port=5053)
-    # Render the fixture's nested structures rather than whatever the live test args hold
-    web_interface.args = yaml.load(APPS_YAML_FIXTURE)["pred_bat"]
+def _attribute_values(text, pattern):
+    """Return the set of values an attribute pattern matches, as the browser would decode them."""
+    return set(html.unescape(value) for value in re.findall(pattern, text))
+
+
+def _render_apps_page(my_predbat, args=None):
+    """Render the /apps page against the given args, or the nested fixture's, and return its HTML."""
+    # Built the way _reset_fixture() does: the full constructor would alias .args to the live
+    # shared args and build AnnualPage/WebChat before the rebinding below, which rendering
+    # needs none of - and which would leave this test sensitive to whatever initialize() picks up
+    web_interface = WebInterface.__new__(WebInterface)
+    web_interface.base = my_predbat
+    web_interface.log = my_predbat.log
+    web_interface.prefix = my_predbat.prefix
+    if args is None:
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        # Render the fixture's nested structures rather than whatever the live test args hold
+        args = yaml.load(APPS_YAML_FIXTURE)["pred_bat"]
+    web_interface.args = args
     return asyncio.run(web_interface.html_apps(None)).text
 
 
@@ -573,8 +591,8 @@ def run_web_apps_filter_tests(my_predbat):
         print("  ERROR: filterApps() should select rows by the data-arg-name / data-nested-path attributes the page renders")
         failed += 1
 
-    arg_rows = set(re.findall(r'data-arg-name="([^"]+)"', text))
-    nested_rows = set(re.findall(r"data-nested-path='([^']+)'", text))
+    arg_rows = _attribute_values(text, r'data-arg-name="([^"]+)"')
+    nested_rows = _attribute_values(text, r"data-nested-path='([^']+)'")
     for expected in ("compare_list", "chat", "forecast_solar", "nested_matrix"):
         if expected not in arg_rows:
             print("  ERROR: expected a top-level row for {}, got: {}".format(expected, sorted(arg_rows)))
@@ -596,6 +614,39 @@ def run_web_apps_filter_tests(my_predbat):
             failed += 1
         if not path.startswith(parent):
             print("  ERROR: nested row {} does not extend its parent path {}".format(path, parent))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a key holding a quote cannot truncate the attributes the filter reads")
+    # data-nested-path is delimited with apostrophes and data-arg-name/data-path with quotes, so
+    # an unescaped key such as "it's" ends its attribute early: the browser then reports a path
+    # that is not the row's, and filtering on a parent name no longer keeps the row visible
+    quoted_args = {"chat": {"providers": {"it's": {"api_key": "sk-quoted-credential"}}}, 'say "hi"': 1}
+    quoted_text = _render_apps_page(my_predbat, quoted_args)
+    quoted_nested = _attribute_values(quoted_text, r"data-nested-path='([^']+)'")
+    quoted_top = _attribute_values(quoted_text, r'data-arg-name="([^"]+)"')
+    quoted_edit_paths = _attribute_values(quoted_text, r'data-path="([^"]+)"')
+    for expected, found, attribute in (
+        ("chat.providers.it's", quoted_nested, "data-nested-path"),
+        ("chat.providers.it's.api_key", quoted_nested, "data-nested-path"),
+        ('say "hi"', quoted_top, "data-arg-name"),
+        ("chat.providers.it's.api_key", quoted_edit_paths, "data-path"),
+    ):
+        if expected not in found:
+            print("  ERROR: {} should carry the whole path {}, got: {}".format(attribute, expected, sorted(found)))
+            failed += 1
+    # The truncated attribute the unescaped form produced, named directly so the test still fails
+    # if the escaping is dropped in favour of something that only looks right after unescaping
+    if "data-nested-path='chat.providers.it'" in quoted_text:
+        print("  ERROR: an apostrophe in a key truncated data-nested-path to its prefix")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the parent-path helper handles a key that ends in a bracket")
+    # "parent.weird]" ends with ']' but holds no '[' - the helper must still report a parent
+    for path, expected_parent in (("parent.weird]", "parent"), ("nested_matrix[0][1]", "nested_matrix[0]"), ("chat", "")):
+        if _parent_row_path(path) != expected_parent:
+            print("  ERROR: the parent of {} should be '{}', got '{}'".format(path, expected_parent, _parent_row_path(path)))
             failed += 1
 
     if failed:
