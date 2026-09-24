@@ -68,7 +68,7 @@ is the first to change behaviour.
 | D11 | A record describes the device, not the user's opt-outs. Settings that stop a binding (`automatic_ignore_pv`, `givtcp_rest_power_ignore`) do not remove entities from the record; piece 3's coordinator applies them. |
 | D12 | A PV-only device's record carries its `pv_power` and `pv_today` as `access: r` entities - still with no `inverter_type` and no `capabilities` - so its generation is not lost when the coordinator configures from records (the GH#4922 regression). |
 | D13 | GEC and GEE `soc_units` become `"%"`: GE Cloud binds `soc_percent`, and `inv_soc_units` is never read, so this changes no behaviour. `clock_time_format` stays as it is on GE, GEC and GEE, because those rows also serve installs that do not use the components (the GivTCP add-on and GE Cloud templates) and the row's format is their last-resort parse; GivTCP and GE Cloud records describe the ISO format their sensors really publish, and their completeness tests carry that one named exception. |
-| D14 | A rating is a figure the device reports. A value Predbat derives or the user overrides (AlphaESS's and Solis's `battery_rate_max`) is bound as an entity but not given as a rating. |
+| D14 | A rating is a figure the device reports. A value Predbat derives or the user overrides (AlphaESS's and Solis's `battery_rate_max`) is bound as an entity but not given as a rating. The same applies to `soc_max` on the vendors that report amp-hours (Sunsynk, Deye, Solis): their kWh is the Ah times a pack voltage Predbat infers or the user sets, so they report `battery_capacity_ah` as the rating and bind `soc_max` as an entity only. |
 | D15 | A site-wide setting bound once from the first driven inverter (`battery_temperature_history`) goes on that inverter's record only. |
 
 ## 1. The inverter record
@@ -149,6 +149,11 @@ One descriptor per Predbat setting that automatic configuration binds for this d
 | `invert` | no | `true` when the entity's sign is the opposite of Predbat's convention. Replaces the `grid_power_invert`, `battery_power_invert` and `load_power_invert` settings. |
 
 A descriptor with both `entity_id` and `value`, or neither, is dropped.
+
+An inverter record's `entities` are not filtered to entities Home Assistant has already seen (the
+`discovery_entities()` filter Octopus, Ohme and Solcast use): they describe what automatic configuration
+binds, which does not wait for HA either. GivTCP is the one reporter that lists only entities it has
+published, because its component publishes them itself before `build_discovery()` runs.
 
 A setting that `inverter.py` replaces with a dummy entity for this inverter type is left out of `entities`,
 because Predbat never reads or writes the component's binding for it. Today that means any setting whose
