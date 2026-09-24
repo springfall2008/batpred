@@ -130,6 +130,7 @@ from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests, run_web_dark_mode_preference_tests
 from tests.test_web_power_flow import run_web_power_flow_tests
+from tests.test_web_discovery import run_web_discovery_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
@@ -278,6 +279,8 @@ from tests.test_givtcp_rest import run_givtcp_rest_tests
 from tests.test_myenergi import test_myenergi
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
+from tests.test_coordinator import test_coordinator_all
+from tests.test_discovery_catalogue import test_discovery_catalogue_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
@@ -538,6 +541,7 @@ def main():
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
+        ("web_discovery", run_web_discovery_tests, "Discovery catalogue web page tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_dark_mode_preference", run_web_dark_mode_preference_tests, "Dark mode follows OS prefers-color-scheme when unset (issue #4800)", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
@@ -702,6 +706,8 @@ def main():
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
+        ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
+        ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
         # Shared MockBase tests
         ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),
         # Solis Cloud API unit tests

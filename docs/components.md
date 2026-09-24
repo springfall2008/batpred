@@ -1095,8 +1095,8 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 
 - Export freeze is not supported by the Powerwall hardware and is disabled automatically
 - The Powerwall has no charge/discharge rate control; rates are modelled from the nameplate power
-- When enabled (and Predbat is not read-only) the component owns the device tariff, publishing Predbat's real import/export rates (quantised into a few time-of-use bands) so they show correctly in the Tesla app, with a synthetic high-price `ON_PEAK` band over the committed discharge window to drive export
-- Export start/stop is driven each cycle by the operation-mode and export-rule commands; the tariff is pushed only when the rates or the discharge window actually change, to conserve Teslemetry's monthly API-call budget
+- When enabled (and Predbat is not read-only) the component owns the device tariff. By default (`tbc_control` on) it pushes a control-signal tariff over the committed charge and export windows so Tesla's Time-Based Control runs the charge at full rate; with `tbc_control` set to `false` it instead publishes Predbat's real import/export rates (quantised into a few time-of-use bands) so they show correctly in the Tesla app, with a synthetic high-price `ON_PEAK` band over the committed discharge window to drive export
+- Export start/stop is driven each cycle by the operation-mode and export-rule commands; the tariff is pushed only when it actually changes (the committed windows, or with `tbc_control` off the rates), to conserve Teslemetry's monthly API-call budget
 - The four diagnostic control entities (operation mode, backup reserve, grid charging, allow export) mirror the emulator's asserted state; any manual change made to them is re-asserted away within about a minute while Predbat is not read-only
 
 #### Configuration Options (teslemetry)
@@ -1107,7 +1107,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 | `site_id` | String or String List | No | First account site | `teslemetry_site_id` | Optional Tesla energy site id (or list of ids) to filter the sites discovered from the account; leave unset to use the first site on the account automatically |
 | `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; for direct Fleet API set this to your regional Fleet endpoint (e.g. `https://fleet-api.prd.eu.vn.cloud.tesla.com`) |
 | `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
-| `tbc_control` | Boolean | No | false | `teslemetry_tbc_control` | Trial setting - see [Teslemetry component (beta)](inverter-setup.md#teslemetry-component-beta) for what it does and its known limitation |
+| `tbc_control` | Boolean | No | true | `teslemetry_tbc_control` | Drive the Powerwall through Tesla's Time-Based Control with a control-signal tariff (full-rate charging); set to `false` for the real-rate tariff and reserve-driven charging - see [Teslemetry component (beta)](inverter-setup.md#teslemetry-component-beta) for what it does and its known limitation |
 | `auth_method` | String | No | `api_key` | `teslemetry_auth_method` | `api_key` (static Teslemetry token) or `oauth` (direct Tesla Fleet API). In `oauth` mode the OAuth flow and token refresh are handled for you by predbat.com - the same way the Fox integration works - so `oauth` requires connecting via predbat.com; self-hosted users use `api_key` |
 
 ---

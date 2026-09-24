@@ -12,17 +12,19 @@ import asyncio
 import solis as solis_module
 from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, patch
-from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
+from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE, SOLIS_CID_BATTERY_CAPACITY
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
 from solis import SOLIS_CID_TOU_V2_MODE, SOLIS_CID_LIST_TOU_V2
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_RECOVERY_SOC, SOLIS_CID_DISCHARGE_SOC
+from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_OFF_GRID
+from coordinator import validate_report
 
 
 class MockBase:
@@ -84,6 +86,7 @@ class MockSolisAPI(SolisAPI):
         self.slots_reset = set()
         self.quota_exhausted_until = None
         self.datalogger_offline_until = {}
+        self.datalogger_cooldown_code = {}
         self.automatic_config_done = False
 
         # Timezone for now_utc_exact property (from ComponentBase)
@@ -1225,6 +1228,226 @@ async def _run_automatic_config(details):
     return recorded, api
 
 
+def _solis_fleet():
+    """A MockSolisAPI holding one captured battery inverter and one captured PV-only inverter.
+
+    Both details are the live-captured _DETAIL_WITH_BATTERY / _DETAIL_NO_BATTERY. The battery
+    inverter additionally carries productModel from test_publish_entities' sample and a DERIVED
+    power/powerStr pair: the repository holds no captured power field, so 5.0 kW follows the
+    sample's "Solis-5G-Hybrid" rating and the API's <field>Str "kW" convention.
+    """
+    api = MockSolisAPI()
+    api.inverter_sn = ["BAT001", "PV001"]
+    api.inverter_details = {
+        "BAT001": dict(_DETAIL_WITH_BATTERY, productModel="Solis-5G-Hybrid", power=5.0, powerStr="kW"),
+        "PV001": dict(_DETAIL_NO_BATTERY),
+    }
+    api.cached_values = {"BAT001": {SOLIS_CID_BATTERY_CAPACITY: "100", SOLIS_CID_TOU_V2_MODE: "43605"}}
+    api.parallel_battery_count = {"BAT001": 2}
+    api.nominal_pack_voltage = None
+    # build_discovery() reads the CID 6798 register via is_tou_v2_mode(), so the real
+    # cached_values-based detection is bound here rather than MockSolisAPI's _test_v2_mode
+    # shortcut (same reasoning as _StorageModeInverter's override, #4774).
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+    return api
+
+
+def test_solis_catalogue_describes_battery_and_pv_only():
+    """A battery inverter is a SolisCloud inverter; a PV-only one reports solar with no inverter_type.
+
+    A third serial carries no entry in inverter_details at all - not read yet, or a failed fetch -
+    which automatic_config() retries rather than treats as settled; its record must claim neither
+    "solar" nor any other function, rather than the misleading PV-only guess it would get if empty
+    detail were treated the same as a confirmed no-battery detail (_DETAIL_NO_BATTERY, on PV001,
+    which does have a read detail and must still get ["solar"]).
+    """
+    api = _solis_fleet()
+    api.inverter_sn = api.inverter_sn + ["NODETAIL001"]
+    report = api.build_discovery()
+    by_id = {record["device_id"]: record for record in report["inverters"]}
+    assert set(by_id) == {"solis:BAT001", "solis:PV001", "solis:NODETAIL001"}, sorted(by_id)
+    battery = by_id["solis:BAT001"]
+    assert battery["inverter_type"] == "SolisCloud"
+    assert battery["composition"] == "direct"
+    assert battery["functions"] == ["solar", "battery"]
+    assert battery["hardware_ids"] == {"serial": "BAT001"}
+    assert battery["info"] == {"model": "Solis-5G-Hybrid"}
+    assert sorted(battery["capabilities"]) == ["charge_rate_power", "discharge_target", "schedule", "soh", "target_soc"]
+    assert battery["flags"] == ["tou_v2"]
+    pv = by_id["solis:PV001"]
+    assert "inverter_type" not in pv, "a PV-only inverter is not one automatic_config() configures"
+    assert pv["functions"] == ["solar"], "every Solis inverter feeds the PV totals (automatic_config's pv_devices)"
+    assert "capabilities" not in pv
+    no_detail = by_id["solis:NODETAIL001"]
+    assert "functions" not in no_detail, "no detail read yet must not claim PV-only"
+    assert "inverter_type" not in no_detail
+    return False
+
+
+def test_solis_catalogue_battery_ratings_carry_only_stated_facts():
+    """battery_capacity_ah is the bank total (register 172 x pack count); kWh only when the voltage is configured.
+
+    The fixture is 100 Ah per pack (register 172) with 2 packs, so the bank total is 200.0 Ah -
+    publish_entities() multiplies by parallel_battery_count the same way, so battery_capacity_ah
+    means the same thing here as on every other reporter.
+
+    GH#5090: without solis_nominal_voltage the voltage is inferred, and for an HV pack still a live
+    reading that moves dump to dump, so a derived kWh would present an estimate as a rating.
+    """
+    api = _solis_fleet()
+    ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+    assert ratings == {"inverter_w": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
+    api.nominal_pack_voltage = 51.2
+    ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+    assert ratings["battery_kwh"] == round(100.0 * 2 * 51.2 / 1000.0, 2), ratings
+    # Prove the rounding actually does something, not just that it's a no-op here: 314 Ah x 1 pack
+    # at 51.2V is 16.0768 kWh, which must round to 16.08.
+    api.cached_values["BAT001"][SOLIS_CID_BATTERY_CAPACITY] = "314"
+    api.parallel_battery_count["BAT001"] = 1
+    ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+    assert ratings["battery_kwh"] == 16.08, ratings
+    return False
+
+
+async def test_solis_catalogue_inverter_type_tracks_automatic_config():
+    """inverter_type is set exactly where the real automatic_config() would configure the inverter.
+
+    Uses the existing _run_automatic_config() helper, which runs the real automatic_config() over the
+    captured details and returns the set_arg_auto args it recorded. "battery but no SoH field" is the
+    case the predicate excludes despite a battery: automatic_config() needs batteryHealthSoh to parse.
+    """
+    cases = {
+        "with battery": _DETAIL_WITH_BATTERY,
+        "no battery": _DETAIL_NO_BATTERY,
+        "no battery, alt firmware": _DETAIL_NO_BATTERY_ALT_FIRMWARE,
+        "with battery, alt firmware": _DETAIL_WITH_BATTERY_ALT_FIRMWARE,
+        "battery but no SoH field": {key: value for key, value in _DETAIL_WITH_BATTERY.items() if key != "batteryHealthSoh"},
+    }
+    for label, detail in cases.items():
+        recorded, api = await _run_automatic_config({"INV001": dict(detail)})
+        record = api.build_discovery()["inverters"][0]
+        assert ("inverter_type" in record) == ("inverter_type" in recorded), "{}: catalogue says {!r}, automatic_config configured {!r}".format(label, record.get("inverter_type"), recorded.get("inverter_type"))
+    return False
+
+
+def test_solis_catalogue_never_reports_the_inverter_name():
+    """inverterName is user-set free text and must never reach the report."""
+    api = _solis_fleet()
+    api.inverter_details["BAT001"]["inverterName"] = "12 Acacia Avenue"
+    assert "Acacia" not in str(api.build_discovery()), "inverterName leaked into the report"
+    return False
+
+
+def test_solis_catalogue_none_before_discovery():
+    """With no inverters there is nothing to describe."""
+    assert MockSolisAPI().build_discovery() is None
+    return False
+
+
+def test_solis_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every Solis record back unchanged."""
+    api = _solis_fleet()
+    api.nominal_pack_voltage = 51.2
+    report = api.build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "solis", warnings.append)
+    assert not warnings, warnings
+    assert cleaned["inverters"] == report["inverters"], (report["inverters"], cleaned["inverters"])
+    return False
+
+
+async def test_solis_catalogue_filed_even_when_automatic_config_configures_nothing():
+    """run() files the report on a cycle where the real automatic_config() finds no battery inverter.
+
+    Solis's automatic_config() returns False rather than raising, and is gated on
+    automatic_config_done; the report must not depend on either. Built on _make_run_api() and
+    test_run_first_success(): the discovered inverter has the captured no-battery detail.
+    """
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], automatic=True)
+    # _make_run_api() stubs automatic_config(); put the real one back so it genuinely runs.
+    api.automatic_config = SolisAPI.automatic_config.__get__(api)
+    configured = {}
+    api.set_arg_auto = lambda key, value: configured.__setitem__(key, value)
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    # _make_run_api()'s fetch_inverter_details stub only records the call, so this detail survives.
+    api.inverter_details = {sn: dict(_DETAIL_NO_BATTERY)}
+    reports = []
+    api.report_discovery = reports.append
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+    # automatic_config() found no battery inverter. It returns details_read (True here), so
+    # automatic_config_done DOES become True - "done, nothing to configure" - which is why this
+    # asserts on what it configured, not on that flag.
+    assert "inverter_type" not in configured, "automatic_config() found no battery inverter, so it must configure nothing: {}".format(configured)
+    assert len(reports) == 1 and reports[0]["inverters"][0]["device_id"] == "solis:" + sn, reports
+    return False
+
+
+async def test_solis_catalogue_filed_when_automatic_config_gate_is_closed():
+    """run() files the report even when the auto-configure gate never opens.
+
+    The neighbouring test (_configures_nothing, above) runs with the gate open
+    (self.automatic=True), so moving refresh_discovery() inside `if self.automatic and
+    self.inverter_sn and not self.automatic_config_done:` in run() would not be caught by it -
+    that block still executes on that cycle and the call would still fire. Here self.automatic is
+    False (the _make_run_api() default), so the gate never opens at all; automatic_config() must
+    not even be called, and the report must still be filed.
+    """
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_details = {sn: dict(_DETAIL_NO_BATTERY)}
+    reports = []
+    api.report_discovery = reports.append
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+    assert api.automatic_config_calls == 0, "the gate must stay closed for this test to prove anything: {}".format(api.automatic_config_calls)
+    assert len(reports) == 1 and reports[0]["inverters"][0]["device_id"] == "solis:" + sn, reports
+    return False
+
+
+async def test_solis_catalogue_refiled_on_a_later_cycle():
+    """run() files a second, different report once a reported fact changes on a later cycle.
+
+    Every wiring test above only drives first=True, so none of them proves the refresh_discovery()
+    call sits outside a one-shot `if first:` block. Here run() is driven twice - first=True, then
+    first=False after the pack's cached Ah rating changes - and both reports must be filed and
+    differ from each other.
+    """
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_details = {sn: dict(_DETAIL_WITH_BATTERY)}
+    api.cached_values = {sn: {SOLIS_CID_BATTERY_CAPACITY: "100"}}
+    api.parallel_battery_count = {sn: 1}
+    reports = []
+    api.report_discovery = reports.append
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        # A changed fact on a later cycle - the bank's cached Ah rating moved.
+        api.cached_values[sn][SOLIS_CID_BATTERY_CAPACITY] = "150"
+        await api.run(60, False)
+    assert len(reports) == 2, "a changed rating on a later cycle must file a second report: {}".format(reports)
+    assert reports[0] != reports[1], "the second report must actually differ from the first: {}".format(reports)
+    return False
+
+
 async def test_automatic_config_skips_no_battery_inverter():
     """An inverter SolisCloud reports as having no battery must not be enrolled as a battery inverter.
 
@@ -1457,6 +1680,12 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_health_message_names_the_quota_limit())
         failed |= asyncio.run(test_quota_diagnostic_survives_until_a_request_succeeds())
         failed |= asyncio.run(test_offline_datalogger_stops_being_polled())
+        failed |= asyncio.run(test_run_survives_startup_register_reset_refusal())
+        failed |= asyncio.run(test_b0600_backs_off_without_calling_the_datalogger_offline())
+        failed |= asyncio.run(test_startup_leaves_an_inverter_in_datalogger_cooldown_alone())
+        failed |= asyncio.run(test_datalogger_diagnostic_dropped_once_the_inverter_leaves_the_rotation())
+        failed |= asyncio.run(test_datalogger_diagnostic_cleared_by_an_unrelated_failure_after_its_cooldown())
+        failed |= asyncio.run(test_datalogger_reason_follows_the_latest_refusal())
         failed |= asyncio.run(test_automatic_config_settles_on_a_pv_only_fleet())
         failed |= asyncio.run(test_discovery_cache_lets_a_restart_configure_without_the_api())
         failed |= asyncio.run(test_successful_discovery_is_cached_and_session_reused())
@@ -1467,6 +1696,15 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
+        failed |= test_solis_catalogue_describes_battery_and_pv_only()
+        failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
+        failed |= asyncio.run(test_solis_catalogue_inverter_type_tracks_automatic_config())
+        failed |= test_solis_catalogue_never_reports_the_inverter_name()
+        failed |= test_solis_catalogue_none_before_discovery()
+        failed |= test_solis_catalogue_round_trips_through_validate_report()
+        failed |= asyncio.run(test_solis_catalogue_filed_even_when_automatic_config_configures_nothing())
+        failed |= asyncio.run(test_solis_catalogue_filed_when_automatic_config_gate_is_closed())
+        failed |= asyncio.run(test_solis_catalogue_refiled_on_a_later_cycle())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())
@@ -1483,6 +1721,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_discharge_soc_unchanged_above_recovery())
         failed |= asyncio.run(test_discharge_soc_unclamped_when_recovery_unknown())
         failed |= asyncio.run(test_recovery_soc_not_lowered_below_inverter_minimum())
+        failed |= asyncio.run(test_implausible_recovery_soc_falls_back_to_inverter_minimum())
+        failed |= test_get_rated_current()
+        failed |= asyncio.run(test_v2_slot_currents_capped_at_inverter_rating())
+        failed |= asyncio.run(test_v1_slot_currents_capped_at_inverter_rating())
+        failed |= asyncio.run(test_slot_currents_uncapped_when_inverter_size_unknown())
         failed |= asyncio.run(test_control_write_failure_withholds_success_timestamp())
         failed |= asyncio.run(test_control_write_success_updates_success_timestamp())
         failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
@@ -2597,6 +2840,173 @@ async def test_recovery_soc_not_lowered_below_inverter_minimum():
     assert _written_recovery(api) == "21", f"Recovery SOC should stop at over-discharge + 1 = 21, got {_written_recovery(api)}"
     assert _written_soc(api) == "21", f"Discharge SOC should be clamped to 21, got {_written_soc(api)}"
     print("PASSED: Recovery floored at 21 and the target clamped to match")
+    return False
+
+
+async def test_implausible_recovery_soc_falls_back_to_inverter_minimum():
+    """A recovery SOC reading that cannot be right is replaced by over-discharge + 1 (issue #5187).
+
+    Most of the fleet reports 0, 1, the over-discharge SOC itself or 65521 for CID 7229. Taken at
+    face value any of those let a target at the over-discharge SOC through unclamped, which the
+    inverter refuses, so the slot kept a stale cut-off of 40-50%. The fallback is never written
+    back to the inverter, since the reading it would be verified against is the one that is wrong.
+    """
+    print("\n=== Test: implausible recovery SOC falls back to over-discharge + 1 ===")
+
+    # (description, discharge target, recovery reading, over-discharge, expected SOC write)
+    cases = [
+        ("recovery reads 0", 12, 0, 12, "13"),
+        ("recovery reads the over-discharge SOC", 15, 15, 15, "16"),
+        ("recovery reads 65521", 10, 65521, 10, "11"),
+        ("recovery reads 0 but the target is reachable anyway", 40, 0, 12, "40"),
+        ("recovery reads 65521 and over-discharge is unknown", 20, 65521, None, "20"),
+    ]
+    for description, target, recovery, over_discharge, expected in cases:
+        api = _discharge_slot_api(discharge_soc=target, recovery_soc=recovery, over_discharge_soc=over_discharge)
+        assert await api.write_time_windows_if_changed("TEST123") is True, f"{description}: write_time_windows_if_changed should succeed"
+        assert _written_soc(api) == expected, f"{description}: discharge SOC should be {expected}, got {_written_soc(api)}"
+        assert _written_recovery(api) is None, f"{description}: an implausible recovery SOC must not be written back, got {_written_recovery(api)}"
+
+    print("PASSED: Implausible recovery SOC readings clamp to over-discharge + 1 without being written")
+    return False
+
+
+def _rated_inverter_api(inverter_sn="TEST123", power=3.6):
+    """Build a V2-mode MockSolisAPI for a 3.6kW inverter whose battery limits read 100A, as in issue #5187.
+
+    Args:
+        inverter_sn: Inverter serial number to use
+        power: inverterDetail power in kW, or None to leave the inverter size unknown
+
+    Returns: The configured MockSolisAPI, with an enabled discharge slot 1 asking for 100A
+    """
+    api = _discharge_slot_api(discharge_soc=40, recovery_soc=21, over_discharge_soc=20, inverter_sn=inverter_sn)
+    api.charge_discharge_time_windows[inverter_sn][1]["discharge_current"] = 100
+    api.cached_values[inverter_sn][SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT] = "100"
+    api.cached_values[inverter_sn][SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT] = "100"
+    if power is not None:
+        api.inverter_details[inverter_sn] = {"power": power, "powerStr": "kW"}
+    return api
+
+
+def _written_value(api, cid):
+    """Return the last value written to a CID, or None if it was not written.
+
+    Args:
+        api: MockSolisAPI whose recorded calls should be searched
+        cid: CID to look for
+
+    Returns: The written value as a string, or None
+    """
+    values = [c["value"] for c in api.read_and_write_cid_calls if c["cid"] == cid]
+    return values[-1] if values else None
+
+
+def test_get_rated_current():
+    """The rated current is the inverter size over the nominal pack voltage, floored to whole amps."""
+    print("\n=== Test: get_rated_current ===")
+
+    sn = "TEST123"
+    # (description, inverterDetail, expected amps)
+    cases = [
+        ("3.6kW on a 48V pack", {"power": 3.6, "powerStr": "kW"}, 75.0),
+        ("3.6kW on a 16S pack", {"power": "3.6", "powerStr": "kW", "batteryAcvSet": 56.8}, 70.0),
+        ("size reported in watts", {"power": 3600, "powerStr": "W"}, 75.0),
+        ("unit missing, taken as kW", {"power": 3.6}, 75.0),
+        ("size missing", {}, None),
+        ("size zero", {"power": 0, "powerStr": "kW"}, None),
+        ("size not a number", {"power": "junk", "powerStr": "kW"}, None),
+        ("unrecognised unit", {"power": 3.6, "powerStr": "kVA"}, None),
+    ]
+    for description, detail, expected in cases:
+        api = MockSolisAPI()
+        api.inverter_details[sn] = detail
+        rated = api.get_rated_current(sn)
+        assert rated == expected, f"{description}: expected {expected}, got {rated}"
+
+    print("PASSED: Rated current derived from inverter size and nominal voltage")
+    return False
+
+
+async def test_v2_slot_currents_capped_at_inverter_rating():
+    """A V2 slot current is never written above what the inverter can deliver (issue #5187).
+
+    The battery limit (CID 7226) reads 100A, but on a 3.6kW inverter at 48V the most it can move is
+    75A; the inverter refused 100A every minute and left the slot at 0A instead.
+    """
+    print("\n=== Test: V2 slot currents capped at the inverter rating ===")
+
+    sn = "TEST123"
+    api = _rated_inverter_api(inverter_sn=sn)
+    api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    assert _written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0]) == "75.0", f"Discharge current should be capped at 75.0A, got {_written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0])}"
+    assert any("Capping slot currents on TEST123 at 75.0A" in m for m in api.log_messages), "The cap should be logged"
+
+    # The same cap applies to a charge slot
+    api = _rated_inverter_api(inverter_sn=sn)
+    api.cached_values[sn][SOLIS_CID_CHARGE_CURRENT[0]] = "0"
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 100, "discharge_enable": 0})
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    assert _written_value(api, SOLIS_CID_CHARGE_CURRENT[0]) == "75.0", f"Charge current should be capped at 75.0A, got {_written_value(api, SOLIS_CID_CHARGE_CURRENT[0])}"
+
+    # The windows Predbat asked for are left as they were, only the write is capped
+    assert api.charge_discharge_time_windows[sn][1]["charge_current"] == 100, "The requested current must not be rewritten in the local windows"
+
+    print("PASSED: 100A requests written as 75A on a 3.6kW inverter")
+    return False
+
+
+async def test_v1_slot_currents_capped_at_inverter_rating():
+    """The V1 path encodes capped currents into CID 103 as well."""
+    print("\n=== Test: V1 slot currents capped at the inverter rating ===")
+
+    sn = "TEST123"
+    api = MockSolisAPI()
+    api._test_v2_mode = False
+    api._mock_storage_mode = True
+    api.inverter_sn = [sn]
+    api.inverter_details[sn] = {"power": 3.6, "powerStr": "kW"}
+    windows = {}
+    for slot in range(1, 4):
+        windows[slot] = {
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_current": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_current": 0,
+            "field_length": 18,
+        }
+    windows[1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 100, "discharge_current": 100})
+    api.charge_discharge_time_windows[sn] = windows
+    api.cached_values[sn] = {}
+    # Outside the window, so the in-slot SOC handling cannot zero a current either way
+    api._test_now_utc_exact = datetime(2026, 9, 21, 12, 0, tzinfo=api.local_tz)
+
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    encoded = _written_value(api, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS)
+    assert encoded is not None, "CID 103 should be written"
+    assert encoded.startswith("75,75,02:00,05:00,"), f"Slot 1 currents should be encoded as 75A, got {encoded}"
+
+    print("PASSED: V1 currents encoded at the 75A rating")
+    return False
+
+
+async def test_slot_currents_uncapped_when_inverter_size_unknown():
+    """Without an inverter size there is no rating to cap at, so the existing limits alone apply."""
+    print("\n=== Test: slot currents uncapped when the inverter size is unknown ===")
+
+    sn = "TEST123"
+    api = _rated_inverter_api(inverter_sn=sn, power=None)
+    # An absent register is taken to be at the battery limit already, so give it something to change from
+    api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    assert _written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0]) == "100.0", f"Discharge current should be the uncapped 100.0A, got {_written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0])}"
+    assert not any("Capping" in m for m in api.log_messages), "Nothing should be capped"
+
+    print("PASSED: Unknown inverter size leaves the current at the battery limit")
     return False
 
 
@@ -5940,10 +6350,10 @@ async def test_quota_pause_expires_and_requests_resume():
 
 
 async def test_with_retry_does_not_retry_settled_codes():
-    """R0000 and B0115 get one attempt: retrying them cannot help and each attempt costs a request."""
+    """R0000, B0115 and B0600 get one attempt: retrying them cannot help and each attempt costs a request."""
     failed = False
 
-    for code in ("R0000", "B0115"):
+    for code in ("R0000", "B0115", "B0600"):
         api = MockSolisAPI()
         attempts = {"n": 0}
 
@@ -6165,7 +6575,7 @@ async def test_offline_datalogger_stops_being_polled():
     api = _make_run_api(configured_sns=[offline_sn, healthy_sn], control_enable=False)
     api.inverter_sn = [offline_sn, healthy_sn]
     api._test_now_utc_exact = datetime(2026, 3, 4, 12, 0, 0, tzinfo=UTC)
-    api.note_datalogger_offline(offline_sn)
+    api.note_datalogger_offline(offline_sn, solis_module.SOLIS_API_CODE_DATALOGGER_OFFLINE)
 
     await api.run(60, False)
 
@@ -6193,6 +6603,296 @@ async def test_offline_datalogger_stops_being_polled():
 
     if not failed:
         print("PASSED: an offline datalogger is skipped until its cooldown expires, then re-probed")
+    return failed
+
+
+# ==================== Datalogger refusing remote reads (issue #5177) ====================
+
+
+async def test_run_survives_startup_register_reset_refusal():
+    """A refused startup register read must not abort the whole first cycle.
+
+    startup_reset_registers() only lowers the over-discharge SoC, but its read was unguarded, so a
+    datalogger that refuses every remote read (B0600, and B0115 the same way) killed each startup
+    attempt before automatic_config() could bind the args, and Predbat ran with no inverter at all
+    (issue #5177). This drives the real reset against a canned SolisCloud refusal.
+    """
+    failed = False
+    sn = "INV001"
+    refusals = (
+        ("B0600", "Datalogger returns data abnormally. Please try again later"),
+        ("B0115", "Sending failure ,the current datalogger is offline or disconnected"),
+    )
+    for code, msg in refusals:
+        api = _make_run_api(configured_sns=[sn], control_enable=True, automatic=True)
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC)
+        del api.startup_reset_registers  # The real reset, not _make_run_api's no-op
+        session = _RecordingSession(_FakeResponse(status=200, payload={"code": code, "msg": msg}))
+        api.session = session  # run() reuses an existing session rather than opening one
+
+        async def mock_get_inverter_list():
+            """Discovery succeeds, as it did on the reporting account."""
+            return [{"sn": sn}]
+
+        api.get_inverter_list = mock_get_inverter_list
+
+        try:
+            await api.run(0, True)
+        except solis_module.SolisAPIError as err:
+            print("ERROR: {} on the startup register read aborted run(): {}".format(code, err))
+            failed = True
+            continue
+
+        if len(session.post_calls) != 1:
+            print("ERROR: {} on the startup register read should be sent once, got {} requests".format(code, len(session.post_calls)))
+            failed = True
+        if not any("Startup register reset failed for inverter {}".format(sn) in m for m in api.log_messages):
+            print("ERROR: expected a warning naming the failed startup reset for {}, got {}".format(code, api.log_messages))
+            failed = True
+        if api.automatic_config_calls != 1:
+            print("ERROR: auto-config should still be attempted after a {} startup reset, got {} calls".format(code, api.automatic_config_calls))
+            failed = True
+        if api.publish_entities_calls != 1:
+            print("ERROR: entities should still be published after a {} startup reset, got {} calls".format(code, api.publish_entities_calls))
+            failed = True
+        if not api.datalogger_offline(sn):
+            print("ERROR: {} should back off the inverter for the rest of the cycle".format(code))
+            failed = True
+        message = api.health_message()
+        if not message or sn not in message:
+            print("ERROR: expected the run status to name {} for {}, got {}".format(sn, code, message))
+            failed = True
+
+    if not failed:
+        print("PASSED: a refused startup register read is logged and startup carries on")
+    return failed
+
+
+async def test_b0600_backs_off_without_calling_the_datalogger_offline():
+    """B0600 is backed off like B0115, but the log and run status must not call it offline.
+
+    The owner in issue #5177 could see the datalogger online in SolisCloud; it just would not answer
+    remote reads. The run status also has to outlast the cooldown, because a component stuck in
+    startup backoff re-probes up to two hours apart.
+    """
+    failed = False
+    sn = "INV001"
+    other_sn = "INV002"
+    api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.inverter_sn = [sn, other_sn]
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "B0600", "msg": "Datalogger returns data abnormally. Please try again later"}))
+
+    try:
+        await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": sn, "cid": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC})
+        print("ERROR: expected SolisAPIError for the B0600 response")
+        failed = True
+    except solis_module.SolisAPIError as err:
+        if err.response_code != "B0600":
+            print("ERROR: expected response_code B0600, got {}".format(err.response_code))
+            failed = True
+        if "Unknown code" in str(err):
+            print("ERROR: B0600 should be a known code, got {}".format(err))
+            failed = True
+
+    if not api.datalogger_offline(sn):
+        print("ERROR: B0600 should back off that inverter's reads")
+        failed = True
+    if api.quota_exhausted_until is not None:
+        print("ERROR: B0600 is not a quota failure and must not pause requests")
+        failed = True
+    pause_logs = [m for m in api.log_messages if sn in m and "pausing its reads" in m]
+    if not pause_logs or "offline" in pause_logs[0] or "abnormally" not in pause_logs[0]:
+        print("ERROR: expected a pause log naming B0600 as abnormal data rather than offline, got {}".format(pause_logs))
+        failed = True
+    message = api.health_message()
+    if not message or sn not in message or "B0600" not in message or "offline" in message:
+        print("ERROR: expected the health message to name B0600 for {} without calling it offline, got {}".format(sn, message))
+        failed = True
+
+    # A second inverter that is genuinely offline is reported under its own reason
+    api.note_datalogger_offline(other_sn, solis_module.SOLIS_API_CODE_DATALOGGER_OFFLINE)
+    message = api.health_message() or ""
+    if "offline or disconnected for inverter {}".format(other_sn) not in message or "B0600) for inverter {}".format(sn) not in message:
+        print("ERROR: expected each inverter under its own reason, got {}".format(message))
+        failed = True
+
+    # The cooldown lapses, but nothing has succeeded yet, so the run status still names it
+    api._test_now_utc_exact = datetime(2026, 9, 7, 13, 0, 0, tzinfo=UTC)
+    if api.datalogger_offline(sn):
+        print("ERROR: the B0600 cooldown should have lapsed after an hour")
+        failed = True
+    message = api.health_message()
+    if not message or sn not in message:
+        print("ERROR: the diagnostic should outlast the cooldown until a request succeeds, got {}".format(message))
+        failed = True
+
+    # A read that succeeds clears it
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {"msg": "20"}}))
+    await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": sn, "cid": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC})
+    message = api.health_message() or ""
+    if sn in message or sn in api.datalogger_cooldown_code:
+        print("ERROR: a successful read should clear the B0600 diagnostic, got {}".format(message))
+        failed = True
+
+    if not failed:
+        print("PASSED: B0600 backs off the inverter and is reported as abnormal data, not offline")
+    return failed
+
+
+async def test_startup_leaves_an_inverter_in_datalogger_cooldown_alone():
+    """Startup attempts inside a datalogger cooldown send nothing for that inverter.
+
+    Early startup backoff re-runs the first-cycle block 2, 6 and 14 minutes in, all inside the 15
+    minute cooldown, and each attempt used to send the detail read, the TOU mode read and the reset
+    read regardless - every one refused, every one counted against the 200 a day (issue #5177). This
+    drives the real detail, poll and reset code against a datalogger that refuses everything.
+    """
+    failed = False
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+    api._test_now_utc_exact = datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC)
+    # The real requests, not _make_run_api's no-ops
+    del api.fetch_inverter_details
+    del api.poll_inverter_data
+    del api.startup_reset_registers
+    session = _RecordingSession(_FakeResponse(status=200, payload={"code": "B0600", "msg": "Datalogger returns data abnormally. Please try again later"}))
+    api.session = session
+
+    async def mock_get_inverter_list():
+        """Discovery succeeds, as it did on the reporting account."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    # The first refusal starts the cooldown, and nothing more is sent for that inverter
+    if await api.run(0, True):
+        print("ERROR: a startup attempt whose only inverter is in cooldown should fail, so startup is retried")
+        failed = True
+    if len(session.post_calls) != 1:
+        print("ERROR: the first startup attempt should stop at its first refusal, got {} requests".format(len(session.post_calls)))
+        failed = True
+
+    # The early backoff attempts all land inside the cooldown and send nothing
+    for minutes in (2, 6, 14):
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, minutes, 0, tzinfo=UTC)
+        session.post_calls = []
+        if await api.run(minutes * 60, True):
+            print("ERROR: the startup attempt at {} minutes should still fail".format(minutes))
+            failed = True
+        if session.post_calls:
+            print("ERROR: the startup attempt at {} minutes should send nothing, got {} requests".format(minutes, len(session.post_calls)))
+            failed = True
+
+    # The first attempt after the cooldown expires probes it again
+    api._test_now_utc_exact = datetime(2026, 9, 7, 12, 30, 0, tzinfo=UTC)
+    session.post_calls = []
+    await api.run(30 * 60, True)
+    if len(session.post_calls) != 1:
+        print("ERROR: the attempt after the cooldown should re-probe with one request, got {}".format(len(session.post_calls)))
+        failed = True
+
+    if not failed:
+        print("PASSED: startup sends nothing to a datalogger in its cooldown and re-probes once it expires")
+    return failed
+
+
+async def test_datalogger_diagnostic_dropped_once_the_inverter_leaves_the_rotation():
+    """An inverter that is no longer polled is not reported for ever, since no request will clear it."""
+    failed = False
+    sn = "INV001"
+    api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.inverter_sn = [sn]
+    api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_ABNORMAL)
+
+    message = api.health_message()
+    if not message or sn not in message:
+        print("ERROR: expected the health message to name {} while it is polled, got {}".format(sn, message))
+        failed = True
+
+    # Dropped by discovery, or removed from the inverter_sn setting
+    api.inverter_sn = []
+    if api.health_message() is not None:
+        print("ERROR: an inverter no longer polled should not be reported, got {}".format(api.health_message()))
+        failed = True
+
+    if not failed:
+        print("PASSED: the datalogger diagnostic only covers inverters still being polled")
+    return failed
+
+
+async def test_datalogger_diagnostic_cleared_by_an_unrelated_failure_after_its_cooldown():
+    """Once the cooldown has expired, a re-probe failing for another reason stops the datalogger being blamed.
+
+    The diagnostic outlasts the cooldown until a request succeeds, so without this an HTTP error or an
+    unrelated API code on the re-probe - a SolisCloud outage, say - would still be reported as the
+    datalogger returning data abnormally.
+    """
+    failed = False
+    sn = "INV001"
+    payload = {"inverterSn": sn, "cid": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC}
+    unrelated_failures = (
+        ("an HTTP 500", _FakeResponse(status=500, payload={"error": "Internal Server Error"})),
+        ("an unrelated API code", _FakeResponse(status=200, payload={"code": "1", "msg": "System error"})),
+    )
+    for description, response in unrelated_failures:
+        api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+        api.inverter_sn = [sn]
+        api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_ABNORMAL)
+        api.session = _RecordingSession(response)
+
+        # Inside the cooldown it changes nothing
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, 5, 0, tzinfo=UTC)
+        try:
+            await api._execute_request(SOLIS_READ_ENDPOINT, payload)
+        except solis_module.SolisAPIError:
+            pass
+        message = api.health_message() or ""
+        if not api.datalogger_offline(sn) or "B0600" not in message:
+            print("ERROR: {} inside the cooldown should leave it and its reason alone, got {}".format(description, message))
+            failed = True
+
+        # After it expires the datalogger is no longer the latest explanation
+        api._test_now_utc_exact = datetime(2026, 9, 7, 12, 20, 0, tzinfo=UTC)
+        try:
+            await api._execute_request(SOLIS_READ_ENDPOINT, payload)
+        except solis_module.SolisAPIError:
+            pass
+        if api.health_message() is not None or sn in api.datalogger_cooldown_code:
+            print("ERROR: {} after the cooldown should clear the datalogger diagnostic, got {}".format(description, api.health_message()))
+            failed = True
+
+    if not failed:
+        print("PASSED: an unrelated failure after the cooldown clears the datalogger diagnostic")
+    return failed
+
+
+async def test_datalogger_reason_follows_the_latest_refusal():
+    """A refusal inside the cooldown updates the reported reason without extending the cooldown or re-logging."""
+    failed = False
+    sn = "INV001"
+    api = _quota_api(now=datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC))
+    api.inverter_sn = [sn]
+    api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_OFFLINE)
+    resume_at = api.datalogger_offline_until[sn]
+
+    # The refusals turn from B0115 into B0600 part way through the cooldown
+    api._test_now_utc_exact = datetime(2026, 9, 7, 12, 5, 0, tzinfo=UTC)
+    api.note_datalogger_offline(sn, solis_module.SOLIS_API_CODE_DATALOGGER_ABNORMAL)
+
+    message = api.health_message() or ""
+    if "B0600" not in message or "offline" in message:
+        print("ERROR: expected the health message to report the latest refusal, B0600, got {}".format(message))
+        failed = True
+    if api.datalogger_offline_until[sn] != resume_at:
+        print("ERROR: a refusal inside the cooldown must not extend it, got {} instead of {}".format(api.datalogger_offline_until[sn], resume_at))
+        failed = True
+    pause_logs = [m for m in api.log_messages if "pausing its reads" in m]
+    if len(pause_logs) != 1:
+        print("ERROR: the pause should be logged once, got {}".format(pause_logs))
+        failed = True
+
+    if not failed:
+        print("PASSED: the reported reason follows the latest refusal")
     return failed
 
 

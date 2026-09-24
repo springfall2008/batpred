@@ -51,6 +51,7 @@ from web_helper import (
     get_html_config_css,
     get_apps_js,
     get_components_css,
+    get_discovery_css,
     get_entity_modal_css,
     get_component_edit_modal_css,
     get_entity_modal_js,
@@ -520,6 +521,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
+        app.router.add_get("/discovery", self.html_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -4329,7 +4331,7 @@ chart.render();
                 self.args.update(live_args)
                 # A credential value or the redact_strings/redact_strings_labelled denylists
                 # themselves can change in this batch, so log()'s cached redaction pattern
-                # (hass.py, held on self.base - the PredBat instance, not this web component)
+                # (log_secrets.py, held on self.base - the PredBat instance, not this web component)
                 # must be rebuilt on next use, or a newly added/changed secret keeps leaking into
                 # the log under the stale pattern until the restart below completes (GH#4770 review).
                 self.base._invalidate_log_secret_pattern()
@@ -5138,6 +5140,160 @@ chart.render();
         except Exception as e:
             self.log(f"Error in html_component_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
+
+    def _coordinator(self):
+        """Return the discovery coordinator, or None when there is no component registry."""
+        components = getattr(self.base, "components", None)
+        return getattr(components, "coordinator", None) if components else None
+
+    def _discovery_value_html(self, value):
+        """Render one catalogue value - a scalar, a list or a nested container - as HTML.
+
+        Deliberately generic: it renders whatever shape it is handed rather than knowing the
+        catalogue's fields. The catalogue is designed to grow, and a renderer written against a
+        fixed field list would silently omit anything added later - which is precisely the kind of
+        gap an observe-only release exists to catch. Every value is escaped: info strings come from
+        third-party vendor APIs, not from Predbat.
+        """
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if not value:
+                return "<span class='discovery-token'>none</span>"
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return " ".join("<span class='discovery-token'>{}</span>".format(html_module.escape(str(item))) for item in value)
+            return "".join("<div class='discovery-nested'>{}</div>".format(self._discovery_value_html(item)) for item in value)
+        return "<span class='discovery-token'>{}</span>".format(html_module.escape(str(value)))
+
+    def _discovery_fields_html(self, mapping, skip=()):
+        """Render a mapping as labelled rows, recursing into whatever it nests."""
+        text = ""
+        for key in mapping:
+            if key in skip:
+                continue
+            value = mapping[key]
+            label = html_module.escape(str(key))
+            nested = isinstance(value, dict) and value
+            nested = nested or (isinstance(value, list) and value and any(isinstance(item, (dict, list)) for item in value))
+            if nested:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>:</div>\n".format(label)
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_value_html(value))
+            else:
+                text += "<div class='discovery-field'><span class='discovery-key'>{}</span>: {}</div>\n".format(label, self._discovery_value_html(value))
+        return text
+
+    def _discovery_record_html(self, record):
+        """Render one catalogue record as a card, titled by its device_id and reporting source."""
+        text = "<div class='discovery-card'>\n"
+        text += "<div class='discovery-card-title'>{}".format(html_module.escape(str(record.get("device_id", "(no device_id)"))))
+        source = record.get("source")
+        if source:
+            text += "<span class='discovery-source'>{}</span>".format(html_module.escape(str(source)))
+        text += "</div>\n"
+        # entities is much the largest container on a real inverter - collapsed so one record does
+        # not push every other section off the screen.
+        entities = record.get("entities")
+        text += self._discovery_fields_html(record, skip=("device_id", "source", "entities"))
+        if entities:
+            text += "<details><summary>{} entities</summary><div class='discovery-nested'>{}</div></details>\n".format(len(entities), self._discovery_fields_html(entities))
+        text += "</div>\n"
+        return text
+
+    def _discovery_document_html(self, catalogue):
+        """Render the whole catalogue as the YAML a bug report would carry, for copying out."""
+        try:
+            stream = StringIO()
+            YAML().dump(json.loads(json.dumps(catalogue, default=str)), stream)
+            body = stream.getvalue()
+        except Exception as e:
+            self.log("Warn: Web: could not render the discovery document as YAML: {}".format(e))
+            body = json.dumps(catalogue, indent=2, default=str)
+        return "<details><summary>Full document</summary><pre class='discovery-raw'>{}</pre></details>\n".format(html_module.escape(body))
+
+    async def html_discovery(self, request):
+        """
+        Return the discovery catalogue as an HTML page
+
+        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
+        back out: that entity deliberately carries only a summary, and the coordinator is the
+        better coupling anyway (see Coordinator.publish()).
+        """
+        raw = str(request.query.get("raw", "")).lower() in ("1", "true", "yes", "on")
+        self.default_page = "./discovery"
+        text = self.get_header("Predbat Discovery", refresh=60)
+        text += "<body>\n"
+        text += get_discovery_css()
+        text += "<h2>Discovery Catalogue</h2>\n"
+
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue_raw() if raw else coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+
+        if catalogue is None:
+            text += "<div class='discovery-empty'>The discovery catalogue is not available - no component coordinator is running yet.</div>\n"
+            text += "</body></html>\n"
+            return web.Response(content_type="text/html", text=text)
+
+        # Any list at the top level is a section of records, so a section added to the catalogue
+        # later appears here without this page being taught about it.
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        sections = [key for key, value in catalogue.items() if key not in meta_keys and isinstance(value, list)]
+
+        text += "<div class='discovery-bar'>\n"
+        text += "<div class='discovery-counts'>\n"
+        text += "<span class='discovery-count'>schema {}</span>\n".format(html_module.escape(str(catalogue.get("schema_version", "?"))))
+        text += "<span class='discovery-count'>generated {}</span>\n".format(html_module.escape(str(catalogue.get("generated", "?"))))
+        for section in sections:
+            text += "<span class='discovery-count'>{} {}</span>\n".format(len(catalogue[section]), html_module.escape(section))
+        text += "</div>\n"
+        if raw:
+            text += "<a class='discovery-toggle' href='./discovery'>Show redacted</a>\n"
+        else:
+            text += "<a class='discovery-toggle' href='./discovery?raw=1'>Show raw values</a>\n"
+        text += "</div>\n"
+
+        if raw:
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+
+        conflicts = catalogue.get("observations", {}).get("conflicts", [])
+        if conflicts:
+            text += "<div class='discovery-conflicts'>\n"
+            text += "<strong>{} conflict(s)</strong> - two components describing the same hardware, or competing for the same slot.\n".format(len(conflicts))
+            for conflict in conflicts:
+                text += "<div class='discovery-nested'>{}</div>\n".format(self._discovery_fields_html(conflict))
+            text += "</div>\n"
+        else:
+            text += "<div class='discovery-clear'>No conflicts - no two components are describing the same hardware.</div>\n"
+
+        components = catalogue.get("components", {})
+        if components:
+            text += "<h3>Components</h3>\n"
+            text += "<div class='discovery-grid'>\n"
+            for name in sorted(components):
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}</div>\n".format(html_module.escape(str(name)))
+                text += self._discovery_fields_html(components[name] if isinstance(components[name], dict) else {"status": components[name]})
+                text += "</div>\n"
+            text += "</div>\n"
+
+        for section in sections:
+            records = catalogue[section]
+            if not records:
+                continue
+            text += "<h3>{} <span class='discovery-count'>{}</span></h3>\n".format(html_module.escape(section.title()), len(records))
+            text += "<div class='discovery-grid'>\n"
+            for record in records:
+                text += self._discovery_record_html(record if isinstance(record, dict) else {"device_id": record})
+            text += "</div>\n"
+
+        text += self._discovery_document_html(catalogue)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
     async def html_components(self, request):
         """

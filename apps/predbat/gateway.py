@@ -898,7 +898,16 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
+        # The reserve ceiling is per-inverter, so it overrides the table's 100: GivEnergy
+        # firmware refuses a reserve of 100 and the gateway reports 98 for it (gateway
+        # issue #346). adjust_reserve() honours this entity's "max" through
+        # reserve_device_bounds(), so publishing it is what stops PredBat asking a full
+        # battery to hold at a value the inverter will not take and reading the unchanged
+        # register back as a failed write. 0 is firmware predating the field: assume 100.
+        reserve_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}))
+        reserve_soc_max = getattr(control, "reserve_soc_max", 0)
+        reserve_attributes["max"] = reserve_soc_max if 1 <= reserve_soc_max <= 100 else 100
+        self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=reserve_attributes, app="gateway")
         self.dashboard_item(f"number.{pfx}_target_soc", control.target_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("target_soc", {}), app="gateway")
         # Schedule times (convert HHMM uint32 → HH:MM:SS string)
         # Always set with defaults so PredBat doesn't crash on missing charge_start_time

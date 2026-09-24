@@ -485,6 +485,40 @@ def test_validate_config(my_predbat):
     _run(my_predbat, {"car_charging_battery_size": [77.4, 64.0], "num_cars": 2}, expect_clean=["car_charging_battery_size"])
     _run(my_predbat, {"car_charging_battery_size": 77.4, "num_cars": 2}, expect_errors=["car_charging_battery_size"])
 
+    # A pointer to one entity repeated to the maximum car count (8). The validator trims a list to
+    # num_cars, so one 8-entry list passes for every num_cars up to 8, whereas a single entity name
+    # is rejected as the wrong type as soon as num_cars exceeds 1.
+    pointer = ["sensor.test_car_profile_battery_size"] * 8
+    for cars in (0, 1, 2, 8):
+        print("  [sensor float] 8-entry car_charging_battery_size pointer passes with num_cars={}".format(cars))
+        _run(
+            my_predbat,
+            {"car_charging_battery_size": pointer, "num_cars": cars},
+            extra_states={"sensor.test_car_profile_battery_size": "10.5"},
+            expect_clean=["car_charging_battery_size"],
+        )
+
+    print("  [sensor float] a single entity pointer fails once num_cars exceeds 1")
+    _run(
+        my_predbat,
+        {"car_charging_battery_size": "sensor.test_car_profile_battery_size", "num_cars": 2},
+        extra_states={"sensor.test_car_profile_battery_size": "10.5"},
+        expect_errors=["car_charging_battery_size"],
+    )
+
+    print("  [sensor float] every slot of the pointer resolves the entity as a float")
+    saved_args = my_predbat.args.copy()
+    saved_states = my_predbat.ha_interface.dummy_items.copy()
+    try:
+        my_predbat.args["car_charging_battery_size"] = pointer
+        my_predbat.ha_interface.dummy_items["sensor.test_car_profile_battery_size"] = "10.5"
+        for slot in (0, 1, 7):
+            value = my_predbat.get_arg("car_charging_battery_size", 100.0, index=slot)
+            assert value == 10.5, "slot {} resolved {!r}, expected 10.5".format(slot, value)
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.ha_interface.dummy_items = saved_states
+
     print("**** test_validate_config PASSED ****")
     return False
 

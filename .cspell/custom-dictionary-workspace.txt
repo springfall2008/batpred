@@ -170,6 +170,7 @@ eauth
 echargingpile
 Eddi
 eddis
+efgh
 elif
 elinter
 eload
@@ -421,6 +422,7 @@ newtok
 njpwerner
 nobat
 nocharge
+NODETAIL
 nodischarge
 nohup
 noopener
@@ -497,12 +499,17 @@ preseed
 preseeded
 prevs
 protobuf
+pseudonymisation
+pseudonymise
+pseudonymised
+pseudonymises
 psum
 pthread
 pvbat
 pvenergytotal
 pvlib
 pvlimit
+PVONLY
 pvpower
 pvwatts
 pwindow
@@ -670,6 +677,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable
@@ -702,6 +710,7 @@ varh
 venv
 Victron
 visibilitychange
+vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
@@ -714,6 +723,7 @@ WNOHANG
 workmode
 writeonly
 wrongsha
+wwxxabcdefyyzz
 xaxis
 xaxistooltip
 xlabel
@@ -721,6 +731,7 @@ xlim
 xload
 xrtkq
 xticks
+xxabcdefyy
 yaxis
 yaxistooltip
 yday

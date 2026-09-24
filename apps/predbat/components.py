@@ -38,6 +38,8 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 
+from coordinator import Coordinator
+
 
 def load_component_class(component_info):
     """Import a registry entry's module and return its component class.
@@ -634,7 +636,7 @@ COMPONENT_LIST = {
             "site_id": {"required": False, "secret": True, "config": "teslemetry_site_id"},
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
-            "tbc_control": {"required": False, "default": False, "config": "teslemetry_tbc_control"},
+            "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
@@ -753,6 +755,14 @@ class Components:
     """
 
     def __init__(self, base):
+        """Create the registry, with an empty component set and its own discovery coordinator.
+
+        The coordinator lives here - never as a PredBat attribute - because create_debug_yaml()
+        dumps every non-excluded member of PredBat.__dict__, and the coordinator holds the raw
+        unredacted reports plus the pseudonym salt. "components" is in DEBUG_EXCLUDE_LIST (as is
+        "coordinator", defensively), so nothing under self.components is dumped automatically at
+        all; create_debug_yaml() instead adds a plain redacted dict via coordinator.catalogue().
+        """
         self.components = {}
         self.component_tasks = {}
         # Why a configured component could not be loaded or constructed, by name. Such a component
@@ -761,6 +771,7 @@ class Components:
         self.component_errors = {}
         self.base = base
         self.log = base.log
+        self.coordinator = Coordinator(base)
 
     def initialize(self, only=None, phase=0):
         """Initialise components without starting them"""
@@ -796,7 +807,16 @@ class Components:
                     have_all_args = False
                     missing_config.append(arg_info["config"])
                 else:
-                    arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
+                    value = self.base.get_arg(arg_info["config"], default, indirect=indirect)
+                    if value is None and default is not None:
+                        # A key present in apps.yaml but empty (a bare "teslemetry_tbc_control:") resolves
+                        # to a YAML null, and get_arg's bool branch only coerces strings - unlike its int
+                        # and float branches it has no None fallback, so the null would be passed straight
+                        # to the component and a registry "default": True would silently not apply (GH#5186).
+                        # An empty value is not a setting, so the registry default stands. Args with no
+                        # declared default keep resolving to None, which is how they signal "not set".
+                        value = default
+                    arg_dict[arg] = value
             required_or = component_info.get("required_or", [])
             # If required_or is set we must have at least one of the listed args
             if required_or:
@@ -808,6 +828,9 @@ class Components:
                     component_class = load_component_class(component_info)
                     self.log(f"Initialising {component_info['name']} interface")
                     self.components[component_name] = component_class(self.base, **arg_dict)
+                    # Overrides the class-name fallback ComponentBase.__init__ set, with the
+                    # registry key report_discovery() should file this component's reports under.
+                    self.components[component_name].component_name = component_name
                 except Exception as e:
                     # A component that will not import (a missing package, a syntax error) or
                     # construct must not take Predbat down with it: record why, leave it inactive
