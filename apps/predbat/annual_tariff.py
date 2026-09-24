@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from annual_http import fetch_json
-from utils import minute_data
+from utils import filter_payment_method, minute_data
 
 MINUTES_PER_DAY = 24 * 60
 
@@ -157,7 +157,7 @@ class AnnualTariff:
         if self.storage:
             cached = await self.storage.load("annual", cache_key)
             if isinstance(cached, list) and cached:
-                return cached, False
+                return filter_payment_method(cached), False
 
         rows = []
         pages = 0
@@ -184,7 +184,11 @@ class AnnualTariff:
             return [], True
         if rows and self.storage:
             await self.storage.save("annual", cache_key, rows, format="json", expiry=expiry)
-        return rows, False
+        # A Flexible tariff returns a DIRECT_DEBIT and a NON_DIRECT_DEBIT row for each window, which
+        # both ``_rows_to_stamped_rates`` and ``_rows_to_local_pattern`` would otherwise resolve by
+        # response order. The cache keeps the API's own rows, so a later change of preferred payment
+        # method takes effect without re-downloading a year of history.
+        return filter_payment_method(rows), False
 
     @staticmethod
     def _rows_to_stamped_rates(rows, start_utc, days):

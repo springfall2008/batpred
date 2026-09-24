@@ -67,6 +67,7 @@ brickatius
 bwignore
 byok
 cadata
+calcsize
 calib
 Cantarell
 cbat
@@ -133,12 +134,14 @@ dayname
 daynumber
 daysymbol
 deadband
+deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
 dend
 denorm
 derate
+derated
 derating
 desync
 desynced
@@ -166,6 +169,7 @@ eauth
 echargingpile
 Eddi
 eddis
+efgh
 elif
 elinter
 eload
@@ -250,12 +254,14 @@ GivEnergy
 givtcp
 gnueabihf
 GOELEC
+goldens
 gridcharge
 gridcode
 gridconsumption
 gridconsumptionpower
 Groq
 growatt
+growattsph
 GWMQTT
 HACS
 hadashboard
@@ -415,6 +421,7 @@ newtok
 njpwerner
 nobat
 nocharge
+NODETAIL
 nodischarge
 nohup
 noopener
@@ -490,12 +497,17 @@ preseed
 preseeded
 prevs
 protobuf
+pseudonymisation
+pseudonymise
+pseudonymised
+pseudonymises
 psum
 pthread
 pvbat
 pvenergytotal
 pvlib
 pvlimit
+PVONLY
 pvpower
 pvwatts
 pwindow
@@ -663,6 +675,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable
@@ -680,6 +693,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrepresentable
 unreproduced
 unsmoothed
 unstaged
@@ -694,6 +708,7 @@ varh
 venv
 Victron
 visibilitychange
+vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
@@ -706,6 +721,7 @@ WNOHANG
 workmode
 writeonly
 wrongsha
+wwxxabcdefyyzz
 xaxis
 xaxistooltip
 xlabel
@@ -713,6 +729,7 @@ xlim
 xload
 xrtkq
 xticks
+xxabcdefyy
 yaxis
 yaxistooltip
 yday

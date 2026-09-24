@@ -32,7 +32,6 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
-    LOW_POWER_PV_LIGHT_FRACTION,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -905,6 +904,32 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
+    def fetch_pv_forecast_and_dawn(self):
+        """
+        Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
+        binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
+        computed from a freshly-fetched forecast, not the empty dict fetch_sensor_data() resets it
+        to at the top of each cycle) can't drift apart again. Published unconditionally regardless
+        of whether import rates currently exist, so the sensor never goes stale.
+
+        Returns:
+            pv_light_dark: dict as returned by calc_pv_light_dark(), also stored on self.pv_light_dark.
+        """
+        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+
+        # Stored on self, not just local, so it can be used elsewhere rather than only by the
+        # window split below.
+        pv_light_dark = self.pv_light_dark = self.calc_pv_light_dark()
+        # "on" past dawn, "off" before it or when unclassified (no PV forecast) - based on the PV
+        # forecast crossing low_power_pv_threshold_w, not the same as PV actually producing right
+        # now, see calc_dawn's docstring. Independent of combine_charge_slots/set_charge_low_power.
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_dawn",
+            state="on" if pv_light_dark.get(self.minutes_now) == 1 else "off",
+            attributes={"friendly_name": "Predbat is past dawn (light, not dark, by PV forecast)", "icon": "mdi:weather-sunset-up"},
+        )
+        return pv_light_dark
+
     def combine_active_keep(self):
         """
         Combine the SOC keep floors (alerts, manual_soc) and ceilings (manual_soc_max) into all_active_keep/all_active_keep_max.
@@ -970,6 +995,7 @@ class Fetch:
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}
+        self.pv_light_dark = {}
         # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
         # earlier pair of signatures may be held against them
         self.pv_forecast_minute90_signatures = None
@@ -1156,7 +1182,8 @@ class Fetch:
             )
 
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
-        self.fetch_sensor_data_cars()
+        self.dispatch_timeline_pending = []
+        self.fetch_sensor_data_cars(save=save)
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1251,6 +1278,12 @@ class Fetch:
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
 
+        # Needed here, ahead of "Find charging windows" below, because calc_pv_light_dark() reads
+        # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
+        # function, after the dawn calculation had already run against the freshly-reset empty dict
+        # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
+        pv_light_dark = self.fetch_pv_forecast_and_dawn()
+
         # Find discharging windows
         if self.rate_export:
             self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
@@ -1261,14 +1294,19 @@ class Fetch:
 
         # Find charging windows
         if self.rate_import:
-            pv_light_dark = self.calc_pv_light_dark()
-
             # Find charging window
             self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
             self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
                 self.rate_import_cost_threshold = highest
+
+        # #4516 Stage 1: render the dispatch timelines captured during the car fetch. This has to
+        # come after the low-rate scan above, not merely after set_rate_thresholds(): in automatic
+        # mode (rate_low_threshold 0) set_rate_thresholds() only sets a provisional
+        # "everything but the most expensive" threshold, which the scan then replaces with the real
+        # low-rate band. Rendering on the provisional value painted most of the day as cheap.
+        self.log_dispatch_timelines()
 
         # Work out car plan?
         self.fetch_sensor_data_car_planning()
@@ -1298,9 +1336,6 @@ class Fetch:
         # Work out cost today
         if self.import_today:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
-
-        # Fetch PV forecast if enabled, today must be enabled, other days are optional
-        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
 
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
@@ -1396,9 +1431,12 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
-    def fetch_sensor_data_cars(self):
+    def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
+
+        `save` is False when compare.py re-runs the fetch for a candidate tariff rather than the
+        live plan; diagnostics that record state across cycles must be skipped in that case.
         """
 
         # Work out current car SoC and limit
@@ -1462,13 +1500,6 @@ class Fetch:
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
-                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
-                timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
-                should_log, marker = self.dispatch_timeline_should_log(car_n, timeline)
-                if should_log:
-                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}{}".format(car_n, self.time_abs_str(self.minutes_now), timeline, marker))
-
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
@@ -1499,6 +1530,31 @@ class Fetch:
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
+
+                # #4516 Stage 1: diagnostic dispatch-timeline log. Purely observational - see
+                # build_dispatch_timeline()'s and dispatch_timeline_should_log()'s docstrings.
+                # Only the live plan's view is worth recording: compare.py re-runs this whole
+                # fetch per candidate tariff (with save=False), which otherwise emits a burst of
+                # near-identical timelines for plans that were never active - and, because each
+                # one updates the "last logged" state, makes the real cycle's line look changed.
+                #
+                # Recorded here but rendered later: this runs before the rate fetch, so the cheap
+                # ('-') background would read from the previous cycle's rates - and be empty
+                # altogether on the first cycle after a restart. The dispatch lists and the
+                # plugged-in reading are only correct here though: further down this function the
+                # Octopus branch overwrites car_charging_planned with "has dispatch slots", so
+                # capture the inputs now and render once the rates are known.
+                if save:
+                    self.dispatch_timeline_pending.append(
+                        {
+                            "car_n": car_n,
+                            "completed": completed,
+                            "started": started,
+                            "planned": planned,
+                            "plugged": self.car_charging_planned[car_n],
+                            "charging_now": self.get_car_charging_now_tristate(car_n),
+                        }
+                    )
 
                 # Extract vehicle preference if we can get it
                 if self.octopus_intelligent_charging:
@@ -1847,19 +1903,18 @@ class Fetch:
 
     def calc_pv_light_dark(self):
         """
-        Decide whether a dawn light/dark boundary is worth computing at all, and return it via
-        calc_dawn if so - otherwise an empty dict (no split).
+        Compute the dawn light/dark split via calc_dawn().
 
-        Only combine_charge_slots can merge a charge window across dawn in the first place - with it
-        off, find_charge_window already forces a break every charge_slot_split minutes (which equals
-        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary could
-        never be reached and computing it would be a pure no-op. This used to be gated on
-        set_charge_low_power instead, since that was the only feature that needed the split - but the
-        split also lets the plan optimizer charge just the dark portion of a combined window and skip
-        the daylight portion (where solar may cover the load) on its own merits, independent of low
-        power charging, so it now runs for any combine_charge_slots user.
+        Always computed, even when combine_charge_slots is off: with it off, find_charge_window
+        already forces a window break every charge_slot_split minutes (which equals
+        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary can
+        never actually be reached there and calc_dawn's result is a no-op for window splitting in
+        that case - but binary_sensor.predbat_dawn (published from this same result, see
+        fetch_pv_forecast_and_dawn) is a useful standalone signal regardless of combine_charge_slots,
+        and used to read permanently "off" for anyone with it disabled (the default) even in broad
+        daylight, which is what it is not meant to mean.
         """
-        return self.calc_dawn() if self.combine_charge_slots else {}
+        return self.calc_dawn()
 
     def calc_dawn(self):
         """
@@ -1886,13 +1941,21 @@ class Fetch:
         day correctly stay all-dark (dawn never crosses) and a polar-day day correctly stay all-light
         (crossed from the very first bucket).
 
-        The threshold itself is LOW_POWER_PV_LIGHT_FRACTION of the peak PV forecast anywhere in
-        self.pv_forecast_minute, not a fixed Watts figure, so it scales with the site rather than being
-        picked for a "typical" system size.
+        The threshold is the user-configurable low_power_pv_threshold_w, an absolute Watts figure,
+        rather than a fraction of this forecast's own peak. A fraction-of-peak threshold sounds like it
+        "scales with the site", but it actually scales with today's weather: a heavily overcast day has
+        a low peak of its own, so a fixed fraction of it can call a trickle of PV "light" at a much
+        lower absolute wattage than the same fraction would on a clear day - and there is nothing in
+        Predbat today recording the site's real panel capacity to normalise against instead (only
+        inverter_limit, which caps the inverter's own output, not the array's rating). An absolute
+        figure the user sets once for their own system does not have that problem (#4699 follow-up).
+        The same value and the same comparison is reused by find_charge_rate's low-power abandon check
+        (utils.py) - one threshold answering "is this bright enough to matter" everywhere it is asked,
+        rather than two independently-tuned ones that could disagree on genuine twilight PV.
 
-        Built from whatever PV forecast is already in self.pv_forecast_minute, which at the point this
-        is called from fetch_sensor_data is up to one cycle stale (refreshed later this same loop by
-        fetch_pv_forecast()) - fine for a forecast that doesn't meaningfully change minute to minute.
+        Built from self.pv_forecast_minute as populated earlier this same fetch_sensor_data() call by
+        fetch_pv_forecast() - see #4699, where calc_pv_light_dark() ran before that populating call and
+        so always saw the freshly-reset empty dict, silently disabling the dawn split for everyone.
 
         Logs the calculated dawn time (today's, or the earliest day the forecast reaches if today's PV
         data isn't there) each time it runs, so it's visible whether the detected dawn looks sane.
@@ -1901,11 +1964,7 @@ class Fetch:
         if not self.pv_forecast_minute:
             return pv_light_dark
 
-        peak_pv = max(self.pv_forecast_minute.values())
-        if peak_pv <= 0:
-            return {pv_minute: 0 for pv_minute in self.pv_forecast_minute}
-
-        light_threshold = peak_pv * LOW_POWER_PV_LIGHT_FRACTION
+        light_threshold = self.low_power_pv_threshold_w / MINUTE_WATT
         interval = self.plan_interval_minutes
         bucket_sums = {}
         bucket_counts = {}
@@ -2467,6 +2526,31 @@ class Fetch:
 
         if print:
             self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
+
+    def get_car_charging_now_tristate(self, car_n):
+        """
+        Read car_charging_now as a tri-state (True/False/None) for the #4516 Stage 1 dispatch
+        timeline's GH#5080 reconciliation note.
+
+        self.car_charging_now (set by get_car_charging_planned()) is a plain boolean used
+        throughout the planner, where "no signal" and "confirmed not charging" both have to mean
+        False - there is no room there for a genuine unknown. This diagnostic needs that
+        distinction: flagging a slot as billing-risk when Predbat actually has no idea whether the
+        car is charging would be a false positive on every dispatch, for every IOG user who hasn't
+        configured the (optional) car_charging_now sensor, or during the "unknown"/"unavailable"
+        state HA reports for a real sensor briefly after a restart.
+
+        Returns None (unknown) when the sensor isn't configured, is out of range for this car, or
+        HA is currently reporting "unknown"/"unavailable"; otherwise the normalised boolean.
+        """
+        if "car_charging_now" not in self.args:
+            return None
+        raw = self.get_arg("car_charging_now", "no", index=car_n)
+        if raw is None:
+            return None
+        if isinstance(raw, str) and raw.lower() in ("unknown", "unavailable"):
+            return None
+        return self.car_charging_now[car_n]
 
     def get_car_charging_planned(self):
         """
@@ -3123,6 +3207,8 @@ class Fetch:
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")
+        self.low_power_pv_threshold_w = self.get_arg("low_power_pv_threshold_w")
+        self.set_charge_low_power_solar_full_rate = self.get_arg("set_charge_low_power_solar_full_rate")
         self.calculate_export_first = True
 
         self.set_status_notify = self.get_arg("set_status_notify")

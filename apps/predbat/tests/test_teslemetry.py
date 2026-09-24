@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, FORCED_ASSERT_SECONDS
 
 
 class FakeStorage:
@@ -45,6 +45,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.api_auth_failed = False
         self.last_live_poll = 0
         self.last_energy_poll = 0
+        self._last_forced_assert = 0
         self.site_info_done = False
         self.last_soc = None
         self.soc_max_real = False
@@ -59,6 +60,8 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.schedule_loaded = False
         self.automatic = False
         self.automatic_done = False
+        # Production defaults this on (GH#5186); the double keeps the real-rate path so the tests
+        # written against it still exercise that path, and the TBC tests opt in explicitly.
         self.tbc_control = False
         self._reserve_band_warned = False
         self.args_set = {}
@@ -1137,12 +1140,12 @@ def test_teslemetry_sync_tariff_read_only_no_push():
     assert not [r for r in api.requests_made if r[0] == "POST"]
 
 
-def test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff():
-    """With the trial setting off nothing changes: the real-rate builder is still what gets pushed."""
+def test_teslemetry_tbc_control_off_uses_the_real_rate_tariff():
+    """With teslemetry_tbc_control set False the opt-out holds: the real-rate builder is still what gets pushed."""
     api = MockTeslemetryAPI()
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0}}
-    assert api.tbc_control is False
+    api.tbc_control = False
     pushed = {}
     api.set_tariff = lambda tariff, force=False: _record_tariff(pushed, tariff)
     run_async(api.sync_tariff())
@@ -1175,6 +1178,49 @@ def test_teslemetry_initialize_sets_tbc_control_from_component_arg():
     assert api.tbc_control is False
     api.initialize(tbc_control=True)
     assert api.tbc_control is True
+    # The opt-out must survive too, now that the setting is on by default (GH#5186).
+    api.initialize(tbc_control=False)
+    assert api.tbc_control is False
+
+
+def test_teslemetry_tbc_control_defaults_on_via_the_registry():
+    """An apps.yaml that never sets teslemetry_tbc_control takes the Time-Based Control path (GH#5186).
+
+    Components.start() resolves an unset key to the registry default and constructs the class with
+    it, so this feeds that default through initialize() and asserts the path it selects (what that
+    path pushes is test_teslemetry_tbc_control_on_pushes_the_signal_tariff's job). The registry
+    default and initialize()'s own default must agree, or a direct construction (the CLI test run)
+    would take a different path from production.
+    """
+    from components import COMPONENT_LIST
+
+    api = MockTeslemetryAPI()
+    api.initialize(tbc_control=COMPONENT_LIST["teslemetry"]["args"]["tbc_control"]["default"])
+    assert api.tbc_control is True
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous"
+
+    direct = MockTeslemetryAPI()
+    direct.initialize()
+    assert direct.tbc_control is True
+
+
+def test_teslemetry_tbc_control_fallback_matches_the_documented_default():
+    """With no tbc_control attribute at all, the defensive getattr fallbacks take the default path.
+
+    evaluate_schedule and sync_tariff both read getattr(self, "tbc_control", ...), which is unreachable
+    in production because initialize() always sets the attribute. Both encoded a literal False, so if
+    initialize() ever failed before that line - or a future path skipped it - the fallback would have
+    silently selected the *non-default* path rather than failing visibly. They now read the same class
+    constant initialize() defaults to, so the two cannot drift apart.
+    """
+    api = MockTeslemetryAPI()
+    del api.tbc_control
+    assert not hasattr(api, "tbc_control"), "the fallback is only reached with the attribute absent"
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    # autonomous mode in a charge window is the TBC path; the real-rate path asserts a charge directly.
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous", "the fallback must select the documented default path"
+    assert TeslemetryAPI.DEFAULT_TBC_CONTROL is True, "and that default is on (GH#5186)"
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -1316,6 +1362,73 @@ def test_teslemetry_dedupe_failed_post_not_cached_so_retries():
     posts = [req for req in api.requests_made if req[0] == "POST"]
     assert len(posts) == 2
     assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "backup"
+
+
+def _make_forced_assert_api():
+    """Build a run()-driveable API whose control branch is reachable, for the forced re-assert tests."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.get_arg = lambda a, d=None, **k: d  # not read-only
+    api.mock_responses["/api/1/products"] = {"response": [{"energy_site_id": 123456}]}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    for path in ("operation", "backup", "grid_import_export", "time_of_use_settings"):
+        api.mock_responses["/api/1/energy_sites/123456/" + path] = {"response": {"code": 201}}
+    return api
+
+
+def _control_posts(api):
+    """Return the device-tuple POSTs made so far (the tariff push is not part of the asserted tuple)."""
+    return [req[1].rsplit("/", 1)[-1] for req in api.requests_made if req[0] == "POST" and not req[1].endswith("/time_of_use_settings")]
+
+
+def test_teslemetry_forced_assert_resends_unchanged_tuple_after_interval():
+    """An unchanged desired tuple is deduped away every cycle until FORCED_ASSERT_SECONDS, then re-sent in full.
+
+    This is the GH#5157 stall: a Powerwall silently stops honouring a standing state while still
+    reading it back correctly, so nothing detects the drift and the transition-based self-heal never
+    fires. The periodic forced re-assert is the only correction, so it must actually re-POST the
+    whole tuple rather than being skipped by the write-on-change cache.
+    """
+    api = _make_forced_assert_api()
+    run_async(api.run(seconds=0, first=True))
+    assert _control_posts(api), "boot cycle should assert the tuple onto the device"
+    # Steady state: the desired tuple never changes, so every cycle short of the interval is deduped away.
+    api.requests_made.clear()
+    for seconds in range(60, FORCED_ASSERT_SECONDS, 60):
+        run_async(api.run(seconds=seconds, first=False))
+    assert _control_posts(api) == [], "an unchanged tuple must not cost commands before the forced re-assert is due"
+    # Interval reached: the full tuple is re-asserted despite nothing having changed.
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS, first=False))
+    assert sorted(_control_posts(api)) == ["backup", "grid_import_export", "operation"]
+    assert api._last_forced_assert == FORCED_ASSERT_SECONDS
+    # ...and the timer resets, so the next cycle is deduped again rather than re-sending every cycle.
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS + 60, first=False))
+    assert _control_posts(api) == []
+
+
+def test_teslemetry_forced_assert_failure_retries_next_cycle():
+    """A forced re-assert that fails must not advance the timer, so it retries next cycle rather than waiting another interval.
+
+    This is _apply_command's failure-retry invariant carried up to the forced assert: the dedupe cache
+    is only refreshed on a confirmed send, and the forced-assert timer must behave the same way.
+    """
+    api = _make_forced_assert_api()
+    run_async(api.run(seconds=0, first=True))
+    # Break the /operation endpoint so the forced assert cannot complete (returns None -> command fails).
+    del api.mock_responses["/api/1/energy_sites/123456/operation"]
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS, first=False))
+    assert "operation" in _control_posts(api)
+    assert api._last_forced_assert == 0, "a failed forced assert must not advance the timer"
+    # Next cycle retries immediately instead of waiting another FORCED_ASSERT_SECONDS.
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    api.requests_made.clear()
+    run_async(api.run(seconds=FORCED_ASSERT_SECONDS + 60, first=False))
+    assert "operation" in _control_posts(api)
+    assert api._last_forced_assert == FORCED_ASSERT_SECONDS + 60
 
 
 def test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post():
@@ -1493,7 +1606,10 @@ def test_teslemetry_component_registry_config():
     assert entry["args"]["automatic"]["default"] is False
     assert entry["args"]["automatic"]["required"] is False
     assert entry["args"]["tbc_control"]["config"] == "teslemetry_tbc_control"
-    assert entry["args"]["tbc_control"]["default"] is False
+    assert entry["args"]["tbc_control"]["default"] is True  # on by default since GH#5186
+    # The registry holds a literal because components.py imports component modules lazily, so nothing
+    # else keeps it in step with the class constant initialize() and the getattr fallbacks read.
+    assert entry["args"]["tbc_control"]["default"] is TeslemetryAPI.DEFAULT_TBC_CONTROL
     assert entry.get("can_restart") is True
     assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
     assert APPS_SCHEMA["teslemetry_tbc_control"] == {"type": "boolean"}
@@ -2659,9 +2775,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_set_tariff_asserts_optimization_strategy_economics()
     test_teslemetry_sync_tariff_dedupes_unchanged()
     test_teslemetry_sync_tariff_pushes_on_window_change()
-    test_teslemetry_tbc_control_defaults_off_and_uses_the_real_rate_tariff()
+    test_teslemetry_tbc_control_off_uses_the_real_rate_tariff()
     test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
     test_teslemetry_initialize_sets_tbc_control_from_component_arg()
+    test_teslemetry_tbc_control_defaults_on_via_the_registry()
+    test_teslemetry_tbc_control_fallback_matches_the_documented_default()
     test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()
@@ -2671,6 +2789,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_dedupe_operation_mode_skips_repeat_post()
     test_teslemetry_dedupe_operation_mode_resends_on_change()
     test_teslemetry_dedupe_failed_post_not_cached_so_retries()
+    test_teslemetry_forced_assert_resends_unchanged_tuple_after_interval()
+    test_teslemetry_forced_assert_failure_retries_next_cycle()
     test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post()
     test_teslemetry_dedupe_tariff_resends_when_rates_change()
     test_teslemetry_drift_correction_refreshes_cache_and_reasserts()

@@ -54,9 +54,6 @@ pred_bat:
   num_inverters: 1
   inverter_type: "SF"
   #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
-  #
   battery_power:
     - sensor.sofar_inverter_battery_power
   pv_power:

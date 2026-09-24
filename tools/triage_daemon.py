@@ -173,6 +173,14 @@ DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
 JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
 DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
 JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
+# How many queued candidates one flush is asked to fold in. Every other flow handles exactly
+# one issue or one pull request; the flush is the only one whose workload is unbounded,
+# because the queue fills from all five flows and drains only when a flush succeeds. On
+# 2026-09-13 it first outran its turn budget - seven candidates against a journal that had
+# grown from 73KB to 128KB in a week - and since archiving waits for a PR, the failure fed
+# itself: seven candidates became sixty-two over six nights and no later run stood a chance.
+# A cap makes a bad night cost a day of latency instead of permanently outrunning the budget.
+JOURNAL_MAX_CANDIDATES_PER_FLUSH = 15
 # Where the flush writes its pull request body, and what it finds there to replace.
 # A body is many lines of markdown. Assembling one in the shell means getting both the
 # permission matcher and the quoting right - `--body-file` needs a file the flush has no
@@ -1061,7 +1069,7 @@ def flush_journal(today):
         [
             "claude",
             "-p",
-            f"/journal-update queue={QUEUE_DIR}",
+            f"/journal-update queue={QUEUE_DIR} limit={JOURNAL_MAX_CANDIDATES_PER_FLUSH}",
             "--permission-mode",
             "dontAsk",
             "--allowedTools",
@@ -1077,14 +1085,22 @@ def flush_journal(today):
             # be in scope for the Edit grant above to be usable.
             "--add-dir",
             str(SCRATCH_DIR),
+            # 150, matching issue-pr and pr-cleanup - the other flows that edit, commit and
+            # push. 80 was set when the journal was 30KB and the flush was a near-append;
+            # it reads a 130KB file end to end and verifies every candidate against main,
+            # and from 2026-09-13 every single run died on "Reached max turns (80)".
             "--max-turns",
-            "80",
+            "150",
         ]
         + claude_model_args(review_only=True)
         + claude_budget_args("10.00", review_only=True)
         + claude_mcp_args()
     )
-    consumed = journal_queue_entries()
+    # The same slice the prompt above asks the skill to fold in, so what gets archived below
+    # is what was offered. Both ends take it from the front of journal_queue_entries()'s
+    # filename order, which means a candidate that missed one flush leads the next rather
+    # than being skipped indefinitely.
+    consumed = journal_queue_entries()[:JOURNAL_MAX_CANDIDATES_PER_FLUSH]
     prepare_journal_body()
     log_path = LOG_DIR / "journal-update.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1094,13 +1110,21 @@ def flush_journal(today):
         log_handle.flush()
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== journal update exited {result.returncode} ====\n")
-    if result.returncode == 0:
-        open_journal_pr(today)
+    # Deliberately not gated on the exit code. A flush can finish the entire job - journal
+    # edited, pre-commit run, branch committed and pushed - and still exit non-zero by
+    # exhausting --max-turns on the way out. That is exactly what happened on 2026-09-14:
+    # commit 78d396c7 folded in 14 findings and reached the remote, the exit-code gate
+    # skipped the one step that would have made it reviewable, and the branch sat there
+    # unnoticed for five days. open_journal_pr() already no-ops when no branch was pushed
+    # and when a PR exists, so the pushed branch is the honest test of what to open.
+    open_journal_pr(today)
     # Archive only once the findings are on a branch a maintainer can review. Exit 0 from a
     # blocked run would otherwise sweep verified candidates into processed/ having landed
     # nothing, and journal_queue_entries()'s non-recursive glob means they are never
-    # offered again - the failure mode that lost GH#4965/#4967/#4973 on 2026-09-07.
-    if result.returncode == 0 and journal_pr_opened(today):
+    # offered again - the failure mode that lost GH#4965/#4967/#4973 on 2026-09-07. The
+    # exit code was only ever a weaker proxy for the same question, and demanding both
+    # means a run that landed its work but died on the last turn never drains the queue.
+    if journal_pr_opened(today):
         archive_journal_queue(consumed)
     else:
         print(

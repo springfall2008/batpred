@@ -41,6 +41,7 @@ import time
 import aiohttp
 from datetime import datetime
 from component_base import ComponentBase
+from coordinator import inverter_record
 from alphaess_const import (
     ALPHAESS_BASE_URL,
     ALPHAESS_ENDPOINTS,
@@ -864,6 +865,91 @@ class AlphaESSAPI(ComponentBase):
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
         await self.apply_hybrid_verdict()
+
+    def build_discovery(self):
+        """
+        Describe the discovered AlphaESS systems for the discovery catalogue.
+
+        Reads only what get_device_list() already holds - self.device_list and self.device_detail -
+        plus the EV-charger verdict _apply_live_payload() records, so this adds no API calls and
+        cannot change what AlphaESS does. Reporting is independent of self.automatic: the catalogue
+        records the hardware, and the report's own "automatic" flag says whether Predbat wired
+        apps.yaml to it.
+
+        self.device_list holds serial strings (sysSn), and only systems that passed has_battery()
+        at discovery: a battery-less system (the VT1000 family, cobat 0 or missing) is dropped in
+        get_device_list() and never reaches device_detail. automatic_config() applies no further
+        test - it registers every serial in device_list as "AlphaESSCloud" - so inverter_type is set
+        on every record, mirroring automatic_config() as the source of truth.
+
+        Ratings are getEssList's own figures: poinv (kW) as inverter_w via inverter_limit(), popv
+        (kW) as pv_w, cobat (kWh) as battery_kwh via battery_capacity(). cobat is one scalar per
+        system, so there is no list of entries to mis-sum. A system reports "solar" only when popv
+        says PV is attached.
+
+        Deliberately not reported:
+        - emsStatus: a status that changes. refresh_discovery() compares whole reports, so a
+          changing value would re-file the report every time it moved.
+        - usCapacity and surplusCobat: they fit "current SoC" and "configured usable depth" equally
+          well, which is why publish_data() never maps them to SoC; reporting either as a rating
+          would assert a meaning nobody knows.
+        - firmware: the AlphaESS Open API exposes none.
+        - account_ids: the API has no station, plant or site identifier; every endpoint is keyed by
+          sysSn alone.
+        - an AC-coupled verdict: detect_ac_coupled() infers it from live telemetry and
+          ALPHAESS_AC_COUPLED_MODELS ships empty on purpose, so there is no held fact to report.
+
+        An EV charger is reported as a flag only when _ev_present says True. That verdict comes from
+        live telemetry alone, so a charger not yet seen reports nothing either way rather than a
+        guess. No chargers record is invented for it: AlphaESS reports a charger's power, not its
+        identity.
+
+        Returns None when no system has been discovered yet, which refresh_discovery() treats as
+        "nothing to report, ask again next cycle".
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.device_list:
+            detail = self.device_detail.get(sn, {}) or {}
+            pv_kw = self._as_float(detail.get("popv"), 0.0)
+
+            functions = ["solar", "battery"] if pv_kw > 0 else ["battery"]
+
+            info = {}
+            if detail.get("minv"):
+                info["model"] = str(detail["minv"])
+            if detail.get("mbat"):
+                info["battery_model"] = str(detail["mbat"])
+
+            ratings = {}
+            inverter_w = self.inverter_limit(sn)
+            if inverter_w > 0:
+                ratings["inverter_w"] = inverter_w
+            if pv_kw > 0:
+                ratings["pv_w"] = pv_kw * 1000.0
+            battery_kwh = self.battery_capacity(sn)
+            if battery_kwh > 0:
+                ratings["battery_kwh"] = battery_kwh
+
+            flags = ["ev_charger"] if self._ev_present.get(sn) is True else []
+
+            inverters.append(
+                inverter_record(
+                    "alphaess:{}".format(sn),
+                    inverter_type="AlphaESSCloud",
+                    composition="direct",
+                    functions=functions,
+                    capabilities=["schedule", "target_soc", "discharge_target", "charge_rate_power"],
+                    flags=flags,
+                    hardware_ids={"serial": sn},
+                    info=info,
+                    ratings=ratings,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
     @staticmethod
     def _empty_schedule():
@@ -1999,6 +2085,14 @@ class AlphaESSAPI(ComponentBase):
             await self.publish_schedule_settings_ha(sn)
 
         await self.publish_data()
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first telemetry poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (AlphaESS's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         if first and not live_ok:
             # Startup has not really succeeded without telemetry: automatic_config() runs

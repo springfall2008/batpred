@@ -60,8 +60,6 @@ pred_bat:
   #export_limit:
   #  - 3680
 
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  #balance_inverters_seconds: 60
   #
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w

@@ -2324,6 +2324,332 @@ def test_extra_energy_figures_are_published_but_not_claimed(my_predbat=None):
     return 1 if failed else 0
 
 
+def test_build_discovery_shape(my_predbat=None):
+    """One record per discovered endpoint, with descriptors carrying the real per-device rate maximum."""
+    base, component = _make_component(rest_urls=["http://a:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    record = report["inverters"][0]
+    assert record["device_id"].startswith("givtcp:")
+    assert record["inverter_type"] == "GE"
+    assert "battery" in record["functions"] and "solar" in record["functions"]
+    charge_rate = record["entities"]["charge_rate"]
+    assert charge_rate["domain"] == "number" and charge_rate["access"] == "rw"
+    assert charge_rate["entity_id"] == "number.predbat_givtcp_0_charge_rate"
+    assert charge_rate["step"] == 100
+    soc_kw = record["entities"]["soc_kw"]
+    assert soc_kw["access"] == "r" and soc_kw["unit"] == "kWh"
+    print("PASS: GivTCP discovery record shape")
+    return 0
+
+
+def test_build_discovery_uses_device_rate_max(my_predbat=None):
+    """The descriptor carries the inverter's own maximum rate, not the generic 20kW ceiling."""
+    base, component = _make_component(rest_urls=["http://a:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    component.rest[0].max_battery_rate = lambda: 3600
+    assert component.build_discovery()["inverters"][0]["entities"]["charge_rate"]["max"] == 3600
+    print("PASS: per-device rate maximum used")
+    return 0
+
+
+def test_build_discovery_only_discovered_endpoints(my_predbat=None):
+    """A configured but unanswered endpoint produces no record - the shipped apps.yaml over-provisions givtcp_rest."""
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component, indices=[0])
+    run_async(component.publish_data())
+    assert len(component.build_discovery()["inverters"]) == 1
+    print("PASS: only discovered endpoints reported")
+    return 0
+
+
+def test_build_discovery_reports_regardless_of_automatic(my_predbat=None):
+    """The catalogue describes hardware whether or not this component wired apps.yaml to it."""
+    base, component = _make_component(rest_urls=["http://a:6345"], automatic=False)
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    report = component.build_discovery()
+    assert report["automatic"] is False
+    assert len(report["inverters"]) == 1
+    print("PASS: build_discovery reports with givtcp_automatic off")
+    return 0
+
+
+def test_build_discovery_falls_back_to_rest_api_without_a_serial(my_predbat=None):
+    """No serial reported (the blob carries no raw.invertor block) falls back to the REST URL for device_id."""
+    base, component = _make_component(rest_urls=["http://a:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    record = component.build_discovery()["inverters"][0]
+    assert record["device_id"] == "givtcp:http://a:6345"
+    assert "hardware_ids" not in record
+    print("PASS: device_id falls back to the REST URL without a serial")
+    return 0
+
+
+def test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config(my_predbat=None):
+    """v3 capabilities appear only when GivTCP itself is v3, matching automatic_config()'s own gating."""
+    base, component = _make_component(rest_urls=["http://a:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob(version="2.4.0")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    v2_capabilities = component.build_discovery()["inverters"][0]["capabilities"]
+    assert "rest_v3" not in v2_capabilities
+    assert "pause_mode" not in v2_capabilities
+    assert "discharge_target" not in v2_capabilities
+
+    component.rest[0].inverter.rest_data = _rest_data_blob(version="3.0.4")
+    run_async(component.publish_data())
+    v3_capabilities = component.build_discovery()["inverters"][0]["capabilities"]
+    assert "rest_v3" in v3_capabilities
+    assert "pause_mode" in v3_capabilities
+    assert "discharge_target" in v3_capabilities
+    print("PASS: capabilities mirror automatic_config()'s own v3/register probes")
+    return 0
+
+
+def test_build_discovery_omits_capabilities_when_no_probe_applies(my_predbat=None):
+    """
+    An inverter to which no capability probe applies carries no capabilities key - raw or in the catalogue.
+
+    This is the one raw-report change moving GivTCP onto inverter_record() made (ruling R1 in the
+    rollout plan's Amendments): the hand-built record always wrote "capabilities": capabilities,
+    even when the list was empty, whereas the builder omits an empty container. validate_report()
+    already dropped an empty container, so the catalogue never carried one either way. Every
+    other fixture here fills capabilities, so without this test neither half would be pinned.
+
+    A v2 GivTCP with no battery module details (so no soh) and no Enable_Charge_Target register
+    (so no charge_enable) trips none of build_discovery()'s probes.
+    """
+    from coordinator import validate_report
+
+    base, component = _make_component(rest_urls=["http://a:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob(version="2.4.0", charge_target_enable=None)
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    rest = component.rest[0]
+    assert not rest.rest_v3 and rest.battery_soh() is None and rest.charge_target_enabled is None, "the fixture must leave every capability probe false"
+
+    report = component.build_discovery()
+    record = report["inverters"][0]
+    assert "capabilities" not in record, "an empty capabilities list is omitted from the raw record, got {}".format(record.get("capabilities"))
+    assert "entities" in record, "the record itself is still there - only the empty container is gone"
+
+    cleaned = validate_report(report, "givtcp", print)["inverters"][0]
+    assert "capabilities" not in cleaned, "no capabilities key may reach the catalogue, got {}".format(cleaned.get("capabilities"))
+    print("PASS: an inverter with no capabilities carries no capabilities key, raw or in the catalogue")
+    return 0
+
+
+def test_build_discovery_entities_omit_what_v2_never_publishes(my_predbat=None):
+    """
+    The catalogue never lists an entity as present when publish_data() did not actually create it.
+
+    v2 GivTCP has no /setBatteryPauseMode or /setDischargeTarget endpoint, so publish_data()
+    withholds pause_mode/pause_start_time/pause_end_time and discharge_target_soc entirely on a v2
+    capture - listing them in the catalogue as live rw controls would tell a maintainer reading a
+    v2 user's debug dump that an entity exists which Home Assistant has never seen.
+    """
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    entities = component.build_discovery()["inverters"][0]["entities"]
+    for name in ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"):
+        assert name not in entities, "{} should be absent on v2, got a descriptor".format(name)
+    # Entities v2 does publish are still there - this isn't just an empty entities dict
+    assert "charge_rate" in entities
+    assert "soc_kw" in entities
+    print("PASS: v2 catalogue omits entities publish_data() never created")
+    return 0
+
+
+def test_build_discovery_entities_include_what_v3_actually_publishes(my_predbat=None):
+    """The v3 counterpart of the omission test above: a fleet with full register support does report these."""
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    entities = component.build_discovery()["inverters"][0]["entities"]
+    for name in ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"):
+        assert name in entities, "{} should be present on this fully-featured v3 capture".format(name)
+    print("PASS: v3 catalogue includes entities publish_data() actually published")
+    return 0
+
+
+def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
+    """
+    Feeding build_discovery() through the real Coordinator keeps every field it was meant to carry.
+
+    Uses the real rest_v3.json capture (not the synthetic _rest_data_blob(), which carries no
+    "raw" block) specifically so hardware_ids/info/ratings are populated with real values here -
+    a reporter whose values are quietly discarded looks fine against a blob too thin to exercise
+    those containers at all, and would only show an empty catalogue in production.
+    """
+    from coordinator import Coordinator
+
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    report = component.build_discovery()
+    original = report["inverters"][0]
+
+    coordinator = Coordinator(MockBase())
+    coordinator.report("givtcp", report)
+    record = coordinator.reports["givtcp"]["inverters"][0]
+
+    # Nothing intended for a typed container was silently dropped by validation.
+    assert record["device_id"] == original["device_id"] == "givtcp:EA2303G082"
+    assert record["inverter_type"] == "GE"
+    assert record["composition"] == "direct"
+    assert set(record["functions"]) == {"solar", "battery"}
+    assert set(record["capabilities"]) == set(original["capabilities"]) == {"rest_v3", "discharge_target", "pause_mode", "pause_slots", "soh", "charge_enable"}
+    assert record["hardware_ids"] == {"serial": "EA2303G082"}
+    assert record["info"]["model"] == "Gen2 Hybrid"
+    assert record["info"]["firmware"] == "D0.913-A0.913"
+    assert record["ratings"]["battery_kwh"] == 9.52
+    assert record["ratings"]["max_charge_w"] == 3600
+    assert len(record["entities"]) == len(original["entities"])
+    for name, descriptor in original["entities"].items():
+        assert record["entities"][name]["entity_id"] == descriptor["entity_id"]
+    # The 1440-entry time-of-day option list is recorded as a format, never truncated by the
+    # catalogue's MAX_OPTIONS cap.
+    assert record["entities"]["charge_start_time"]["format"] == "HH:MM:SS"
+    assert "options" not in record["entities"]["charge_start_time"]
+    print("PASS: build_discovery() round-trips through the real Coordinator with nothing dropped")
+    return 0
+
+
+def test_report_discovery_failure_does_not_degrade_component_health(my_predbat=None):
+    """
+    A bug in build_discovery() must not propagate out of run() or withhold the success timestamp.
+
+    An observer must never be able to degrade the health of the thing it observes: without the
+    guard in run(), an exception here would skip update_success_timestamp() below it and retry -
+    failing identically - every single cycle, eventually pushing an otherwise-healthy component
+    towards unhealthy over a bug in a side-channel report. self._discovery_report is deliberately left
+    unset on failure so the next cycle still retries, exactly as it would without the guard. This
+    also proves the failure never reaches base.had_errors: that flag makes update_pred() skip
+    record_status() and suppress the run notification, so a bug in this purely observational side
+    channel must be visible only in the log, never by changing Predbat's own reported status.
+    """
+    base, component = _make_component()
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.build_discovery = MagicMock(side_effect=Exception("boom"))
+
+    result = run_async(component.run(seconds=0, first=True))
+
+    assert result is True, "a discovery-reporting bug must not fail the whole run() call"
+    assert component._discovery_report is None, "a failed report must not be marked as reported"
+    assert component.last_updated_time() is not None, "the success timestamp must still be recorded"
+    assert getattr(base, "had_errors", False) is False, "a discovery-reporting bug must not degrade Predbat's own status - see update_pred()'s had_errors branch"
+
+    # Once the bug is fixed, the very next cycle retries and succeeds - nothing was permanently lost
+    del component.build_discovery
+    run_async(component.run(seconds=1, first=False))
+    assert component._discovery_report is not None, "the retried report should now succeed"
+    assert [record["device_id"] for record in component._discovery_report["inverters"]] == ["givtcp:http://givtcp:6345"], component._discovery_report["inverters"]
+    print("PASS: a build_discovery() failure is contained and retried, not left to degrade the component")
+    return 0
+
+
+def test_rediscovered_inverter_is_reported_only_once_its_entities_exist(my_predbat=None):
+    """
+    A rediscovered inverter's report is deferred a cycle, until publish_data() has actually
+    published its entities - not emitted empty, and marked reported, on the very cycle
+    rediscover() adds it to self.discovered.
+
+    rediscover() appends the newly-found index to self.discovered without publishing anything for
+    it - publish_data() already ran that same cycle, over self.discovered as it stood at the TOP of
+    the cycle, before the new index existed in it. The report block in run() is positioned BEFORE
+    "if rediscover:" for exactly this reason: on the rediscovery cycle the report it builds still
+    equals self._discovery_report (self.discovered hasn't grown yet) and is a no-op, and the NEXT
+    cycle's poll republishes the now-grown fleet - including the rediscovered inverter's real
+    entities - before the report block runs again. Drives an actual run() cycle through rediscovery
+    rather than calling build_discovery() directly, since that ordering is exactly what a direct
+    call sidesteps.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[1].read_data = MagicMock(return_value=None)
+
+    reports = []
+    component.report_discovery = lambda report: reports.append(report)
+
+    run_async(component.run(seconds=0, first=True))
+    assert len(reports) == 1, f"Expected the startup report, got {len(reports)}"
+    assert len(component._discovery_report["inverters"]) == 1
+
+    # inverter 1 comes back, and the hourly re-probe finds it
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
+    # The rediscovery cycle itself must not have reported anything new: reporting here, before
+    # publish_data() has published inverter 1's entities, would emit an empty entity map for it.
+    assert len(reports) == 1, "The rediscovery cycle itself must not report yet - inverter 1 has no published entities until next cycle's poll"
+    assert len(component._discovery_report["inverters"]) == 1, f"Expected the report to stay deferred this cycle, got {component._discovery_report['inverters']}"
+
+    # The following cycle republishes the grown fleet before the report block runs again
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS + GIVTCP_POLL_SECONDS, first=False))
+    assert len(reports) == 2, "Expected the deferred report to fire once inverter 1's entities exist"
+    assert len(component._discovery_report["inverters"]) == 2
+    rediscovered_entities = reports[-1]["inverters"][1]["entities"]
+    assert rediscovered_entities, "The rediscovered inverter's report must have a populated entity map, not an empty one"
+    assert "charge_rate" in rediscovered_entities
+    print("PASS: a rediscovered inverter's report is deferred until its entities actually exist, never emitted empty")
+    return 0
+
+
+def test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in(my_predbat=None):
+    """
+    A report filed before the inverter had reported its serial must be replaced once it arrives.
+
+    The report marker used to be the discovered INDEX list, which does not move when an endpoint's
+    later polls fill in facts its first answer lacked - a serial, a firmware or GivTCP version, or
+    any conditional capability. An endpoint that answered before GivTCP had decoded its inverter
+    registers therefore had its URL-derived device_id and missing hardware_ids frozen into the
+    catalogue for the life of the process, which is exactly the identity a dump is read for.
+    Comparing the built report itself is what lets the complete one replace it.
+
+    Also pins the other half: a cycle where nothing moved must NOT re-file, or every GivTCP
+    installation would churn the catalogue once a minute forever.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345"])
+    blob = _rest_data_blob()
+    component.rest[0].read_data = MagicMock(return_value=blob)
+
+    reports = []
+    component.report_discovery = lambda report: reports.append(report)
+
+    run_async(component.run(seconds=0, first=True))
+    assert len(reports) == 1, f"Expected the startup report, got {len(reports)}"
+    assert reports[0]["inverters"][0]["device_id"] == "givtcp:http://givtcp0:6345", "a first answer with no serial falls back to the URL"
+    assert "hardware_ids" not in reports[0]["inverters"][0]
+
+    # Nothing has changed - the next poll must not re-file the same report
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS, first=False))
+    assert len(reports) == 1, f"An unchanged report must not be re-filed, got {len(reports)}"
+
+    # GivTCP now reports the inverter's identity registers
+    identified = _rest_data_blob()
+    identified["raw"] = {"invertor": {"serial_number": "CE1234G567"}}
+    component.rest[0].read_data = MagicMock(return_value=identified)
+    run_async(component.run(seconds=GIVTCP_POLL_SECONDS * 2, first=False))
+
+    assert len(reports) == 2, "the completed report must replace the partial one, not be suppressed by an unchanged index list"
+    assert reports[-1]["inverters"][0]["device_id"] == "givtcp:CE1234G567"
+    assert reports[-1]["inverters"][0]["hardware_ids"] == {"serial": "CE1234G567"}
+    print("PASS: a partial first report is replaced once the inverter reports its serial")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -2429,6 +2755,19 @@ def test_givtcp_component(my_predbat=None):
         ("fleet_no_shrink", test_automatic_config_keeps_a_manually_configured_inverter, "num_inverters is never shrunk (#5029)"),
         ("fleet_grows", test_automatic_config_still_grows_the_fleet, "num_inverters still grows past apps.yaml"),
         ("fleet_tail_untouched", test_automatic_config_leaves_the_undiscovered_slot_untouched, "slots past discovery are left as configured"),
+        ("discovery_shape", test_build_discovery_shape, "build_discovery record shape"),
+        ("discovery_rate_max", test_build_discovery_uses_device_rate_max, "build_discovery uses the per-device rate max"),
+        ("discovery_only_discovered", test_build_discovery_only_discovered_endpoints, "build_discovery reports only discovered endpoints"),
+        ("discovery_regardless_of_automatic", test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),
+        ("discovery_serial_fallback", test_build_discovery_falls_back_to_rest_api_without_a_serial, "device_id falls back to the REST URL"),
+        ("discovery_capabilities", test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config, "capabilities follow automatic_config()'s own probes"),
+        ("discovery_no_capabilities", test_build_discovery_omits_capabilities_when_no_probe_applies, "no capabilities key when no probe applies, raw or in the catalogue"),
+        ("discovery_entities_v2_omit", test_build_discovery_entities_omit_what_v2_never_publishes, "v2 catalogue omits entities never published"),
+        ("discovery_entities_v3_include", test_build_discovery_entities_include_what_v3_actually_publishes, "v3 catalogue includes entities actually published"),
+        ("discovery_round_trip", test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
+        ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
+        ("discovery_rediscovery_ordering", test_rediscovered_inverter_is_reported_only_once_its_entities_exist, "rediscovered inverter reported only once its entities exist"),
+        ("discovery_partial_replaced", test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in, "a partial first report is replaced, an unchanged one is not re-filed"),
     ]
 
     passed = 0

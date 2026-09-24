@@ -62,7 +62,7 @@ def _warm_cache(**ages):
         DEYE_CACHE_STATIC: {"station_ids": [61016286], "device_list": ["INV1"]},
         DEYE_CACHE_CONFIG: {"INV1": {"battCapacity": 1200, "battLowCapacity": 14, "maxChargeCurrent": 185}},
         DEYE_CACHE_RATINGS: {"capacity": {"INV1": 61.44}, "pack_voltage": {"INV1": 51.2}, "rated_power": {"INV1": 8000.0}},
-        DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}},
+        DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}, "control_active": ["INV1"]},
     }
     default_ages = {name: ages.get(name, 0.5) for name in data}
     return FakeStorage(data=data, ages=default_ages)
@@ -116,6 +116,9 @@ def test_restore_seeds_clocks_and_state():
         failed = True
     if d.applied_payload.get("INV1", {}).get("touAction") != "on":
         print(f"ERROR: applied_payload not restored: {d.applied_payload}")
+        failed = True
+    if d.control_active != {"INV1"}:
+        print(f"ERROR: control_active not restored: {d.control_active}")
         failed = True
     for tier, ttl in (("static", DEYE_TTL_STATIC), ("config", DEYE_TTL_CONFIG)):
         if d.tier_expired(tier, ttl):
@@ -356,7 +359,7 @@ def test_restore_primes_the_ratings_signature():
 
 
 def test_stale_applied_payload_is_discarded_but_orders_are_not():
-    """A stale applied_payload is dropped so the next apply re-writes; orders always resume."""
+    """A stale applied_payload (and control_active with it) is dropped so the next apply re-writes; orders always resume."""
     failed = False
     d = StorageDeye()
     d._mock_storage = _warm_cache()
@@ -369,6 +372,9 @@ def test_stale_applied_payload_is_discarded_but_orders_are_not():
     if d.applied_payload:
         print(f"ERROR: a stale applied_payload must be discarded: {d.applied_payload}")
         failed = True
+    if d.control_active:
+        print(f"ERROR: control_active must be discarded alongside a stale applied_payload: {d.control_active}")
+        failed = True
     if not any("applied-payload cache is stale" in m for m in d.log_messages):
         print(f"ERROR: expected a stale applied-payload log line: {d.log_messages}")
         failed = True
@@ -379,6 +385,112 @@ def test_stale_applied_payload_is_discarded_but_orders_are_not():
         print(f"ERROR: the poll count must carry over so DEYE_ORDER_MAX_POLLS still bounds it: {d.order_poll_count}")
         failed = True
     assert not failed, "test_stale_applied_payload_is_discarded_but_orders_are_not"
+
+
+def test_save_control_persists_control_active():
+    """save_control must persist control_active, not just applied_payload/orders.
+
+    Believed to be the same bug as batpred#5138 (Sunsynk), found by code reading rather
+    than a reported deye.py incident: without this, _reconcile_control(),
+    gated on control_active, silently stops writing to every inverter after a restart
+    until an unrelated event happens to re-add it - including one meant to stop an
+    export already in progress. Fixed the same way as sunsynk.py and alphaess.py, which
+    already persist control_active for the same reason.
+    """
+    failed = False
+    d = StorageDeye()
+    d._mock_storage = FakeStorage()
+    d.applied_payload = {"INV1": {"deviceSn": "INV1", "touAction": "on"}}
+    d.control_active = {"INV1"}
+    run_async(d.save_control())
+    saved = d._mock_storage.data.get(DEYE_CACHE_CONTROL, {})
+    if sorted(saved.get("control_active") or []) != ["INV1"]:
+        print(f"ERROR: control_active was not persisted by save_control: {saved}")
+        failed = True
+
+    restored = StorageDeye()
+    restored._mock_storage = FakeStorage(data={DEYE_CACHE_CONTROL: saved}, ages={DEYE_CACHE_CONTROL: 1.0})
+    run_async(restored.restore_state())
+    if restored.control_active != {"INV1"}:
+        print(f"ERROR: control_active did not round-trip through save_control/restore_state, got {restored.control_active}")
+        failed = True
+    assert not failed, "test_save_control_persists_control_active"
+
+
+def test_pre_upgrade_control_cache_infers_control_active():
+    """A cache predating the control_active key infers it from applied_payload, rather than restoring half the state.
+
+    Without this, upgrading to this fix would still lose control_active on the one restart
+    that installs it: the cache on disk was written by the old save_control, so it carries
+    applied_payload alone, and restoring that half on its own leaves _reconcile_control
+    gated off exactly as before. Inferring cannot arm an inverter Predbat never drove -
+    every applied_payload key got there through apply_schedule/apply_reserve_live, which add
+    to control_active first - so it restores a subset, never a superset.
+
+    An explicitly empty list is honoured rather than inferred: "the new format saved nothing
+    armed" and "this cache predates the key" are different states, and only the second may
+    be guessed at.
+    """
+    failed = False
+    old_format = StorageDeye()
+    old_format._mock_storage = FakeStorage(
+        data={DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}}},
+        ages={DEYE_CACHE_CONTROL: 1.0},
+    )
+    run_async(old_format.restore_state())
+    if old_format.control_active != {"INV1"}:
+        print(f"ERROR: a pre-upgrade cache should infer control_active from applied_payload, got {old_format.control_active}")
+        failed = True
+
+    explicit_empty = StorageDeye()
+    explicit_empty._mock_storage = FakeStorage(
+        data={DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}, "control_active": []}},
+        ages={DEYE_CACHE_CONTROL: 1.0},
+    )
+    run_async(explicit_empty.restore_state())
+    if explicit_empty.control_active:
+        print(f"ERROR: an explicitly empty control_active must be honoured, not inferred, got {explicit_empty.control_active}")
+        failed = True
+    assert not failed, "test_pre_upgrade_control_cache_infers_control_active"
+
+
+def test_invalidated_payload_still_restores_control_active():
+    """An applied_payload emptied on purpose must not take control_active down with it.
+
+    run() pops a serial from applied_payload once its order has stayed unconfirmed past
+    DEYE_ORDER_MAX_POLLS - deliberately, so the next apply re-writes - and calls
+    save_control() in the same cycle. On a single-inverter install that persists an empty
+    payload beside a live control_active. Gating the restore on a non-empty payload would
+    discard both, leaving _reconcile_control behind an empty control_active on exactly the
+    inverter that had just been marked for a forced re-write.
+    """
+    failed = False
+    d = StorageDeye()
+    d._mock_storage = FakeStorage()
+    d.applied_payload = {"INV1": {"deviceSn": "INV1", "touAction": "on"}}
+    d.control_active = {"INV1"}
+    d.applied_payload.pop("INV1", None)  # what run() does when an order goes unconfirmed
+    run_async(d.save_control())
+    saved = d._mock_storage.data.get(DEYE_CACHE_CONTROL, {})
+
+    restored = StorageDeye()
+    restored._mock_storage = FakeStorage(data={DEYE_CACHE_CONTROL: saved}, ages={DEYE_CACHE_CONTROL: 1.0})
+    run_async(restored.restore_state())
+    if restored.control_active != {"INV1"}:
+        print(f"ERROR: control_active must survive an intentionally emptied applied_payload, got {restored.control_active}")
+        failed = True
+    if restored.applied_payload:
+        print(f"ERROR: the emptied applied_payload must stay empty so the next apply re-writes, got {restored.applied_payload}")
+        failed = True
+
+    # The age bound is unchanged by the above: past it both halves still go together.
+    stale = StorageDeye()
+    stale._mock_storage = FakeStorage(data={DEYE_CACHE_CONTROL: saved}, ages={DEYE_CACHE_CONTROL: DEYE_RESTORE_MAX_CONTROL + 1.0})
+    run_async(stale.restore_state())
+    if stale.control_active:
+        print(f"ERROR: a stale control cache must still discard control_active, got {stale.control_active}")
+        failed = True
+    assert not failed, "test_invalidated_payload_still_restores_control_active"
 
 
 def test_fresh_applied_payload_suppresses_a_redundant_write():
@@ -725,6 +837,9 @@ def run_deye_storage_tests(my_predbat):
         ("restore_primes_ratings", test_restore_primes_the_ratings_signature),
         ("stale_applied_payload", test_stale_applied_payload_is_discarded_but_orders_are_not),
         ("fresh_applied_payload_suppresses", test_fresh_applied_payload_suppresses_a_redundant_write),
+        ("save_control_persists_control_active", test_save_control_persists_control_active),
+        ("pre_upgrade_infers_control_active", test_pre_upgrade_control_cache_infers_control_active),
+        ("invalidated_payload_keeps_control_active", test_invalidated_payload_still_restores_control_active),
         ("first_fails_without_telemetry", test_first_run_fails_when_telemetry_is_unavailable),
         ("first_succeeds_with_telemetry", test_first_run_succeeds_once_telemetry_arrives),
         ("success_timestamp_reported", test_successful_run_reports_a_success_timestamp),

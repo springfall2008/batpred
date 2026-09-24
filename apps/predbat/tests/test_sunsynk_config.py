@@ -12,7 +12,9 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from unittest.mock import patch
 from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
+from coordinator import validate_report
 from sunsynk_const import SUNSYNK_TTL_STATIC
+from sunsynk import load_apps_yaml_credentials, _tou_test_window
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_sunsynk_publish import PublishingSunsynk
 from tests.test_infra import run_async as run_async_local
@@ -346,6 +348,206 @@ def test_run_first_cycle_polls_and_publishes():
         print(f"ERROR: run() should return True on a completed first cycle, got {result!r}")
         failed = True
     assert not failed, "test_run_first_cycle_polls_and_publishes"
+
+
+SUNSYNK_LIVE_SERIAL = "2405116013"
+
+
+def _sunsynk_fleet():
+    """A MockSunsynk holding one inverter built from sunsynk_const.py's CONFIRMED-live values only.
+
+    No captured inverter_detail or settings response exists in the repository (sunsynk_const.py
+    records that nobody on the project has a live account), so this is assembled from the values it
+    does mark confirmed live: ratePower 8000 with pvMaxLimit 7000; chargeVolt 58.4 with a 200 Ah pack
+    (10.24 kWh); and the serial the live telemetry sample was taken from.
+    """
+    s = MockSunsynk()
+    sn = SUNSYNK_LIVE_SERIAL
+    s.device_list = [sn]
+    s.device_rated_power = {sn: 8000.0}
+    s.device_values = {sn: {"capacity": 200, "chargeVolt": 58.4}}
+    s.device_settings = {sn: {"pvMaxLimit": 7000}}
+    return s
+
+
+def test_sunsynk_catalogue_describes_each_inverter():
+    """Each inverter is a SunsynkCloud record with the confirmed-live ratings."""
+    failed = False
+    s = _sunsynk_fleet()
+    record = s.build_discovery()["inverters"][0]
+    checks = [
+        (record["device_id"], "sunsynk:" + SUNSYNK_LIVE_SERIAL),
+        (record["inverter_type"], "SunsynkCloud"),
+        (record["composition"], "direct"),
+        (record["functions"], ["solar", "battery"]),
+        (record["hardware_ids"], {"serial": SUNSYNK_LIVE_SERIAL}),
+        (sorted(record["capabilities"]), ["charge_rate_power", "discharge_target", "export_limit", "schedule", "target_soc"]),
+        (record["ratings"]["inverter_w"], 8000.0),
+        (record["ratings"]["battery_capacity_ah"], 200.0),
+        (record["ratings"]["battery_kwh"], s.battery_capacity(SUNSYNK_LIVE_SERIAL)),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print("ERROR: expected {!r}, got {!r}".format(expected, actual))
+            failed = True
+    if abs(record["ratings"]["battery_kwh"] - 10.24) > 0.01:
+        print("ERROR: the confirmed-live pack is 10.24 kWh, got {}".format(record["ratings"]["battery_kwh"]))
+        failed = True
+    for absent in ("info", "account_ids"):
+        if absent in record:
+            print("ERROR: Sunsynk holds no model, firmware or station ID, so {} must be absent: {}".format(absent, record[absent]))
+            failed = True
+    return failed
+
+
+def test_sunsynk_catalogue_export_limit_only_on_evidence():
+    """export_limit is reported per device where export_limit() > 0 - the per-device half of automatic_config()'s test, which binds the arg only when every inverter passes it."""
+    s = _sunsynk_fleet()
+    s.device_rated_power = {}
+    s.device_settings = {}
+    record = s.build_discovery()["inverters"][0]
+    if "export_limit" in record.get("capabilities", []):
+        print("ERROR: with no rating and no pvMaxLimit, export_limit() is 0 and the capability must be absent")
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll():
+    """A poll that omits the battery fields keeps the last battery ratings, as the published sensor does.
+
+    fetch_device_data() rebuilds device_values from every poll and leaves out a field the battery
+    endpoint did not return. publish_data() then skips the battery_capacity sensor, so Home
+    Assistant - and Predbat's soc_max - keep the last value. The catalogue keeps its last ratings
+    too, rather than filing a thinner report and then the full one again when the fields return.
+    """
+    failed = False
+    s = _sunsynk_fleet()
+    sn = SUNSYNK_LIVE_SERIAL
+    full = s.build_discovery()
+    # A new capacity with no chargeVolt cannot give a kWh for it, so the kept Ah and kWh stay
+    # together rather than a new Ah being filed beside the old kWh
+    for name, partial in (("no capacity", {"chargeVolt": 58.4}), ("no chargeVolt", {"capacity": 200}), ("new capacity, no chargeVolt", {"capacity": 280}), ("no battery fields", {})):
+        s.device_values = {sn: dict(partial)}
+        if s.build_discovery() != full:
+            print("ERROR: {}: the report changed on a partial poll: {}".format(name, s.build_discovery()))
+            failed = True
+
+    # A poll that does carry the fields replaces the kept ratings: 280 Ah at 51.2 V nominal
+    s.device_values = {sn: {"capacity": 280, "chargeVolt": 58.4}}
+    ratings = s.build_discovery()["inverters"][0]["ratings"]
+    if ratings.get("battery_capacity_ah") != 280.0 or ratings.get("battery_kwh") != 14.34:
+        print("ERROR: fresh battery fields must replace the kept ratings: {}".format(ratings))
+        failed = True
+
+    # An install that has never reported a chargeVolt still reports the Ah it states, with no kWh,
+    # and gains the kWh once a poll carries both
+    ah_only = _sunsynk_fleet()
+    ah_only.device_values = {sn: {"capacity": 200}}
+    ratings = ah_only.build_discovery()["inverters"][0]["ratings"]
+    if ratings.get("battery_capacity_ah") != 200.0 or "battery_kwh" in ratings:
+        print("ERROR: an Ah-only install must report its Ah and no kWh: {}".format(ratings))
+        failed = True
+    ah_only.device_values = {sn: {"capacity": 200, "chargeVolt": 58.4}}
+    ratings = ah_only.build_discovery()["inverters"][0]["ratings"]
+    if ratings.get("battery_capacity_ah") != 200.0 or ratings.get("battery_kwh") != 10.24:
+        print("ERROR: a poll carrying both fields must add the kWh: {}".format(ratings))
+        failed = True
+
+    # Nothing is invented for an inverter whose battery fields have never been seen
+    s.device_list = [sn, "UNSEEN1"]
+    unseen = {record["device_id"]: record for record in s.build_discovery()["inverters"]}["sunsynk:UNSEEN1"]
+    if {"battery_kwh", "battery_capacity_ah"} & set(unseen.get("ratings", {})):
+        print("ERROR: an inverter never polled must carry no battery ratings: {}".format(unseen.get("ratings")))
+        failed = True
+    return failed
+
+
+def test_sunsynk_catalogue_none_before_discovery():
+    """With no inverters there is nothing to describe."""
+    if MockSunsynk().build_discovery() is not None:
+        print("ERROR: an empty device_list must report None")
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every Sunsynk record back unchanged."""
+    report = _sunsynk_fleet().build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "sunsynk", warnings.append)
+    if warnings or cleaned.get("inverters") != report["inverters"]:
+        print("ERROR: validation changed or warned on the report: {} {}".format(warnings, cleaned.get("inverters")))
+        return True
+    return False
+
+
+def test_sunsynk_catalogue_filed_when_first_cycle_defers():
+    """run() files the report even on a first cycle that defers startup because the live poll failed.
+
+    `if first and not live_ok: return False` - and automatic_config() after it - would otherwise
+    swallow the report on exactly the installs whose dump most needs to say what hardware was found.
+    Built on test_run_first_cycle_polls_and_publishes(); fetch_device_data() fails and
+    automatic_config() is observed.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.automatic = True
+    reports = []
+    s.report_discovery = reports.append
+    configured = []
+
+    async def fake_restore():
+        """Restore nothing."""
+
+    async def fake_token():
+        """Log in successfully."""
+        return True
+
+    async def fake_device_list():
+        """Discover one inverter."""
+        s.device_list = ["INV1"]
+        return ["INV1"]
+
+    async def fake_detail(sn):
+        """Return the confirmed-live rating."""
+        return {"ratePower": 8000}
+
+    async def fake_device_data(sn):
+        """Fail the live poll: refresh_live() treats a falsy result as no data."""
+        return {}
+
+    async def fake_settings(sn):
+        """Return a minimal settings read."""
+        return {"batteryLowCap": "10"}
+
+    async def fake_publish():
+        """Publish nothing."""
+
+    async def fake_auto():
+        """Record that automatic_config() ran."""
+        configured.append(True)
+
+    with (
+        patch.object(s, "restore_state", side_effect=fake_restore),
+        patch.object(s, "fetch_token", side_effect=fake_token),
+        patch.object(s, "get_device_list", side_effect=fake_device_list),
+        patch.object(s, "fetch_device_detail", side_effect=fake_detail),
+        patch.object(s, "fetch_device_data", side_effect=fake_device_data),
+        patch.object(s, "fetch_settings", side_effect=fake_settings),
+        patch.object(s, "publish_data", side_effect=fake_publish),
+        patch.object(s, "automatic_config", side_effect=fake_auto),
+    ):
+        result = run_async_local(s.run(0, True))
+    if result is not False:
+        print("ERROR: run() should defer startup (return False) when the first live poll fails, got {!r}".format(result))
+        failed = True
+    if configured:
+        print("ERROR: automatic_config() must not run on a deferred first cycle")
+        failed = True
+    if len(reports) != 1 or reports[0]["inverters"][0]["device_id"] != "sunsynk:INV1":
+        print("ERROR: the report must be filed before the deferring return, got {}".format(reports))
+        failed = True
+    return failed
 
 
 def test_run_returns_false_on_login_failure():
@@ -806,11 +1008,110 @@ def test_sign_flags_are_claimed_not_inherited():
     assert not failed, "test_sign_flags_are_claimed_not_inherited"
 
 
+def test_apps_yaml_credentials_loader():
+    """The standalone CLI's --apps-yaml loader builds a usable account or refuses precisely.
+
+    This is what lets the CLI drive a real oauth account for the live TOU round trip, where
+    there is a bearer token and no password at all. A bug here either half-builds a client
+    that fails at login with a confusing message, or silently drops the serial.
+    """
+    failed = False
+    import os
+    import tempfile
+
+    import yaml as yaml_module
+
+    def write(folder, name, payload):
+        """Write a YAML fixture and return its path."""
+        path = os.path.join(folder, name)
+        with open(path, "w") as handle:
+            yaml_module.safe_dump(payload, handle)
+        return path
+
+    with tempfile.TemporaryDirectory() as folder:
+        oauth = write(folder, "oauth.yaml", {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_token_hash": "hash-abc", "sunsynk_inverter_sn": ["2211093089"], "sunsynk_token_expires_at": "2026-09-19T22:11:54.287+00:00"}})
+        credentials = load_apps_yaml_credentials(oauth)
+        expected = {"auth_method": "oauth", "key": "token-abc", "token_hash": "hash-abc", "inverter_sn": ["2211093089"], "token_expires_at": "2026-09-19T22:11:54.287+00:00"}
+        if credentials != expected:
+            print(f"ERROR: oauth config loaded as {credentials}, expected {expected}")
+            failed = True
+
+        # A YAML-parsed timestamp must come back as the string _parse_expiry wants, not a
+        # datetime - safe_load turns an unquoted ISO date into one.
+        from datetime import datetime as real_datetime
+
+        typed = write(folder, "typed.yaml", {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_inverter_sn": ["2211093089"], "sunsynk_token_expires_at": real_datetime(2026, 9, 19, 22, 11, 54)}})
+        if not isinstance(load_apps_yaml_credentials(typed).get("token_expires_at"), str):
+            print("ERROR: a YAML-typed expiry must be handed on as a string")
+            failed = True
+
+        # A bare mapping (a hand-trimmed file with no pred_bat wrapper) is accepted too.
+        bare = write(folder, "bare.yaml", {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc", "sunsynk_inverter_sn": "2211093089"})
+        if load_apps_yaml_credentials(bare).get("inverter_sn") != ["2211093089"]:
+            print("ERROR: a bare mapping with a scalar serial should load as a one-element list")
+            failed = True
+
+        # Each way of being unusable must refuse with its own reason, never half-build.
+        refusals = {
+            "no_serial.yaml": {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_key": "token-abc"}},
+            "oauth_no_token.yaml": {"pred_bat": {"sunsynk_auth_method": "oauth", "sunsynk_inverter_sn": ["2211093089"]}},
+            "password_incomplete.yaml": {"pred_bat": {"sunsynk_username": "someone@example.com", "sunsynk_inverter_sn": ["2211093089"]}},
+        }
+        for name, payload in refusals.items():
+            try:
+                load_apps_yaml_credentials(write(folder, name, payload))
+                print(f"ERROR: {name} should have been refused")
+                failed = True
+            except ValueError:
+                pass
+        for name, path in (("missing", os.path.join(folder, "missing.yaml")), ("not a mapping", write(folder, "list.yaml", ["a", "b"]))):
+            try:
+                load_apps_yaml_credentials(path)
+                print(f"ERROR: {name} should have been refused")
+                failed = True
+            except ValueError:
+                pass
+
+        # A password account is complete without any token.
+        password = write(folder, "password.yaml", {"pred_bat": {"sunsynk_username": "someone@example.com", "sunsynk_password": "hunter2", "sunsynk_inverter_sn": ["2211093089"]}})
+        if load_apps_yaml_credentials(password).get("username") != "someone@example.com":
+            print("ERROR: a username/password account should load without a token")
+            failed = True
+    assert not failed, "test_apps_yaml_credentials_loader"
+
+
+def test_tou_test_window_avoids_now():
+    """The CLI's live TOU window never contains the current time.
+
+    The programme --tou-test writes is meant to be stored, read back and removed without
+    the inverter ever acting on it. A window covering the current minute would put the
+    battery into a real grid-charge for the seconds before the restore.
+    """
+    failed = False
+    for now_minutes in range(0, 24 * 60, 7):
+        start, end = _tou_test_window(now_minutes)
+        start_minutes = int(start[:2]) * 60 + int(start[3:])
+        end_minutes = int(end[:2]) * 60 + int(end[3:])
+        if start_minutes < end_minutes:
+            inside = start_minutes <= now_minutes < end_minutes
+        else:
+            inside = now_minutes >= start_minutes or now_minutes < end_minutes
+        if inside:
+            print(f"ERROR: window {start}-{end} contains the current time {now_minutes // 60:02d}:{now_minutes % 60:02d}")
+            failed = True
+        if start == end:
+            print(f"ERROR: window {start}-{end} is zero length and would be dropped")
+            failed = True
+    assert not failed, "test_tou_test_window_avoids_now"
+
+
 def run_sunsynk_config_tests(my_predbat):
     """Run all Sunsynk configuration tests."""
     failed = False
     for name, fn in [
         ("inverter_def", test_inverter_def_registered),
+        ("apps_yaml_credentials", test_apps_yaml_credentials_loader),
+        ("tou_test_window", test_tou_test_window_avoids_now),
         ("component_registered", test_component_registered),
         ("apps_schema", test_apps_schema_keys),
         ("automatic_config", test_automatic_config_maps_control_entities),
@@ -819,6 +1120,12 @@ def run_sunsynk_config_tests(my_predbat):
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),
+        ("catalogue_describes_each_inverter", test_sunsynk_catalogue_describes_each_inverter),
+        ("catalogue_export_limit_only_on_evidence", test_sunsynk_catalogue_export_limit_only_on_evidence),
+        ("catalogue_keeps_battery_ratings_through_a_partial_poll", test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll),
+        ("catalogue_none_before_discovery", test_sunsynk_catalogue_none_before_discovery),
+        ("catalogue_round_trips", test_sunsynk_catalogue_round_trips_through_validate_report),
+        ("catalogue_filed_when_first_cycle_defers", test_sunsynk_catalogue_filed_when_first_cycle_defers),
         ("run_login_failure", test_run_returns_false_on_login_failure),
         ("run_no_inverters", test_run_returns_false_with_no_inverters),
         ("run_publishes_every_tick", test_run_publishes_schedule_every_tick_not_only_first),
