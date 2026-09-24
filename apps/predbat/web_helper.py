@@ -3123,6 +3123,211 @@ body.dark-mode .edit-button:hover {
     return text
 
 
+def get_discovery_css():
+    """
+    Return CSS for the discovery catalogue page
+    """
+    text = """
+<style>
+.discovery-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 12px 0 20px 0;
+}
+
+.discovery-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.discovery-count {
+    background: #eceff1;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+body.dark-mode .discovery-count {
+    background: #37474f;
+    color: #eee;
+}
+
+.discovery-toggle {
+    margin-left: auto;
+    padding: 6px 14px;
+    border-radius: 4px;
+    text-decoration: none;
+    background: #1976D2;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.discovery-toggle:hover {
+    background: #1565C0;
+}
+
+.discovery-warning {
+    border-left: 5px solid #d32f2f;
+    background: #ffebee;
+    color: #b71c1c;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-warning {
+    background: #4a1c1c;
+    color: #ffcdd2;
+}
+
+.discovery-conflicts {
+    border-left: 5px solid #f57c00;
+    background: #fff8e1;
+    color: #6d4c00;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-conflicts {
+    background: #4a3c1c;
+    color: #ffe082;
+}
+
+.discovery-clear {
+    border-left: 5px solid #4CAF50;
+    background: #e8f5e9;
+    color: #1b5e20;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-clear {
+    background: #1b3a1e;
+    color: #c8e6c9;
+}
+
+.discovery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 18px;
+    margin-bottom: 26px;
+}
+
+.discovery-card {
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fff;
+    color: #333;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+}
+
+body.dark-mode .discovery-card {
+    background: #2c2c2c;
+    color: #eee;
+    border-color: #555;
+}
+
+.discovery-card-title {
+    font-weight: bold;
+    font-size: 1.05em;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.discovery-source {
+    background: #1976D2;
+    color: #fff;
+    border-radius: 10px;
+    padding: 2px 9px;
+    font-size: 0.75em;
+    font-weight: normal;
+}
+
+.discovery-field {
+    margin: 3px 0;
+    line-height: 1.45;
+}
+
+.discovery-key {
+    color: #555;
+    font-weight: 600;
+}
+
+body.dark-mode .discovery-key {
+    color: #bbb;
+}
+
+.discovery-nested {
+    margin-left: 16px;
+    border-left: 2px solid #e0e0e0;
+    padding-left: 10px;
+}
+
+body.dark-mode .discovery-nested {
+    border-left-color: #555;
+}
+
+.discovery-token {
+    font-family: monospace;
+    background: #f1f1f1;
+    border-radius: 3px;
+    padding: 0 4px;
+}
+
+body.dark-mode .discovery-token {
+    background: #3a3a3a;
+}
+
+.discovery-raw {
+    background: #f6f6f6;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    white-space: pre;
+}
+
+body.dark-mode .discovery-raw {
+    background: #1e1e1e;
+    color: #ddd;
+    border-color: #555;
+}
+
+.discovery-empty {
+    padding: 20px;
+    background: #f5f5f5;
+    border-radius: 6px;
+    color: #555;
+}
+
+body.dark-mode .discovery-empty {
+    background: #333;
+    color: #ccc;
+}
+
+@media (max-width: 768px) {
+    .discovery-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+"""
+    return text
+
+
 def get_entity_modal_css():
     """
     Return CSS for entity modal popup
@@ -8627,6 +8832,7 @@ setTimeout(function() {
         + config_warning
         + """</a>
 <a href='./components'>Components</a>
+<a href='./discovery'>Discovery</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./browse'>Browse</a>
 <a href='./internals'>Internals</a>

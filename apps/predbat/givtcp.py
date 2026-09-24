@@ -36,6 +36,7 @@ import asyncio
 import re
 
 from component_base import ComponentBase
+from coordinator import inverter_record
 from utils import dp4
 from givtcp_rest import GivTCPRest, InverterRestState
 
@@ -469,6 +470,19 @@ class GivTCPComponent(ComponentBase):
             self.log("Warn: GivTCP: no data read from any configured REST endpoint yet")
             return False
 
+        # Independent of self.automatic and of automatic_config(): the catalogue describes what
+        # hardware is physically there, not whether this component wired Predbat's apps.yaml to it -
+        # that distinction is recorded in the report's own "automatic" flag.
+        #
+        # Deliberately placed BEFORE "if rediscover:" below: rediscover() appends a newly-found
+        # index to self.discovered without publishing anything for it (publish_data() already ran,
+        # above, over self.discovered as it stood at the TOP of this cycle), so a report built after
+        # it would describe the rediscovered inverter with an empty entity map. Positioned here,
+        # this cycle's report is built over the fleet publish_data() actually published for, so it
+        # is unchanged and files nothing; the next cycle republishes the grown fleet first, and the
+        # report that finally fires sees real entities.
+        self.refresh_discovery()
+
         if rediscover:
             await self.rediscover()
 
@@ -878,6 +892,146 @@ class GivTCPComponent(ComponentBase):
             # themselves in place, so its recorded history survives - set_arg_auto still fills the
             # key in when they named nothing.
             self.set_arg_auto(key, self._keep_configured_tail(key, [self._entity_id(domain, n, key) for n in discovered], n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
+
+    def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
+        """
+        One entity descriptor for the discovery catalogue, or None if this entity was never published.
+
+        Checked against the state store (get_state_wrapper()) rather than against
+        publish_data()'s own gating conditions a second time here: discharge_target_soc, the pause
+        entities, charge_limit_enable, the two scheduled_*_enable switches and most of the
+        discovery sensors are each conditional there on GivTCP version, register support or a
+        non-None reading, and duplicating those conditions in this file's second half would
+        eventually drift out of step with the first. publish_data() always runs earlier in the same
+        run() cycle before this is called, so an entity's presence in the state store already IS
+        the ground truth for whether it was actually published - no separate bookkeeping needed.
+
+        Draws from the same attribute table publish_data() already turns into this entity's HA
+        attributes, so a descriptor that IS produced can never disagree with what was published.
+        charge_rate/discharge_rate get the per-device rate maximum from rest.max_battery_rate() in
+        place of the generic ceiling, exactly as publish_data() does - or no "max" at all when
+        GivTCP has not reported one, rather than a generic figure claiming a battery capability
+        that may not exist.
+
+        A time-of-day select's option list (charge/discharge/pause start and end time) is recorded
+        as format="HH:MM:SS" rather than its 1440 discrete minute values: the catalogue's option
+        container caps at 256 entries, so publishing the raw list would be silently truncated to
+        "00:00:00".."04:15:00" - every afternoon and evening slot lost from the document. This
+        matches the design's own convention for a time-valued select.
+        """
+        entity_id = self._entity_id(domain, n, name)
+        if self.get_state_wrapper(entity_id) is None:
+            return None
+        descriptor = {"entity_id": entity_id, "domain": domain, "access": access}
+        if "unit_of_measurement" in attrs:
+            descriptor["unit"] = attrs["unit_of_measurement"]
+        for field in ("device_class", "min", "max", "step"):
+            if field in attrs:
+                descriptor[field] = attrs[field]
+        options = attrs.get("options")
+        if options is GIVTCP_TIME_OPTIONS:
+            descriptor["format"] = "HH:MM:SS"
+        elif options:
+            descriptor["options"] = options
+        if name in ("charge_rate", "discharge_rate"):
+            if max_battery_rate:
+                descriptor["max"] = max_battery_rate
+            else:
+                descriptor.pop("max", None)
+        return descriptor
+
+    def build_discovery(self):
+        """
+        Describe the discovered inverters for the discovery catalogue.
+
+        One record per REST endpoint that actually answered discovery (self.discovered), never the
+        full configured list - the shipped apps.yaml deliberately over-provisions givtcp_rest with
+        placeholder URLs that were never adopted. device_id is "givtcp:{serial}", falling back to
+        "givtcp:{rest_api}" when the inverter reports no serial - the same fallback identity
+        publish_data()'s own identity entities would show as "Unknown".
+
+        Entity descriptors are built from GIVTCP_CONTROLS/GIVTCP_SENSORS, but only for an entity
+        publish_data() actually published this run (see _discovery_descriptor) - many of them are
+        conditional there on GivTCP version, register support or a non-None reading (the pause
+        entities and discharge_target_soc need rest_v3 and, for the latter, a supported model;
+        charge_limit_enable and the two scheduled_*_enable switches need their register reported at
+        all; most of the discovery/energy sensors are published only when GivTCP actually reports
+        that field), so the catalogue never lists a control or sensor as present when no such HA
+        entity exists. capabilities records the same probes automatic_config() gates its own
+        auto-configuration decisions on.
+
+        Reporting is independent of self.automatic: the catalogue records what hardware is
+        physically there, not whether this component wired Predbat's apps.yaml to it - that
+        distinction is what the report's own "automatic" flag is for, not a gate on reporting here.
+        """
+        inverters = []
+        for n in self.discovered:
+            rest = self.rest[n]
+            serial = rest.serial_number
+            known_serial = serial if serial and serial != "Unknown" else None
+            device_id = "givtcp:{}".format(known_serial or rest.inverter.rest_api)
+
+            max_battery_rate = rest.max_battery_rate()
+            entities = {}
+            for name, (domain, _, attrs) in GIVTCP_CONTROLS.items():
+                descriptor = self._discovery_descriptor(n, name, domain, "rw", attrs, max_battery_rate)
+                if descriptor is not None:
+                    entities[name] = descriptor
+            for name, attrs in GIVTCP_SENSORS.items():
+                descriptor = self._discovery_descriptor(n, name, "sensor", "r", attrs, max_battery_rate)
+                if descriptor is not None:
+                    entities[name] = descriptor
+
+            # Same probes automatic_config() gates its own decisions on - see
+            # GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS/PAUSE_MODE_KEYS/PAUSE_SLOT_KEYS/SCALING_KEYS/
+            # CHARGE_ENABLE_KEYS above. Recorded here regardless of self.automatic or of whether the
+            # rest of the discovered fleet also qualifies - automatic_config() requires every
+            # discovered inverter to agree before claiming a key; this reports what is true of THIS
+            # inverter alone.
+            capabilities = []
+            if rest.rest_v3:
+                capabilities.append("rest_v3")
+                capabilities.append("discharge_target")
+                if rest.pause_mode_supported:
+                    capabilities.append("pause_mode")
+                if rest.pause_slots_supported:
+                    capabilities.append("pause_slots")
+            if rest.battery_soh() is not None:
+                capabilities.append("soh")
+            if rest.charge_target_enabled is not None:
+                capabilities.append("charge_enable")
+
+            info = {}
+            model = rest.inverter_type()
+            if model:
+                info["model"] = model
+            if rest.firmware_version and rest.firmware_version != "Unknown":
+                info["firmware"] = rest.firmware_version
+            if rest.givtcp_version and rest.givtcp_version != "Unknown":
+                info["givtcp_version"] = rest.givtcp_version
+
+            ratings = {}
+            design_capacity = rest.battery_capacity_kwh() or rest.nominal_capacity()
+            if design_capacity:
+                ratings["battery_kwh"] = design_capacity
+            if max_battery_rate:
+                ratings["max_charge_w"] = max_battery_rate
+
+            inverters.append(
+                inverter_record(
+                    device_id,
+                    inverter_type="GE",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=capabilities,
+                    hardware_ids={"serial": known_serial} if known_serial else None,
+                    info=info,
+                    ratings=ratings,
+                    entities=entities,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
     def _parse_entity(self, entity_id):
         """entity_id -> (inverter index, control name), or (None, None) if it doesn't match."""

@@ -51,6 +51,8 @@ class MockSunsynk(SunsynkAPI):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        self._stack_size_warned = set()
+        self._discovery_battery_ratings = {}
         # Most recent body-level API failure message (the `msg` field only, never a
         # credential) and whether the last discovery attempt actually reached the API -
         # mirrors the two attributes initialize() sets on the real component.
@@ -705,6 +707,41 @@ def test_nominal_pack_voltage_variants():
     assert not failed, "test_nominal_pack_voltage_variants"
 
 
+def test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt():
+    """A chargeVolt that fits no LiFePO4 stack is warned about once per value, not on every call.
+
+    battery_capacity() and battery_rate_max() both reach nominal_pack_voltage() every cycle, and the
+    discovery reporter reads battery_capacity() too, so an unchanging chargeVolt would otherwise log
+    the same Warn several times a cycle.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    def stack_warnings():
+        return [message for message in s.log_messages if "cannot infer a LiFePO4 stack size" in message]
+
+    # 40V fits no stack: 8 cells charge to 27.2-30V and 15 cells to 51-56.25V
+    for _ in range(3):
+        if s.nominal_pack_voltage(40.0) != 0.0:
+            print("ERROR: a chargeVolt that fits no stack must still give no voltage")
+            failed = True
+    if len(stack_warnings()) != 1:
+        print(f"ERROR: expected one warning for a repeated chargeVolt, got {stack_warnings()}")
+        failed = True
+    # A different value that fits no stack is new information and is warned about
+    s.nominal_pack_voltage(70.0)
+    if len(stack_warnings()) != 2 or "70.0" not in stack_warnings()[-1]:
+        print(f"ERROR: a new chargeVolt that fits no stack must be warned about, got {stack_warnings()}")
+        failed = True
+    # Neither a placeable value nor one already warned about logs again
+    s.nominal_pack_voltage(56.8)
+    s.nominal_pack_voltage(40.0)
+    if len(stack_warnings()) != 2:
+        print(f"ERROR: no further warnings expected, got {stack_warnings()}")
+        failed = True
+    assert not failed, "test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt"
+
+
 def test_battery_capacity_amp_hours_to_kwh():
     """Amp-hour capacity becomes kWh using the inferred pack voltage."""
     failed = False
@@ -1198,6 +1235,7 @@ def run_sunsynk_api_tests(my_predbat):
         ("grid_power_sign", test_grid_power_sign_matches_the_live_export_sample),
         ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
+        ("nominal_pack_voltage_warns_once", test_nominal_pack_voltage_warns_once_per_unmatched_charge_volt),
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),

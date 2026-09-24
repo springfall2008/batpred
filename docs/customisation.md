@@ -800,7 +800,7 @@ Selected slots will be shown in the list in square brackets, and you can cancel 
 
 When you use the Manual Control features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-The **off** option at the bottom of the list will cancel all selected force charges.
+The **off** option at the top of the list will cancel all selected force charges.
 
 ![image](images/manual_select.png)
 
@@ -854,9 +854,9 @@ the rate selected will be that configured in **input_number.predbat_manual_expor
 
 Similar to manual_import_rates, if this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
-The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
+The **select.predbat_manual_load_adjust** selector is used to make positive or negative adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
 which can be adjusted prior to making a selection.
-Predbat will add the adjustment amount to the kWh predicted load for those slots.
+Predbat will add the adjustment amount (which can be positive or negative) to the kWh predicted load for those slots.
 
 If this selector is used in an automation you can set the time and kWh load adjustment amount together by making a selection in the format HH:MM=adjustment e.g. 12:30=0.5
 

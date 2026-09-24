@@ -536,6 +536,53 @@ class TestInjectEntities:
         state, _ = gw._dashboard_calls[entity]
         assert state == 0
 
+    def test_reserve_soc_max_published_as_the_entity_max(self):
+        """The firmware's reserve ceiling becomes the reserve entity's max attribute, which is what adjust_reserve() clamps a hold to."""
+        status = self._make_status()
+        status.inverters[0].control.reserve_soc_max = 98
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "number.predbat_gateway_456789_reserve_soc"
+        assert entity in gw._dashboard_calls
+        state, attrs = gw._dashboard_calls[entity]
+        assert state == 4
+        assert attrs["max"] == 98
+        # The rest of the table entry survives the override
+        assert attrs["min"] == 0
+        assert attrs["step"] == 1
+        assert attrs["unit_of_measurement"] == "%"
+
+    def test_reserve_soc_max_zero_falls_back_to_100(self):
+        """Gateway firmware predating the field reports 0, which means "no limit reported" and must not cap the reserve at zero."""
+        status = self._make_status()  # control.reserve_soc_max defaults to 0
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_reserve_soc"]
+        assert attrs["max"] == 100
+
+    def test_reserve_soc_max_out_of_range_falls_back_to_100(self):
+        """A ceiling above 100 is nonsense and is ignored rather than published as a bound."""
+        status = self._make_status()
+        status.inverters[0].control.reserve_soc_max = 255
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_reserve_soc"]
+        assert attrs["max"] == 100
+
+    def test_reserve_soc_max_does_not_mutate_the_shared_table(self):
+        """The ceiling is per-inverter, so it is applied to a copy: one inverter's 98 must not become every inverter's max."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        status = self._make_status()
+        status.inverters[0].control.reserve_soc_max = 98
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        assert GATEWAY_ATTRIBUTE_TABLE["reserve_soc"]["max"] == 100
+
     def test_ems_aggregate_entities(self):
         """EMS aggregate and sub-inverter entities are published with table attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE

@@ -235,6 +235,7 @@ class MinuteArray:
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
+    "coordinator",
     "prediction",
     "logfile",
     "predheat",
@@ -607,7 +608,7 @@ def compile_log_secret_pattern(secret_values):
     Compile the {value: label} map into a single alternation pattern plus a value->label lookup
     for redact_log_line(), or None when there is nothing to redact.
 
-    Compiled once whenever the value set changes (hass.py caches this alongside the values
+    Compiled once whenever the value set changes (log_secrets.py caches this alongside the values
     themselves) rather than per log line: log() runs on every line, and matching one compiled
     alternation is a single scan of the line regardless of how many secrets there are to check
     for, where re-scanning the line once per value (the naive str.replace() loop) costs O(line
