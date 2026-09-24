@@ -144,6 +144,11 @@ One descriptor per Predbat setting that automatic configuration binds for this d
 
 A descriptor with both `entity_id` and `value`, or neither, is dropped.
 
+A setting that `inverter.py` replaces with a dummy entity for this inverter type is left out of `entities`,
+because Predbat never reads or writes the component's binding for it. Today that means any setting whose
+presence flag is False in the type's row (section 2), and `inverter_mode` when both `has_ge_inverter_mode`
+and `has_ge_eco_toggle` are False. Solis's `reserve` is one such case (D9).
+
 A rating with a sensor appears twice: the number in `ratings`, the binding in `entities` with
 `access: r`. The coordinator binds the entity where one exists and the rating's number otherwise.
 
@@ -169,8 +174,8 @@ only inverters that do) and `rest_v3` (moved from `capabilities`). Existing: `th
 ## 2. From record to inverter definition
 
 A pure function in `coordinator.py`, `inverter_definition(record, write_and_poll_sleep, base=None)`,
-returns `(definition, gaps)`: a new dict shaped like an `INVERTER_DEF` row, and a list of the fields it
-could not work out. It never writes to `INVERTER_DEF`.
+returns `(definition, gaps, not_applicable)`: a new dict shaped like an `INVERTER_DEF` row, the fields it
+could not work out, and the fields that do not apply to this device (below). It never writes to `INVERTER_DEF`.
 
 The definition is built from four sources:
 
@@ -187,6 +192,8 @@ The definition is built from four sources:
    | `has_target_soc` | `charge_limit` |
    | `has_idle_time` | `idle_start_time` and `idle_end_time` |
    | `has_timed_pause` | `pause_mode` |
+   | `has_ge_inverter_mode` | `inverter_mode`, when its `domain` is `select` (GivTCP's mode select) |
+   | `has_ge_eco_toggle` | `inverter_mode`, when its `domain` is `switch` (GE Cloud's eco switch) |
 
    This matches what `inverter.py` already does: lines 612-655 create a dummy entity for exactly these
    settings when the flag is False, and lines 438-449 turn `has_timed_pause` off at runtime when no
@@ -202,12 +209,12 @@ The definition is built from four sources:
    | `output_charge_control` | `charge_rate`'s `unit`: W -> `power`, A -> `current`; no entity -> `none` |
    | `current_dp` | the decimal places of `charge_rate`'s `step`, when its unit is A |
    | `time_button_press` | whether a `schedule_write_button` entity is present |
+   | `num_load_entities` | 1 plus the number of consecutive `load_power_1`, `load_power_2`, ... entities bound (`inverter.py:1523` adds them into the load reading) |
 
 4. **The component** - `write_and_poll_sleep`, a constant on the component class. It is 2 for every
    component-driven type today.
 
-The GE-only fields (`has_rest_api`, `has_mqtt_api`, `has_ge_eco_toggle`, `has_ge_inverter_mode`) default to
-`False`, their value for every component-driven type.
+`has_mqtt_api` (Sofar's MQTT path) defaults to `False`, its value for every component-driven type.
 
 A protocol field whose source setting is not bound at all is **not applicable**, not a gap: for example
 `clock_time_format` only matters when `inverter_time` is bound, and of the seven reporters only GE Cloud
@@ -218,8 +225,10 @@ A field the function cannot work out - a missing capability key, or a bound sour
 `format` or `unit` it needs - is listed in `gaps`. With `base` given (a copy of the `INVERTER_DEF` row, used while
 reporters migrate) the field takes the base's value; with no `base` it is left out.
 
-Two fields are neither derived nor carried: `has_time_window` and `num_load_entities`. Nothing reads either
-(`inverter.py` sets no attribute from them), so piece 3 deletes them.
+Two fields are neither derived nor carried: `has_time_window` and `has_rest_api`. Nothing reads either
+(`inverter.py` sets no attribute from `has_time_window`, and nothing reads the `inv_has_rest_api` it no longer sets),
+so piece 3 deletes them. `name` is carried from `base` when given, and otherwise set to the
+record's `inverter_type`.
 
 Building a new dict per inverter matters: `inverter.py:381-389` applies apps.yaml's `inverter:` override
 by writing into the shared `INVERTER_DEF[type]` row, so with two inverters of one type the last
@@ -227,7 +236,7 @@ inverter's override applies to both. The coordinator must not repeat that.
 
 **Proof of completeness.** For every converted reporter, a test builds a record from that component's
 fixture and calls `inverter_definition(record, ...)` with **no** `base`. It asserts that `gaps` is empty and
-that the definition equals `INVERTER_DEF[type]` on every applicable field except the two dead ones. Building without
+that the definition equals `INVERTER_DEF[type]` on every applicable field except `name`, `has_time_window` and `has_rest_api`. Building without
 the row matters: with the row as a base, any field the record left out would silently inherit the right
 answer and the test would pass without proving anything. Passing is what shows the record holds enough to
 retire the row in piece 3.
