@@ -506,6 +506,7 @@ pvbat
 pvenergytotal
 pvlib
 pvlimit
+PVONLY
 pvpower
 pvwatts
 pwindow
@@ -673,6 +674,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable

@@ -436,6 +436,20 @@ def test_inverter_record_normalises_sets_and_tuples():
     return 0
 
 
+def test_inverter_record_sorts_a_mixed_type_set_without_raising():
+    """A set mixing types that cannot be compared is sorted by string form rather than raising.
+
+    A bare sorted() raises TypeError on {1, "a"}. build_discovery() is called from
+    refresh_discovery(), which catches it - so the component survives, but its whole report is
+    withheld, on every cycle, because nothing changes the offending data. Sorting by str() makes
+    every element comparable, and leaves the order of an all-string set exactly as before.
+    """
+    record = inverter_record("x:1", serials={1, "a"})
+    assert record["serials"] == [1, "a"], "a mixed-type set should sort by string form: {}".format(record.get("serials"))
+    print("PASS: inverter_record sorts a mixed-type set by string form instead of raising")
+    return 0
+
+
 def test_inverter_record_drops_an_empty_string():
     """An empty string is unset, like None - but control=False is a real value and is kept."""
     record = inverter_record("fox:ABC123", inverter_type="", measures_meter="", composition="direct", control=False)
@@ -1598,6 +1612,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_inverter_record_fields_are_keyword_only()
     failures += test_inverter_record_copies_the_callers_containers()
     failures += test_inverter_record_normalises_sets_and_tuples()
+    failures += test_inverter_record_sorts_a_mixed_type_set_without_raising()
     failures += test_inverter_record_drops_an_empty_string()
     failures += test_component_status_omits_components_that_cannot_report()
     failures += test_component_status_reported_at_set_only_for_ok()

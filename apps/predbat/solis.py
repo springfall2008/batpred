@@ -813,6 +813,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         first_slot = time_windows.get(1, time_windows.get(min(time_windows.keys())))
         field_length = first_slot.get("field_length", 18)  # Default to variant 1
 
+        # Never encode a current above what the inverter can deliver at its rated power (issue #5187)
+        rated_current = self.get_rated_current(inverter_sn)
+
+        def encoded_current(slot_data, key):
+            """Return a slot current as CID 103 holds it, in whole amps and no higher than the inverter's rating."""
+            current = int(slot_data.get(key, 0))
+            if rated_current is not None:
+                current = min(current, int(rated_current))
+            return str(current)
+
         fields = []
 
         if field_length == 18:
@@ -822,8 +832,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 slot_data = time_windows.get(slot_index, {})
 
                 # Extract fields with defaults
-                charge_current = str(int(slot_data.get("charge_current", 0)))
-                discharge_current = str(int(slot_data.get("discharge_current", 0)))
+                charge_current = encoded_current(slot_data, "charge_current")
+                discharge_current = encoded_current(slot_data, "discharge_current")
                 charge_start = slot_data.get("charge_start_time", "00:00")
                 charge_end = slot_data.get("charge_end_time", "00:00")
                 discharge_start = slot_data.get("discharge_start_time", "00:00")
@@ -839,8 +849,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 slot_data = time_windows.get(slot_index, {})
 
                 # Extract fields with defaults
-                charge_current = str(int(slot_data.get("charge_current", 0)))
-                discharge_current = str(int(slot_data.get("discharge_current", 0)))
+                charge_current = encoded_current(slot_data, "charge_current")
+                discharge_current = encoded_current(slot_data, "discharge_current")
                 charge_start = slot_data.get("charge_start_time", "00:00")
                 charge_end = slot_data.get("charge_end_time", "00:00")
                 discharge_start = slot_data.get("discharge_start_time", "00:00")
@@ -941,6 +951,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         over-discharge SOC is never written here, leaving the battery protection floor
         where the user set it.
 
+        A recovery SOC reading at or below the over-discharge SOC, or above 100, cannot be
+        right, yet most inverters report one - 0, 1, the over-discharge SOC itself or 65521
+        (issue #5187). Such a reading is replaced by over-discharge + 1, where the inverter
+        holds the recovery SOC, and is never written back.
+
         Args:
             inverter_sn: Inverter serial number
             target_soc: Cut-off SOC Predbat wants for the discharge slot, as a percentage
@@ -952,11 +967,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Cache only - the infrequent poll runs before the first control write, so a missing
         # value means we cannot tell where the floor is and the target is left alone
         recovery_soc = parse_cid_int(values.get(SOLIS_CID_BATTERY_RECOVERY_SOC))
-        if recovery_soc is None or target_soc >= recovery_soc:
-            return target_soc
-
         # The inverter will not accept a recovery SOC at or below the over-discharge SOC
         over_discharge_soc = parse_cid_int(values.get(SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC))
+
+        recovery_reading = recovery_soc
+        if recovery_soc is not None and (recovery_soc > 100 or (over_discharge_soc is not None and recovery_soc <= over_discharge_soc)):
+            recovery_soc = (over_discharge_soc + 1) if over_discharge_soc is not None else None
+        if recovery_soc is None or target_soc >= recovery_soc:
+            return target_soc
+        if recovery_soc != recovery_reading:
+            self.log(f"Solis API: Recovery SOC on {inverter_sn} reads {recovery_reading}%, which cannot be right with over-discharge SOC at {over_discharge_soc}%, so taking it as {recovery_soc}%")
+
         hard_floor = (over_discharge_soc + 1) if over_discharge_soc is not None else recovery_soc
 
         wanted_recovery = max(target_soc, hard_floor)
@@ -972,6 +993,28 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log(f"Solis API: Clamping discharge slot SOC from {target_soc}% to {recovery_soc}% on {inverter_sn}, the inverter will not discharge below its recovery SOC")
             return recovery_soc
         return target_soc
+
+    def get_rated_current(self, inverter_sn):
+        """Return the battery current the inverter can deliver at its rated power, in whole amps, or None if its size is unknown.
+
+        The rating is inverterDetail power - the sensor published as inverter_size and bound to
+        inverter_limit - converted at get_nominal_voltage(), which holds still on an LV pack.
+        Floored to whole amps so the capped value is never above the rating, and so an HV pack,
+        converted at its live voltage, does not produce a new value to write every cycle.
+        """
+        detail = self.inverter_details.get(inverter_sn, {})
+        try:
+            power = float(detail.get("power"))
+        except (ValueError, TypeError):
+            return None
+        unit = str(detail.get("powerStr") or "kW").strip().lower()
+        if unit == "kw":
+            power *= 1000.0
+        elif unit != "w":
+            return None
+        if power <= 0:
+            return None
+        return float(int(round(power / self.get_nominal_voltage(inverter_sn), 6)))
 
     async def write_time_windows_if_changed(self, inverter_sn):
         """Write charge/discharge time windows, SOC, and current to inverter, only if values changed from cache.
@@ -1008,6 +1051,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     max_charge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_charge_current_amps), max_charge_current_amps)
                     current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
                     max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
+
+                # Then cap both at what the inverter can deliver at its rated power. CID 7224/7226 are battery limits: a
+                # 3.6kW inverter reading 100A there refused every 100A write and left its discharge slot at 0A (issue #5187)
+                rated_current = self.get_rated_current(inverter_sn)
+                if rated_current is not None and rated_current < max(max_charge_current_amps, max_discharge_current_amps):
+                    self.log(f"Solis API: Capping slot currents on {inverter_sn} at {rated_current}A, the most the inverter can deliver at its rated power")
+                    max_charge_current_amps = min(max_charge_current_amps, rated_current)
+                    max_discharge_current_amps = min(max_discharge_current_amps, rated_current)
 
                 # Prep: extract active currents from slot 1 and zero out times for disabled slots
                 # so that the two-pass write below has clean data to compare against.

@@ -58,14 +58,14 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 
 | Section | What it holds |
 | ------- | -------------- |
-| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), and its entities |
+| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), and - where the reporter has a table mapping Predbat's controls to its entities (GivTCP today) - those entities |
 | `chargers` | EV chargers, cross-linked to the cars they serve |
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
 | `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
-No v1 reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast) populates `programmes` yet - it is part of
+No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
 rather than missing from the document.
 
@@ -236,6 +236,7 @@ Two rules remain yours to follow:
    this particular install with this particular firmware version. Pass your descriptors through
    `self.discovery_entities(descriptors)`, which keeps only those Home Assistant has actually seen -
    claiming an entity exists that Home Assistant has never seen is worse than omitting it.
+
 2. **Never invent a record to resolve a cross-link - a dangling one is fine.** A device can point at
    another with a cross-link field (`measures_meter`, `charged_by`, ...) without the thing on the
    other end existing as a record in its own right. GE Cloud's CT-clamp cross-link is the clearest
@@ -244,3 +245,9 @@ Two rules remain yours to follow:
    supply point. Resolving a dangling cross-link against a genuine record reported by another
    component is exactly what `observations` is for - it is not this reporter's job to guess one into
    existence.
+
+For the `inverters` section, build each record with `inverter_record()` from `coordinator.py`
+rather than assembling the dict by hand. It takes the section's fields as keyword-only parameters and
+omits whatever is unset or empty, so a reporter can pass everything it gathered without writing
+its own `if info: record["info"] = info` ladder. A mistyped field name is a `TypeError` at the
+call site rather than a key silently dropped from a user's dump.
