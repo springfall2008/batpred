@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
+from utils import NetSettlementSeed, get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK
 import functools
 import io
 import itertools
@@ -70,9 +70,12 @@ class DebugYamlDumper(yaml.Dumper):
 
 # An export limit is a (mode, target, power) tuple, and PyYAML tags a tuple as !!python/tuple,
 # which yaml.safe_load refuses - the debug dump is an artefact people attach to bug reports and has
-# to load with plain YAML tooling. Written as an ordinary sequence instead, so any
-# other tuple (e.g. net_settlement_seed) replays as a list and its readers must only index or unpack it.
+# to load with plain YAML tooling. Written as an ordinary sequence instead.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+# add_representer matches the exact type only, so a namedtuple would otherwise fall through to a
+# !!python/object/new tag. net_settlement_seed is written the same way and rebuilt on replay by
+# net_settlement_seed_from().
+DebugYamlDumper.add_representer(NetSettlementSeed, lambda dumper, value: dumper.represent_list(list(value)))
 
 
 def dump_debug_yaml(debug, stream):
