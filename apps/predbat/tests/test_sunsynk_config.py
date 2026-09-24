@@ -412,6 +412,40 @@ def test_sunsynk_catalogue_export_limit_only_on_evidence():
     return False
 
 
+def test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll():
+    """A poll that omits the battery fields keeps the last battery ratings, as the published sensor does.
+
+    fetch_device_data() rebuilds device_values from every poll and leaves out a field the battery
+    endpoint did not return. publish_data() then skips the battery_capacity sensor, so Home
+    Assistant - and Predbat's soc_max - keep the last value. The catalogue keeps its last ratings
+    too, rather than filing a thinner report and then the full one again when the fields return.
+    """
+    failed = False
+    s = _sunsynk_fleet()
+    sn = SUNSYNK_LIVE_SERIAL
+    full = s.build_discovery()
+    for name, partial in (("no capacity", {"chargeVolt": 58.4}), ("no chargeVolt", {"capacity": 200}), ("no battery fields", {})):
+        s.device_values = {sn: dict(partial)}
+        if s.build_discovery() != full:
+            print("ERROR: {}: the report changed on a partial poll: {}".format(name, s.build_discovery()))
+            failed = True
+
+    # A poll that does carry the fields replaces the kept ratings: 280 Ah at 51.2 V nominal
+    s.device_values = {sn: {"capacity": 280, "chargeVolt": 58.4}}
+    ratings = s.build_discovery()["inverters"][0]["ratings"]
+    if ratings.get("battery_capacity_ah") != 280.0 or ratings.get("battery_kwh") != 14.34:
+        print("ERROR: fresh battery fields must replace the kept ratings: {}".format(ratings))
+        failed = True
+
+    # Nothing is invented for an inverter whose battery fields have never been seen
+    s.device_list = [sn, "UNSEEN1"]
+    unseen = {record["device_id"]: record for record in s.build_discovery()["inverters"]}["sunsynk:UNSEEN1"]
+    if {"battery_kwh", "battery_capacity_ah"} & set(unseen.get("ratings", {})):
+        print("ERROR: an inverter never polled must carry no battery ratings: {}".format(unseen.get("ratings")))
+        failed = True
+    return failed
+
+
 def test_sunsynk_catalogue_none_before_discovery():
     """With no inverters there is nothing to describe."""
     if MockSunsynk().build_discovery() is not None:
@@ -1072,6 +1106,7 @@ def run_sunsynk_config_tests(my_predbat):
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),
         ("catalogue_describes_each_inverter", test_sunsynk_catalogue_describes_each_inverter),
         ("catalogue_export_limit_only_on_evidence", test_sunsynk_catalogue_export_limit_only_on_evidence),
+        ("catalogue_keeps_battery_ratings_through_a_partial_poll", test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll),
         ("catalogue_none_before_discovery", test_sunsynk_catalogue_none_before_discovery),
         ("catalogue_round_trips", test_sunsynk_catalogue_round_trips_through_validate_report),
         ("catalogue_filed_when_first_cycle_defers", test_sunsynk_catalogue_filed_when_first_cycle_defers),

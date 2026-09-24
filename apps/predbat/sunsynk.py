@@ -145,6 +145,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        # chargeVolt values nominal_pack_voltage() has already warned fit no LiFePO4 stack
+        self._stack_size_warned = set()
+        # {sn: last battery ratings seen} - build_discovery() keeps them through a poll that omits them
+        self._discovery_battery_ratings = {}
         # The most recent body-level API failure message (the `msg` field only - see
         # _request - never a credential), and whether the last discovery attempt actually
         # reached the API. Both exist so the standalone CLI (test_sunsynk_api) can name
@@ -570,8 +574,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         candidates = [(abs(charge_volts / cells - LIFEPO4_CHARGE_VOLTS_TYPICAL), cells) for cells in LIFEPO4_CELL_COUNTS if LIFEPO4_CHARGE_VOLTS_MIN <= charge_volts / cells <= LIFEPO4_CHARGE_VOLTS_MAX]
         if not candidates:
             # A charge target that fits no standard stack is not something to guess at: a
-            # wrong soc_max makes Predbat plan against a battery that does not exist.
-            self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
+            # wrong soc_max makes Predbat plan against a battery that does not exist. Warned
+            # once per value - this is reached several times a cycle, and chargeVolt rarely moves.
+            if charge_volts not in self._stack_size_warned:
+                self._stack_size_warned.add(charge_volts)
+                self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
             return 0.0
         return min(candidates)[1] * LIFEPO4_NOMINAL_VOLTS_PER_CELL
 
@@ -1556,10 +1563,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
 
         Ratings: inverter_limit() (ratePower, W) as inverter_w; battery_capacity() (kWh, rounded to
         2 dp) as battery_kwh; and the battery endpoint's capacity field as battery_capacity_ah, the
-        raw Ah the API returned. Both battery ratings follow the latest poll - battery_capacity()
-        derives from the battery endpoint read each cycle, the same fetch soc_max is derived from -
-        so a failed battery fetch changes them and re-files the report; accepted, since it is the
-        same derivation the component already relies on. export_limit is reported per device where
+        raw Ah the API returned. Both come from the battery endpoint, which fetch_device_data()
+        re-reads every poll and which can omit a field; publish_data() then leaves the
+        battery_capacity sensor, and so soc_max, at its last value. The battery ratings do the
+        same: a poll that omits them keeps the last values seen (_discovery_battery_ratings), so a
+        partial poll neither thins the report nor re-files it. Nothing is reported for an inverter
+        whose battery fields have never been seen. export_limit is reported per device where
         export_limit() > 0 - the per-device half of automatic_config()'s test, which binds the arg
         only when every inverter passes it. export_limit() falls back to the inverter rating, so
         this holds whenever inverter_w is known.
@@ -1578,12 +1587,16 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             rated_w = self.inverter_limit(sn)
             if rated_w > 0:
                 ratings["inverter_w"] = rated_w
+            # Only a poll that carries the battery fields updates these; one that omits them
+            # keeps the last values, as the battery_capacity sensor (and so soc_max) does.
+            battery = self._discovery_battery_ratings.setdefault(sn, {})
             battery_kwh = round(self.battery_capacity(sn), 2)
             if battery_kwh > 0:
-                ratings["battery_kwh"] = battery_kwh
+                battery["battery_kwh"] = battery_kwh
             capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))
             if capacity_ah > 0:
-                ratings["battery_capacity_ah"] = capacity_ah
+                battery["battery_capacity_ah"] = capacity_ah
+            ratings.update(battery)
 
             capabilities = ["schedule", "target_soc", "discharge_target", "charge_rate_power"]
             if self.export_limit(sn) > 0:

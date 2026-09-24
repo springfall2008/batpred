@@ -10,7 +10,30 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md`, the reporter contract in `docs/discovery-catalogue.md` ("Writing a reporter"), and the rules learnt from Plan 1 in `docs/superpowers/plans/2026-09-20-discovery-reporter-rollout.md` (Global Constraints and Amendments).
 
-**Depends on:** PR #5184 (the Fox reporter and the amended rollout plan). This plan's branch is stacked on it; rebase onto `main` once #5184 merges.
+**Depends on:** PR #5184 (the Fox reporter and the amended rollout plan), merged 2026-09-24. This plan was executed on a branch stacked on it, as PR #5206.
+
+## Amendments
+
+_Recorded 2026-09-24, after all five tasks were executed, the branch was reviewed as a whole, and PR #5206 had its first review. The working notes these rulings were made in are not committed, so they are copied here. The committed code is authoritative. Task 2's Solis code and test blocks below have been corrected to match it, since their superseded figures were the most likely to mislead. The other tasks' blocks still show the code as planned, and this list gives how they differ._
+
+Made during execution:
+
+- **Task 2's fixture binds the real `SolisAPI.is_tou_v2_mode`.** `MockSolisAPI.is_tou_v2_mode` returns a `_test_v2_mode` attribute and ignores the cached 43605 register the fixture sets, so the `tou_v2` assertion could never pass. The fixture binds the production method onto its instance with `__get__`, as the file already does for `automatic_config`.
+- **Task 4's docstring states that Sunsynk excludes no device.** Neither discovery nor `automatic_config()` filters Sunsynk devices, which Task 4's Background required saying and its code block omitted.
+- **Task 5's paragraph sits after the "What each section describes" table.** The anchor Step 2 named was the `inverters` row of that table, and a paragraph cannot go inside a table row.
+
+From the whole-branch review (commit 82fd66b2):
+
+- **Solis `battery_capacity_ah` is the bank total**, register 172 × `parallel_battery_count`, as `publish_entities()` computes it. As planned it was the per-pack figure, while Deye and Sunsynk report the whole bank under the same key.
+- **Derived `battery_kwh` is rounded to 2 dp** in the Solis and Sunsynk reporters. Deye already rounded.
+- **A Solis inverter whose detail has not been read reports no `functions`.** As planned it showed `["solar"]`, which reads as PV-only when `automatic_config()` treats the same state as "not read yet".
+- **Two more Solis wiring tests.** One checks that `run()` files a report with the auto-configure gate closed. The other checks that a changed fact is re-filed on a later cycle (`first=False`).
+- **Docstring and docs wording.** Sunsynk's `export_limit` is the per-device half of `automatic_config()`'s fleet-wide test. The Deye and Sunsynk / PV-only docs paragraph says records follow configuration, not hardware evidence, and how a misconfigured PV-only unit shows.
+
+From the first review of PR #5206:
+
+- **Sunsynk keeps its last battery ratings through a partial poll.** `fetch_device_data()` rebuilds `device_values` every poll and leaves out a field the battery endpoint did not return. `publish_data()` then leaves the `battery_capacity` sensor, and so `soc_max`, at its last value. The reporter now does the same (`_discovery_battery_ratings`) instead of filing a thinner report. The whole-branch review had accepted the drop-out, but it made the catalogue less stable than what Predbat uses.
+- **`nominal_pack_voltage()` warns once per `chargeVolt` it cannot place.** Task 4's Background said it does not log, which was wrong: it logged a `Warn` on every call for a charge voltage that fits no LiFePO4 stack. That happened twice a cycle through `publish_data()`, and three times with the reporter.
 
 ## Global Constraints
 
@@ -464,10 +487,11 @@ def test_solis_catalogue_battery_ratings_carry_only_stated_facts():
     """
     api = _solis_fleet()
     ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
-    assert ratings == {"inverter_w": 5000.0, "battery_capacity_ah": 100.0, "battery_pack_count": 2}, ratings
+    # 100 Ah per pack (register 172) x 2 packs: battery_capacity_ah is the bank total (Amendments)
+    assert ratings == {"inverter_w": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
     api.nominal_pack_voltage = 51.2
     ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
-    assert ratings["battery_kwh"] == 100.0 * 2 * 51.2 / 1000.0, ratings
+    assert ratings["battery_kwh"] == round(100.0 * 2 * 51.2 / 1000.0, 2), ratings
     return False
 
 
@@ -594,11 +618,14 @@ In `apps/predbat/solis.py`, add `from coordinator import inverter_record` beside
         pv_devices, battery or not.
 
         Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
-        per-battery Ah, and parallel_battery_count the pack count; both are always reported for a
-        battery inverter. A kWh figure is reported only when get_capacity_voltage() returns the
-        configured solis_nominal_voltage: otherwise publish_entities() falls back to
-        get_nominal_voltage(), an inference that for an HV pack is still a live reading moving
-        dump to dump (GH#5090), and a derived kWh would present that estimate as a rating.
+        per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
+        parallel_battery_count, the same product publish_entities() uses - so it means the same
+        thing here as on every other reporter. battery_pack_count carries the pack count alongside
+        it, and both are always reported for a battery inverter. A kWh figure is reported only when
+        get_capacity_voltage() returns the configured solis_nominal_voltage: otherwise
+        publish_entities() falls back to get_nominal_voltage(), an inference that for an HV pack is
+        still a live reading moving dump to dump (GH#5090), and a derived kWh would present that
+        estimate as a rating.
 
         The inverter rating is inverterDetail's power in powerStr's unit - defaulted to "kW"
         exactly as publish_entities() does - and is reported only for a unit this code knows how
@@ -647,11 +674,11 @@ In `apps/predbat/solis.py`, add `from coordinator import inverter_record` beside
                     capacity_ah = 0.0
                 if capacity_ah > 0:
                     pack_count = self.parallel_battery_count.get(sn, 1)
-                    ratings["battery_capacity_ah"] = capacity_ah
+                    ratings["battery_capacity_ah"] = capacity_ah * pack_count
                     ratings["battery_pack_count"] = pack_count
                     configured_volts = self.get_capacity_voltage(sn)
                     if configured_volts:
-                        ratings["battery_kwh"] = capacity_ah * pack_count * configured_volts / 1000.0
+                        ratings["battery_kwh"] = round(capacity_ah * pack_count * configured_volts / 1000.0, 2)
 
             inverters.append(
                 inverter_record(
