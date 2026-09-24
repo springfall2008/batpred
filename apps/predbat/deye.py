@@ -26,6 +26,7 @@ import os
 from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from tou_schedule import TouScheduleMixin
 from deye_const import (
     DEYE_BASE_URLS,
     DEYE_ENDPOINTS,
@@ -37,7 +38,6 @@ from deye_const import (
     FREEZE_EXPORT_SOC,
     TOU_FIELD,
     TOU_SLOT_COUNT,
-    TOU_FILLER_TIMES,
     DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
     DEYE_BUSY_CODES,
@@ -66,13 +66,16 @@ from deye_const import (
 )
 
 
-class DeyeAPI(ComponentBase, OAuthMixin):
+class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     """DEYE Cloud API component."""
 
     # Trace every API request/response while the DEYE integration beds in; flip to
     # False once it is stable. A class attribute so it is always readable even when a
     # caller (tests, the CLI tool) builds the object without going through initialize().
     api_debug = True
+
+    # How many slots the TOU programme holds, read by TouScheduleMixin.build_tou_slots.
+    TOU_SLOTS = TOU_SLOT_COUNT
 
     def initialize(
         self,
@@ -709,122 +712,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return self._action_slot(start_time, state)
         return self._self_use_slot(start_time, reserve, self_use_power)
 
-    def build_tou_slots(self, schedule, current_soc, self_use_power):
-        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows."""
-        reserve = int(schedule.get("reserve", 0))
-        # Collect (start_time, state) segment boundaries, from a DERIVED baseline at 00:00.
-        # "No window is active" is not always demand - a freeze export is exactly that state
-        # plus a zero charge rate (see derive_control_state) - so every slot the schedule
-        # does not otherwise claim carries the baseline, and a freeze covers the whole
-        # programme instead of being defeated by the first filler that covers the current
-        # time. Predbat never says when a freeze ends, so there is no boundary to write.
-        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
-        segments = {"00:00": dict(baseline)}
-        for direction in ("charge", "export"):
-            window = schedule.get(direction, {})
-            if window.get("enable") and window.get("start") and window.get("end"):
-                # Normalised to HH:MM here: these strings become DEYE slot times, and the
-                # entities they came from carry seconds.
-                start_time = self._to_slot_time(window["start"])
-                end_time = self._to_slot_time(window["end"])
-                if start_time == end_time:
-                    # Mirrors the guard in _window_active: a zero-length window has no
-                    # interval to act over. Compared on the NORMALISED times, so "02:00:00"
-                    # against "02:00" is caught too. Without this, an enable event arriving
-                    # before the time fields (both still the "00:00:00" default) would add an
-                    # action segment whose matching return-to-self-use segment cannot be
-                    # added at the same key — an unterminated, multi-hour full-power
-                    # grid-charge/export slot, even though _active_state correctly reports
-                    # the window inactive.
-                    continue
-                intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
-                intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
-                segments[start_time] = self.derive_control_state(intent, current_soc)
-                # After the window, return to the baseline.
-                segments.setdefault(end_time, dict(baseline))
-        ordered = sorted(segments.items(), key=lambda kv: kv[0])
-        slots = []
-        for start_time, state in ordered:
-            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
-        # Normalise to exactly TOU_SLOT_COUNT slots, each with a DISTINCT ascending
-        # start time (DEYE rejects/mis-applies duplicate slot times). Pad with
-        # self-use slots at filler times not already used by a window boundary,
-        # then sort and trim keeping the earliest (imminent) slots.
-        used = {slot[TOU_FIELD["time"]] for slot in slots}
-        for filler_time in TOU_FILLER_TIMES:
-            if len(slots) >= TOU_SLOT_COUNT:
-                break
-            if filler_time not in used:
-                slots.append(self._slot_for(filler_time, baseline, reserve, self_use_power))
-                used.add(filler_time)
-        slots = sorted(slots, key=lambda slot: slot[TOU_FIELD["time"]])[:TOU_SLOT_COUNT]
-        return slots
-
     def _now_minutes(self):
         """Return minutes since local midnight, for time-aware window selection."""
         try:
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
-
-    @staticmethod
-    def _to_slot_time(value):
-        """Normalise a schedule time to the HH:MM DEYE's TOU slots require.
-
-        The control entities carry HH:MM:SS because that is the format Predbat writes (see
-        INVERTER_DEF charge_time_format), but DEYE's timeUseSettingItems take HH:MM, so the
-        seconds are dropped here — at the one point a schedule time becomes a slot time.
-        """
-        text = str(value or "00:00")
-        parts = text.split(":")
-        if len(parts) < 2:
-            return "00:00"
-        try:
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-        except ValueError:
-            return "00:00"
-
-    @staticmethod
-    def _hm_to_minutes(hm):
-        """Convert a HH:MM string to minutes since midnight (0 on bad input)."""
-        try:
-            parts = str(hm).split(":")
-            return int(parts[0]) * 60 + int(parts[1])
-        except (ValueError, IndexError):
-            return 0
-
-    def _window_active(self, window, now_minutes):
-        """Return True if an enabled window covers now_minutes (handles a midnight wrap)."""
-        if not window.get("enable") or not window.get("start") or not window.get("end"):
-            return False
-        start = self._hm_to_minutes(window["start"])
-        end = self._hm_to_minutes(window["end"])
-        if start == end:
-            return False
-        if start < end:
-            return start <= now_minutes < end
-        return now_minutes >= start or now_minutes < end  # window wraps past midnight
-
-    def _active_state(self, schedule, current_soc, now_minutes):
-        """Derive the control state for the window active at now_minutes, else idle.
-
-        DEYE has a single global work mode per schedule, so the top-level mode must
-        follow the window active RIGHT NOW rather than a static export-first
-        precedence: otherwise an export window enabled elsewhere in the day would
-        pin the mode to SELLING_FIRST and block the charge window's grid charging.
-        """
-        reserve = int(schedule.get("reserve", 0))
-        charge = schedule.get("charge", {})
-        export = schedule.get("export", {})
-        # The rates are carried even when no window is active: with both windows shut a zero
-        # charge rate is Predbat's Freeze Export, and the mode has to follow it rather than
-        # sit in demand (see derive_control_state).
-        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
-        if self._window_active(export, now_minutes):
-            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
-        elif self._window_active(charge, now_minutes):
-            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
-        return self.derive_control_state(intent, current_soc)
 
     def build_dynamic_payload(self, sn, schedule, current_soc, now_minutes=None):
         """Build the strategy_dynamic_control body for one inverter.
@@ -1407,8 +1300,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return False
 
     async def save_control(self):
-        """Cache control state: what was last written, and any order still in flight."""
-        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count})
+        """Cache control state: what was last written, any order still in flight, and control_active.
+
+        Believed to be the same bug as batpred#5138 (Sunsynk), found by reading this file
+        alongside the Sunsynk fix rather than from a reported deye.py incident: without
+        control_active surviving a restart, _reconcile_control() stays gated off
+        for every inverter until a fresh write-button event happens to arrive - silently
+        skipping every automatic re-apply, including one meant to stop an export already in
+        progress, until something unrelated re-arms it. Fixed the same way as sunsynk.py and
+        alphaess.py, which already persist control_active for exactly this reason.
+        """
+        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's refresh clock.
@@ -1473,9 +1375,38 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if isinstance(counts, dict):
                 self.order_poll_count = counts
             applied = control.get("applied_payload")
-            if isinstance(applied, dict) and applied:
+            active = control.get("control_active")
+            # Either half is enough to be worth restoring, and neither gates the other. An
+            # emptied applied_payload is a normal state, not an absent cache: run() pops a
+            # serial whose order stayed unconfirmed past DEYE_ORDER_MAX_POLLS and then calls
+            # save_control() in the same cycle, so a control_active saved right beside an empty
+            # payload is current. Requiring a non-empty payload here would discard it and leave
+            # _reconcile_control gated off after a restart - the exact failure this fix is for,
+            # on the one inverter that had just been told to re-write.
+            if (isinstance(applied, dict) and applied) or (isinstance(active, list) and active):
                 if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
-                    self.applied_payload = applied
+                    if isinstance(applied, dict):
+                        self.applied_payload = applied
+                    # Restored alongside applied_payload, not just it: control_active is what
+                    # actually lets _reconcile_control() write at all, so restoring
+                    # applied_payload without it would still leave every inverter silently
+                    # unmanaged after a restart. Past the age bound both are dropped together,
+                    # so a stale cache still forces a fresh write-button press to recommit,
+                    # rather than trusting old control state indefinitely.
+                    if isinstance(active, list):
+                        self.control_active = set(active)
+                    elif isinstance(applied, dict):
+                        # A cache written before this key existed carries applied_payload alone.
+                        # Restoring that half on its own would preserve the very bug this fix is
+                        # for through the one restart that installs the fix, so infer the missing
+                        # half from applied_payload. Its keys are a safe lower bound and cannot arm
+                        # an inverter Predbat never drove: apply_dynamic_control is only reached
+                        # through apply_schedule()/apply_reserve_live(), which add to
+                        # control_active first, or through _reconcile_control(), which is
+                        # already gated on it. The reverse is not true - an apply that wrote
+                        # nothing leaves control_active set with no applied_payload entry - so this
+                        # restores a subset, never a superset.
+                        self.control_active = set(applied.keys())
                 else:
                     # Deliberately discarded. This cache asserts the inverter still holds
                     # what Predbat last wrote; after a long gap that may be false, and a

@@ -134,6 +134,7 @@ dayname
 daynumber
 daysymbol
 deadband
+deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
@@ -168,6 +169,7 @@ eauth
 echargingpile
 Eddi
 eddis
+efgh
 elif
 elinter
 eload
@@ -259,6 +261,7 @@ gridconsumption
 gridconsumptionpower
 Groq
 growatt
+growattsph
 GWMQTT
 HACS
 hadashboard
@@ -493,12 +496,17 @@ preseed
 preseeded
 prevs
 protobuf
+pseudonymisation
+pseudonymise
+pseudonymised
+pseudonymises
 psum
 pthread
 pvbat
 pvenergytotal
 pvlib
 pvlimit
+PVONLY
 pvpower
 pvwatts
 pwindow
@@ -666,6 +674,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable
@@ -683,6 +692,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrepresentable
 unreproduced
 unsmoothed
 unstaged
@@ -697,6 +707,7 @@ varh
 venv
 Victron
 visibilitychange
+vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
@@ -709,6 +720,7 @@ WNOHANG
 workmode
 writeonly
 wrongsha
+wwxxabcdefyyzz
 xaxis
 xaxistooltip
 xlabel
@@ -716,6 +728,7 @@ xlim
 xload
 xrtkq
 xticks
+xxabcdefyy
 yaxis
 yaxistooltip
 yday

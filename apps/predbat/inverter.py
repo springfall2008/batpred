@@ -27,6 +27,7 @@ from const import (
     MINUTE_WATT,
     TIME_FORMAT,
     TIME_FORMAT_OCTOPUS,
+    TIME_FORMAT_SOLIS,
     INVERTER_TEST,
     TIME_FORMAT_SECONDS,
     INVERTER_MAX_RETRY,
@@ -506,19 +507,28 @@ class Inverter:
         if isinstance(ivtime, str) and ivtime.strip().lower() in ("", "unavailable", "unknown", "none"):
             ivtime = None
         if ivtime:
-            try:
-                self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
-            except (ValueError, TypeError):
+            # The per-type clock_time_format is only a hint about the most likely shape - the same
+            # inverter can be read through different integrations that format the clock differently.
+            # A Growatt read over the Solax Modbus integration (inverter_type SA) publishes its rtc
+            # sensor as "2025-06-10 15:44:42", a space separator with no offset, which matched none
+            # of the formats tried here and cost that user skew detection entirely (GH#2444). Try
+            # every known shape rather than just the type's own, and localize whatever comes back
+            # naive to the configured timezone, as the per-type parse already did.
+            tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
+            self.inverter_time = None
+            formats = [TIME_FORMAT, TIME_FORMAT_OCTOPUS, TIME_FORMAT_SOLIS]
+            if self.inv_clock_time_format not in formats:
+                formats.append(self.inv_clock_time_format)
+            for time_format in formats:
                 try:
-                    self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT_OCTOPUS)
+                    parsed = datetime.strptime(ivtime, time_format)
                 except (ValueError, TypeError):
-                    try:
-                        tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
-                        self.inverter_time = tz.localize(datetime.strptime(ivtime, self.inv_clock_time_format))
-                    except (ValueError, TypeError):
-                        self.base.log(f"Warn: Inverter {self.id} unable to read inverter time string {ivtime} using formats {[TIME_FORMAT, TIME_FORMAT_OCTOPUS, self.inv_clock_time_format]}")
-                        self.inverter_time = None
-                        self.auto_restart("Unable to read inverter time")
+                    continue
+                self.inverter_time = parsed if parsed.tzinfo else tz.localize(parsed)
+                break
+            if self.inverter_time is None:
+                self.base.log("Warn: Inverter {} unable to read inverter time string {} using formats {}".format(self.id, ivtime, formats))
+                self.auto_restart("Unable to read inverter time")
 
         # Check inverter time and confirm skew
         if self.inverter_time:
@@ -3349,6 +3359,11 @@ class Inverter:
         state = self.base.get_state_wrapper(entity_id=entity_id)
         if result or (isinstance(state, str) and state.lower() in ["on", "enable", "true"]) or (state is True):
             self.log(f"Inverter {self.id} pressed toggle button {entity_id}")
+            # A commit button press is a real write to the inverter - on Solis a non-volatile one -
+            # so it must be counted like any other. It was invisible to the register-write counter,
+            # so a cycle that pressed the button could still report "count register writes 0",
+            # hiding repeated presses from users entirely (batpred#4712).
+            self.count_register_writes += 1
             return True
         self.base.log(f"Warn: Inverter {self.id} Trying to press toggle button {entity_id} failed")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press toggle button {entity_id} failed", had_errors=True)
@@ -3374,6 +3389,8 @@ class Inverter:
             now_local = datetime.now(local_tz)
             if (now_local - time_pressed).seconds < 10:
                 self.base.log(f"Inverter {self.id} successfully pressed button {entity_id}")
+                # Counted for the same reason as the toggle-button path above (batpred#4712).
+                self.count_register_writes += 1
                 return True
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
