@@ -40,7 +40,14 @@ def run_rate_add_io_slots_test(testname, my_predbat, slots, octopus_slot_low_rat
     # into the next one's assertions on it.
     my_predbat.trusted_dynamic_minutes = set()
     tagged_slots = [dict(slot, _confirmed=confirmed) if "_confirmed" not in slot else slot for slot in slots]
+    # Mirror fetch.py's sequence: octopus_slots is populated, then the cross-car shield is resolved
+    # across every car, and only then does the per-car loop run. Resolving it here rather than
+    # hand-setting it keeps these tests honest about the real call order (#5110 review).
+    saved_octopus_slots = my_predbat.octopus_slots
+    my_predbat.octopus_slots = [tagged_slots] + [[] for _ in range(max(0, my_predbat.num_cars - 1))]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
     result_rates = my_predbat.rate_add_io_slots(0, rates, tagged_slots)
+    my_predbat.octopus_slots = saved_octopus_slots
 
     # Check that expected rates were applied
     for minute, expected_rate in expected_rates.items():
@@ -523,6 +530,10 @@ def run_rate_add_io_slots_tests(my_predbat):
     saved_trust_dynamic = my_predbat.trust_future_dynamic_iog_slots
     saved_limit_future_slots = my_predbat.octopus_intelligent_limit_future_slots
     saved_trusted_dynamic_minutes = set(my_predbat.trusted_dynamic_minutes)
+    # Saved beside trusted_dynamic_minutes for the same reason: these tests call rate_add_io_slots()
+    # directly and so set the cross-car shield themselves, where production resolves it per cycle in
+    # fetch.py. Restored at the end so nothing escapes into the shared fixture (#5079).
+    saved_protected_dispatch_minutes = set(my_predbat.protected_dispatch_minutes)
     saved_car_charging_now = list(my_predbat.car_charging_now)
     saved_confirmed_slots = getattr(my_predbat, "car_charging_now_confirmed_slots", None)
     saved_args_car_charging_now = my_predbat.args.get("car_charging_now", None)
@@ -693,27 +704,61 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_38 = {minute: 4.0 for minute in range(840, 870)}
     failed |= run_rate_add_io_slots_test("test38_planned_trusts_unconfirmed_slot", my_predbat, slots_29, True, 12, expected_rates_38, confirmed=False)
 
-    print("\n**** Test 39: a trusted dynamic slot rejected by the octopus_slot_max cap is not recorded as trusted ****")
-    # trusted_dynamic_minutes is what exclude_dynamic_io_slots() consults to decide whether to strip
-    # the feed-side (io_adjusted) discount for a minute. A slot that passed the trust test but was
-    # then rejected by the daily cap gets no discount from rate_add_io_slots(), so it must not be
-    # recorded as trusted either - otherwise the capped slot would keep a cheap rate by the back door.
-    my_predbat.trust_future_dynamic_iog_slots = "planned"
+    print("\n**** Test 39: a cap-rejected slot keeps the tariff's own feed-side discount ****")
+    # octopus_slot_max is a budget on how much cheap-rate charging Predbat PLANS, not a claim about
+    # what Octopus will bill - it is documented as per-car (docs/car-charging.md) while the rates
+    # dict is install-wide, so it cannot govern install-wide beliefs about price. So the cap withholds
+    # Predbat's OWN overlay for a slot beyond budget, but must not reach across and strip a discount
+    # the tariff feed itself delivered (io_adjusted): that marker is a statement of billing fact.
+    #
+    # rate_add_io_slots()'s reject branch already declines to rewrite a cap-only rejection (#4483).
+    # trusted_dynamic_minutes therefore has to record "would this have been trusted", not "did it get
+    # the overlay", or exclude_dynamic_io_slots() strips the very minutes that branch just protected -
+    # the two functions encoding opposite intents for one slot (#5110 review). Stripping it would be
+    # strictly worse than either alternative: the minute loses the cheap rate AND the io_adjusted
+    # marker that plan.py's IOG skew and prediction.py's PV10 worst-case use to hedge it.
+    #
+    # The previous version of this test used a uniform rates dict with no io_adjusted entries at all,
+    # so it passed identically under either behaviour and only asserted the internal bookkeeping.
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.car_charging_now_confirmed_slots = [{840, 870}]  # both blocks corroborated, so both are trusted
     slots_39 = []
     for i in range(2):
         slot_start_39 = midnight_utc_26 + timedelta(hours=14, minutes=i * 30)  # 14:00 and 14:30, both dynamic
         slot_end_39 = slot_start_39 + timedelta(minutes=30)
-        slots_39.append({"start": slot_start_39.strftime(TIME_FORMAT), "end": slot_end_39.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"})
-    # Cap of 1 slot per day: 14:00-14:30 is added, 14:30-15:00 is rejected by the cap
-    expected_rates_39 = {minute: 4.0 for minute in range(840, 870)}
-    expected_rates_39.update({minute: 10.0 for minute in range(870, 900)})
-    failed |= run_rate_add_io_slots_test("test39_capped_slot_is_not_recorded_as_trusted", my_predbat, slots_39, True, 1, expected_rates_39, confirmed=False)
-    if not all(minute in my_predbat.trusted_dynamic_minutes for minute in range(840, 870)):
-        print("ERROR: expected the added slot's minutes 840-869 to be recorded in trusted_dynamic_minutes")
-        failed = True
-    if any(minute in my_predbat.trusted_dynamic_minutes for minute in range(870, 900)):
-        print("ERROR: expected the cap-rejected slot's minutes 870-899 to be absent from trusted_dynamic_minutes")
-        failed = True
+        slots_39.append({"start": slot_start_39.strftime(TIME_FORMAT), "end": slot_end_39.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False})
+
+    feed_discount_39 = 3.5  # what the tariff feed itself already charged for both blocks
+    rates_39 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    saved_io_adjusted_39 = dict(my_predbat.io_adjusted)
+    for minute in range(840, 900):
+        rates_39[minute] = feed_discount_39
+        my_predbat.io_adjusted[minute] = True
+
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 1  # only the first block fits the budget
+    my_predbat.trusted_dynamic_minutes = set()
+    saved_slots_39 = my_predbat.octopus_slots
+    my_predbat.octopus_slots = [slots_39]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    rates_39 = my_predbat.rate_add_io_slots(0, rates_39, slots_39)
+    my_predbat.octopus_slots = saved_slots_39
+    # The install-wide pass fetch.py runs after every car - this is where the strip would happen.
+    rates_39 = my_predbat.exclude_dynamic_io_slots(rates_39)
+
+    for minute in range(840, 870):
+        if rates_39.get(minute) != 4.0:
+            print("ERROR: minute {} is within budget and should get Predbat's overlay rate 4.0, got {}".format(minute, rates_39.get(minute)))
+            failed = True
+    for minute in range(870, 900):
+        if rates_39.get(minute) != feed_discount_39:
+            print("ERROR: minute {} was rejected only by the cap and must keep the feed's own {} rate, got {} - the cap stripped a discount Octopus will actually bill".format(minute, feed_discount_39, rates_39.get(minute)))
+            failed = True
+        if not my_predbat.io_adjusted.get(minute):
+            print("ERROR: minute {} lost its io_adjusted marker, so plan.py's IOG skew and prediction.py's PV10 hedge can no longer see it".format(minute))
+            failed = True
+
+    my_predbat.io_adjusted = saved_io_adjusted_39
 
     print("\n**** Test 40: an elapsed unconfirmed dynamic slot keeps the rate it actually charged ****")
     # `needed` exempts past slots (slot_start <= current_block) but `trusted` deliberately doesn't
@@ -838,7 +883,7 @@ def run_rate_add_io_slots_tests(my_predbat):
     my_predbat.trust_future_dynamic_iog_slots = "started"
     my_predbat.args["octopus_slot_low_rate"] = True
     my_predbat.args["octopus_slot_max"] = 12
-    my_predbat.car_charging_now_confirmed_slots = [set(range(840, 870)), set()]  # car 0 corroborated, car 1 not
+    my_predbat.car_charging_now_confirmed_slots = [{840}, set()]  # car 0 corroborated, car 1 not - keyed on slot START
     slot_start_45 = midnight_utc_26 + timedelta(hours=14)  # 14:00-14:30, both cars dispatched here
     slot_end_45 = slot_start_45 + timedelta(minutes=30)
     slots_car0_45 = [{"start": slot_start_45.strftime(TIME_FORMAT), "end": slot_end_45.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}]
@@ -846,18 +891,265 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     rates_45 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
     my_predbat.trusted_dynamic_minutes = set()
+    saved_slots_45, saved_cars_45 = my_predbat.octopus_slots, my_predbat.num_cars
+    my_predbat.num_cars = 2
+    my_predbat.octopus_slots = [slots_car0_45, slots_car1_45]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
     rates_45 = my_predbat.rate_add_io_slots(0, rates_45, slots_car0_45)  # car 0: corroborated, accepted
     rates_45 = my_predbat.rate_add_io_slots(1, rates_45, slots_car1_45)  # car 1: not corroborated, rejected
+    my_predbat.octopus_slots, my_predbat.num_cars = saved_slots_45, saved_cars_45
 
     for minute in range(840, 870):
         if rates_45.get(minute) != 4.0:
             print("ERROR: minute {} should keep car 0's accepted 4.0 rate after car 1's rejected pass, got {}".format(minute, rates_45.get(minute)))
             failed = True
 
+    print("\n**** Test 46: a later corroborated slot must override an earlier rejected one for the same block ****")
+    # slots_decided makes the FIRST entry visited for a 30-min block decide it permanently, and
+    # saved_slots then skips every later entry's minutes outright. So when two entries cover one
+    # block and disagree, the earlier verdict wins regardless of which is better evidence. Under
+    # "started" the only per-ENTRY input to `trusted` is `confirmed` (a completed dispatch record),
+    # since car_charging_now_confirmed_slot_starts is keyed on slot_start and therefore shared - so
+    # an unconfirmed planned entry visited first rejects the block and the confirmed duplicate that
+    # follows can never admit it (Copilot review on #5110, high). Same car, two entries, one block.
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 12
+    # No sensor corroboration for this block, so `trusted` differs per ENTRY rather than per block:
+    # only `confirmed` (slot["_confirmed"], set from a completed dispatch record) can make the two
+    # disagree, since car_charging_now_confirmed_slot_starts is keyed on slot_start and so is shared.
+    my_predbat.car_charging_now_confirmed_slots = [set()]
+    slot_start_46 = midnight_utc_26 + timedelta(hours=14)  # 14:00-14:30
+    slot_end_46 = slot_start_46 + timedelta(minutes=30)
+    planned_46 = {"start": slot_start_46.strftime(TIME_FORMAT), "end": slot_end_46.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}
+    live_46 = {"start": slot_start_46.strftime(TIME_FORMAT), "end": slot_end_46.strftime(TIME_FORMAT), "charge_in_kwh": 3.7, "source": "smart-charge", "location": "AT_HOME", "_confirmed": True}
+
+    rates_46 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    my_predbat.trusted_dynamic_minutes = set()
+    # Deliberately in the order fetch produces: planned first, live appended after.
+    saved_slots_46 = my_predbat.octopus_slots
+    my_predbat.octopus_slots = [[planned_46, live_46]]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    rates_46 = my_predbat.rate_add_io_slots(0, rates_46, [planned_46, live_46])
+    my_predbat.octopus_slots = saved_slots_46
+
+    for minute in range(840, 870):
+        if rates_46.get(minute) != 4.0:
+            print("ERROR: minute {} should be admitted at 4.0 by the confirmed entry, got {} - an earlier rejection blocked it".format(minute, rates_46.get(minute)))
+            failed = True
+
+    print("\n**** Test 47: an overridden block must still consume only one slot of the daily cap ****")
+    # The override above must not let one block count twice against octopus_slot_max, or a pair of
+    # duplicated entries would halve the day's budget.
+    my_predbat.trust_future_dynamic_iog_slots = "planned"  # both entries trusted, so both would admit
+    my_predbat.args["octopus_slot_max"] = 2
+    base_47 = midnight_utc_26 + timedelta(hours=14)
+    slots_47 = []
+    for index in range(3):  # three distinct blocks, each duplicated
+        start_47 = base_47 + timedelta(minutes=30 * index)
+        end_47 = start_47 + timedelta(minutes=30)
+        entry_47 = {"start": start_47.strftime(TIME_FORMAT), "end": end_47.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}
+        slots_47.append(entry_47)
+        slots_47.append(dict(entry_47))  # duplicate of the same block
+
+    rates_47 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    my_predbat.trusted_dynamic_minutes = set()
+    saved_slots_47 = my_predbat.octopus_slots
+    my_predbat.octopus_slots = [slots_47]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    rates_47 = my_predbat.rate_add_io_slots(0, rates_47, slots_47)
+    my_predbat.octopus_slots = saved_slots_47
+
+    discounted_blocks_47 = {(minute // 30) * 30 for minute, rate in rates_47.items() if rate == 4.0 and 840 <= minute < 930}
+    if len(discounted_blocks_47) != 2:
+        print("ERROR: octopus_slot_max=2 should admit exactly 2 of the 3 duplicated blocks, got {}".format(sorted(discounted_blocks_47)))
+        failed = True
+
+    print("\n**** Test 48: a rejected slot must not become the assumed tariff price for a later accepted one ****")
+    # With octopus_slot_low_rate off, assumed_price is the TARIFF price for the slot. Reading it from
+    # the `rates` working dict was safe on main (nothing ever wrote rate_max_base into rates), but this
+    # PR's reject path does - so car 0's rejection of a block would be read back by car 1 as though it
+    # were the tariff, pricing car 1's genuinely confirmed dispatch at the day rate, and leaving
+    # trusted_dynamic_minutes set so exclude_dynamic_io_slots() cannot repair it either. Swapping the
+    # cars gave the correct answer, which is the tell (#5110 review). Read from rate_import_no_io - the
+    # snapshot fetch takes before the per-car loop - instead.
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.args["octopus_slot_low_rate"] = False  # assumed_price comes from the tariff, not rate_min_base
+    my_predbat.args["octopus_slot_max"] = 12
+    my_predbat.car_charging_now_confirmed_slots = [set(), set()]
+    slot_start_48 = midnight_utc_26 + timedelta(hours=14)  # 14:00-14:30
+    slot_end_48 = slot_start_48 + timedelta(minutes=30)
+    # Car 0: planned only, unconfirmed -> rejected, writes rate_max_base over the block.
+    slots_car0_48 = [{"start": slot_start_48.strftime(TIME_FORMAT), "end": slot_end_48.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}]
+    # Car 1: a completed dispatch record for the same block -> trusted, must get the TARIFF price.
+    slots_car1_48 = [{"start": slot_start_48.strftime(TIME_FORMAT), "end": slot_end_48.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": True}]
+
+    tariff_price_48 = 9.0
+    rates_48 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    for minute in range(840, 870):
+        rates_48[minute] = tariff_price_48
+    # The snapshot fetch takes before the per-car loop - what the tariff actually says.
+    saved_no_io_48 = my_predbat.rate_import_no_io
+    my_predbat.rate_import_no_io = dict(rates_48)
+    my_predbat.trusted_dynamic_minutes = set()
+    saved_slots_48, saved_cars_48 = my_predbat.octopus_slots, my_predbat.num_cars
+    my_predbat.num_cars = 2
+    my_predbat.octopus_slots = [slots_car0_48, slots_car1_48]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    rates_48 = my_predbat.rate_add_io_slots(0, rates_48, slots_car0_48)  # rejects, clobbers the block
+    rates_48 = my_predbat.rate_add_io_slots(1, rates_48, slots_car1_48)  # confirmed, must be tariff priced
+    my_predbat.octopus_slots, my_predbat.num_cars = saved_slots_48, saved_cars_48
+    my_predbat.rate_import_no_io = saved_no_io_48
+
+    for minute in range(840, 870):
+        if rates_48.get(minute) != tariff_price_48:
+            print("ERROR: minute {} should be the tariff price {} for car 1's confirmed dispatch, got {} - an earlier rejection was read back as the tariff".format(minute, tariff_price_48, rates_48.get(minute)))
+            failed = True
+    my_predbat.args["octopus_slot_low_rate"] = True
+
+    print("\n**** Test 49: car order must not change the outcome, including the io_adjusted marker ****")
+    # The reject path drops self.io_adjusted[minute] as well as rewriting the rate, and NOTHING ever
+    # restores that marker - so a rejecting car running before the accepting one used to leave the
+    # block without it even though the rate was later restored. The block then vanishes from
+    # plan.py's IOG charge skew and prediction.py's PV10 worst case. Resolving the cross-car shield
+    # before the loop makes both orders agree (#5110 review). Run the same pair both ways round.
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 12
+    slot_start_49 = midnight_utc_26 + timedelta(hours=14)  # 14:00-14:30
+    slot_end_49 = slot_start_49 + timedelta(minutes=30)
+    entry_49 = {"start": slot_start_49.strftime(TIME_FORMAT), "end": slot_end_49.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}
+    slots_accept_49 = [dict(entry_49, _confirmed=True)]  # a completed dispatch record - genuinely trusted
+    slots_reject_49 = [dict(entry_49)]  # unconfirmed, uncorroborated - rejected
+
+    saved_slots_49, saved_cars_49 = my_predbat.octopus_slots, my_predbat.num_cars
+    saved_io_adjusted_49 = dict(my_predbat.io_adjusted)
+    outcomes_49 = {}
+    for label, car0, car1 in (("accept_first", slots_accept_49, slots_reject_49), ("reject_first", slots_reject_49, slots_accept_49)):
+        rates_49 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+        my_predbat.io_adjusted = {}
+        for minute in range(840, 870):
+            rates_49[minute] = 3.5
+            my_predbat.io_adjusted[minute] = True
+        my_predbat.car_charging_now_confirmed_slots = [set(), set()]
+        my_predbat.num_cars = 2
+        my_predbat.octopus_slots = [car0, car1]
+        my_predbat.trusted_dynamic_minutes = set()
+        my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+        rates_49 = my_predbat.rate_add_io_slots(0, rates_49, car0)
+        rates_49 = my_predbat.rate_add_io_slots(1, rates_49, car1)
+        outcomes_49[label] = (rates_49.get(855), bool(my_predbat.io_adjusted.get(855)))
+    my_predbat.octopus_slots, my_predbat.num_cars = saved_slots_49, saved_cars_49
+    my_predbat.io_adjusted = saved_io_adjusted_49
+
+    if outcomes_49["accept_first"] != outcomes_49["reject_first"]:
+        print("ERROR: car order changed the outcome - accept_first gave (rate, io_adjusted)={} but reject_first gave {}".format(outcomes_49["accept_first"], outcomes_49["reject_first"]))
+        failed = True
+    if not outcomes_49["reject_first"][1]:
+        print("ERROR: the io_adjusted marker was dropped when the rejecting car ran first - the block falls out of plan.py's IOG skew and prediction.py's PV10 hedge")
+        failed = True
+
+    print("\n**** Test 50: the cross-car shield must not be broader than what the loop itself accepts ****")
+    # resolve_protected_dispatch_minutes() shields a minute from another car's rejection. If it
+    # protects a block the loop would itself have rejected, a rescindable slot keeps a cheap rate -
+    # the #4516 failure this PR exists to prevent - and exclude_dynamic_io_slots() is no backstop at
+    # "planned" (it returns early). Two ways the shield was broader, both fixed by deriving it from
+    # the same car_trusted_dispatch_blocks() the loop's gates use (#5110 review):
+    #   a) at "planned" it dropped the `needed` gate, shielding a block the car no longer wants
+    #   b) at "started" it skipped the per-car degrade to "none" for a car with no real sensor
+    saved_limit_50 = my_predbat.octopus_intelligent_limit_future_slots
+    saved_slots_50, saved_cars_50 = my_predbat.octopus_slots, my_predbat.num_cars
+    saved_car_slots_50 = my_predbat.car_charging_slots[0]
+    saved_args_ccn_50 = my_predbat.args.get("car_charging_now", None)
+    saved_io_50 = dict(my_predbat.io_adjusted)
+
+    slot_start_50 = midnight_utc_26 + timedelta(hours=14)  # 14:00-14:30, future at minutes_now=10:00
+    slot_end_50 = slot_start_50 + timedelta(minutes=30)
+    entry_50 = {"start": slot_start_50.strftime(TIME_FORMAT), "end": slot_end_50.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}
+
+    # (a) "planned" + limit_future_slots on, and the car does NOT expect this block any more.
+    my_predbat.trust_future_dynamic_iog_slots = "planned"
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    my_predbat.car_charging_slots[0] = []  # no expected blocks - the car no longer needs it
+    my_predbat.num_cars = 1
+    my_predbat.octopus_slots = [[dict(entry_50)]]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    if any(minute in my_predbat.protected_dispatch_minutes for minute in range(840, 870)):
+        print("ERROR: a block the car no longer needs is in the cross-car shield at 'planned' - it would keep a cheap rate the loop itself rejects")
+        failed = True
+
+    # (b) "started" with car_charging_now a literal rather than a real sensor: the loop degrades this
+    # car to "none", so nothing of its should be shielded even when the slot set says corroborated.
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.octopus_intelligent_limit_future_slots = False
+    my_predbat.args["car_charging_now"] = "on"  # a literal, not an entity id
+    my_predbat.car_charging_now_confirmed_slots = [{840}]
+    my_predbat.octopus_slots = [[dict(entry_50)]]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    if any(minute in my_predbat.protected_dispatch_minutes for minute in range(840, 870)):
+        print("ERROR: a car whose 'started' trust degrades to 'none' (no real car_charging_now sensor) still had its block shielded")
+        failed = True
+
+    # And the shield must still contain what the loop DOES accept, or a genuine dispatch is clobbered.
+    my_predbat.args.pop("car_charging_now", None)
+    my_predbat.args["car_charging_now"] = "binary_sensor.fake_charging_now"
+    my_predbat.octopus_slots = [[dict(entry_50, _confirmed=True)]]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    if not all(minute in my_predbat.protected_dispatch_minutes for minute in range(840, 870)):
+        print("ERROR: a confirmed dispatch the loop would accept is missing from the shield - another car's rejection could clobber it")
+        failed = True
+
+    my_predbat.octopus_intelligent_limit_future_slots = saved_limit_50
+    my_predbat.octopus_slots, my_predbat.num_cars = saved_slots_50, saved_cars_50
+    my_predbat.car_charging_slots[0] = saved_car_slots_50
+    my_predbat.io_adjusted = saved_io_50
+    if saved_args_ccn_50 is not None:
+        my_predbat.args["car_charging_now"] = saved_args_ccn_50
+    else:
+        my_predbat.args.pop("car_charging_now", None)
+
+    print("\n**** Test 51: the reject path is observable - a rejected block loses a distinct feed discount ****")
+    # Most tests here run against reset_rates(my_predbat, 10, 5), which makes rate_max_base 10 while
+    # the harness fills the baseline with 10.0 - so the reject branch writes the value already there
+    # and those tests pass whether it fires or not (#5110 review). This one seeds a discount
+    # distinguishable from rate_max_base, and asserts both halves of the restore: the rate goes back
+    # to the day rate AND the io_adjusted marker is cleared.
+    my_predbat.trust_future_dynamic_iog_slots = "started"
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 12
+    my_predbat.car_charging_now_confirmed_slots = [set()]  # no corroboration - the slot is rejected
+    slot_start_51 = midnight_utc_26 + timedelta(hours=14)
+    slot_end_51 = slot_start_51 + timedelta(minutes=30)
+    slots_51 = [{"start": slot_start_51.strftime(TIME_FORMAT), "end": slot_end_51.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "_confirmed": False}]
+
+    saved_io_51 = dict(my_predbat.io_adjusted)
+    saved_slots_51 = my_predbat.octopus_slots
+    rates_51 = {minute: 10.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    my_predbat.io_adjusted = {}
+    for minute in range(840, 870):
+        rates_51[minute] = 3.5  # a feed-side discount, distinct from rate_max_base
+        my_predbat.io_adjusted[minute] = True
+
+    my_predbat.trusted_dynamic_minutes = set()
+    my_predbat.octopus_slots = [slots_51]
+    my_predbat.protected_dispatch_minutes = my_predbat.resolve_protected_dispatch_minutes()
+    rates_51 = my_predbat.rate_add_io_slots(0, rates_51, slots_51)
+    my_predbat.octopus_slots = saved_slots_51
+
+    for minute in range(840, 870):
+        if rates_51.get(minute) != my_predbat.rate_max_base:
+            print("ERROR: minute {} was rejected and must be restored to rate_max_base {}, got {}".format(minute, my_predbat.rate_max_base, rates_51.get(minute)))
+            failed = True
+        if my_predbat.io_adjusted.get(minute):
+            print("ERROR: minute {} was rejected but kept its io_adjusted marker, so it still reads as discounted downstream".format(minute))
+            failed = True
+    my_predbat.io_adjusted = saved_io_51
+
     # Restore original state
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
     my_predbat.octopus_intelligent_limit_future_slots = saved_limit_future_slots
     my_predbat.trusted_dynamic_minutes = saved_trusted_dynamic_minutes
+    my_predbat.protected_dispatch_minutes = saved_protected_dispatch_minutes
     my_predbat.car_charging_now = saved_car_charging_now
     if saved_confirmed_slots is not None:
         my_predbat.car_charging_now_confirmed_slots = saved_confirmed_slots

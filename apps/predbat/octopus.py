@@ -3208,9 +3208,14 @@ class Octopus:
         strictly narrower than the pre-#4946 behaviour, where every AWAY minute stayed mispriced.
 
         This is only the off-peak *eligibility* test - callers still apply the midday-to-midday
-        slot cap on top, so a completed dispatch beyond the day's budget is still priced at
-        rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
-        completed dispatch consumes it like any other.
+        slot cap on top, so a dispatch beyond the day's budget gets no cheap rate from Predbat's own
+        overlay. That models Octopus's 6-hour allowance, which a dispatch consumes like any other.
+
+        The cap withholds Predbat's overlay only; it does not override the tariff's own price. Where
+        the feed has itself delivered a discounted rate (self.io_adjusted), that is a statement of
+        what Octopus will bill rather than a prediction, and the cap - documented as per-car, while
+        the rates dict is install-wide - is a budget on what Predbat PLANS, not on what it believes
+        the price to be. See rate_add_io_slots()'s trusted_dynamic_minutes note (#5110 review).
 
         :param source: Dispatch source, e.g. smart-charge, bump-charge or BOOST
         :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
@@ -3622,6 +3627,110 @@ class Octopus:
                         new_slots.append(new_slot)
         return new_slots
 
+    def resolve_protected_dispatch_minutes(self):
+        """
+        Minutes ANY car has a genuine dispatch for, resolved before rate_add_io_slots() runs.
+
+        rate_add_io_slots() is called once per car into a single shared `rates` dict, and its reject
+        path both rewrites the rate to rate_max_base and drops the minute's io_adjusted marker. So a
+        car with no dispatch for a block must not undo a different car's real one there - two
+        IOG-enabled cars can have overlapping dispatch windows.
+
+        Resolved up front rather than read from the set the loop builds as it goes: a rejecting car
+        running first saw that set still empty, popped the marker, and nothing anywhere restores it,
+        so identical inputs gave different results depending on car order (#5110 review). The marker
+        feeds plan.py's IOG charge skew and prediction.py's PV10 worst case, so losing it silently
+        drops the block out of both.
+
+        Per car this asks car_trusted_dispatch_blocks() - the same helper the loop's own gates are
+        built from - so the shield can never be broader than what the loop would accept.
+        """
+        protected = set()
+        for car_n in range(self.num_cars):
+            octopus_slots = self.octopus_slots[car_n] if car_n < len(self.octopus_slots) else []
+            if not octopus_slots:
+                continue
+            for block_start in self.car_trusted_dispatch_blocks(car_n, octopus_slots):
+                protected.update(range(block_start, block_start + 30))
+        return protected
+
+    def car_trusted_dispatch_blocks(self, car_n, octopus_slots):
+        """
+        The 30-minute blocks this car has a genuine dispatch for - the per-car half of the trust
+        decision, shared by rate_add_io_slots() and resolve_protected_dispatch_minutes().
+
+        Returns the blocks for which BOTH gates the main loop applies would pass: `needed` (the car
+        still wants this slot - #4482) and `trusted` (Octopus is likely to honour it - #4516). The
+        cap is deliberately not applied here: octopus_slot_max budgets what Predbat PLANS, not what
+        it believes the price to be, and both callers want the belief.
+
+        Factored out because computing it twice let the two drift. The cross-car shield re-derived a
+        looser version of this - it dropped the `needed` gate at "planned", and skipped the per-car
+        degrade to "none" for a car with no real car_charging_now sensor - so it shielded blocks the
+        loop itself would have rejected, keeping a rescindable slot cheap (#5110 review). One
+        implementation means they cannot disagree.
+
+        Several entries can cover one block (Octopus lists a planned dispatch and, later, a completed
+        record for it) and `_confirmed` is the only per-ENTRY input to `trusted` - so confirmation is
+        resolved across ALL entries first, before any block is judged. Without that a weaker planned
+        entry visited first decided a block its own completed record proved had happened.
+        """
+        plan_interval_minutes = self.plan_interval_minutes
+        trust_level = self.trust_future_dynamic_iog_slots
+        # Same per-car degrade as the main loop: "started" needs a genuine car-reported sensor behind
+        # it, not a literal in apps.yaml.
+        if trust_level == "started" and not self.has_car_charging_now_sensor(car_n):
+            trust_level = "none"
+
+        limit_future_slots = self.octopus_intelligent_limit_future_slots
+        current_block = (self.minutes_now // 30) * 30
+        confirmed_slot_starts = self.car_charging_now_confirmed_slots[car_n] if car_n < len(self.car_charging_now_confirmed_slots) else set()
+
+        # Every eligible block this car is dispatched for, and which of those a completed record
+        # covers. Both are resolved before any block is judged, so entry order cannot matter.
+        dispatched_blocks = set()
+        confirmed_blocks = set()
+        for slot in octopus_slots or []:
+            start_minutes, end_minutes, kwh, source, location, confirmed = self.decode_octopus_slot(car_n, slot, raw=True)
+            # A dispatch already fully in the past that delivered zero kWh either never happened or
+            # delivered nothing - the same exemption the main loop applies before anything else.
+            if end_minutes <= self.minutes_now and kwh <= 0:
+                continue
+            if not self.dispatch_billed_off_peak(source, location, end_minutes):
+                continue
+            block_from = ((start_minutes // plan_interval_minutes) * plan_interval_minutes // 30) * 30
+            block_to = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
+            blocks = range(block_from, block_to, 30)
+            dispatched_blocks.update(blocks)
+            if confirmed:
+                confirmed_blocks.update(blocks)
+
+        # The blocks the car still expects to draw on - see the #4482 note in rate_add_io_slots().
+        expected_blocks = set()
+        if limit_future_slots:
+            for car_slot in self.car_charging_slots[car_n]:
+                if car_slot.get("kwh", 0) <= 0:
+                    continue
+                block_start = (car_slot["start"] // 30) * 30
+                block_end = ((car_slot["end"] + 29) // 30) * 30
+                expected_blocks.update(range(block_start, block_end, 30))
+
+        trusted_blocks = set()
+        for block_start in dispatched_blocks:
+            in_fixed_window = self.minute_in_iog_fixed_window(block_start)
+            needed = (not limit_future_slots) or (block_start <= current_block) or (block_start in expected_blocks) or in_fixed_window
+            if in_fixed_window:
+                trusted = True
+            elif trust_level == "planned":
+                trusted = True
+            elif trust_level == "started":
+                trusted = (block_start in confirmed_blocks) or (block_start in confirmed_slot_starts)
+            else:  # "none"
+                trusted = False
+            if needed and trusted:
+                trusted_blocks.add(block_start)
+        return trusted_blocks
+
     def rate_add_io_slots(self, car_n, rates, octopus_slots):
         """
         Add in any planned Octopus Intelligent dispatch slots as a low rate, subject to two
@@ -3693,6 +3802,29 @@ class Octopus:
                 block_end = ((car_slot["end"] + 29) // 30) * 30
                 expected_blocks.update(range(block_start, block_end, 30))
 
+        # Resolve per-block confirmation across ALL entries before applying any of them. Several
+        # entries can cover the same 30-minute block - Octopus lists a planned dispatch and, later, a
+        # completed record for it - and `confirmed` is the only per-ENTRY input to `trusted`
+        # (car_charging_now_confirmed_slot_starts is keyed on slot_start, so it is shared). Deciding
+        # a block from whichever entry the feed happened to list first therefore let a weaker planned
+        # entry reject a block its own completed record proves happened, with the later entry skipped
+        # outright by saved_slots before it could be consulted (#5110 review). Hoisting it here means
+        # no entry's position in the list can change the outcome.
+        # Confirmation resolved across ALL entries before any is applied, so entry order cannot
+        # change the verdict - see car_trusted_dispatch_blocks(), which shares this derivation.
+        confirmed_blocks = set()
+        for _slot in octopus_slots or []:
+            _start, _end, _kwh, _source, _location, _confirmed = self.decode_octopus_slot(car_n, _slot, raw=True)
+            if not _confirmed:
+                continue
+            if _end <= self.minutes_now and _kwh <= 0:
+                continue
+            if not self.dispatch_billed_off_peak(_source, _location, _end):
+                continue
+            _from = ((_start // plan_interval_minutes) * plan_interval_minutes // 30) * 30
+            _to = ((_end + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
+            confirmed_blocks.update(range(_from, _to, 30))
+
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
@@ -3717,17 +3849,32 @@ class Octopus:
                     start_minutes = (start_minutes // plan_interval_minutes) * plan_interval_minutes
                     end_minutes = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
                     start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
-                    end_minutes = min(end_minutes, self.forecast_minutes)
+                    # forecast_minutes is a duration from now, not an absolute minute - the three
+                    # sibling clamps in this file (load_octopus_slots, decode_octopus_slot) all add
+                    # minutes_now for that reason. Clamping without it truncated roughly minutes_now
+                    # of the horizon, so a dispatch landing in that tail was never recorded in
+                    # trusted_dynamic_minutes and exclude_dynamic_io_slots() then stripped its
+                    # feed-side discount and io_adjusted marker - dropping a real, completed-record
+                    # dispatch out of plan.py's IOG skew and prediction.py's PV10 hedge. Pre-existing,
+                    # but this PR added the consumer that makes it bite (#5110 review).
+                    end_minutes = min(end_minutes, self.forecast_minutes + self.minutes_now)
 
                     for minute in range(start_minutes, end_minutes):
                         if octopus_slot_low_rate:
                             assumed_price = self.rate_min_base
                         else:
-                            # Use the `rates` working dict, not self.rate_import: fetch now publishes
-                            # rate_import atomically at the end of the rebuild, so self.rate_import holds
-                            # the previous cycle's data here. (On main these were the same object, so this
-                            # is behaviour-preserving there and simply avoids the staleness this PR adds.)
-                            assumed_price = rates.get(start_minutes, self.rate_min)
+                            # The tariff's own price for this slot, from the snapshot fetch takes after
+                            # replication and BEFORE the per-car rate_add_io_slots() loop begins.
+                            #
+                            # Deliberately not the `rates` working dict: this function mutates it, and
+                            # this PR's reject path writes rate_max_base into it. An earlier rejection -
+                            # by a previous car, or by an earlier entry for an overlapping block - would
+                            # therefore be read back here as though it were the tariff price, pricing a
+                            # genuinely trusted dispatch at the day rate and making the result depend on
+                            # car order (#5110 review). Not self.rate_import either: fetch publishes that
+                            # atomically at the end of the rebuild, so it still holds the previous
+                            # cycle's data at this point.
+                            assumed_price = self.rate_import_no_io.get(start_minutes, rates.get(start_minutes, self.rate_min))
 
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
@@ -3794,7 +3941,9 @@ class Octopus:
                         elif trust_level == "planned":
                             trusted = True
                         elif trust_level == "started":
-                            trusted = confirmed or (slot_start in car_charging_now_confirmed_slot_starts)
+                            # confirmed_blocks, not this entry's own `confirmed`: a completed record
+                            # for this block is evidence about the BLOCK, whichever entry carries it.
+                            trusted = confirmed or (slot_start in confirmed_blocks) or (slot_start in car_charging_now_confirmed_slot_starts)
                         else:  # "none"
                             trusted = False
 
@@ -3824,10 +3973,17 @@ class Octopus:
                                 # not, so the minute test is what protects an unconfirmed past
                                 # dispatch here. And a minute another car's own octopus_slots already
                                 # got accepted for this same rates dict - this function runs once per
-                                # car into one shared dict (fetch.py), so a later car's rejection must
-                                # not undo an earlier car's genuine dispatch at the same minute (two
+                                # car into one shared dict (fetch.py), so a car's rejection must not
+                                # undo another car's genuine dispatch at the same minute (two
                                 # IOG-enabled cars can have overlapping dispatch windows).
-                                if (not needed or not trusted) and minute >= self.minutes_now and minute not in self.trusted_dynamic_minutes:
+                                #
+                                # protected_dispatch_minutes, not trusted_dynamic_minutes: the latter
+                                # is built up DURING this loop, so a rejecting car running first saw
+                                # an empty set and popped the io_adjusted marker before the accepting
+                                # car had recorded anything - and nothing ever restores that marker,
+                                # so the outcome depended on car order. The shield is resolved across
+                                # every car before any of them mutates rates (#5110 review).
+                                if (not needed or not trusted) and minute >= self.minutes_now and minute not in self.protected_dispatch_minutes:
                                     rates[minute] = self.rate_max_base
                                     self.io_adjusted.pop(minute, None)
                         else:
@@ -3838,17 +3994,35 @@ class Octopus:
                             # cleared here too, not just slot_start.
                             if slot_start in slots_added_set:
                                 rates[minute] = assumed_price
-                            elif (not needed or not trusted) and minute >= self.minutes_now and minute not in self.trusted_dynamic_minutes:
+                            elif (not needed or not trusted) and minute >= self.minutes_now and minute not in self.protected_dispatch_minutes:
                                 rates[minute] = self.rate_max_base
                                 self.io_adjusted.pop(minute, None)
 
-                        # Record the minute as trusted only once the slot has actually survived the
-                        # octopus_slot_max daily cap, not merely the trust test above. A trusted slot
-                        # beyond the cap gets no discount here, so exclude_dynamic_io_slots() must
-                        # still be free to strip the same minute's feed-side (io_adjusted) discount -
-                        # otherwise a capped slot would keep a cheap rate by the back door.
-                        if not in_fixed_window and slot_start in slots_added_set:
-                            self.trusted_dynamic_minutes.add(minute)
+                        # Record the block as trusted whenever `needed and trusted` held, even if the
+                        # octopus_slot_max cap then denied it the discount.
+                        #
+                        # This set answers "would this minute have been trusted", which is the question
+                        # exclude_dynamic_io_slots() asks - its docstring states it reads this set
+                        # "rather than re-deriving trust, so the two cannot disagree". Gating the record
+                        # on the cap as well broke that: the reject branch above deliberately does NOT
+                        # rewrite a cap-only rejection (needed and trusted both still True - it may be a
+                        # genuine dispatch Predbat simply is not counting against its own budget,
+                        # #4483), and then exclude_dynamic_io_slots() stripped the very minutes that
+                        # branch had just protected, on any install whose feed delivers the discount.
+                        # Two functions encoding opposite intents for one slot (#5110 review).
+                        #
+                        # The cap still does its job: it withholds Predbat's own overlay, so a capped
+                        # slot gets no discount this function would otherwise have applied. What it no
+                        # longer does is reach across and strip the tariff's own feed-side rate.
+                        # Record the whole 30-minute BLOCK, not just the minutes this entry's
+                        # rounded range happened to visit. Admission is decided per slot_start and
+                        # slots_added_set is keyed on it, so with plan_interval_minutes < 30 an
+                        # entry can admit a block while covering only part of it - leaving the rest
+                        # admitted but unrecorded, so exclude_dynamic_io_slots() then strips their
+                        # feed-side discount and a later car's rejection is free to overwrite them
+                        # (#5110 review).
+                        if not in_fixed_window and needed and trusted:
+                            self.trusted_dynamic_minutes.update(range(slot_start, slot_start + 30))
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(

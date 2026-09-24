@@ -987,6 +987,11 @@ class Fetch:
         # desync: a minute trusted on a previous cycle must not keep protecting its io_adjusted
         # discount on this one, after the dispatch behind it may have been withdrawn.
         self.trusted_dynamic_minutes = set()
+        # Minutes some car has a genuine dispatch for, resolved across every car before the per-car
+        # rate_add_io_slots() loop begins - see resolve_protected_dispatch_minutes(). Distinct from
+        # trusted_dynamic_minutes, which that loop builds as it goes and exclude_dynamic_io_slots()
+        # consumes afterwards; this one exists so no car's rejection can depend on running order.
+        self.protected_dispatch_minutes = set()
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
@@ -1248,6 +1253,14 @@ class Fetch:
             self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
+            # Resolve which minutes any car has a genuine dispatch for BEFORE the per-car loop
+            # mutates anything. rate_add_io_slots() runs once per car into this one shared dict, and
+            # its reject path both rewrites the rate and drops the io_adjusted marker - so a car
+            # that rejects a block must not undo a different car's real dispatch at the same minute.
+            # Computing the shield up front makes that independent of the order the cars run in;
+            # consulting the set the loop itself builds meant a rejecting car running first saw it
+            # empty, and nothing ever restores a dropped marker (#5110 review).
+            self.protected_dispatch_minutes = self.resolve_protected_dispatch_minutes()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
             # #4516: undo any dynamic (out-of-window) IOG dispatch discount that arrived via the

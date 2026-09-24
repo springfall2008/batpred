@@ -536,6 +536,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_limit_future_slots = False
         self.trust_future_dynamic_iog_slots = "planned"
         self.trusted_dynamic_minutes = set()
+        # Resolved across all cars before the per-car rate_add_io_slots() loop - see
+        # resolve_protected_dispatch_minutes(). Initialised here so a direct caller of
+        # rate_add_io_slots() (the tests) does not have to have run fetch_sensor_data() first.
+        self.protected_dispatch_minutes = set()
         # Per-car "trusted streak" state for trust_future_dynamic_iog_slots "started", maintained by
         # get_car_charging_planned() (fetch.py) and read by rate_add_io_slots() (octopus.py). Sized
         # for PREDBAT_MAX_CARS rather than num_cars, which isn't known until apps.yaml is read, and
