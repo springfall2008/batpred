@@ -18,6 +18,7 @@ from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU
 from solis import SOLIS_CID_TOU_V2_MODE, SOLIS_CID_LIST_TOU_V2
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_RECOVERY_SOC, SOLIS_CID_DISCHARGE_SOC
+from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
@@ -1490,6 +1491,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_discharge_soc_unchanged_above_recovery())
         failed |= asyncio.run(test_discharge_soc_unclamped_when_recovery_unknown())
         failed |= asyncio.run(test_recovery_soc_not_lowered_below_inverter_minimum())
+        failed |= asyncio.run(test_implausible_recovery_soc_falls_back_to_inverter_minimum())
+        failed |= test_get_rated_current()
+        failed |= asyncio.run(test_v2_slot_currents_capped_at_inverter_rating())
+        failed |= asyncio.run(test_v1_slot_currents_capped_at_inverter_rating())
+        failed |= asyncio.run(test_slot_currents_uncapped_when_inverter_size_unknown())
         failed |= asyncio.run(test_control_write_failure_withholds_success_timestamp())
         failed |= asyncio.run(test_control_write_success_updates_success_timestamp())
         failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
@@ -2604,6 +2610,173 @@ async def test_recovery_soc_not_lowered_below_inverter_minimum():
     assert _written_recovery(api) == "21", f"Recovery SOC should stop at over-discharge + 1 = 21, got {_written_recovery(api)}"
     assert _written_soc(api) == "21", f"Discharge SOC should be clamped to 21, got {_written_soc(api)}"
     print("PASSED: Recovery floored at 21 and the target clamped to match")
+    return False
+
+
+async def test_implausible_recovery_soc_falls_back_to_inverter_minimum():
+    """A recovery SOC reading that cannot be right is replaced by over-discharge + 1 (issue #5187).
+
+    Most of the fleet reports 0, 1, the over-discharge SOC itself or 65521 for CID 7229. Taken at
+    face value any of those let a target at the over-discharge SOC through unclamped, which the
+    inverter refuses, so the slot kept a stale cut-off of 40-50%. The fallback is never written
+    back to the inverter, since the reading it would be verified against is the one that is wrong.
+    """
+    print("\n=== Test: implausible recovery SOC falls back to over-discharge + 1 ===")
+
+    # (description, discharge target, recovery reading, over-discharge, expected SOC write)
+    cases = [
+        ("recovery reads 0", 12, 0, 12, "13"),
+        ("recovery reads the over-discharge SOC", 15, 15, 15, "16"),
+        ("recovery reads 65521", 10, 65521, 10, "11"),
+        ("recovery reads 0 but the target is reachable anyway", 40, 0, 12, "40"),
+        ("recovery reads 65521 and over-discharge is unknown", 20, 65521, None, "20"),
+    ]
+    for description, target, recovery, over_discharge, expected in cases:
+        api = _discharge_slot_api(discharge_soc=target, recovery_soc=recovery, over_discharge_soc=over_discharge)
+        assert await api.write_time_windows_if_changed("TEST123") is True, f"{description}: write_time_windows_if_changed should succeed"
+        assert _written_soc(api) == expected, f"{description}: discharge SOC should be {expected}, got {_written_soc(api)}"
+        assert _written_recovery(api) is None, f"{description}: an implausible recovery SOC must not be written back, got {_written_recovery(api)}"
+
+    print("PASSED: Implausible recovery SOC readings clamp to over-discharge + 1 without being written")
+    return False
+
+
+def _rated_inverter_api(inverter_sn="TEST123", power=3.6):
+    """Build a V2-mode MockSolisAPI for a 3.6kW inverter whose battery limits read 100A, as in issue #5187.
+
+    Args:
+        inverter_sn: Inverter serial number to use
+        power: inverterDetail power in kW, or None to leave the inverter size unknown
+
+    Returns: The configured MockSolisAPI, with an enabled discharge slot 1 asking for 100A
+    """
+    api = _discharge_slot_api(discharge_soc=40, recovery_soc=21, over_discharge_soc=20, inverter_sn=inverter_sn)
+    api.charge_discharge_time_windows[inverter_sn][1]["discharge_current"] = 100
+    api.cached_values[inverter_sn][SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT] = "100"
+    api.cached_values[inverter_sn][SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT] = "100"
+    if power is not None:
+        api.inverter_details[inverter_sn] = {"power": power, "powerStr": "kW"}
+    return api
+
+
+def _written_value(api, cid):
+    """Return the last value written to a CID, or None if it was not written.
+
+    Args:
+        api: MockSolisAPI whose recorded calls should be searched
+        cid: CID to look for
+
+    Returns: The written value as a string, or None
+    """
+    values = [c["value"] for c in api.read_and_write_cid_calls if c["cid"] == cid]
+    return values[-1] if values else None
+
+
+def test_get_rated_current():
+    """The rated current is the inverter size over the nominal pack voltage, floored to whole amps."""
+    print("\n=== Test: get_rated_current ===")
+
+    sn = "TEST123"
+    # (description, inverterDetail, expected amps)
+    cases = [
+        ("3.6kW on a 48V pack", {"power": 3.6, "powerStr": "kW"}, 75.0),
+        ("3.6kW on a 16S pack", {"power": "3.6", "powerStr": "kW", "batteryAcvSet": 56.8}, 70.0),
+        ("size reported in watts", {"power": 3600, "powerStr": "W"}, 75.0),
+        ("unit missing, taken as kW", {"power": 3.6}, 75.0),
+        ("size missing", {}, None),
+        ("size zero", {"power": 0, "powerStr": "kW"}, None),
+        ("size not a number", {"power": "junk", "powerStr": "kW"}, None),
+        ("unrecognised unit", {"power": 3.6, "powerStr": "kVA"}, None),
+    ]
+    for description, detail, expected in cases:
+        api = MockSolisAPI()
+        api.inverter_details[sn] = detail
+        rated = api.get_rated_current(sn)
+        assert rated == expected, f"{description}: expected {expected}, got {rated}"
+
+    print("PASSED: Rated current derived from inverter size and nominal voltage")
+    return False
+
+
+async def test_v2_slot_currents_capped_at_inverter_rating():
+    """A V2 slot current is never written above what the inverter can deliver (issue #5187).
+
+    The battery limit (CID 7226) reads 100A, but on a 3.6kW inverter at 48V the most it can move is
+    75A; the inverter refused 100A every minute and left the slot at 0A instead.
+    """
+    print("\n=== Test: V2 slot currents capped at the inverter rating ===")
+
+    sn = "TEST123"
+    api = _rated_inverter_api(inverter_sn=sn)
+    api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    assert _written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0]) == "75.0", f"Discharge current should be capped at 75.0A, got {_written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0])}"
+    assert any("Capping slot currents on TEST123 at 75.0A" in m for m in api.log_messages), "The cap should be logged"
+
+    # The same cap applies to a charge slot
+    api = _rated_inverter_api(inverter_sn=sn)
+    api.cached_values[sn][SOLIS_CID_CHARGE_CURRENT[0]] = "0"
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 100, "discharge_enable": 0})
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    assert _written_value(api, SOLIS_CID_CHARGE_CURRENT[0]) == "75.0", f"Charge current should be capped at 75.0A, got {_written_value(api, SOLIS_CID_CHARGE_CURRENT[0])}"
+
+    # The windows Predbat asked for are left as they were, only the write is capped
+    assert api.charge_discharge_time_windows[sn][1]["charge_current"] == 100, "The requested current must not be rewritten in the local windows"
+
+    print("PASSED: 100A requests written as 75A on a 3.6kW inverter")
+    return False
+
+
+async def test_v1_slot_currents_capped_at_inverter_rating():
+    """The V1 path encodes capped currents into CID 103 as well."""
+    print("\n=== Test: V1 slot currents capped at the inverter rating ===")
+
+    sn = "TEST123"
+    api = MockSolisAPI()
+    api._test_v2_mode = False
+    api._mock_storage_mode = True
+    api.inverter_sn = [sn]
+    api.inverter_details[sn] = {"power": 3.6, "powerStr": "kW"}
+    windows = {}
+    for slot in range(1, 4):
+        windows[slot] = {
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_current": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_current": 0,
+            "field_length": 18,
+        }
+    windows[1].update({"charge_enable": 1, "charge_start_time": "02:00", "charge_end_time": "05:00", "charge_current": 100, "discharge_current": 100})
+    api.charge_discharge_time_windows[sn] = windows
+    api.cached_values[sn] = {}
+    # Outside the window, so the in-slot SOC handling cannot zero a current either way
+    api._test_now_utc_exact = datetime(2026, 9, 21, 12, 0, tzinfo=api.local_tz)
+
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    encoded = _written_value(api, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS)
+    assert encoded is not None, "CID 103 should be written"
+    assert encoded.startswith("75,75,02:00,05:00,"), f"Slot 1 currents should be encoded as 75A, got {encoded}"
+
+    print("PASSED: V1 currents encoded at the 75A rating")
+    return False
+
+
+async def test_slot_currents_uncapped_when_inverter_size_unknown():
+    """Without an inverter size there is no rating to cap at, so the existing limits alone apply."""
+    print("\n=== Test: slot currents uncapped when the inverter size is unknown ===")
+
+    sn = "TEST123"
+    api = _rated_inverter_api(inverter_sn=sn, power=None)
+    # An absent register is taken to be at the battery limit already, so give it something to change from
+    api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
+    assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
+    assert _written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0]) == "100.0", f"Discharge current should be the uncapped 100.0A, got {_written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0])}"
+    assert not any("Capping" in m for m in api.log_messages), "Nothing should be capped"
+
+    print("PASSED: Unknown inverter size leaves the current at the battery limit")
     return False
 
 
