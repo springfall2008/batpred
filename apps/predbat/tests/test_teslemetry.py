@@ -1205,6 +1205,24 @@ def test_teslemetry_tbc_control_defaults_on_via_the_registry():
     assert direct.tbc_control is True
 
 
+def test_teslemetry_tbc_control_fallback_matches_the_documented_default():
+    """With no tbc_control attribute at all, the defensive getattr fallbacks take the default path.
+
+    evaluate_schedule and sync_tariff both read getattr(self, "tbc_control", ...), which is unreachable
+    in production because initialize() always sets the attribute. Both encoded a literal False, so if
+    initialize() ever failed before that line - or a future path skipped it - the fallback would have
+    silently selected the *non-default* path rather than failing visibly. They now read the same class
+    constant initialize() defaults to, so the two cannot drift apart.
+    """
+    api = MockTeslemetryAPI()
+    del api.tbc_control
+    assert not hasattr(api, "tbc_control"), "the fallback is only reached with the attribute absent"
+    api.schedule = {"reserve": 15, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}, "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 20, "enable": 1}}
+    # autonomous mode in a charge window is the TBC path; the real-rate path asserts a charge directly.
+    assert api.evaluate_schedule(3 * 60, 40)["mode"] == "autonomous", "the fallback must select the documented default path"
+    assert TeslemetryAPI.DEFAULT_TBC_CONTROL is True, "and that default is on (GH#5186)"
+
+
 def _assert_tou_periods_partition_day(tou_periods):
     """Assert the tou_periods cover every minute of the (circular) day exactly once — no overlaps, no gaps."""
     covered = [0] * (24 * 60)
@@ -1589,6 +1607,9 @@ def test_teslemetry_component_registry_config():
     assert entry["args"]["automatic"]["required"] is False
     assert entry["args"]["tbc_control"]["config"] == "teslemetry_tbc_control"
     assert entry["args"]["tbc_control"]["default"] is True  # on by default since GH#5186
+    # The registry holds a literal because components.py imports component modules lazily, so nothing
+    # else keeps it in step with the class constant initialize() and the getattr fallbacks read.
+    assert entry["args"]["tbc_control"]["default"] is TeslemetryAPI.DEFAULT_TBC_CONTROL
     assert entry.get("can_restart") is True
     assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
     assert APPS_SCHEMA["teslemetry_tbc_control"] == {"type": "boolean"}
@@ -2758,6 +2779,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tbc_control_on_pushes_the_signal_tariff()
     test_teslemetry_initialize_sets_tbc_control_from_component_arg()
     test_teslemetry_tbc_control_defaults_on_via_the_registry()
+    test_teslemetry_tbc_control_fallback_matches_the_documented_default()
     test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()
