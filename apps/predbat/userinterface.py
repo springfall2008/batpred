@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
+from utils import NetSettlementSeed, get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
 import functools
 import io
 import itertools
@@ -95,8 +95,11 @@ class DebugYamlDumper(yaml.Dumper):
 # wants from one anyway. That includes a tuple used as a dict key, and a sequence cannot be a dict
 # key on the way back in ("found unhashable key"), so a tuple-keyed dict must be kept out of the
 # dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
-# Any other tuple (e.g. net_settlement_seed) also replays as a list, so its readers must only index or unpack it.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+# add_representer matches the exact type only, so a namedtuple would otherwise fall through to a
+# !!python/object/new tag. net_settlement_seed is written the same way and rebuilt on replay by
+# net_settlement_seed_from().
+DebugYamlDumper.add_representer(NetSettlementSeed, lambda dumper, value: dumper.represent_list(list(value)))
 
 
 def dump_debug_yaml(debug, stream):
