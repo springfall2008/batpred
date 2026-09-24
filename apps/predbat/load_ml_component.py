@@ -177,8 +177,13 @@ class LoadMLComponent(ComponentBase):
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
     def is_calculating(self):
-        """Return whether the component is currently calculating predictions."""
-        return self.load_ml_calculating
+        """Return whether the component is currently doing NumPy-heavy work.
+
+        training_running is part of the answer because a training run outlives the coroutine that
+        started it: when the run_timeout watchdog cancels run(), its finally clears
+        load_ml_calculating while the worker thread is still inside train_curriculum.
+        """
+        return self.load_ml_calculating or self.training_running
 
     def get_from_incrementing(self, data, index, step, backwards=True):
         """

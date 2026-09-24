@@ -3429,6 +3429,7 @@ def _make_training_component(predictor, now_utc):
     component.last_train_time = None
     component.initial_training_done = False
     component.run_timeout = 2 * 60 * 60
+    component.load_ml_calculating = False
     component.training_running = False
     component.training_cancelled = False
     return component
@@ -3754,8 +3755,11 @@ def _test_component_training_survives_watchdog_cancel():
         except asyncio.CancelledError:
             observed["cancelled"] = True
 
-        # The worker thread is still inside train_curriculum here. The next run() tick must not
-        # start a second one on the same predictor.
+        # The worker thread is still inside train_curriculum here. run()'s finally has already
+        # cleared load_ml_calculating, so is_calculating() has to get its answer from elsewhere,
+        # and the next run() tick must not start a second training on the same predictor.
+        component.load_ml_calculating = False
+        observed["calculating_while_orphaned"] = component.is_calculating()
         await component._do_training(is_initial=False)
         allow_exit.set()
 
@@ -3770,6 +3774,7 @@ def _test_component_training_survives_watchdog_cancel():
     assert component.training_cancelled is True, "a cancelled run must raise the component's own cancel signal, or the worker thread never learns to abandon"
     assert observed.get("hook_tripped") is True, "the stop hook must report True after the coroutine is cancelled, so the orphaned training thread abandons its run"
     assert observed["calls"] == 1, f"a second training must not start while the previous worker thread is still running, got {observed['calls']} calls"
+    assert observed.get("calculating_while_orphaned") is True, "is_calculating() must still report True while an orphaned training thread is doing NumPy work"
     assert component.training_running is False, "the worker thread must clear training_running when it returns, or training never runs again"
     assert component.last_train_time is None, "a cancelled run must not stamp last_train_time"
 
