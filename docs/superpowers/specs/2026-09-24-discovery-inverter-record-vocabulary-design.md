@@ -59,10 +59,11 @@ is the first to change behaviour.
 | D2 | Controls and sensors share one map, `entities`, keyed by Predbat setting name. Every entry is marked `access: rw` (Predbat writes it) or `access: r` (Predbat only reads it). |
 | D3 | `capabilities` holds per-device behaviour that overrides the device's `INVERTER_DEF` row. The goal is to retire `INVERTER_DEF` for component-driven types. |
 | D4 | Protocol detail (time formats, units, option-vs-string time entities) is derived from the entity map, not stated separately. |
-| D5 | `capabilities` is a dictionary of `INVERTER_DEF` keys to `True`/`False`, shaped like an `INVERTER_DEF` row. |
+| D5 | `capabilities` is a dictionary of `INVERTER_DEF` keys to `True`/`False`, shaped like an `INVERTER_DEF` row. It holds only the seven keys that describe behaviour; the `has_*` keys that describe whether an entity exists are derived (section 2). |
 | D6 | `ratings` are keyed by Predbat setting name, in Predbat's units. A sensor binding for a rating lives in `entities` under the same key. |
 | D7 | A site-wide export limit is reported as each inverter's share of it. Predbat sums `export_limit` across inverters, so the shares add back up to the site figure. |
 | D8 | `functions` reports what the component believes the device is, whether probed or assumed. There is no marker for an assumed value. |
+| D9 | SolisCloud does not write the reserve (it often won't change); it presents the battery minimum SoC instead. Its record reports `battery_min_soc` and no `reserve` (section 3). |
 
 ## 1. The inverter record
 
@@ -79,24 +80,27 @@ is the first to change behaviour.
 
 ### 1.1 `capabilities`
 
-Allowed keys are the fourteen behaviour fields of `INVERTER_DEF`:
+Allowed keys are the seven `INVERTER_DEF` fields that describe behaviour rather than the presence of an
+entity:
 
-`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `has_timed_pause`,
-`has_target_soc`, `has_reserve_soc`, `has_idle_time`, `has_time_window`, `has_charge_enable_time`,
-`has_discharge_enable_time`, `can_span_midnight`, `charge_discharge_with_rate`,
-`charge_control_immediate`, `target_soc_used_for_discharge`.
+`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`,
+`charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`.
 
-Values are `True` or `False`. An unknown key, or a non-bool value, is dropped by the validator. A reporter
-may state as many or as few keys as it has established for the device; the rest come from the row.
+Values are `True` or `False`. An unknown key, or a non-bool value, is dropped by the validator. While
+reporters migrate, a key left out keeps the row's value; a converted reporter states all seven (section 2's
+completeness test enforces it).
+
+The other `has_*` fields are not capabilities: each says whether the inverter has a particular entity, and
+is derived from `entities` (section 2).
 
 The previous capability tokens are removed. Their meaning moves as follows:
 
 | Old token | Now |
 |---|---|
-| `schedule` | `has_time_window`, `has_charge_enable_time`, `has_discharge_enable_time` |
-| `target_soc` | `has_target_soc` |
+| `schedule` | the `scheduled_charge_enable` / `scheduled_discharge_enable` and `*_start_time` / `*_end_time` entities |
+| `target_soc` | a `charge_limit` entity |
 | `discharge_target` | `target_soc_used_for_discharge` plus a `discharge_target_soc` entity |
-| `pause_mode`, `pause_slots` | `has_timed_pause` plus the `pause_*` entities |
+| `pause_mode`, `pause_slots` | the `pause_*` entities |
 | `charge_rate_power`, `charge_rate_percent` | derived from the `charge_rate` entity (section 2) |
 | `charge_enable` | a `charge_limit_enable` entity |
 | `export_limit` | the `export_limit` rating (D1) |
@@ -162,14 +166,32 @@ only inverters that do) and `rest_v3` (moved from `capabilities`). Existing: `th
   report binds.
 - `num_cars` and `car_charging_*` - these belong to the `chargers` and `cars` sections.
 
-## 2. From record to inverter definition (proposal)
+## 2. From record to inverter definition
 
-A pure function in the coordinator, `inverter_definition(record, component_defaults)`, returns a new
-dict shaped like an `INVERTER_DEF` row. It never writes to `INVERTER_DEF`.
+A pure function in `coordinator.py`, `inverter_definition(record, write_and_poll_sleep, base=None)`,
+returns `(definition, gaps)`: a new dict shaped like an `INVERTER_DEF` row, and a list of the fields it
+could not work out. It never writes to `INVERTER_DEF`.
 
-1. Start from a **copy** of `INVERTER_DEF[record["inverter_type"]]`.
-2. Apply `record["capabilities"]` over it.
-3. Derive the protocol fields from `record["entities"]`:
+The definition is built from four sources:
+
+1. **Behaviour** - the seven `capabilities` keys (section 1.1).
+2. **Entity presence** - each flag is true when `entities` binds the setting to a real entity with
+   `access: rw`. All six are settings Predbat writes, so an `access: r` entry does not count. A `value`
+   stand-in counts as absent, because Predbat treats that setting as having no entity.
+
+   | Field | True when `entities` has an `rw` entity for |
+   |---|---|
+   | `has_charge_enable_time` | `scheduled_charge_enable` |
+   | `has_discharge_enable_time` | `scheduled_discharge_enable` |
+   | `has_reserve_soc` | `reserve` |
+   | `has_target_soc` | `charge_limit` |
+   | `has_idle_time` | `idle_start_time` and `idle_end_time` |
+   | `has_timed_pause` | `pause_mode` |
+
+   This matches what `inverter.py` already does: lines 612-655 create a dummy entity for exactly these
+   settings when the flag is False, and lines 438-449 turn `has_timed_pause` off at runtime when no
+   `pause_mode` entity exists.
+3. **Protocol detail** - read from the entity descriptors:
 
    | Field | Derived from |
    |---|---|
@@ -181,56 +203,86 @@ dict shaped like an `INVERTER_DEF` row. It never writes to `INVERTER_DEF`.
    | `current_dp` | the decimal places of `charge_rate`'s `step`, when its unit is A |
    | `time_button_press` | whether a `schedule_write_button` entity is present |
 
-   A field whose source entity is missing, or lacks the needed `format` or `unit`, keeps the row's
-   value and is listed in the function's second return value, so a gap is visible rather than guessed.
-4. Take `write_and_poll_sleep` from `component_defaults`, a constant on the component class. It is 2 for
-   every component-driven type today.
+4. **The component** - `write_and_poll_sleep`, a constant on the component class. It is 2 for every
+   component-driven type today.
 
-The GE-only fields (`has_rest_api`, `has_mqtt_api`, `has_ge_eco_toggle`, `has_ge_inverter_mode`) keep the
-row's value, which is `False` for every component-driven type.
+The GE-only fields (`has_rest_api`, `has_mqtt_api`, `has_ge_eco_toggle`, `has_ge_inverter_mode`) default to
+`False`, their value for every component-driven type.
 
-`num_load_entities` is not derived: nothing reads it (`inverter.py` sets no attribute from it), so piece 3
-deletes it rather than carrying it forward.
+A protocol field whose source setting is not bound at all is **not applicable**, not a gap: for example
+`clock_time_format` only matters when `inverter_time` is bound, and of the seven reporters only GE Cloud
+binds it. A not-applicable field takes a fixed default, is not listed in `gaps`, and is skipped by the
+completeness test.
+
+A field the function cannot work out - a missing capability key, or a bound source entity lacking the
+`format` or `unit` it needs - is listed in `gaps`. With `base` given (a copy of the `INVERTER_DEF` row, used while
+reporters migrate) the field takes the base's value; with no `base` it is left out.
+
+Two fields are neither derived nor carried: `has_time_window` and `num_load_entities`. Nothing reads either
+(`inverter.py` sets no attribute from them), so piece 3 deletes them.
 
 Building a new dict per inverter matters: `inverter.py:381-389` applies apps.yaml's `inverter:` override
 by writing into the shared `INVERTER_DEF[type]` row, so with two inverters of one type the last
 inverter's override applies to both. The coordinator must not repeat that.
 
 **Proof of completeness.** For every converted reporter, a test builds a record from that component's
-fixture and asserts `inverter_definition(record)` equals `INVERTER_DEF[type]` on every field, with no
-gaps reported. That parity is what shows the record holds enough to retire the row in piece 3.
+fixture and calls `inverter_definition(record, ...)` with **no** `base`. It asserts that `gaps` is empty and
+that the definition equals `INVERTER_DEF[type]` on every applicable field except the two dead ones. Building without
+the row matters: with the row as a base, any field the record left out would silently inherit the right
+answer and the test would pass without proving anything. Passing is what shows the record holds enough to
+retire the row in piece 3.
 
-## 3. Validation and migration (proposal)
+## 3. Validation and migration
 
-**Schema.** `SCHEMA_VERSION` goes from 1 to 2. A document's shape changes in three ways, all at once:
-`capabilities` becomes a dict, ratings are renamed, and descriptors require `access`.
+**Schema.** `SCHEMA_VERSION` goes from 1 to 2: `capabilities` becomes a dict, ratings are renamed, and
+descriptors require `access`. Reports are held in memory only (the pseudonymisation salt is the only
+thing the coordinator persists), so the bump affects debug dumps and their readers, nothing stored.
 
 **Validator** (`coordinator.py`):
 
-- `capabilities` leaves `VOCAB_CONTAINERS` and becomes a `CONTAINER_SPEC` entry with a bool cleaner that
-  also rejects keys outside the fourteen.
-- `_clean_descriptor` requires `access` in `{"rw", "r"}` and exactly one of `entity_id`/`value`, and
-  gains `invert` (bool) and `value` (number, bool or short string) cleaners.
+- `capabilities` leaves `VOCAB_CONTAINERS` and becomes a `CONTAINER_SPEC` entry: a clear container whose
+  cleaner keeps only `True`/`False` values for the seven keys of section 1.1. Only inverter reporters set
+  `capabilities`, so no other section is affected.
+- `_clean_descriptor` requires `access` in `{"rw", "r"}` and exactly one of `entity_id`/`value`. Every
+  component that emits `entities` today (GivTCP, Octopus, Ohme, Solcast) already sets `access`.
+- `value` must be a number, a bool, or a string passing the same guard as `info` strings. `entities` is
+  published unredacted in dumps users post to public issues, so it must not admit free text.
+- `invert` must be a bool.
 - `inverter_record()` accepts the dict-shaped `capabilities`.
-- `capabilities` is a clear container; nothing in it is identifying.
 
-**Reporters.** The seven existing reporters convert in one piece, because the old capability tokens and
-rating names are removed. Each reporter builds its `entities` from the same table its
-`automatic_config()` uses, so the two cannot disagree. Where the setting names come from a list in
-`automatic_config()` (Sunsynk's, for instance), that list moves to a module constant read by both - a
-change to a control path, made here with the parity test as its guard.
+**Reporters.** Each component's `automatic_config()` is left untouched in this piece. Piece 3 deletes it,
+so extracting its setting lists into shared constants now would change a control path for code about to
+be removed. Agreement between the two is proven by a test instead (below).
+
+The seven existing reporters convert in one PR, because the old capability tokens and rating names are
+removed. The plan's tasks are the validator and `inverter_definition()` first, then one reporter per task,
+simplest first: Sunsynk, Deye, AlphaESS, Fox, Solis, GE Cloud, GivTCP. Between those tasks an unconverted
+reporter's list-shaped `capabilities` is dropped by the validator; that state exists only inside the
+branch.
+
+**Solis's `reserve`.** SolisCloud deliberately does not write the reserve - it often won't change - and
+presents the battery minimum SoC instead, which is why its row has `has_reserve_soc: False`.
+`solis.py:1715-1716` binds both `reserve` and `battery_min_soc` to the same `over_discharge_soc` entity,
+and `inverter.py:622-624` replaces the `reserve` binding with a dummy. So the Solis record reports
+`battery_min_soc` (an `access: r` entity plus a rating) and no `reserve`; derived `has_reserve_soc` is
+then False, matching the row. Piece 3 removes the unused `reserve` binding.
 
 **Consumers.** No code reads `ratings` or `capabilities` by name today: the web discovery page renders
 records generically. Its test fixtures (`test_web_discovery.py`) use the old tokens and rating names and
-are updated, and a dict-valued `capabilities` must render. `docs/discovery-catalogue.md` and the catalogue design spec
-are amended to match.
+are updated, and a dict-valued `capabilities` must render. `docs/discovery-catalogue.md` and the catalogue
+design spec are amended to match.
 
 **Testing.**
 
-- Validator tests for each new rule: bad capability key, non-bool value, descriptor without `access`,
-  descriptor with both `entity_id` and `value`, `invert` on a non-bool.
-- Per-reporter parity tests (section 2).
-- Per-reporter tests that every setting `automatic_config()` binds appears in `entities` with the same
-  entity id and the right `access`. The check runs `automatic_config()` against a fixture and compares
-  the `set_arg` calls with the record.
-- A round trip through `validate_report()` for each reporter.
+- **Validator** - one test per new rule: an unknown capability key, a non-bool capability value, a
+  descriptor without `access`, one with both `entity_id` and `value`, a free-text `value`, a non-bool
+  `invert`.
+- **Completeness** (section 2) - per reporter, `inverter_definition()` with no `base` gives no gaps and
+  matches the `INVERTER_DEF` row on every applicable field.
+- **Agreement** - per reporter, run `automatic_config()` against a single-device fixture, capture every
+  setting it sets, and check each appears in the record: an entity id matching the descriptor, a literal
+  matching a `value` entry or a rating, and each `*_invert` setting matching the descriptor's `invert`.
+  Two kinds of setting are skipped: the section 1.5 exclusions, and any setting whose presence flag is
+  False in the type's row, since `inverter.py` replaces those bindings with a dummy (Solis's `reserve` is
+  the only case today).
+- **Round trip** - each reporter's report survives `validate_report()` unchanged.
