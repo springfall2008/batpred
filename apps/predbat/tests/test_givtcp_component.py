@@ -735,25 +735,27 @@ def test_automatic_config_counts_discovered_inverters_not_configured_urls(my_pre
     return 0
 
 
-def test_automatic_config_maps_predbat_inverter_to_the_live_endpoint(my_predbat=None):
+def test_automatic_config_keeps_the_live_endpoint_in_its_own_slot(my_predbat=None):
     """
-    When an earlier endpoint is dead, the surviving one still drives Predbat inverter 0.
+    When an earlier endpoint is dead, the surviving one still drives its own Predbat inverter.
 
-    Entity ids stay pinned to the REST endpoint index because _parse_entity feeds self.rest[n] on
-    every write - renumbering them would route inverter 0's writes at the dead client.
+    A dead endpoint at startup cannot be told apart from a placeholder URL, and moving the live
+    endpoint down into slot 0 leaves every per-inverter setting that is not auto-configured
+    (inverter_limit_charge and the like) applying to the wrong inverter (#5209). Entity ids stay
+    pinned to the REST endpoint index too, because _parse_entity feeds self.rest[n] on every write.
     """
     base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
     component.rest[0].read_data = MagicMock(return_value=None)
     component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
-    assert base.args["num_inverters"] == 1, f"Expected num_inverters 1, got {base.args.get('num_inverters')}"
-    assert base.args["charge_rate"] == ["number.predbat_givtcp_1_charge_rate"], f"Expected the live endpoint's own index, got {base.args.get('charge_rate')}"
+    assert base.args["num_inverters"] == 2, f"Expected num_inverters 2, got {base.args.get('num_inverters')}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected each slot to carry its own endpoint's index, got {base.args.get('charge_rate')}"
 
-    # and that entity must still route a write back to the live client
-    n, control = component._parse_entity(base.args["charge_rate"][0])
-    assert component.rest[n] is component.rest[1], "Predbat inverter 0's entity must address the live REST client"
-    print("PASS: a dead leading endpoint leaves the live one driving Predbat inverter 0")
+    # and inverter 1's entity must route a write to the live client
+    n, control = component._parse_entity(base.args["charge_rate"][1])
+    assert component.rest[n] is component.rest[1], "Predbat inverter 1's entity must address the live REST client"
+    print("PASS: a dead leading endpoint leaves the live one driving its own Predbat inverter")
     return 0
 
 
@@ -836,13 +838,14 @@ def test_rediscovery_picks_up_an_inverter_that_was_down_at_startup(my_predbat=No
     return 0
 
 
-def test_rediscovery_appends_so_running_inverters_keep_their_identity(my_predbat=None):
+def test_rediscovery_keeps_inverter_identity_by_endpoint(my_predbat=None):
     """
-    A late arrival is appended, never inserted.
+    Predbat inverter n is REST endpoint n, however late endpoint n answers.
 
-    self.discovered's order *is* Predbat's inverter numbering. Inserting endpoint 0 ahead of the
-    endpoint already running as inverter 0 would silently repoint inverter 0 at different physical
-    hardware - its SoC, rates and charge windows would start following the wrong battery.
+    The order the endpoints answered in used to be Predbat's inverter numbering, so an endpoint
+    down at startup shifted endpoint 1 into slot 0, and adopting endpoint 0 later appended it as
+    inverter 1 - a permanent rotation. Every per-inverter setting that is not auto-configured
+    (inverter_limit_charge and the like) then applied to the wrong physical inverter (#5209).
     """
     base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
     component.rest[0].read_data = MagicMock(return_value=None)
@@ -850,17 +853,69 @@ def test_rediscovery_appends_so_running_inverters_keep_their_identity(my_predbat
 
     run_async(component.run(seconds=0, first=True))
     assert component.discovered == [1], f"Expected only endpoint 1 discovered, got {component.discovered}"
-    first_inverter_entity = base.args["charge_rate"][0]
+    # Endpoint 1 stays in slot 1; slot 0 is endpoint 0's own, waiting for it to answer
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected slot n to be endpoint n at startup, got {base.args.get('charge_rate')}"
+    assert base.args["num_inverters"] == 2
 
     component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
-    assert component.discovered == [1, 0], f"Expected the late endpoint appended, got {component.discovered}"
-    assert base.args["charge_rate"][0] == first_inverter_entity, "Predbat inverter 0 must keep addressing the same physical inverter"
-    assert base.args["charge_rate"] == ["number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_0_charge_rate"]
+    assert sorted(component.discovered) == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected slot n to stay endpoint n after re-probe, got {base.args.get('charge_rate')}"
     assert base.args["num_inverters"] == 2
-    print("PASS: a late inverter is appended, leaving running inverter identities untouched")
+    print("PASS: a late inverter takes its own slot, leaving running inverter identities untouched")
     return 0
+
+
+def test_leading_endpoint_down_does_not_shift_the_fleet(my_predbat=None):
+    """
+    GH#5209: three GivTCP inverters, endpoint 0 down while Predbat starts.
+
+    Positional slot filling put endpoints 1 and 2 into slots 0 and 1 and kept only slot 2 from
+    apps.yaml, so Predbat inverter 1 wrote its 2600W limit to the AC3 on endpoint 2 while inverter
+    2 wrote 3000W back to it every cycle. Slot n must be endpoint n: the down endpoint's slot keeps
+    what apps.yaml configured for it, and a claimed key the user never configured still comes out
+    one entry per inverter rather than short (the reporter's "battery_calibration expected 3").
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345", "http://givtcp2:6345"])
+    apps_yaml = {
+        "num_inverters": 3,
+        "charge_rate": ["number.inv0_charge_rate", "number.inv1_charge_rate", "number.inv2_charge_rate"],
+    }
+    base.args_from_apps_yaml = dict(apps_yaml)
+    base.apps_yaml_override_warned = set()
+    base.args.update(apps_yaml)
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[2].read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+
+    if base.args.get("num_inverters") != 3:
+        print("ERROR: expected num_inverters 3, got {}".format(base.args.get("num_inverters")))
+        failed = True
+    if base.args.get("charge_rate") != ["number.inv0_charge_rate", "number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_2_charge_rate"]:
+        print("ERROR: expected slot n to be endpoint n with slot 0 left as configured, got {}".format(base.args.get("charge_rate")))
+        failed = True
+    if base.args.get("battery_calibration") != ["sensor.predbat_givtcp_0_battery_calibration", "sensor.predbat_givtcp_1_battery_calibration", "sensor.predbat_givtcp_2_battery_calibration"]:
+        print("ERROR: expected an unconfigured claimed key to cover all three slots by endpoint, got {}".format(base.args.get("battery_calibration")))
+        failed = True
+    if base.args.get("inverter_type") != ["GE", "GE", "GE"]:
+        print("ERROR: expected inverter_type ['GE', 'GE', 'GE'], got {}".format(base.args.get("inverter_type")))
+        failed = True
+
+    # Endpoint 0 comes back and is adopted on the hourly re-probe - nothing rotates
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_2_charge_rate"]:
+        print("ERROR: expected slot n to be endpoint n after recovery, got {}".format(base.args.get("charge_rate")))
+        failed = True
+
+    if not failed:
+        print("PASS: a leading endpoint that is down at startup leaves every other inverter in its own slot")
+    return 1 if failed else 0
 
 
 def test_rediscovery_never_drops_an_inverter_that_stops_answering(my_predbat=None):
@@ -2104,7 +2159,7 @@ def test_automatic_config_keeps_a_manually_configured_inverter(my_predbat=None):
     # A scalar apps.yaml value applies to every inverter, so it fills the tail rather than vanishing
     # (battery_scaling is only claimed when every inverter reports a design capacity, so the tail
     # handling is checked directly rather than through a key this fixture may not claim)
-    scaled = component._keep_configured_tail("battery_scaling", ["sensor.predbat_givtcp_0_battery_dod_soh"], 2)
+    scaled = component._per_endpoint_values("battery_scaling", lambda n: "sensor.predbat_givtcp_{}_battery_dod_soh".format(n), 2)
     if scaled != ["sensor.predbat_givtcp_0_battery_dod_soh", 1.0]:
         print("ERROR: expected the user's scalar battery_scaling to fill the tail, got {}".format(scaled))
         failed = True
@@ -2714,12 +2769,13 @@ def test_givtcp_component(my_predbat=None):
         ("soc_kw_binding", test_automatic_config_uses_soc_kw_not_percent, "automatic_config binds soc_kw"),
         ("write_exception", test_write_event_exception_does_not_propagate, "write exception contained"),
         ("discovered_count", test_automatic_config_counts_discovered_inverters_not_configured_urls, "num_inverters counts discovered inverters"),
-        ("discovered_mapping", test_automatic_config_maps_predbat_inverter_to_the_live_endpoint, "live endpoint drives inverter 0"),
+        ("discovered_mapping", test_automatic_config_keeps_the_live_endpoint_in_its_own_slot, "live endpoint keeps its own slot"),
         ("discovered_none", test_automatic_config_skipped_when_nothing_was_discovered, "no config when nothing discovered"),
         ("discovery_drops_dead", test_dead_endpoint_is_not_polled_after_discovery, "dead endpoint dropped after discovery"),
         ("discovered_pause_gate", test_pause_keys_gated_on_discovered_inverters_only, "pause gate ignores undiscovered endpoints"),
         ("rediscover_late", test_rediscovery_picks_up_an_inverter_that_was_down_at_startup, "late inverter adopted on re-probe"),
-        ("rediscover_append", test_rediscovery_appends_so_running_inverters_keep_their_identity, "re-probe appends, preserving identity"),
+        ("rediscover_append", test_rediscovery_keeps_inverter_identity_by_endpoint, "re-probe keeps slot n on endpoint n"),
+        ("leading_endpoint_down", test_leading_endpoint_down_does_not_shift_the_fleet, "leading endpoint down does not shift the fleet (#5209)"),
         ("rediscover_no_shrink", test_rediscovery_never_drops_an_inverter_that_stops_answering, "discovered inverters are never dropped"),
         ("rediscover_cheap", test_rediscovery_uses_a_cheap_single_probe, "re-probe uses a single cheap GET"),
         ("rediscover_complete", test_rediscovery_skipped_once_every_endpoint_is_discovered, "no re-probe when fleet is complete"),
