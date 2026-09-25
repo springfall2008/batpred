@@ -5266,6 +5266,33 @@ class TestCommandAck:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
         assert len(gw._published) == 1
 
+    def test_full_history_failing_publish_with_concurrent_ack_keeps_all_earlier_ids(self):
+        """16 ids kept, a 17th send fails while an ack for PBAT2 arrives: PBAT1..PBAT16 all stay matchable."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(16):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+
+            async def ack_other_then_fail(command, command_id=None, **kwargs):
+                self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="not_managed")
+                self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="modbus_write_failed")
+                raise RuntimeError("broker gone")
+
+            real_publish = gw.publish_command
+            gw.publish_command = ack_other_then_fail
+            clock["now"] = 1100.0
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+        entry = gw._pending_commands[self.CHARGE_RATE]
+        assert entry["command_ids"] == [f"PBAT{n}" for n in range(1, 17)]
+        assert entry["outcomes"] == {"PBAT2": "refused", "PBAT1": "refused"}
+        assert self._logged(gw, "refused by hub: modbus_write_failed")
+
     def test_outcomes_do_not_grow_past_the_kept_ids(self):
         """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
         gw = self._make_gateway()

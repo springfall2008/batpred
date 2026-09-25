@@ -1975,7 +1975,7 @@ class GatewayMQTT(ComponentBase):
             if not same:
                 entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": [], "acks": 0}
                 self._pending_commands[entity_id] = entry
-            previous = {"command_ids": list(entry["command_ids"]), "attempt_ids": list(entry["attempt_ids"]), "outcomes": dict(entry["outcomes"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
+            previous = {"attempt_ids": list(entry["attempt_ids"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
             if entry["state"] != "sent":
                 # A fresh attempt after the previous one was answered. Earlier ids and their
                 # outcomes stay, so a late ack from another unit is still logged and acted on and
@@ -1985,10 +1985,10 @@ class GatewayMQTT(ComponentBase):
                 entry["resent"] = True  # the one re-send after an unanswered window
             command_id = self._command_id = self._command_id + 1
             command_ref = f"PBAT{command_id}"
-            # Earlier ids of the same value stay matchable: an ack for any of them confirms it
-            entry["command_ids"] = entry["command_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_ref]
-            entry["outcomes"] = {key: value for key, value in entry["outcomes"].items() if key in entry["command_ids"]}
-            entry["attempt_ids"] = [ref for ref in entry["attempt_ids"] if ref in entry["command_ids"]] + [command_ref]
+            # Earlier ids of the same value stay matchable: an ack for any of them confirms it.
+            # The oldest id is only pruned once this send has gone out (see below).
+            entry["command_ids"] = entry["command_ids"] + [command_ref]
+            entry["attempt_ids"] = entry["attempt_ids"] + [command_ref]
             entry["sent_at"] = now
             acks_before = entry["acks"]
 
@@ -2001,16 +2001,22 @@ class GatewayMQTT(ComponentBase):
                 # An ack for this id may already have arrived while the publish was awaiting its
                 # broker confirmation: then the command did reach the hub, so keep it
                 if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"] and command_ref not in entry["outcomes"]:
-                    if not previous["command_ids"]:
+                    entry["command_ids"].remove(command_ref)
+                    entry["attempt_ids"].remove(command_ref)
+                    if not entry["command_ids"]:
                         del self._pending_commands[entity_id]
                     elif entry["acks"] == acks_before:
-                        # No ack arrived meanwhile: back to how the earlier attempt left it,
-                        # including any id pruned to make room for this one
+                        # No ack arrived meanwhile: back to how the earlier attempt left it
                         entry.update(previous)
-                    else:
-                        entry["command_ids"].remove(command_ref)
-                        entry["attempt_ids"].remove(command_ref)
             raise
+
+        with self._command_lock:
+            # Keep the id history bounded now that this send is out
+            if self._pending_commands.get(entity_id) is entry and len(entry["command_ids"]) > _COMMAND_ACK_IDS_KEPT:
+                entry["command_ids"] = entry["command_ids"][-_COMMAND_ACK_IDS_KEPT:]
+                entry["outcomes"] = {key: value for key, value in entry["outcomes"].items() if key in entry["command_ids"]}
+                entry["attempt_ids"] = [ref for ref in entry["attempt_ids"] if ref in entry["command_ids"]]
+                entry["cached_ids"] = [ref for ref in entry["cached_ids"] if ref in entry["command_ids"]]
 
     def _process_ack(self, data):
         """Handle a command ack from the hub.
