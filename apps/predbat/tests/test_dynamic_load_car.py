@@ -44,6 +44,7 @@ STATE_FIELDS = (
     "dynamic_load_car_since",
     "dynamic_load_car_cancelled",
     "dynamic_load_car_decided",
+    "octopus_intelligent_trust_slots",
 )
 
 
@@ -99,6 +100,7 @@ def _reset(my_predbat):
     my_predbat.dynamic_load_car_cancelled = {}
     my_predbat.dynamic_load_car_decided = set()
     my_predbat.update_pending = False
+    my_predbat.octopus_intelligent_trust_slots = True
 
 
 def _kwh(my_predbat):
@@ -295,6 +297,8 @@ def _run(my_predbat):
 
         failed |= _run_rates(my_predbat)
         failed |= _run_poll(my_predbat)
+        failed |= _run_untrusted(my_predbat)
+        failed |= _run_kwh_cancelled(my_predbat)
     finally:
         if had_sensor:
             my_predbat.args["car_charging_now"] = saved_sensor
@@ -469,6 +473,130 @@ def _run_poll(my_predbat):
     my_predbat.metric_dynamic_load_adjust = False
     due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=845))
     failed |= _check("t17 off", not due, "due {}".format(due))
+    return failed
+
+
+def _cancelled(my_predbat):
+    """
+    kwh_cancelled of car 0's slots after the check (None where a slot was not cancelled).
+    """
+    return [slot.get("kwh_cancelled") for slot in my_predbat.car_charging_slots[0]]
+
+
+def _run_untrusted(my_predbat):
+    """
+    octopus_intelligent_trust_slots Off: Octopus Intelligent slots start untrusted and are only
+    trusted once the car is seen charging in one, until it stops or the slot ends.
+    """
+    failed = False
+    try:
+        print("Test 19: trust Off - Octopus slots start untrusted, even with dynamic load off")
+        _reset(my_predbat)
+        _sensor(my_predbat, "off")
+        my_predbat.metric_dynamic_load_adjust = False
+        my_predbat.octopus_intelligent_trust_slots = False
+        changed = _cycle(my_predbat, 830)
+        failed |= _check("t19 untrusted outside a slot", changed and _kwh(my_predbat) == [0, 0] and _cancelled(my_predbat) == [3.5, 3.5], "changed {} kwh {} cancelled {}".format(changed, _kwh(my_predbat), _cancelled(my_predbat)))
+        changed = _cycle(my_predbat, 840)
+        failed |= _check("t19 still untrusted in a slot while not charging", (not changed) and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        print("Test 20: trust Off - the car seen charging in a slot trusts it and the later ones, straight away")
+        _sensor(my_predbat, "on")
+        changed = _cycle(my_predbat, 841)
+        failed |= _check("t20 trusted on charging", changed and _kwh(my_predbat) == [3.5, 3.5] and _cancelled(my_predbat) == [None, None], "changed {} kwh {} cancelled {}".format(changed, _kwh(my_predbat), _cancelled(my_predbat)))
+
+        print("Test 21: trust Off - the car stopping for the grace period cancels them again")
+        _sensor(my_predbat, "off")
+        changed = _cycle(my_predbat, 845)
+        failed |= _check("t21 inside grace", (not changed) and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        changed = _cycle(my_predbat, 847)
+        failed |= _check("t21 after grace", changed and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        print("Test 22: trust Off - leaving the slot goes back to untrusted, even while charging")
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 850)
+        changed = _cycle(my_predbat, 875)
+        failed |= _check("t22 untrusted after the slot", changed and _kwh(my_predbat) == [3.5, 0] and my_predbat.dynamic_load_car_cancelled.get(0), "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        print("Test 23: trust Off does not touch slots Predbat planned itself")
+        _reset(my_predbat)
+        _sensor(my_predbat, "off")
+        my_predbat.metric_dynamic_load_adjust = False
+        my_predbat.octopus_intelligent_trust_slots = False
+        own_slots = [{"start": 840, "end": 870, "kwh": 3.5}, {"start": 900, "end": 930, "kwh": 3.5}]
+        _cycle(my_predbat, 840, slots=own_slots)
+        _cycle(my_predbat, 850, slots=own_slots)
+        failed |= _check("t23 own slots untouched", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
+
+        print("Test 24: trust Off with no evidence source never trusts the slots")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = False
+        my_predbat.octopus_intelligent_trust_slots = False
+        _cycle(my_predbat, 840)
+        _cycle(my_predbat, 855)
+        failed |= _check("t24 no evidence stays untrusted", _kwh(my_predbat) == [0, 0], "kwh {}".format(_kwh(my_predbat)))
+
+        print("Test 25: trust Off - the poll asks for a replan when the car starts charging, not when the slot ends")
+        _reset(my_predbat)
+        _sensor(my_predbat, "off")
+        my_predbat.octopus_intelligent_trust_slots = False
+        _cycle(my_predbat, 840)
+        my_predbat.update_pending = False
+        _sensor(my_predbat, "on")
+        due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=842))
+        failed |= _check("t25 due on charging", due, "due {}".format(due))
+        _cycle(my_predbat, 842)
+        _sensor(my_predbat, "off")
+        _cycle(my_predbat, 845)
+        _cycle(my_predbat, 850)
+        my_predbat.update_pending = False
+        due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=875))
+        failed |= _check("t25 not due leaving the slot already untrusted", not due, "due {}".format(due))
+
+        print("Test 27: trust Off warns about an Intelligent car with nothing to confirm its slots, once")
+        saved_iog = my_predbat.octopus_intelligent_charging
+        try:
+            _reset(my_predbat)
+            _sensor(my_predbat, None)
+            my_predbat.octopus_intelligent_charging = True
+            my_predbat.octopus_intelligent_trust_slots = False
+            my_predbat.car_energy_reported_load = False
+            my_predbat.dynamic_load_car_warned = []
+            cars = my_predbat.dynamic_load_car_check_config()
+            failed |= _check("t27 no evidence warned", cars == [0] and my_predbat.dynamic_load_car_warned == [0], "cars {}".format(cars))
+            my_predbat.car_energy_reported_load = True
+            failed |= _check("t27 CT clamp is evidence", my_predbat.dynamic_load_car_check_config() == [], "cars {}".format(my_predbat.dynamic_load_car_warned))
+            my_predbat.car_energy_reported_load = False
+            _sensor(my_predbat, "off")
+            failed |= _check("t27 sensor is evidence", my_predbat.dynamic_load_car_check_config() == [], "cars {}".format(my_predbat.dynamic_load_car_warned))
+            _sensor(my_predbat, None)
+            my_predbat.octopus_intelligent_trust_slots = True
+            failed |= _check("t27 trust On never warns", my_predbat.dynamic_load_car_check_config() == [], "cars {}".format(my_predbat.dynamic_load_car_warned))
+        finally:
+            my_predbat.octopus_intelligent_charging = saved_iog
+            my_predbat.dynamic_load_car_warned = []
+    finally:
+        my_predbat.octopus_intelligent_trust_slots = True
+    return failed
+
+
+def _run_kwh_cancelled(my_predbat):
+    """
+    A cancelled slot keeps the kWh it had in kwh_cancelled, so the plan can still show it with a "?".
+    """
+    failed = False
+    print("Test 26: a cancelled slot records its kWh in kwh_cancelled")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    slots = [{"start": 840, "end": 870, "kwh": 3.5}, {"start": 900, "end": 930, "kwh": 0.0}]
+    _cycle(my_predbat, 840, slots=slots)
+    _cycle(my_predbat, 845, slots=slots)
+    failed |= _check("t26 recorded", _kwh(my_predbat) == [0, 0] and _cancelled(my_predbat) == [3.5, None], "kwh {} cancelled {}".format(_kwh(my_predbat), _cancelled(my_predbat)))
+    failed |= _check("t26 helper", my_predbat.car_charge_slot_kwh_cancelled(840, 870) == 3.5 and my_predbat.car_charge_slot_kwh(840, 870) == 0, "cancelled {}".format(my_predbat.car_charge_slot_kwh_cancelled(840, 870)))
+    _sensor(my_predbat, "on")
+    _cycle(my_predbat, 850, slots=slots)
+    failed |= _check("t26 gone once resumed", _cancelled(my_predbat) == [None, None], "cancelled {}".format(_cancelled(my_predbat)))
     return failed
 
 

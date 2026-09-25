@@ -916,6 +916,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_trust_slots",
+        "friendly_name": "Trust Intelligent slots before the car is seen charging",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",

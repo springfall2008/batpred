@@ -200,6 +200,26 @@ def run_test_plan_json_rate_adjust(my_predbat):
         print("ERROR: Expected car_charge_slot_rate to skip a window with no average key, got {}".format(rate))
         failed = True
 
+    # A slot dynamic load cancelled (car in its slot but not charging) plans 0 kWh but is still shown,
+    # with a "?", so the user can see the car plan Predbat has decided not to rely on (#5229)
+    print("Test plan output shows a cancelled car slot with a question mark")
+    my_predbat.car_charging_slots[0] = [{"start": car_minute, "end": car_minute + 30, "kwh": 0, "kwh_cancelled": 3.0, "average": 10.0, "octopus": True}]
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
+    if car_row is None:
+        print("ERROR: Could not find row for car minute {} in plan output".format(car_minute))
+        failed = True
+    else:
+        if car_row.get("car_charging") != 0 or car_row.get("car_charging_cancelled") != 3.0:
+            print("ERROR: Expected car_charging 0 and car_charging_cancelled 3.0, got {} and {}".format(car_row.get("car_charging"), car_row.get("car_charging_cancelled")))
+            failed = True
+    if "<td id=car bgcolor=#FFFFCC>3.0?</td>" not in html_plan:
+        print("ERROR: Expected the cancelled car slot cell '3.0?' on #FFFFCC in the HTML plan")
+        failed = True
+    if raw_plan.get("totals", {}).get("car_charging", 0) != 0:
+        print("ERROR: Cancelled kWh must not count towards the planned car total, got {}".format(raw_plan.get("totals", {}).get("car_charging")))
+        failed = True
+
     # Clean up
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []

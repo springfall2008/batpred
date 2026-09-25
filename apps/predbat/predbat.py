@@ -532,6 +532,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
+        self.octopus_intelligent_trust_slots = True
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
@@ -548,6 +549,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_since = {}
         self.dynamic_load_car_cancelled = {}
         self.dynamic_load_car_decided = set()
+        self.dynamic_load_car_warned = []
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
