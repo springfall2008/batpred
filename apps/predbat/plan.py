@@ -23,6 +23,8 @@ from multiprocessing import cpu_count
 from const import (
     CLOUD_FACTOR_PV10,
     CLOUD_WINDOW_MINUTES,
+    DYNAMIC_LOAD_CAR_LOAD_MINUTES,
+    DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
     PREDICT_STEP,
     PV_SCENARIO_NOMINAL,
     PV_SCENARIO_PV10,
@@ -53,6 +55,8 @@ from utils import (
     pack_export_limit,
     export_limit_exports_no_battery,
     export_limit_is_full_discharge,
+    is_entity_id,
+    minutes_since_midnight,
 )
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
@@ -226,20 +230,12 @@ class Plan:
         Return True if load status has changed and hence we need to re-plan
         """
         prev_last_load_status = self.load_last_status
-        prev_last_load_car_slot = self.load_last_car_slot
 
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
         threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
 
         # Last period load analysis
-        self.load_last_status = "baseline"
-        if self.load_last_period >= threshold_battery:
-            self.load_last_status = "high"
-        elif (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
-            # Check if the load is less than car charging threshold
-            self.load_last_status = "low"
-        else:
-            self.load_last_status = "baseline"
+        self.load_last_status = self.dynamic_load_classify()
 
         # Update entity for last load
         self.dashboard_item(
@@ -295,21 +291,10 @@ class Plan:
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
-            # When dynamic load is enabled we try can do two things
-            # 1. Increase the load prediction in the current self.plan_interval_minutes minute period to match the actual load (if the load is higher than expected),
-            #    extending into the following period too once the load has been high for two consecutive checks in a row (mirrors the low-load debounce below)
-            # 2. If the load is low and car charging is predicted then cancel off future car slots
-            # Note never do this just after midnight due to the load sensor reset
-            if self.load_last_status == "low" and self.minutes_now > 5:
-                if load_car_slot and prev_last_load_car_slot:
-                    for car_n in range(0, self.num_cars):
-                        for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                            slot = self.car_charging_slots[car_n][slot_n]
-                            if slot["end"] > minutes_now:
-                                # If the slot is in the future
-                                self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n, slot["start"], slot["end"]))
-                                self.car_charging_slots[car_n][slot_n]["kwh"] = 0
-
+            # When dynamic load is enabled, increase the load prediction in the current self.plan_interval_minutes minute period to match the
+            # actual load (if the load is higher than expected), extending into the following period too once the load has been high for two
+            # consecutive checks in a row. Cancelling the slots of a car that is not charging is done earlier in the cycle, before the rates
+            # are built, by dynamic_load_car_check().
             if self.load_last_status == "high":
                 have_printed = False
                 minutes_end_baseline = minutes_end_slot
@@ -329,6 +314,161 @@ class Plan:
                 return True
 
         return False
+
+    def dynamic_load_classify(self):
+        """
+        Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
+        battery rate and the car charging threshold, so no car can be charging) or "baseline".
+
+        Shared by dynamic_load(), which runs after the inverter fetch, and dynamic_load_car_check(), which
+        runs before it and so uses the previous cycle's battery_rate_max_discharge - it barely moves
+        between cycles, and the car grace period spans several of them.
+        """
+        threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
+        threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
+        if self.load_last_period >= threshold_battery:
+            return "high"
+        if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
+            return "low"
+        return "baseline"
+
+    def dynamic_load_car_evidence(self, car_n):
+        """
+        Whether car_n is not charging right now, and how long that must hold before its slots are cancelled.
+
+        Returns (not_charging, grace_minutes) where not_charging is True (not charging), False (charging)
+        or None (no evidence either way).
+
+        car_charging_now is used whenever it names a real entity - a static literal in apps.yaml can never
+        report the car stopping. An "unknown"/"unavailable" reading is no evidence, rather than a stop.
+        Without a sensor the low-load test stands in, but only when the car is inside the CT clamp
+        (car_energy_reported_load): otherwise its charging never shows in the load at all. The load test
+        is skipped just after midnight, when the load_today sensor resets.
+        """
+        if is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
+            raw = self.get_arg("car_charging_now", "no", index=car_n)
+            if raw is None or (isinstance(raw, str) and raw.lower() in ("unknown", "unavailable")):
+                return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES
+            if isinstance(raw, str):
+                charging = raw.lower() in self.car_charging_now_response
+            else:
+                charging = bool(raw)
+            return (not charging), DYNAMIC_LOAD_CAR_SENSOR_MINUTES
+        if self.car_energy_reported_load:
+            if self.minutes_now <= 5:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
+            return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES
+        return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
+
+    def dynamic_load_car_in_slot(self, car_n, minute):
+        """
+        Whether minute falls inside any of car_n's charging slots, whatever their kWh - a slot the
+        check has already cancelled is still one the car is meant to be charging in.
+        """
+        for slot in self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []:
+            if slot["start"] <= minute < slot["end"]:
+                return True
+        return False
+
+    def dynamic_load_car_check(self, save=True, late=False):
+        """
+        Cancel the slots of a car that is inside one of its charging slots but not charging.
+
+        Runs in fetch_sensor_data() before the rates are built, so that a cancelled Octopus Intelligent
+        dispatch never gets its cheap rate (rate_add_io_slots() and dynamic_load_car_strip_feed_rates()
+        consult dynamic_load_car_cancelled). Cars that Predbat plans itself only get their slots after the
+        rates, from the low-rate scan, so a second call with late=True decides those once they exist -
+        they have no dispatch discount to withhold.
+
+        A car that has shown "not charging" for its grace period (see dynamic_load_car_evidence()) has
+        every slot ending after now set to 0 kWh, which releases "Hold for car" and the predicted car
+        load. That is re-derived every cycle from freshly built slots, so the cancellation ends as soon
+        as the car leaves its slots or starts charging again.
+
+        With save False (compare.py re-running the fetch for another tariff) the saved decision is
+        applied but not advanced.
+
+        Returns True when a car's cancellation changed, so the plan is recomputed.
+        """
+        changed = False
+        if not late:
+            self.dynamic_load_car_decided = set()
+
+        for car_n in range(self.num_cars):
+            if car_n in self.dynamic_load_car_decided:
+                continue
+            if not late and not (car_n < len(self.car_charging_slots) and self.car_charging_slots[car_n]):
+                continue
+            self.dynamic_load_car_decided.add(car_n)
+
+            was_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
+            if save:
+                cancelled = was_cancelled
+                if not self.metric_dynamic_load_adjust or not self.dynamic_load_car_in_slot(car_n, self.minutes_now):
+                    self.dynamic_load_car_since.pop(car_n, None)
+                    cancelled = False
+                else:
+                    not_charging, grace_minutes = self.dynamic_load_car_evidence(car_n)
+                    if not_charging is False:
+                        self.dynamic_load_car_since.pop(car_n, None)
+                        cancelled = False
+                    elif not_charging:
+                        since = self.dynamic_load_car_since.setdefault(car_n, self.now_utc_real)
+                        if (self.now_utc_real - since).total_seconds() >= grace_minutes * 60:
+                            cancelled = True
+                if cancelled != was_cancelled:
+                    changed = True
+                    self.log("Dynamic load: car {} {}".format(car_n, "is in a charging slot but not charging, cancelling its slots" if cancelled else "slots resumed"))
+                self.dynamic_load_car_cancelled[car_n] = cancelled
+            else:
+                cancelled = was_cancelled and self.metric_dynamic_load_adjust
+
+            if cancelled:
+                for slot in self.car_charging_slots[car_n]:
+                    if slot["end"] > self.minutes_now:
+                        slot["kwh"] = 0
+        return changed
+
+    def dynamic_load_car_poll(self, now=None):
+        """
+        Called from the 15 second loop between plan cycles: ask for a replan as soon as a car's
+        cancellation is due to change, rather than waiting up to 5 minutes for the next cycle.
+
+        Only car_charging_now is polled - the load test needs the fetch. The clock is started here too,
+        so a slot that begins between cycles is timed from when the car was first seen idle in it.
+        The real decision is still made by dynamic_load_car_check() in the replan this triggers.
+
+        Returns True when it set update_pending.
+        """
+        if not self.metric_dynamic_load_adjust or not self.num_cars or self.midnight_utc is None:
+            return False
+        if now is None:
+            now = datetime.now(self.local_tz)
+        # Judge "in a slot" on the minute the replan's check will use - clock skew added and floored to
+        # PREDICT_STEP, as update_time() builds minutes_now - or for a slot ending between steps the poll
+        # would keep asking for a reset the replan then declines, every 15 seconds. The grace is still
+        # timed on the exact clock, as dynamic_load_car_check() times it on now_utc_real.
+        minute = minutes_since_midnight(now + timedelta(minutes=self.args.get("clock_skew", 0)), self.midnight_utc)
+
+        due = False
+        for car_n in range(self.num_cars):
+            if not is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
+                continue
+            cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
+            if not self.dynamic_load_car_in_slot(car_n, minute):
+                due |= cancelled
+                continue
+            not_charging, grace_minutes = self.dynamic_load_car_evidence(car_n)
+            if not_charging is False:
+                due |= cancelled
+            elif not_charging and not cancelled:
+                since = self.dynamic_load_car_since.setdefault(car_n, now)
+                due |= (now - since).total_seconds() >= grace_minutes * 60
+
+        if due:
+            self.log("Dynamic load: car charging state changed, will re-plan")
+            self.update_pending = True
+        return due
 
     def find_price_levels(
         self,

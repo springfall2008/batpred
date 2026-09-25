@@ -615,7 +615,9 @@ e.g. you are using Intelligent Octopus or you use the car slots in Predbat to co
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
 
-- **switch.predbat_metric_dynamic_load_adjust** (default `false`) - If turned Off then Predbat won't export during times the car is planned to charge even if the car is not charging.
+- **switch.predbat_metric_dynamic_load_adjust** (default `false`) - When On, Predbat cancels a car's charging slots, including the cheap rate of an Octopus Intelligent dispatch, while the car is inside a slot but not actually charging, and restores them as soon as it starts charging again or the slot ends.
+This releases the battery hold set by **switch.predbat_car_charging_from_battery**, and stops the house battery being planned around a dispatch Octopus may bill at the full rate.
+It uses **car_charging_now** when that is a real sensor (reacting within about 2 minutes), otherwise the house load if the car is inside the CT clamp (about 10 minutes). If turned Off then Predbat won't export during times the car is planned to charge even if the car is not charging.
 
 - See [Car charging filtering](#filtering-car-charging-energy-from-house-load) and [Planned car charging](#planned-car-charging)
 for further car charging setup details.

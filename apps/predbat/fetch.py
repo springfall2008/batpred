@@ -1184,6 +1184,9 @@ class Fetch:
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
         self.dispatch_timeline_pending = []
         self.fetch_sensor_data_cars(save=save)
+        # Dynamic load: cancel the slots of a car that is in one but not charging - before the rates are
+        # built, so a cancelled Intelligent dispatch never gets its cheap rate
+        dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1237,6 +1240,7 @@ class Fetch:
         if import_rates:
             self.rate_scan(import_rates, print=False)
             self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -1310,6 +1314,8 @@ class Fetch:
 
         # Work out car plan?
         self.fetch_sensor_data_car_planning()
+        # Dynamic load for the cars Predbat plans itself, whose slots only exist now
+        dynamic_load_car_changed |= self.dynamic_load_car_check(save=save, late=True)
         # Publish the car plan
         self.publish_car_plan()
 
@@ -1367,7 +1373,7 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = False
+        force_replan = dynamic_load_car_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do

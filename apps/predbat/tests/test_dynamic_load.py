@@ -61,8 +61,10 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
         print(f"ERROR: Car slot 1 kwh should not have changed, was {original_slot_1_kwh}, now {my_predbat.car_charging_slots[1][0]['kwh']}")
         failed = True
 
-    # Test 2: Low load - should cancel car slots that overlap with current time
-    print("Test 2: Low load case")
+    # Test 2: Low load - dynamic_load() classifies it but no longer cancels car slots itself; that
+    # moved earlier in the cycle, before the rates are built (dynamic_load_car_check(), see
+    # test_dynamic_load_car.py), so it can withhold an Intelligent dispatch's cheap rate too
+    print("Test 2: Low load case leaves the car slots to dynamic_load_car_check()")
     my_predbat.load_last_status = "baseline"  # Reset status
     my_predbat.load_last_period = 2.0  # 2kW - low load (< battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000 and < car_charging_threshold * 0.9)
     my_predbat.load_last_car_slot = True
@@ -78,73 +80,8 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
         print(f"ERROR: Expected load_last_status to be 'low', got '{my_predbat.load_last_status}'")
         failed = True
 
-    # Verify that car slot 0 was cancelled (overlaps with current time)
-    if my_predbat.car_charging_slots[0][0]["kwh"] != 0:
-        print(f"ERROR: Car slot 0 should have been cancelled (kwh=0), but kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
-        failed = True
-
-    # Verify that car slot 1 was also cancelled (overlaps with current 30-minute period)
-    if my_predbat.car_charging_slots[1][0]["kwh"] != 0:
-        print(f"ERROR: Car slot 1 should have been cancelled (kwh=0), but kwh = {my_predbat.car_charging_slots[1][0]['kwh']}")
-        failed = True
-
-    # Test 3: Low load but slots don't overlap with current time - should not cancel
-    print("Test 3.1: Low load with non-overlapping slots, first time car starts")
-    my_predbat.load_last_status = "baseline"  # Reset status
-    my_predbat.load_last_period = 2.0  # Low load
-    my_predbat.load_last_car_slot = False
-
-    # Create slots that don't overlap with current time period
-    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now - 5, "end": my_predbat.minutes_now + 90, "kwh": 10.0}]
-    my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now - 60, "end": my_predbat.minutes_now - 30, "kwh": 8.0}]
-
-    # Call dynamic_load
-    my_predbat.dynamic_load()
-
-    if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:
-        print(f"ERROR: Car slot 0 should not have been cancelled, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
-        failed = True
-
-    if my_predbat.car_charging_slots[1][0]["kwh"] != 8.0:
-        print(f"ERROR: Car slot 1 should not have been cancelled, kwh = {my_predbat.car_charging_slots[1][0]['kwh']}")
-        failed = True
-
-    # Test 3: Low load but slots don't overlap with current time - should not cancel
-    print("Test 3.2: Low load with non-overlapping slots")
-    my_predbat.load_last_status = "baseline"  # Reset status
-    my_predbat.load_last_period = 2.0  # Low load
-
-    # Create slots that don't overlap with current time period
-    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now - 5, "end": my_predbat.minutes_now + 90, "kwh": 10.0}]
-    my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now - 60, "end": my_predbat.minutes_now - 30, "kwh": 8.0}]
-
-    # Call dynamic_load
-    my_predbat.dynamic_load()
-
-    if my_predbat.car_charging_slots[0][0]["kwh"] != 0:
-        print(f"ERROR: Car slot 0 should have been cancelled, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
-        failed = True
-
-    if my_predbat.car_charging_slots[1][0]["kwh"] != 8.0:
-        print(f"ERROR: Car slot 1 should not have been cancelled, kwh = {my_predbat.car_charging_slots[1][0]['kwh']}")
-        failed = True
-
-    # Test 4: Just after midnight (minutes_now <= 5) - should not cancel even with low load
-    print("Test 4: Low load just after midnight")
-    my_predbat.minutes_now = 3  # 3 minutes after midnight
-    my_predbat.load_last_status = "baseline"  # Reset status
-    my_predbat.load_last_period = 2.0  # Low load
-    my_predbat.load_last_car_slot = False
-
-    # Create slots that overlap with current time
-    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
-
-    # Call dynamic_load
-    my_predbat.dynamic_load()
-
-    # Verify slots were NOT cancelled (due to midnight exclusion)
-    if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:
-        print(f"ERROR: Car slot should not have been cancelled just after midnight, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
+    if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0 or my_predbat.car_charging_slots[1][0]["kwh"] != 8.0:
+        print(f"ERROR: dynamic_load() should leave car slots alone, got kwh {my_predbat.car_charging_slots[0][0]['kwh']} and {my_predbat.car_charging_slots[1][0]['kwh']}")
         failed = True
 
     # Test 5: Metric dynamic load adjust disabled - should not cancel slots
