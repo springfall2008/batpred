@@ -2323,6 +2323,60 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     Splits candidate charge windows into pre/inter/post segments upon intersecting an active clipping window,
     stamping clipping_target_soc_pct onto the intersecting segment instead of zeroing/deleting it.
     """
+    has_clipping = any("clipping_target_soc_pct" in w for w in export_window_best) or any("clipping_target_soc_pct" in w for w in charge_window_best)
+    if not has_clipping:
+        # Enabled export windows only - the sole candidates for clipping anything
+        export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_mode_of(export_limit_best[n]) != EXPORT_MODE_IDLE)
+        if not export_active:
+            # Rebuild the windows rather than passing the caller's dicts back, so the returned windows
+            # carry exactly the same keys (and are as freshly owned) as on the clipping path below
+            return list(charge_limit_best), [{"start": w["start"], "end": w["end"], "average": w["average"]} for w in charge_window_best]
+
+        new_limit_best = []
+        new_window_best = []
+
+        # For each charge window
+        for window_n in range(len(charge_limit_best)):
+            window = charge_window_best[window_n]
+            start = window["start"]
+            end = window["end"]
+            average = window["average"]
+            limit = charge_limit_best[window_n]
+            clipped = False
+
+            if limit <= 0.0:
+                # A disabled charge window can never be clipped; rebuild it exactly as the clipping
+                # path below would have done, so the returned dicts are equivalent either way
+                new_window_best.append({"start": start, "end": end, "average": average})
+                new_limit_best.append(limit)
+                continue
+
+            # For each enabled discharge window, in start order
+            for dstart, dend in export_active:
+                # Overlapping window?
+                if (dstart < end) and (dend >= start):
+                    if dstart <= start:
+                        if start != dend:
+                            start = dend
+                            clipped = True
+                    elif dend >= end:
+                        if end != dstart:
+                            end = dstart
+                            clipped = True
+                    else:
+                        # Two segments - emit the head now, carry on clipping the tail
+                        if (dstart - start) >= 5:
+                            new_window_best.append({"start": start, "end": dstart, "average": average})
+                            new_limit_best.append(limit)
+                        start = dend
+                        clipped = True
+
+            if not clipped or ((end - start) >= 5):
+                new_window_best.append({"start": start, "end": end, "average": average})
+                new_limit_best.append(limit)
+
+        return new_limit_best, new_window_best
+
     has_active_export = False
     for limit in export_limit_best:
         if export_mode_of(limit) != EXPORT_MODE_IDLE:

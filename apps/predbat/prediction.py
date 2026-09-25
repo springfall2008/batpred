@@ -647,6 +647,7 @@ class Prediction(PredictionBatch):
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
         charge_window_optimised = self.find_charge_window_optimised(charge_window, charge_limit)
         export_window_optimised = self.find_charge_window_optimised(export_window, export_limits, is_export=True)
+        has_clipping = getattr(self, "clipping_buffer_enable", False) or any("clipping_target_soc_pct" in w for w in charge_window) or any("clipping_target_soc_pct" in w for w in export_window)
 
         # For the SoC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -775,9 +776,13 @@ class Prediction(PredictionBatch):
                 best_soc_max = min(alert_keep_max / 100.0 * soc_max, soc_max)
 
             # Find charge & discharge windows
-            minute_absolute_aligned = int(minute_absolute / step) * step
-            charge_window_n = charge_window_optimised.get(minute_absolute_aligned, -1)
-            export_window_n = export_window_optimised.get(minute_absolute_aligned, -1)
+            if has_clipping:
+                minute_absolute_aligned = int(minute_absolute / step) * step
+                charge_window_n = charge_window_optimised.get(minute_absolute_aligned, -1)
+                export_window_n = export_window_optimised.get(minute_absolute_aligned, -1)
+            else:
+                charge_window_n = charge_window_optimised.get(minute_absolute, -1)
+                export_window_n = export_window_optimised.get(minute_absolute, -1)
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
             export_limit_now = export_limits[export_window_n] if export_window_active else IDLE_EXPORT_LIMIT
@@ -975,6 +980,8 @@ class Prediction(PredictionBatch):
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_percent / 100.0, reserve, self.best_soc_min)
                 is_anti_clipping = "clipping_target_soc_pct" in export_window[export_window_n]
+            elif charge_window_active:
+                is_anti_clipping = "clipping_target_soc_pct" in charge_window[charge_window_n]
 
             limit_max = soc_max
             if is_anti_clipping and export_mode_now != EXPORT_MODE_IDLE:
@@ -995,8 +1002,11 @@ class Prediction(PredictionBatch):
                 )
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
-                battery_to_discharge_min = max(soc - discharge_min, 0) * battery_loss_discharge
-                battery_draw = min(discharge_rate_now_curve_step, battery_to_discharge_min)
+                if is_anti_clipping:
+                    battery_to_discharge_min = max(soc - discharge_min, 0) * battery_loss_discharge
+                    battery_draw = min(discharge_rate_now_curve_step, battery_to_discharge_min)
+                else:
+                    battery_draw = min(discharge_rate_now_curve_step, battery_to_min)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
@@ -1129,7 +1139,10 @@ class Prediction(PredictionBatch):
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
-                battery_draw = max(-min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), -battery_to_max)
+                if is_anti_clipping:
+                    battery_draw = max(-min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), -battery_to_max)
+                else:
+                    battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
 
