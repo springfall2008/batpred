@@ -220,6 +220,25 @@ def run_test_plan_json_rate_adjust(my_predbat):
         print("ERROR: Cancelled kWh must not count towards the planned car total, got {}".format(raw_plan.get("totals", {}).get("car_charging")))
         failed = True
 
+    # Two cars in the same step, one charging and one cancelled: the cancelled car's "?" must still show
+    # alongside the live kWh, not be dropped because the row has some live car charging (#5229 review)
+    print("Test plan output shows a cancelled car slot next to another car's live charging")
+    saved_num_cars = my_predbat.num_cars
+    my_predbat.num_cars = 2
+    while len(my_predbat.car_charging_slots) < 2:
+        my_predbat.car_charging_slots.append([])
+    my_predbat.car_charging_slots[1] = [{"start": car_minute, "end": car_minute + 30, "kwh": 2.0, "average": 10.0, "octopus": True}]
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
+    if car_row is None or car_row.get("car_charging") != 2.0 or car_row.get("car_charging_cancelled") != 3.0:
+        print("ERROR: Expected car_charging 2.0 and car_charging_cancelled 3.0, got {}".format(car_row and (car_row.get("car_charging"), car_row.get("car_charging_cancelled"))))
+        failed = True
+    if ">2.0 +3.0?</td>" not in html_plan:
+        print("ERROR: Expected the car cell to show the live 2.0 and the cancelled +3.0?")
+        failed = True
+    my_predbat.car_charging_slots[1] = []
+    my_predbat.num_cars = saved_num_cars
+
     # Clean up
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []

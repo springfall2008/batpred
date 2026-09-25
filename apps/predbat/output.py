@@ -1606,20 +1606,22 @@ class Output:
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 car_total += car_charging_kwh
+                # A slot dynamic load cancelled (the car is not charging) is not planned for, but is still
+                # shown with a "?" so the car's own plan stays visible - alongside another car's live
+                # charging in the same step, not only when no car is charging
+                car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
+                    if car_charging_cancelled > 0.0:
+                        car_charging_str += " +" + str(car_charging_cancelled) + "?"
                     car_color = "FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
+                elif car_charging_cancelled > 0.0:
+                    car_charging_str = str(car_charging_cancelled) + "?"
+                    car_color = "#FFFFCC"
                 else:
-                    # A slot dynamic load cancelled (the car is not charging) is not planned for, but is
-                    # still shown with a "?" so the car's own plan stays visible
-                    car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
-                    if car_charging_cancelled > 0.0:
-                        car_charging_str = str(car_charging_cancelled) + "?"
-                        car_color = "#FFFFCC"
-                    else:
-                        car_charging_str = "&#9866;"
-                        car_color = "#FFFFFF"
+                    car_charging_str = "&#9866;"
+                    car_color = "#FFFFFF"
 
             # The car's own rate can diverge from the general household rate once its IOG dispatch
             # cap is used up for the day - the car falls back to the peak rate while the house keeps

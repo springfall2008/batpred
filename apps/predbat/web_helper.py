@@ -7130,7 +7130,8 @@ def get_plan_renderer_js():
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
                     // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
-                    const carVal = row.car_charging > 0 ? row.car_charging : (row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '&#9866;');
+                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '';
+                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging} +${carCancelled}` : row.car_charging) : (carCancelled || '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 

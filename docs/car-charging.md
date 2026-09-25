@@ -486,6 +486,7 @@ The overnight 23:30-05:30 rate stays low either way, as that is part of the tari
 Whether the car is charging comes from **car_charging_now** when it is set to a real sensor, otherwise from the house load if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load**).
 With neither, the car's slots can never be confirmed, and Predbat logs a warning.
 This switch works whether or not dynamic load adjustment is turned on.
+It only applies when **switch.predbat_octopus_intelligent_charging** is On, as it acts on the car plan that Octopus Intelligent charging builds. With that Off, the Intelligent dispatch rates are used as before and Predbat logs a warning.
 
 Slots that Predbat has decided will not happen are still shown in the car column of the plan, with a question mark after the kWh (e.g. **3.5?**), so you can see the car's own schedule even though the plan is not counting on it.
 

@@ -245,17 +245,6 @@ class Plan:
         )
         self.log("Dynamic load last period {:.2f}kW, status {}, threshold_battery {}kWh, threshold_car {}kWh,".format(self.load_last_period, self.load_last_status, threshold_battery, dp1(threshold_car)))
 
-        # Is the car currently planned to charge?
-        load_car_slot = False
-        if self.car_energy_reported_load:
-            for car_n in range(0, self.num_cars):
-                for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                    slot = self.car_charging_slots[car_n][slot_n]
-                    # Don't include the exact start minute as it may take a few for the load to filter through
-                    if slot["start"] <= self.minutes_now < slot["end"]:
-                        load_car_slot = True
-                        self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n, slot["start"], slot["end"], self.load_last_car_slot))
-        self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
 
         # Dynamic load baselines are stored as kWh per PREDICT_STEP. When the car is inside the
@@ -345,10 +334,14 @@ class Plan:
         (car_energy_reported_load): otherwise its charging never shows in the load at all. The load test
         is skipped just after midnight, when the load_today sensor resets.
         """
-        if is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
-            # No default: an entity HA does not have (deleted, renamed, integration reloading) must read
-            # as no evidence, not resolve to a "no" that looks like the car has stopped
-            raw = self.get_arg("car_charging_now", None, index=car_n)
+        entity_id = self.dynamic_load_car_sensors.get(car_n)
+        if entity_id:
+            # Read the entity cached by dynamic_load_car_refresh_sensors() rather than get_arg(index=...):
+            # the poll calls this every 15 seconds, and an indexed read of a single (non-list) sensor
+            # shared by several cars logs a set-up warning each time. No default: an entity HA does not
+            # have (deleted, renamed, integration reloading) must read as no evidence, not resolve to a
+            # "no" that looks like the car has stopped.
+            raw = self.resolve_arg("car_charging_now", entity_id, default=None)
             if raw is None or (isinstance(raw, str) and raw.lower() in ("unknown", "unavailable")):
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES
             if isinstance(raw, str):
@@ -426,15 +419,36 @@ class Plan:
                 return True
         return cancelled
 
+    def dynamic_load_car_refresh_sensors(self):
+        """
+        Work out, once per cycle, which cars have car_charging_now set to a real entity, keeping the
+        entity id for dynamic_load_car_evidence(). A static literal in apps.yaml can never report the car
+        stopping, so it does not count.
+        """
+        self.dynamic_load_car_sensors = {}
+        for car_n in range(self.num_cars):
+            entity_id = self.get_arg("car_charging_now", None, indirect=False, index=car_n)
+            if is_entity_id(entity_id):
+                self.dynamic_load_car_sensors[car_n] = entity_id
+
     def dynamic_load_car_check_config(self):
         """
         With octopus_intelligent_trust_slots Off, list the cars whose Octopus Intelligent slots can
         never be trusted: no car_charging_now entity and not inside the CT clamp, so nothing can ever
         show the car charging. Logged as a warning whenever that list changes, not every cycle.
         """
+        self.dynamic_load_car_refresh_sensors()
+        iog_off = (not self.octopus_intelligent_trust_slots) and (not self.octopus_intelligent_charging) and ("octopus_intelligent_slot" in self.args)
+        if iog_off != self.dynamic_load_car_warned_iog_off:
+            if iog_off:
+                # Off only governs the slots Octopus Intelligent charging turns into the car plan; with that
+                # off the dispatches still feed the rate overlay, which this switch does not touch
+                self.log("Warn: octopus_intelligent_trust_slots is Off but octopus_intelligent_charging is Off too, so it has no effect - the Intelligent dispatch rates are still used")
+            self.dynamic_load_car_warned_iog_off = iog_off
+
         cars = []
         if not self.octopus_intelligent_trust_slots and self.octopus_intelligent_charging and not self.car_energy_reported_load:
-            cars = [car_n for car_n in range(self.num_cars) if not is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n))]
+            cars = [car_n for car_n in range(self.num_cars) if car_n not in self.dynamic_load_car_sensors]
         if cars != self.dynamic_load_car_warned:
             if cars:
                 self.log("Warn: octopus_intelligent_trust_slots is Off but car(s) {} have no car_charging_now sensor and are outside the CT clamp, so their Intelligent slots will never be trusted".format(cars))
@@ -520,7 +534,7 @@ class Plan:
 
         due = False
         for car_n in range(self.num_cars):
-            if not is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
+            if car_n not in self.dynamic_load_car_sensors:
                 continue
             if self.dynamic_load_car_target(car_n, minute, now) != self.dynamic_load_car_cancelled.get(car_n, False):
                 due = True

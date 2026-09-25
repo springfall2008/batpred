@@ -44,6 +44,9 @@ STATE_FIELDS = (
     "dynamic_load_car_since",
     "dynamic_load_car_cancelled",
     "dynamic_load_car_decided",
+    "dynamic_load_car_sensors",
+    "dynamic_load_car_warned",
+    "dynamic_load_car_warned_iog_off",
     "octopus_intelligent_trust_slots",
 )
 
@@ -81,9 +84,11 @@ def _sensor(my_predbat, state):
     """
     if state is None:
         my_predbat.args.pop("car_charging_now", None)
+        my_predbat.dynamic_load_car_refresh_sensors()
         return
     my_predbat.args["car_charging_now"] = SENSOR
     my_predbat.ha_interface.dummy_items[SENSOR] = state
+    my_predbat.dynamic_load_car_refresh_sensors()
 
 
 def _reset(my_predbat):
@@ -179,6 +184,7 @@ def _run(my_predbat):
         _reset(my_predbat)
         my_predbat.args["car_charging_now"] = "binary_sensor.car_charging_now_missing"
         my_predbat.ha_interface.dummy_items.pop("binary_sensor.car_charging_now_missing", None)
+        my_predbat.dynamic_load_car_refresh_sensors()
         _cycle(my_predbat, 840)
         _cycle(my_predbat, 850)
         failed |= _check("t4b missing entity", _kwh(my_predbat) == [3.5, 3.5] and my_predbat.dynamic_load_car_since.get(0) is None, "kwh {} since {}".format(_kwh(my_predbat), my_predbat.dynamic_load_car_since.get(0)))
@@ -186,6 +192,7 @@ def _run(my_predbat):
         print("Test 5: a literal car_charging_now is not evidence")
         _reset(my_predbat)
         my_predbat.args["car_charging_now"] = "off"
+        my_predbat.dynamic_load_car_refresh_sensors()
         my_predbat.load_last_period = 0.2
         _cycle(my_predbat, 840)
         _cycle(my_predbat, 860)
@@ -466,6 +473,41 @@ def _run_poll(my_predbat):
     due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=875, seconds=5))
     failed |= _check("t18 reset once minutes_now leaves it", due, "due {}".format(due))
 
+    # Between cycles the poll reads the previous cycle's slots and its midnight_utc together, so after
+    # midnight a new-day slot built at 23:55 (minute 1440 on that axis) is where the poll's minute lands
+    print("Test 18b: the poll across midnight uses the same axis as the slots it reads")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    midnight_slots = [{"start": 1440, "end": 1470, "kwh": 3.5, "octopus": True}]
+    _cycle(my_predbat, 1435, slots=midnight_slots)
+    my_predbat.update_pending = False
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=1440, seconds=30))
+    failed |= _check("t18b not due at 00:00:30", not due, "due {}".format(due))
+    failed |= _check("t18b clock started in the new-day slot", my_predbat.dynamic_load_car_since.get(0) is not None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=1442, seconds=40))
+    failed |= _check("t18b due after the grace in the new-day slot", due, "due {}".format(due))
+
+    # The poll runs every 15 seconds: it must not read car_charging_now through get_arg(index=...),
+    # which warns every time for a second car sharing a single (non-list) sensor (#5229 review)
+    print("Test 18c: the poll does not re-resolve car_charging_now for every car every 15 seconds")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    my_predbat.num_cars = 2
+    my_predbat.dynamic_load_car_refresh_sensors()
+    _at(my_predbat, 840)
+    my_predbat.car_charging_slots = [_slots(), _slots()]
+    my_predbat.dynamic_load_car_check()
+    logged = []
+    saved_log = my_predbat.log
+    my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+    try:
+        my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=841))
+        my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=841, seconds=15))
+    finally:
+        my_predbat.log = saved_log
+    warnings = [message for message in logged if "incorrectly setup" in message]
+    failed |= _check("t18c no per-poll config warnings", not warnings, "logged {}".format(warnings))
+
     print("Test 17: the poll does nothing with dynamic load off")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
@@ -573,6 +615,32 @@ def _run_untrusted(my_predbat):
             _sensor(my_predbat, None)
             my_predbat.octopus_intelligent_trust_slots = True
             failed |= _check("t27 trust On never warns", my_predbat.dynamic_load_car_check_config() == [], "cars {}".format(my_predbat.dynamic_load_car_warned))
+
+            # Off only governs slots Octopus Intelligent charging turns into the car plan - with it off,
+            # the dispatch rate overlay is untouched, so say so rather than silently not applying (#5229 review)
+            print("Test 27b: trust Off with Octopus Intelligent charging off warns that it has no effect")
+            _sensor(my_predbat, "off")
+            my_predbat.octopus_intelligent_trust_slots = False
+            my_predbat.octopus_intelligent_charging = False
+            had_slot_sensor = "octopus_intelligent_slot" in my_predbat.args
+            saved_slot_sensor = my_predbat.args.get("octopus_intelligent_slot")
+            my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.octopus_intelligent_slot_test"
+            logged = []
+            saved_log = my_predbat.log
+            my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+            try:
+                my_predbat.dynamic_load_car_warned_iog_off = False
+                my_predbat.dynamic_load_car_check_config()
+                first = [message for message in logged if "octopus_intelligent_charging" in message]
+                my_predbat.dynamic_load_car_check_config()
+                again = [message for message in logged if "octopus_intelligent_charging" in message]
+            finally:
+                my_predbat.log = saved_log
+                if had_slot_sensor:
+                    my_predbat.args["octopus_intelligent_slot"] = saved_slot_sensor
+                else:
+                    my_predbat.args.pop("octopus_intelligent_slot", None)
+            failed |= _check("t27b warned once", len(first) == 1 and len(again) == 1, "logged {}".format(logged))
         finally:
             my_predbat.octopus_intelligent_charging = saved_iog
             my_predbat.dynamic_load_car_warned = []
