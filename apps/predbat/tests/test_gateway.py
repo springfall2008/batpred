@@ -5030,6 +5030,42 @@ class TestCommandAck:
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
         assert gw.cache == {entity: "00:30:00", "select.house_charge_slot1_x_gateway_456789_charge_slot1_end": "18:00:00"}
 
+    def test_late_refusal_for_an_earlier_attempt_is_still_handled(self):
+        """After an answered attempt, a fresh attempt keeps earlier ids: a late refusal is logged and restarts the window."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1031.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert gw._pending_commands[self.CHARGE_RATE]["command_ids"] == ["PBAT1", "PBAT2"]
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "sent"
+            clock["now"] = 1032.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+            assert self._logged(gw, "refused by hub: not_managed")
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "refused"
+            assert gw._pending_commands[self.CHARGE_RATE]["sent_at"] == 1032.0
+
+    def test_each_refusal_for_the_same_id_is_logged_and_restarts_the_window(self):
+        """Two units refusing one command: both reasons are logged and the window runs from the second."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1001.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+            clock["now"] = 1025.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="modbus_write_failed")
+            assert self._logged(gw, "refused by hub: not_managed")
+            assert self._logged(gw, "refused by hub: modbus_write_failed")
+            clock["now"] = 1031.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 1
+            clock["now"] = 1055.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 2
+
     def test_second_ok_ack_does_not_overwrite_cache(self):
         """Only the first ok ack for a command updates the cached slot times."""
         gw = self._make_gateway()
