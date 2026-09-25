@@ -171,6 +171,16 @@ def _run(my_predbat):
         failed |= _check("t4 unknown keeps cancellation", (not changed) and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
 
         # A static literal is not a sensor, and without the CT clamp there is no load evidence either
+        # A configured entity HA does not have (deleted, renamed, integration reloading) resolves to the
+        # read's default - that must be no evidence, not a "not charging" reading (#5229 review)
+        print("Test 4b: a car_charging_now entity missing from HA is no evidence")
+        _reset(my_predbat)
+        my_predbat.args["car_charging_now"] = "binary_sensor.car_charging_now_missing"
+        my_predbat.ha_interface.dummy_items.pop("binary_sensor.car_charging_now_missing", None)
+        _cycle(my_predbat, 840)
+        _cycle(my_predbat, 850)
+        failed |= _check("t4b missing entity", _kwh(my_predbat) == [3.5, 3.5] and my_predbat.dynamic_load_car_since.get(0) is None, "kwh {} since {}".format(_kwh(my_predbat), my_predbat.dynamic_load_car_since.get(0)))
+
         print("Test 5: a literal car_charging_now is not evidence")
         _reset(my_predbat)
         my_predbat.args["car_charging_now"] = "off"
@@ -240,6 +250,15 @@ def _run(my_predbat):
         _cycle(my_predbat, 845)
         _cycle(my_predbat, 850, save=False)
         failed |= _check("t10 applied when saved state is cancelled", _kwh(my_predbat) == [0, 0], "kwh {}".format(_kwh(my_predbat)))
+        # A car that has since resumed charging, or left its slot, is not cancelled in a comparison run
+        # just because the live state has not been re-derived yet (#5229 review)
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 851, save=False)
+        failed |= _check("t10 not applied once charging again", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
+        _sensor(my_predbat, "off")
+        _cycle(my_predbat, 875, save=False)
+        failed |= _check("t10 not applied outside the slot", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
+        failed |= _check("t10 saved state untouched", my_predbat.dynamic_load_car_cancelled.get(0, False), "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
 
         # Cars planned by Predbat itself get their slots after the rates are built: the late call
         # decides the cars the early call could not
@@ -257,6 +276,22 @@ def _run(my_predbat):
         my_predbat.car_charging_slots = [_slots()]
         changed = my_predbat.dynamic_load_car_check(late=True)
         failed |= _check("t11 late cancel", changed and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
+        # car_charging_slots shorter than num_cars must not raise out of the fetch (#5229 review)
+        print("Test 11b: fewer car slot lists than cars")
+        _reset(my_predbat)
+        _sensor(my_predbat, "off")
+        _at(my_predbat, 840)
+        my_predbat.num_cars = 2
+        my_predbat.dynamic_load_car_cancelled = {1: True}
+        my_predbat.car_charging_slots = [_slots()]
+        try:
+            my_predbat.dynamic_load_car_check(save=False, late=True)
+            my_predbat.dynamic_load_car_cancelled = {1: True}
+            my_predbat.dynamic_load_car_check()
+            my_predbat.dynamic_load_car_check(late=True)
+        except IndexError as exc:
+            failed |= _check("t11b no IndexError", False, str(exc))
 
         failed |= _run_rates(my_predbat)
         failed |= _run_poll(my_predbat)
@@ -324,6 +359,19 @@ def _run_rates(my_predbat):
         failed |= _check("t13 past kept", rates[820] == 7.0 and my_predbat.io_adjusted.get(820), "rate {}".format(rates[820]))
         failed |= _check("t13 other car's dispatch kept", rates[910] == 7.0 and my_predbat.io_adjusted.get(910), "rate {}".format(rates[910]))
         failed |= _check("t13 fixed window kept", rates[1420] == 7.0 and my_predbat.io_adjusted.get(1420), "rate {}".format(rates[1420]))
+
+        # The feed marks whole 30 minute rate periods, and rate_add_io_slots() rounds a dispatch out to
+        # them too - a dispatch off the half hour must strip the whole period (#5229 review)
+        print("Test 13b: a dispatch off the half hour strips its whole 30 minute periods")
+        my_predbat.octopus_slots = [[_dispatch(my_predbat, 967, 997)], []]
+        my_predbat.io_adjusted = {}
+        for minute in range(960, 1020):
+            rates[minute] = 7.0
+            my_predbat.io_adjusted[minute] = True
+        rates = my_predbat.dynamic_load_car_strip_feed_rates(rates)
+        failed |= _check("t13b leading edge stripped", rates[962] == 30.0, "rate {}".format(rates[962]))
+        failed |= _check("t13b trailing edge stripped", rates[1010] == 30.0, "rate {}".format(rates[1010]))
+        my_predbat.octopus_slots = [[_dispatch(my_predbat, 810, 930), _dispatch(my_predbat, 1410, 1440)], [_dispatch(my_predbat, 900, 930)]]
 
         my_predbat.dynamic_load_car_cancelled = {}
         rates[850] = 7.0

@@ -3714,12 +3714,18 @@ class Octopus:
         if not cancelled_cars or not self.io_adjusted:
             return rates
 
+        # Rounded out to whole 30 minute rate periods: the feed marks and prices whole periods, and
+        # rate_add_io_slots() likewise treats any overlap with a period as the whole period
         cancelled_minutes = set()
         trusted_minutes = set()
         for car_n in range(min(self.num_cars, len(self.octopus_slots))):
             covered = cancelled_minutes if car_n in cancelled_cars else trusted_minutes
             for slot in self.octopus_slots[car_n]:
                 start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_minutes = (start_minutes // 30) * 30
+                end_minutes = ((end_minutes + 29) // 30) * 30
                 covered.update(range(max(start_minutes, self.minutes_now), end_minutes))
 
         window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]

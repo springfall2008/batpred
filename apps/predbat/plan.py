@@ -346,7 +346,9 @@ class Plan:
         is skipped just after midnight, when the load_today sensor resets.
         """
         if is_entity_id(self.get_arg("car_charging_now", None, indirect=False, index=car_n)):
-            raw = self.get_arg("car_charging_now", "no", index=car_n)
+            # No default: an entity HA does not have (deleted, renamed, integration reloading) must read
+            # as no evidence, not resolve to a "no" that looks like the car has stopped
+            raw = self.get_arg("car_charging_now", None, index=car_n)
             if raw is None or (isinstance(raw, str) and raw.lower() in ("unknown", "unavailable")):
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES
             if isinstance(raw, str):
@@ -421,9 +423,11 @@ class Plan:
                     self.log("Dynamic load: car {} {}".format(car_n, "is in a charging slot but not charging, cancelling its slots" if cancelled else "slots resumed"))
                 self.dynamic_load_car_cancelled[car_n] = cancelled
             else:
-                cancelled = was_cancelled and self.metric_dynamic_load_adjust
+                # Not advanced, but not applied blindly either: a car that has since started charging
+                # again or left its slot is no longer cancelled, whatever the last live cycle decided
+                cancelled = was_cancelled and self.metric_dynamic_load_adjust and self.dynamic_load_car_in_slot(car_n, self.minutes_now) and self.dynamic_load_car_evidence(car_n)[0] is not False
 
-            if cancelled:
+            if cancelled and car_n < len(self.car_charging_slots):
                 for slot in self.car_charging_slots[car_n]:
                     if slot["end"] > self.minutes_now:
                         slot["kwh"] = 0
