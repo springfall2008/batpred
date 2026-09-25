@@ -61,6 +61,16 @@ _TELEMETRY_STALE_THRESHOLD = 120
 # the generic write_and_poll loop (10 x 2 s), so one write sends the command once.
 _COMMAND_ACK_WINDOW = 30
 
+# Ids kept per tracked command, so an ack for an earlier send of the same value still
+# counts (matches the number of recent ids the hub remembers for replay protection)
+_COMMAND_ACK_IDS_KEPT = 16
+
+
+def _monotonic():
+    """Clock for the ack window: immune to wall-clock corrections, and patchable in tests."""
+    return time.monotonic()
+
+
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
 _STARTUP_WAIT_TICKS = 120 * 2
 _STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
@@ -291,12 +301,15 @@ class GatewayMQTT(ComponentBase):
         self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
-        self._command_id = 0  # incrementing counter included in every published command
+        # Incrementing counter included in every published command, seeded from the clock so
+        # ids do not restart at PBAT1 after a restart: the hub rejects ids it has recently seen
+        # as replays, and a late ack for the previous process's PBAT1 must not match ours.
+        self._command_id = int(time.time() * 1000)
 
         # Command acks (predbat/devices/<id>/ack/<command_id>). Control writes are
         # tracked per entity so an identical re-send can wait for the hub's ack
         # instead of queueing another Modbus write every poll. See _send_control().
-        self._pending_commands = {}  # entity_id -> {command_id, command, kwargs, sent_at, state, resent}
+        self._pending_commands = {}  # entity_id -> {command_ids, command, kwargs, sent_at, state, resent, answered}
         self._ack_subscribed = False  # broker granted the ack subscription on this connection
         self._acks_seen = False  # at least one ack matched a tracked command on this connection
         self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
@@ -1948,30 +1961,34 @@ class GatewayMQTT(ComponentBase):
             await self.publish_command(command, **kwargs)
             return
 
-        now = time.time()
-        resent = False
+        now = _monotonic()
         with self._command_lock:
             entry = self._pending_commands.get(entity_id)
             same = entry is not None and entry["command"] == command and entry["kwargs"] == kwargs
             if same and self._acks_seen:
                 if now - entry["sent_at"] < _COMMAND_ACK_WINDOW:
-                    self.log(f"Info: GatewayMQTT: {command} for {kwargs.get('serial')} already sent as {entry['command_id']} ({entry['state']}), not re-sending")
+                    self.log(f"Info: GatewayMQTT: {command} for {kwargs.get('serial')} already sent as {entry['command_ids'][-1]} ({entry['state']}), not re-sending")
                     return
-                if entry["state"] == "sent":
-                    if entry["resent"]:
-                        self._acks_seen = False
-                        self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
-                    else:
-                        resent = True
+                if entry["state"] == "sent" and entry["resent"]:
+                    self._acks_seen = False
+                    self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
+            if not same or entry["state"] != "sent":
+                # New value, or a fresh attempt after the previous one was answered
+                entry = {"command_ids": [], "command": command, "kwargs": dict(kwargs), "state": "sent", "resent": False, "answered": False}
+                self._pending_commands[entity_id] = entry
+            elif self._acks_seen:
+                entry["resent"] = True  # the one re-send after an unanswered window
             command_id = self._command_id = self._command_id + 1
-            self._pending_commands[entity_id] = {"command_id": f"PBAT{command_id}", "command": command, "kwargs": dict(kwargs), "sent_at": now, "state": "sent", "resent": resent}
+            # Earlier ids of the same value stay matchable: an ack for any of them confirms it
+            entry["command_ids"] = entry["command_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [f"PBAT{command_id}"]
+            entry["sent_at"] = now
 
         try:
             await self.publish_command(command, command_id=command_id, **kwargs)
         except BaseException:
             # Never sent, so nothing is in flight - do not let it suppress the next attempt
             with self._command_lock:
-                if self._pending_commands.get(entity_id, {}).get("command_id") == f"PBAT{command_id}":
+                if self._pending_commands.get(entity_id) is entry:
                     del self._pending_commands[entity_id]
             raise
 
@@ -1993,27 +2010,35 @@ class GatewayMQTT(ComponentBase):
         error = ack.get("error") or "unknown"
 
         with self._command_lock:
-            entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if r["command_id"] == command_id), (None, None))
-            # Acks for other senders, superseded values or already-answered commands are ignored
-            if entry is None or entry["state"] != "sent" or ack.get("command", entry["command"]) != entry["command"]:
+            entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
+            # Acks for other senders or superseded values are ignored
+            if entry is None or ack.get("command", entry["command"]) != entry["command"]:
                 return
+            if entry["state"] == "refused" or (ok and entry["state"] == "applied"):
+                return  # already answered (a command reaching several units acks once per unit)
             self._acks_seen = True
+            first_ok = False
             if ok:
                 entry["state"] = "applied"
+                first_ok = not entry["answered"]
             elif error == "replay":
-                # The hub has seen this id before (e.g. after a PredBat restart reset the
-                # counter), so the value was never considered: let the next attempt go out
-                # under a fresh id straight away.
+                if entry["state"] != "sent":
+                    return
+                # The hub has seen this id before, so the value was never considered:
+                # let the next attempt go out under a fresh id straight away.
                 del self._pending_commands[entity_id]
             else:
+                # A refusal outranks an ok from another unit for the same command
                 entry["state"] = "refused"
-                entry["sent_at"] = time.time()
+                entry["sent_at"] = _monotonic()
+            entry["answered"] = True
             command = entry["command"]
             serial = entry["kwargs"].get("serial")
 
         if ok:
             self.log(f"Info: GatewayMQTT: {command} for {serial} acknowledged by hub ({command_id}) applied={ack.get('applied')}")
-            self._apply_ack(entity_id, command, ack.get("applied"))
+            if first_ok:
+                self._apply_ack(entity_id, command, ack.get("applied"))
         elif error == "replay":
             self.log(f"Info: GatewayMQTT: {command} for {serial} rejected as a replay of {command_id}, will re-send with a new id")
         else:

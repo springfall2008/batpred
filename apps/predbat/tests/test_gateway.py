@@ -4729,11 +4729,11 @@ class TestCommandAck:
         return asyncio.run(coro)
 
     def _clock(self):
-        """A controllable time.time() for the gateway module."""
+        """A controllable clock for the ack window."""
         from unittest.mock import patch
 
         clock = {"now": 1000.0}
-        patcher = patch("gateway.time.time", lambda: clock["now"])
+        patcher = patch("gateway._monotonic", lambda: clock["now"])
         return clock, patcher
 
     def _ack(self, gw, command_id, command, ok=True, error=None, applied=None):
@@ -4900,6 +4900,59 @@ class TestCommandAck:
             clock["now"] = 1004.0
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
         assert len(gw._published) == 2
+
+    def test_ack_for_an_earlier_send_of_the_same_value_counts(self):
+        """Before suppression is on, each poll re-sends under a new id; an ack for any of them confirms the value."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(3):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert [p[1] for p in gw._published] == [1, 2, 3]
+            # Only the first send's ack arrives
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            assert gw._acks_seen is True
+            clock["now"] = 1006.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 3
+
+    def test_refusal_after_ok_from_another_unit_wins(self):
+        """A command reaching two units acks twice; a refusal after an ok is still reported and kept."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+            assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+            assert self._logged(gw, "refused by hub: modbus_write_failed")
+            # A later ok for the same id changes nothing
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 45, "end": 1800, "slot": 1})
+            assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+        assert gw.cache[self.SLOT_START] == "00:30:00"
+
+    def test_second_ok_ack_does_not_overwrite_cache(self):
+        """Only the first ok ack for a command updates the cached slot times."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 900, "slot": 1})
+        assert gw.cache[self.SLOT_END] == "18:00:00"
+
+    def test_command_ids_do_not_restart_at_one(self):
+        """initialize() seeds the id counter from the clock so a restart does not reuse recent ids."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok")
+        assert gw._command_id > 1_000_000_000_000
+        assert gw.topic_ack == "predbat/devices/pbgw_test/ack/+"
 
     def test_unknown_or_mismatched_acks_ignored(self):
         """Acks for ids PredBat is not tracking, or for a different command, change nothing."""
