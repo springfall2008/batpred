@@ -22,16 +22,56 @@ import re
 import secrets
 import threading
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from utils import is_secret_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MAX_STRING = 64
 VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 # Containers whose value is a list of vocabulary tokens
-VOCAB_CONTAINERS = ("functions", "capabilities", "flags", "effects")
+VOCAB_CONTAINERS = ("functions", "flags", "effects")
+
+# TRANSITIONAL: capabilities was a token list before schema 2. A reporter not yet converted still sends
+# one; it is kept as tokens rather than dropped. Removed once every reporter emits the dict (plan Task 10).
+LEGACY_TOKEN_CONTAINERS = ("capabilities",)
+
+# The seven INVERTER_DEF fields that describe behaviour rather than whether an entity exists.
+# A record's capabilities dict may hold only these.
+CAPABILITY_KEYS = (
+    "support_charge_freeze",
+    "support_discharge_freeze",
+    "support_feedin_first",
+    "can_span_midnight",
+    "charge_discharge_with_rate",
+    "charge_control_immediate",
+    "target_soc_used_for_discharge",
+)
+
+# INVERTER_DEF presence flags -> the settings that must be bound to a real rw entity for the flag to be
+# True. inverter.py creates a dummy entity for exactly these settings when the flag is False
+# (inverter.py:612-655), and turns has_timed_pause off at runtime when no pause_mode entity exists.
+PRESENCE_FLAGS = {
+    "has_charge_enable_time": ("scheduled_charge_enable",),
+    "has_discharge_enable_time": ("scheduled_discharge_enable",),
+    "has_reserve_soc": ("reserve",),
+    "has_target_soc": ("charge_limit",),
+    "has_idle_time": ("idle_start_time", "idle_end_time"),
+    "has_timed_pause": ("pause_mode",),
+}
+
+# The value a protocol field takes when the setting it is read from is not bound at all, so the field
+# does not apply to this device. current_dp matches inverter.py's own .get() default.
+NOT_APPLICABLE_DEFAULTS = {
+    "charge_time_entity_is_option": True,
+    "charge_time_format": "HH:MM:SS",
+    "clock_time_format": "%Y-%m-%dT%H:%M:%S",
+    "current_dp": 1,
+}
+
+ACCESS_VALUES = ("rw", "r")
 
 SECTION_SPEC = {
     "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials"), "sub_records": ()},
@@ -74,6 +114,22 @@ def _clean_scalar(value):
     return value if isinstance(value, (str, int, float, bool)) else None
 
 
+def _clean_bool(value):
+    """A True/False fact, or None. Numbers are refused: 1 is not a capability statement."""
+    return value if isinstance(value, bool) else None
+
+
+def _clean_descriptor_value(value):
+    """A descriptor's fixed stand-in value: a number, a bool, or a string passing the info-string guard.
+
+    entities is published unredacted in dumps users post to public issues, so a stand-in string is held
+    to the same length cap and "@" ban as an info string - free text cannot ride in as a "value".
+    """
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    return _clean_string(value)
+
+
 MAX_OPTIONS = 256
 
 
@@ -98,11 +154,10 @@ def _clean_measure_or_tokens(value):
     return None
 
 
-# Descriptor field name -> cleaner. entity_id is required and handled separately in
-# _clean_descriptor, since every other field is optional and dropped rather than disqualifying.
+# Descriptor field name -> cleaner. access, entity_id and value are required/alternative fields and are
+# handled in _clean_descriptor; every field here is optional and dropped rather than disqualifying.
 DESCRIPTOR_FIELD_CLEANERS = {
     "domain": _clean_token,
-    "access": _clean_token,
     "unit": _clean_string,
     "device_class": _clean_string,
     "min": _clean_number,
@@ -111,19 +166,35 @@ DESCRIPTOR_FIELD_CLEANERS = {
     "precision": _clean_number,
     "options": _clean_option_list,
     "format": _clean_string,
+    "invert": _clean_bool,
 }
 
 
 def _clean_descriptor(value):
-    """One entity descriptor: entity_id required verbatim, every other field cleaned by its own declared type.
+    """One entity descriptor: access required, exactly one of entity_id and value, every other field cleaned by its own declared type.
 
     entities is a "clear" container, republished unredacted into debug dumps users post to public
     GitHub issues, so a field is kept only if it fits its type - free text cannot ride in on unit,
     device_class or options just because the container's name sounds safe.
+
+    access says whether Predbat writes the setting ("rw") or only reads it ("r"); the coordinator will
+    configure from it, so a descriptor without one is dropped rather than guessed. entity_id binds the
+    setting to an HA entity; value is a fixed stand-in where no entity exists (a PV-less inverter's
+    pv_power of 0). Both, or neither, is ambiguous and dropped.
     """
-    if not isinstance(value, dict) or not isinstance(value.get("entity_id"), str):
+    if not isinstance(value, dict) or value.get("access") not in ACCESS_VALUES:
         return None
-    kept = {"entity_id": value["entity_id"]}
+    has_entity = isinstance(value.get("entity_id"), str)
+    has_value = value.get("value") is not None
+    if has_entity == has_value:
+        return None
+    if has_entity:
+        kept = {"entity_id": value["entity_id"], "access": value["access"]}
+    else:
+        stand_in = _clean_descriptor_value(value["value"])
+        if stand_in is None:
+            return None
+        kept = {"value": stand_in, "access": value["access"]}
     for field, cleaner in DESCRIPTOR_FIELD_CLEANERS.items():
         if field in value and value[field] is not None:
             cleaned = cleaner(value[field])
@@ -140,7 +211,11 @@ CONTAINER_SPEC = {
     "ratings": ("clear", _clean_number),
     "coverage": ("clear", _clean_measure_or_tokens),
     "entities": ("clear", _clean_descriptor),
+    "capabilities": ("clear", _clean_bool),
 }
+
+# Containers whose keys are a closed set - anything else is dropped and logged
+CONTAINER_KEYS = {"capabilities": CAPABILITY_KEYS}
 
 # Container name sets derived from CONTAINER_SPEC's own class tags rather than hardcoded, so a
 # container added there later is redacted correctly with nothing extra to keep in sync - a
@@ -515,9 +590,9 @@ class Redactor:
             for key, value in node.items():
                 if key in PSEUDONYM_CONTAINERS:
                     out[key] = {self._guard_key(key, name): self._note(entry, substring=True) for name, entry in value.items()}
-                elif key in CLEAR_CONTAINERS:
+                elif key in CLEAR_CONTAINERS and isinstance(value, dict):
                     out[key] = {self._guard_key(key, name): self._guard_value(key, name, entry) for name, entry in value.items()}
-                elif key in VOCAB_CONTAINERS:
+                elif key in VOCAB_CONTAINERS or (key in LEGACY_TOKEN_CONTAINERS and isinstance(value, list)):
                     # Vocabulary lists are clear too, and a token is free-form enough (digits
                     # are legal in the pattern) that a misfiled identifier can hide as one.
                     out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
@@ -886,7 +961,7 @@ def _validate_container(container_name, value, component_name, section, log):
     own key since a token list has no separate key/value split. No container can accept a key
     whose name trips is_secret_key(), however it is nested.
     """
-    if container_name in VOCAB_CONTAINERS:
+    if container_name in VOCAB_CONTAINERS or (container_name in LEGACY_TOKEN_CONTAINERS and isinstance(value, list)):
         if not isinstance(value, list):
             return None
         out = []
@@ -902,12 +977,16 @@ def _validate_container(container_name, value, component_name, section, log):
     if not isinstance(value, dict):
         return None
     _, cleaner = CONTAINER_SPEC[container_name]
+    allowed = CONTAINER_KEYS.get(container_name)
     out = {}
     for key, entry in value.items():
         if not isinstance(key, str):
             continue
         if is_secret_key(key):
             log("Warn: Coordinator: {} {} field '{}' looks like a credential - refused".format(component_name, section, key))
+            continue
+        if allowed is not None and key not in allowed:
+            log("Warn: Coordinator: {} {}.{} is not a recognised key - dropped".format(component_name, container_name, key))
             continue
         cleaned = cleaner(entry)
         if cleaned is None:
@@ -1048,6 +1127,133 @@ def inverter_record(
             continue
         record[name] = value
     return record
+
+
+def _bound_entity(entities, name, access=None):
+    """The descriptor binding `name` to a real HA entity (not a value stand-in), optionally of one access, or None."""
+    descriptor = entities.get(name)
+    if not isinstance(descriptor, dict) or not isinstance(descriptor.get("entity_id"), str):
+        return None
+    if access is not None and descriptor.get("access") != access:
+        return None
+    return descriptor
+
+
+def _decimal_places(step):
+    """How many decimal places a numeric step has: 0.1 -> 1, 1 -> 0, 0.05 -> 2. None if it is not a number."""
+    try:
+        exponent = Decimal(str(step)).normalize().as_tuple().exponent
+    except (InvalidOperation, ValueError):
+        return None
+    return max(0, -exponent) if isinstance(exponent, int) else None
+
+
+def inverter_definition(record, write_and_poll_sleep, base=None):
+    """Rebuild an INVERTER_DEF-shaped definition for one inverter from its discovery record.
+
+    Returns (definition, gaps, not_applicable). definition is always a new dict: base, when given, is
+    copied and never written to - inverter.py:381-389 applies apps.yaml's `inverter:` override by
+    writing into the shared INVERTER_DEF[type] row, so two inverters of one type end up sharing the last
+    one's override, and this must not repeat that.
+
+    Sources, per the vocabulary spec (docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md):
+    the seven CAPABILITY_KEYS from record["capabilities"]; the PRESENCE_FLAGS and the two GE mode flags
+    from which settings record["entities"] binds to a real rw entity; the protocol fields from those
+    entities' descriptors; write_and_poll_sleep from the component. A field it cannot work out - a
+    missing capability, or a bound entity lacking the format/unit/domain it needs - is listed in gaps
+    and keeps base's value (or is left out without a base). A protocol field whose source setting is not
+    bound at all does not apply to this device: it takes NOT_APPLICABLE_DEFAULTS' value (or base's) and
+    is listed in not_applicable, not in gaps.
+    """
+    definition = dict(base) if base else {}
+    gaps = []
+    not_applicable = []
+    capabilities = record.get("capabilities") if isinstance(record.get("capabilities"), dict) else {}
+    entities = record.get("entities") if isinstance(record.get("entities"), dict) else {}
+
+    if not definition.get("name"):
+        definition["name"] = record.get("inverter_type")
+
+    for key in CAPABILITY_KEYS:
+        if isinstance(capabilities.get(key), bool):
+            definition[key] = capabilities[key]
+        else:
+            gaps.append(key)
+
+    for flag, settings in PRESENCE_FLAGS.items():
+        definition[flag] = all(_bound_entity(entities, setting, access="rw") is not None for setting in settings)
+
+    mode = _bound_entity(entities, "inverter_mode", access="rw")
+    definition["has_ge_inverter_mode"] = mode is not None and mode.get("domain") == "select"
+    definition["has_ge_eco_toggle"] = mode is not None and mode.get("domain") == "switch"
+    definition.setdefault("has_mqtt_api", False)
+
+    def not_applicable_field(field):
+        """Mark a protocol field as not applying to this device and give it its default."""
+        not_applicable.append(field)
+        definition.setdefault(field, NOT_APPLICABLE_DEFAULTS[field])
+
+    start = _bound_entity(entities, "charge_start_time")
+    if start is None:
+        not_applicable_field("charge_time_entity_is_option")
+        not_applicable_field("charge_time_format")
+    else:
+        if start.get("domain"):
+            definition["charge_time_entity_is_option"] = start["domain"] == "select"
+        else:
+            gaps.append("charge_time_entity_is_option")
+        if start.get("format"):
+            definition["charge_time_format"] = start["format"]
+        else:
+            gaps.append("charge_time_format")
+
+    clock = _bound_entity(entities, "inverter_time")
+    if clock is None:
+        not_applicable_field("clock_time_format")
+    elif clock.get("format"):
+        definition["clock_time_format"] = clock["format"]
+    else:
+        gaps.append("clock_time_format")
+
+    if _bound_entity(entities, "soc_kw") is not None:
+        definition["soc_units"] = "kWh"
+    elif _bound_entity(entities, "soc_percent") is not None:
+        definition["soc_units"] = "%"
+    else:
+        gaps.append("soc_units")
+
+    rate = _bound_entity(entities, "charge_rate")
+    if rate is None and _bound_entity(entities, "charge_rate_percent") is not None:
+        # GE Cloud's percentage-rate models: charge_rate is left unbound and charge_rate_percent is
+        # written instead, which inverter.py still treats as power control
+        definition["output_charge_control"] = "power"
+        not_applicable_field("current_dp")
+    elif rate is None:
+        definition["output_charge_control"] = "none"
+        not_applicable_field("current_dp")
+    elif rate.get("unit") == "W":
+        definition["output_charge_control"] = "power"
+        not_applicable_field("current_dp")
+    elif rate.get("unit") == "A":
+        definition["output_charge_control"] = "current"
+        places = _decimal_places(rate.get("step")) if rate.get("step") is not None else None
+        if places is None:
+            gaps.append("current_dp")
+        else:
+            definition["current_dp"] = places
+    else:
+        gaps.append("output_charge_control")
+        not_applicable_field("current_dp")
+
+    definition["time_button_press"] = _bound_entity(entities, "schedule_write_button", access="rw") is not None
+
+    count = 1
+    while _bound_entity(entities, "load_power_{}".format(count)) is not None:
+        count += 1
+    definition["num_load_entities"] = count
+
+    definition["write_and_poll_sleep"] = write_and_poll_sleep
+    return definition, gaps, not_applicable
 
 
 def validate_report(report, component_name, log):
