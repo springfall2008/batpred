@@ -373,6 +373,31 @@ def _run_rates(my_predbat):
         failed |= _check("t13b trailing edge stripped", rates[1010] == 30.0, "rate {}".format(rates[1010]))
         my_predbat.octopus_slots = [[_dispatch(my_predbat, 810, 930), _dispatch(my_predbat, 1410, 1440)], [_dispatch(my_predbat, 900, 930)]]
 
+        # A cancelled car's dispatch that runs into the fixed 23:30-05:30 window: the part outside it goes
+        # back to the full rate, the part inside keeps the tariff's own off-peak rate through both the
+        # feed strip and rate_add_io_slots() - which only ever lowers a rate, so skipping it changes nothing
+        print("Test 13c: a cancelled dispatch straddling 23:30 keeps the off-peak rate inside the window")
+        my_predbat.num_cars = 1
+        my_predbat.args["octopus_slot_low_rate"] = True
+        my_predbat.args["octopus_slot_max"] = 48
+        my_predbat.rate_min_base = 4.0
+        dispatch = [_dispatch(my_predbat, 1380, 1470)]
+        my_predbat.octopus_slots = [dispatch]
+        rates = {minute: 25.0 for minute in range(0, 2 * 24 * 60)}
+        for minute in list(range(1410, 1440)) + list(range(1440, 1440 + 330)):
+            rates[minute] = 7.0
+        # Worst case: the feed flags the whole dispatch as adjusted, including the minutes inside the window
+        my_predbat.io_adjusted = {}
+        for minute in range(1380, 1470):
+            rates[minute] = 7.0
+            my_predbat.io_adjusted[minute] = True
+        rates = my_predbat.dynamic_load_car_strip_feed_rates(rates)
+        rates = my_predbat.rate_add_io_slots(0, rates, dispatch)
+        failed |= _check("t13c 23:00-23:30 back to the full rate", rates[1380] == 30.0 and rates[1409] == 30.0, "rates {} {}".format(rates[1380], rates[1409]))
+        failed |= _check("t13c 23:30-00:30 still off-peak", all(rates[minute] == 7.0 for minute in range(1410, 1470)), "rates {}".format(sorted(set(rates[minute] for minute in range(1410, 1470)))))
+        my_predbat.num_cars = 2
+        my_predbat.octopus_slots = [[_dispatch(my_predbat, 810, 930), _dispatch(my_predbat, 1410, 1440)], [_dispatch(my_predbat, 900, 930)]]
+
         my_predbat.dynamic_load_car_cancelled = {}
         rates[850] = 7.0
         my_predbat.io_adjusted[850] = True
