@@ -3227,6 +3227,17 @@ class Fetch:
         self.set_freeze_export_during_demand = self.get_arg("set_freeze_export_during_demand")
         self.export_more_solar = self.get_arg("export_more_solar")
         self.export_more_solar_threshold = self.get_arg("export_more_solar_threshold")
+        # export_more_solar works by enabling Freeze Export on idle solar slots, so optimise_solar()
+        # returns immediately when set_export_freeze is off - the switch is then on but does nothing
+        # at all, with no indication anywhere. Warn once per incident rather than every cycle (same
+        # reasoning as car_charging_energy_warned below), and reset when the combination is fixed so
+        # a later recurrence is reported again.
+        if self.export_more_solar and not self.set_export_freeze:
+            if not self.export_more_solar_warned:
+                self.log("Warn: export_more_solar is enabled but set_export_freeze is off - export_more_solar has no effect, as it works by enabling Freeze Export on idle solar slots. Enable set_export_freeze, or turn export_more_solar off.")
+                self.export_more_solar_warned = True
+        else:
+            self.export_more_solar_warned = False
         # Mode
         self.predbat_mode = self.get_arg("mode")
         if self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_SOC]:

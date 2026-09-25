@@ -348,7 +348,7 @@ By default with this option On the latest export slots of the same value will be
 
 **switch.predbat_export_more_solar** When turned On, late in the planning stage Predbat will try enabling Freeze Export on every otherwise Idle slot that has predicted solar generation. With Freeze Export the battery is not charged from the surplus solar, so that solar is exported to the grid instead.
 
-This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour.
+This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour. If you turn this on while **switch.predbat_set_export_freeze** is off, Predbat will log a warning to say the setting is having no effect.
 
 ## Battery margins and metrics options
 
