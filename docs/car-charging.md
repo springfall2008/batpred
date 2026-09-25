@@ -689,19 +689,11 @@ minute buckets and floored at zero in each, so a bright half hour is not cancell
 rate would put demand in the forecast that the sun cannot meet, making the battery look like it had to cover the difference and skewing every charge and
 export decision that follows.
 
-    One caveat if you also charge a home battery from solar: Predbat gives the car first call on the surplus, with the battery taking what is left.
-If your equipment prioritises the other way round, the car's share will be over-predicted while both are charging.
-
-- **input_number.predbat_car_charging_solar_battery_soc** decides who gets surplus solar first, as a house-battery percentage.
-It defaults to 0%, meaning the car has first call - the behaviour you get without touching it.
-
-    Raise it and surplus goes to the house battery until it is predicted to reach that level; only above it is the car offered
-a solar slot. Set it to 60% and Predbat banks enough for the evening before letting the car have the rest. Set it to 100% and
-the battery always wins, with the car left to whatever it can buy at cheap rates.
-
-    It is the mirror of **car_charging_plan_min_soc** below: that one caps how much of the car you pay for, this one says how
-much battery you want banked before a kWh is worth more in the car than in the pack. What the battery physically cannot absorb
-in a slot is not held back, since that surplus would otherwise be exported at whatever midday pays.
+    Surplus goes to the house battery first, and the car is offered solar once the battery is predicted to be full. A kWh in the battery
+displaces your evening peak, while one in a car that has been promised nothing displaces at most a cheap overnight top-up, so the battery is
+the better home for it. Two things put the car first instead, for exactly as much sun as it needs: a level promised by a time
+(**Car ready by** on the plan page), and away time later in the day that leaves the morning as the car's last chance. If your equipment gives
+the car first call regardless, the car's share will be under-predicted while both are charging.
 
 - For a one-off level by a particular time - a trip rather than the daily routine - use **Car ready by** from the plan page, described under
 [select.predbat_manual_car_deadline](customisation.md#manual-control). It stacks with the everyday minimum below rather than replacing it.

@@ -822,8 +822,8 @@ from the selector without one; in an automation you can set both at once in the 
 It is a guarantee in the same way **car_charging_plan_min_soc** by the ready time is, and the two work side by side. Free sun that lands before
 the deadline is counted first, and whatever it leaves is bought before the deadline passes - from any slot before it, cheapest first, and
 regardless of **car_charging_plan_max_price**, because you have said the charge is needed. Sun that arrives after the deadline never counts
-towards it, however much there is. If the house battery is set to take surplus solar ahead of the car, the deadline claims the sun before it
-first, so Predbat does not buy for the car while banking free energy in a battery that has the rest of the day to fill.
+towards it, however much there is. Surplus solar normally goes to the house battery first, but the deadline claims the sun before it for the
+car, so Predbat does not buy for the car while banking free energy in a battery that has the rest of the day to fill.
 
 It works with **select.predbat_manual_car_away**: slots marked away are skipped, so the deadline's charge moves to slots the car is there for.
 The usual trip is exactly that - ready by 15:00, away from 15:00 - and Predbat then plans the whole promise before departure. If away time
