@@ -236,6 +236,7 @@ DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
     "coordinator",
+    "charger_registry",
     "prediction",
     "logfile",
     "predheat",
