@@ -1729,15 +1729,14 @@ def test_capabilities_drops_unknown_key_and_non_bool():
     return 0
 
 
-def test_capabilities_legacy_token_list_still_accepted():
-    """TRANSITIONAL (removed in Task 10): a not-yet-converted reporter's token list is kept, not crashed on."""
+def test_capabilities_list_is_dropped():
+    """Schema 2: capabilities is a dict of the seven behaviour keys, so a token list no longer validates."""
     record, _ = _one_inverter(capabilities=["schedule", "target_soc"])
-    assert record["capabilities"] == ["schedule", "target_soc"], record
+    assert "capabilities" not in record, record
     base, coordinator = _coordinator()
     coordinator.report("test", {"inverters": [{"device_id": "test:SN1", "capabilities": ["schedule"]}]})
-    catalogue = coordinator.catalogue()
-    assert catalogue["inverters"][0]["capabilities"] == ["schedule"], catalogue
-    print("PASS: legacy capability list tolerated")
+    assert "capabilities" not in coordinator.catalogue()["inverters"][0]
+    print("PASS: capability token list dropped")
     return 0
 
 
@@ -2022,7 +2021,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_schema_version_is_two()
     failures += test_capabilities_dict_keeps_known_bool_keys()
     failures += test_capabilities_drops_unknown_key_and_non_bool()
-    failures += test_capabilities_legacy_token_list_still_accepted()
+    failures += test_capabilities_list_is_dropped()
     failures += test_descriptor_requires_access()
     failures += test_descriptor_needs_exactly_one_of_entity_id_and_value()
     failures += test_descriptor_value_rejects_free_text()

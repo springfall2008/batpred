@@ -155,8 +155,8 @@ that one careless call to the generic masker silently destroys the whole documen
 | `composition` | top level | `direct`, `gateway` (fronting `serials`), or `ems` |
 | `measures_meter` | cross-link | A meter `device_id`, so double counting is detectable |
 | `model`, `firmware` | `info` | |
-| `battery_kwh`, `max_charge_w`, `modules`, `dod_percent`, `nominal_voltage` | `ratings` | |
-| `capabilities` | vocabulary | Recorded not acted on: `schedule`, `pause_mode`, `pause_slots`, `target_soc`, `discharge_target`, `charge_rate_power`, `charge_rate_percent`, `soh` |
+| `inverter_limit`, `export_limit`, `import_limit`, `battery_rate_max`, `soc_max`, `battery_min_soc`, `modules`, `dod_percent`, `nominal_voltage` | `ratings` | Renamed to Predbat setting names on 24 Sep 2026 (was `battery_kwh`, `max_charge_w`) - see `2026-09-24-discovery-inverter-record-vocabulary-design.md` |
+| `capabilities` | dict of bool | Superseded on 24 Sep 2026: the seven `INVERTER_DEF` behaviour keys as `True`/`False`, not tokens - see `2026-09-24-discovery-inverter-record-vocabulary-design.md` |
 | `entities` | `entities` | Keyed by Predbat standard name |
 
 **Cross-links may dangle, and a component must never invent a record to resolve one.**

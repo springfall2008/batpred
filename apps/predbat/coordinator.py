@@ -34,10 +34,6 @@ VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 # Containers whose value is a list of vocabulary tokens
 VOCAB_CONTAINERS = ("functions", "flags", "effects")
 
-# TRANSITIONAL: capabilities was a token list before schema 2. A reporter not yet converted still sends
-# one; it is kept as tokens rather than dropped. Removed once every reporter emits the dict (plan Task 10).
-LEGACY_TOKEN_CONTAINERS = ("capabilities",)
-
 # The seven INVERTER_DEF fields that describe behaviour rather than whether an entity exists.
 # A record's capabilities dict may hold only these.
 CAPABILITY_KEYS = (
@@ -592,7 +588,7 @@ class Redactor:
                     out[key] = {self._guard_key(key, name): self._note(entry, substring=True) for name, entry in value.items()}
                 elif key in CLEAR_CONTAINERS and isinstance(value, dict):
                     out[key] = {self._guard_key(key, name): self._guard_value(key, name, entry) for name, entry in value.items()}
-                elif key in VOCAB_CONTAINERS or (key in LEGACY_TOKEN_CONTAINERS and isinstance(value, list)):
+                elif key in VOCAB_CONTAINERS:
                     # Vocabulary lists are clear too, and a token is free-form enough (digits
                     # are legal in the pattern) that a misfiled identifier can hide as one.
                     out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
@@ -961,7 +957,7 @@ def _validate_container(container_name, value, component_name, section, log):
     own key since a token list has no separate key/value split. No container can accept a key
     whose name trips is_secret_key(), however it is nested.
     """
-    if container_name in VOCAB_CONTAINERS or (container_name in LEGACY_TOKEN_CONTAINERS and isinstance(value, list)):
+    if container_name in VOCAB_CONTAINERS:
         if not isinstance(value, list):
             return None
         out = []
