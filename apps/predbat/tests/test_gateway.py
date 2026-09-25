@@ -4932,6 +4932,61 @@ class TestCommandAck:
             assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
         assert gw.cache[self.SLOT_START] == "00:30:00"
 
+    def test_ok_for_a_later_send_beats_refusal_of_an_earlier_one(self):
+        """Distinct sends of the same value: an ok for any of them means the value was applied."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            clock["now"] = 1002.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+            assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+            self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
+            assert gw.cache[self.SLOT_START] == "00:30:00"
+            # A delayed refusal of an earlier send does not undo the later success
+            clock["now"] = 1004.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+        assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
+        assert len(gw._published) == 2
+
+    def test_failed_retry_keeps_earlier_ids_matchable(self):
+        """A publish that raises drops only its own id; an ack for an earlier send still counts."""
+        gw = self._make_gateway(acks_seen=False)
+        real_publish = gw.publish_command
+
+        async def failing_publish_command(command, command_id=None, **kwargs):
+            raise RuntimeError("broker gone")
+
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1002.0
+            gw.publish_command = failing_publish_command
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+            assert gw._pending_commands[self.CHARGE_RATE]["command_ids"] == ["PBAT1"]
+            assert gw._pending_commands[self.CHARGE_RATE]["sent_at"] == 1000.0
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+        assert gw._acks_seen is True
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+
+    def test_slot_cache_uses_the_entity_suffix_not_the_first_match(self):
+        """A prefix that itself contains 'charge_slot1_' does not redirect the cache update."""
+        gw = self._make_gateway()
+        gw.prefix = "house_charge_slot1_x"
+        entity = "select.house_charge_slot1_x_gateway_456789_charge_slot1_start"
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(entity, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+        assert gw.cache == {entity: "00:30:00", "select.house_charge_slot1_x_gateway_456789_charge_slot1_end": "18:00:00"}
+
     def test_second_ok_ack_does_not_overwrite_cache(self):
         """Only the first ok ack for a command updates the cached slot times."""
         gw = self._make_gateway()

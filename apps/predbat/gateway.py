@@ -309,7 +309,7 @@ class GatewayMQTT(ComponentBase):
         # Command acks (predbat/devices/<id>/ack/<command_id>). Control writes are
         # tracked per entity so an identical re-send can wait for the hub's ack
         # instead of queueing another Modbus write every poll. See _send_control().
-        self._pending_commands = {}  # entity_id -> {command_ids, command, kwargs, sent_at, state, resent, answered}
+        self._pending_commands = {}  # entity_id -> {command_ids, outcomes, command, kwargs, state, sent_at, resent, cached}
         self._ack_subscribed = False  # broker granted the ack subscription on this connection
         self._acks_seen = False  # at least one ack matched a tracked command on this connection
         self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
@@ -1974,26 +1974,37 @@ class GatewayMQTT(ComponentBase):
                     self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
             if not same or entry["state"] != "sent":
                 # New value, or a fresh attempt after the previous one was answered
-                entry = {"command_ids": [], "command": command, "kwargs": dict(kwargs), "state": "sent", "resent": False, "answered": False}
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": False}
                 self._pending_commands[entity_id] = entry
-            elif self._acks_seen:
+            previous = (entry["sent_at"], entry["resent"])
+            if self._acks_seen and entry["command_ids"]:
                 entry["resent"] = True  # the one re-send after an unanswered window
             command_id = self._command_id = self._command_id + 1
+            command_ref = f"PBAT{command_id}"
             # Earlier ids of the same value stay matchable: an ack for any of them confirms it
-            entry["command_ids"] = entry["command_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [f"PBAT{command_id}"]
+            entry["command_ids"] = entry["command_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_ref]
             entry["sent_at"] = now
 
         try:
             await self.publish_command(command, command_id=command_id, **kwargs)
         except BaseException:
-            # Never sent, so nothing is in flight - do not let it suppress the next attempt
+            # This id was never sent, so it must not hold back the next attempt; ids that
+            # were sent earlier stay matchable
             with self._command_lock:
-                if self._pending_commands.get(entity_id) is entry:
-                    del self._pending_commands[entity_id]
+                if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"]:
+                    entry["command_ids"].remove(command_ref)
+                    if entry["command_ids"]:
+                        entry["sent_at"], entry["resent"] = previous
+                    else:
+                        del self._pending_commands[entity_id]
             raise
 
     def _process_ack(self, data):
         """Handle a command ack from the hub.
+
+        Every id sent for a tracked value carries the same payload, so an ok for any of
+        them means the value was applied. A command reaching several units acks once per
+        unit under the same id: there a refusal outranks an ok.
 
         Args:
             data: Raw JSON payload from predbat/devices/<id>/ack/<command_id>.
@@ -2008,38 +2019,40 @@ class GatewayMQTT(ComponentBase):
         command_id = str(ack.get("command_id", ""))
         ok = ack.get("ok") is True
         error = ack.get("error") or "unknown"
+        replay = not ok and error == "replay"
+        apply_cache = False
 
         with self._command_lock:
             entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
             # Acks for other senders or superseded values are ignored
             if entry is None or ack.get("command", entry["command"]) != entry["command"]:
                 return
-            if entry["state"] == "refused" or (ok and entry["state"] == "applied"):
-                return  # already answered (a command reaching several units acks once per unit)
             self._acks_seen = True
-            first_ok = False
-            if ok:
-                entry["state"] = "applied"
-                first_ok = not entry["answered"]
-            elif error == "replay":
+            if replay:
                 if entry["state"] != "sent":
                     return
                 # The hub has seen this id before, so the value was never considered:
                 # let the next attempt go out under a fresh id straight away.
                 del self._pending_commands[entity_id]
             else:
-                # A refusal outranks an ok from another unit for the same command
-                entry["state"] = "refused"
-                entry["sent_at"] = _monotonic()
-            entry["answered"] = True
+                outcome = entry["outcomes"].get(command_id)
+                if outcome == "refused" or (ok and outcome == "ok"):
+                    return  # this id is already answered
+                entry["outcomes"][command_id] = "ok" if ok else "refused"
+                was_refused = entry["state"] == "refused"
+                entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
+                if entry["state"] == "refused" and not was_refused:
+                    entry["sent_at"] = _monotonic()  # the window runs from the refusal
+                if ok and entry["state"] == "applied" and not entry["cached"]:
+                    entry["cached"] = apply_cache = True
             command = entry["command"]
             serial = entry["kwargs"].get("serial")
 
         if ok:
             self.log(f"Info: GatewayMQTT: {command} for {serial} acknowledged by hub ({command_id}) applied={ack.get('applied')}")
-            if first_ok:
+            if apply_cache:
                 self._apply_ack(entity_id, command, ack.get("applied"))
-        elif error == "replay":
+        elif replay:
             self.log(f"Info: GatewayMQTT: {command} for {serial} rejected as a replay of {command_id}, will re-send with a new id")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
@@ -2060,10 +2073,10 @@ class GatewayMQTT(ComponentBase):
             if not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 2400 for v in (start, end)):
                 return
             name = "discharge_slot1" if command == "set_discharge_slot" else "charge_slot1"
-            marker = f"_{name}_"
-            if marker not in entity_id:
+            suffix = next((f"_{name}_{field}" for field in ("start", "end") if entity_id.endswith(f"_{name}_{field}")), None)
+            if suffix is None:
                 return
-            base = entity_id[: entity_id.index(marker)]
+            base = entity_id[: -len(suffix)]
             for field, hhmm in (("start", start), ("end", end)):
                 self.dashboard_item(f"{base}_{name}_{field}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{name}_{field}", {}), app="gateway")
         elif command in ("set_charge_enable", "set_discharge_enable"):
