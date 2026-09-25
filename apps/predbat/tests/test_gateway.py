@@ -5169,6 +5169,69 @@ class TestCommandAck:
             self._run(gw.select_event(self.SLOT_START, "00:30:00"))
         assert len(gw._published) == 2
 
+    def test_replay_for_the_newest_id_after_an_earlier_send_applied(self):
+        """PBAT1 unanswered, PBAT2 re-sent, PBAT1 ok, then PBAT2 replay: PBAT2 is forgotten and the applied value stays suppressed."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1030.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="replay")
+            entry = gw._pending_commands[self.CHARGE_RATE]
+            assert entry["command_ids"] == ["PBAT1"]
+            assert entry["state"] == "applied"
+            assert self._logged(gw, "already applied by another send")
+            clock["now"] = 1040.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 2
+
+    def test_replay_for_the_newest_id_with_only_an_older_attempts_ok_drops_the_entry(self):
+        """An ok from an earlier attempt does not count: a replay of the fresh attempt's id re-sends straight away."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1031.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="replay")
+            assert self.CHARGE_RATE not in gw._pending_commands
+            clock["now"] = 1032.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert [p[1] for p in gw._published] == [1, 2, 3]
+
+    def test_failed_publish_with_full_id_history_restores_the_pruned_id(self):
+        """With 16 ids kept, a failed 17th send puts back the pruned oldest id and the earlier timing."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(16):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            before = dict(gw._pending_commands[self.CHARGE_RATE])
+            before_ids = list(before["command_ids"])
+            assert len(before_ids) == 16
+
+            async def failing_publish_command(command, command_id=None, **kwargs):
+                raise RuntimeError("broker gone")
+
+            real_publish = gw.publish_command
+            gw.publish_command = failing_publish_command
+            clock["now"] = 1100.0
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+            entry = gw._pending_commands[self.CHARGE_RATE]
+            assert entry["command_ids"] == before_ids
+            assert entry["sent_at"] == before["sent_at"]
+            # The oldest id is still matchable
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+
     def test_outcomes_do_not_grow_past_the_kept_ids(self):
         """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
         gw = self._make_gateway()
