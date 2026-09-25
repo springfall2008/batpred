@@ -346,6 +346,24 @@ class LabelSwapTests(unittest.TestCase):
         self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW"], calls)
 
     @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_with_cleanup_flags_review_and_cleanup_together(self, mock_run):
+        """A PR this run just opened gets BOT_REVIEW and BOT_CLEANUP in one edit, so the
+        review's findings are acted on without anyone relabelling it by hand."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        triage_daemon.mark_pr_opened(4720, cleanup=True)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn(["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP"], calls)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_without_cleanup_never_adds_bot_cleanup(self, mock_run):
+        """The default path is also taken for a PR found already open on entry, which may be
+        a person's own branch - that must never gain a label that pushes commits to it."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742}]))
+        triage_daemon.mark_pr_opened(4720)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any("BOT_CLEANUP" in call for call in calls))
+
+    @patch("triage_daemon.subprocess.run")
     def test_mark_pr_opened_skips_flagging_when_no_pr_found(self, mock_run):
         """Defensive path: an empty PR search (e.g. a race with the PR being closed
         between the caller's has_existing_pr() check and this call) must not crash
@@ -386,6 +404,15 @@ class FlagPrForReviewTests(unittest.TestCase):
         triage_daemon.flag_pr_for_review(4742)
         args = mock_run.call_args[0][0]
         self.assertEqual(args, ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW"])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_cleanup_adds_bot_cleanup_in_the_same_edit(self, mock_run):
+        """Both labels land in one gh call, so no poll cycle can see BOT_CLEANUP without
+        BOT_REVIEW and run the cleanup before the review it is meant to act on."""
+        triage_daemon.flag_pr_for_review(4742, cleanup=True)
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--add-label", "BOT_REVIEW", "--add-label", "BOT_CLEANUP"])
 
 
 class PermissionModelTests(unittest.TestCase):
@@ -1663,11 +1690,12 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         self.patches["create_pr"].assert_called_once_with(4720)
 
     def test_marks_opened_when_a_pr_exists_afterwards(self):
-        """If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED."""
+        """If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED - and
+        since this run opened it, queue the cleanup that acts on its review as well."""
         self.patches["has_existing_pr"].side_effect = [False, True]
         self.patches["ensure_triaged"].return_value = True
         triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
-        self.patches["mark_pr_opened"].assert_called_once_with(4720)
+        self.patches["mark_pr_opened"].assert_called_once_with(4720, cleanup=True)
         self.patches["mark_pr_failed"].assert_not_called()
 
     def test_marks_failed_when_no_pr_exists_afterwards(self):
@@ -1936,6 +1964,15 @@ class FetchBotCleanupPrsTests(unittest.TestCase):
         self.assertIn("--label", args)
         self.assertEqual(args[args.index("--label") + 1], "BOT_CLEANUP")
         self.assertIn("--limit", args)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_the_query_asks_for_labels(self, mock_run):
+        """process_bot_cleanup_pr() holds a PR that still carries BOT_REVIEW, which it can
+        only see if the labels are fetched."""
+        mock_run.return_value = MagicMock(stdout="[]")
+        triage_daemon.fetch_bot_cleanup_prs()
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("labels", cmd[cmd.index("--json") + 1].split(","))
 
 
 class RemovePrReviewLabelTests(unittest.TestCase):
@@ -2371,6 +2408,21 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
         triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
         self.patches["mark_pr_cleanup_failed"].assert_called_once_with(4742)
         self.patches["remove_pr_cleanup_label"].assert_not_called()
+
+    def test_waits_while_the_pr_still_carries_bot_review(self):
+        """Cleanup acts on the review's findings, so with both labels set the review goes
+        first. Nothing runs and BOT_CLEANUP stays, so a later poll picks the PR up again
+        once the review has cleared BOT_REVIEW."""
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings", "labels": [{"name": "BOT_CLEANUP"}, {"name": "BOT_REVIEW"}]})
+        self.patches["sync_repo"].assert_not_called()
+        self.patches["cleanup_pr"].assert_not_called()
+        self.patches["remove_pr_cleanup_label"].assert_not_called()
+        self.patches["mark_pr_cleanup_failed"].assert_not_called()
+
+    def test_runs_once_the_review_label_has_gone(self):
+        """The hold is keyed on BOT_REVIEW alone - other labels do not block a cleanup."""
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings", "labels": [{"name": "BOT_CLEANUP"}, {"name": "bug"}]})
+        self.patches["cleanup_pr"].assert_called_once_with(4742)
 
     @patch("builtins.print")
     def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
