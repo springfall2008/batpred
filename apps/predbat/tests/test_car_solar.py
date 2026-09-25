@@ -595,6 +595,49 @@ def run_car_export_tradeoff(my_predbat, export_rate, from_battery, car_kwh=8.0):
     return exported, final[1] + final[2]
 
 
+def test_minimum_is_bought_before_the_ready_time(my_predbat):
+    """Solar after the deadline must not satisfy car_charging_plan_min_soc.
+
+    Solar windows reach for the full limit and run to the forecast horizon, and a single running
+    car_soc is shared with the bought pass. Planned first, tomorrow's sunshine could carry the car
+    past its limit and break the loop before one overnight slot was bought - so a car sitting below
+    the minimum at 01:30 was offered nothing against cheap import, and the "60% by 07:30" guarantee
+    was met hours late. Reported from a live system.
+    """
+    print("  - test_minimum_is_bought_before_the_ready_time")
+    failed = False
+    # Ready in 4 hours, sun not until 6 hours out: nothing solar can count towards the guarantee.
+    # The deadline has to be wide enough that the charger is not the binding constraint - 20kWh at
+    # 7.4kW needs most of three hours, so a tighter window would fail on physics, not on the bug.
+    setup_car(my_predbat, car_kwh=40.0, ready_ahead=240)
+    my_predbat.car_charging_soc = [10.0]
+    my_predbat.car_charging_plan_min_soc = 60  # of a 50kWh pack = 30kWh, so 20kWh must be bought
+    my_predbat.car_charging_solar = True
+    reset_rates(my_predbat, 30.0, 5.0)
+    low_rates = build_low_rates(my_predbat)
+    update_rates_import(my_predbat, low_rates)
+    set_pv(my_predbat, 7.0, start_offset=360, length=600)
+
+    plan = my_predbat.plan_car_charging(0, low_rates)
+    ready_minutes = my_predbat.minutes_now + 240
+    bought_by_ready = sum(slot["kwh"] for slot in plan if not slot.get("solar") and slot["end"] <= ready_minutes)
+
+    if bought_by_ready <= 0:
+        print("ERROR: nothing was bought before the ready time, so the minimum is met only by later solar: {}".format(plan))
+        failed = True
+    # 10kWh in the car, 30kWh minimum: the shortfall has to be bought, not left to the sun
+    elif bought_by_ready < 19.0:
+        print("ERROR: expected about 20kWh bought before the ready time, got {} from {}".format(bought_by_ready, plan))
+        failed = True
+
+    # The solar that follows should still take it beyond the minimum towards the full limit
+    if not any(slot.get("solar") for slot in plan):
+        print("ERROR: solar should still top the car up above the minimum, got {}".format(plan))
+        failed = True
+
+    return failed
+
+
 def test_car_export_tradeoff(my_predbat):
     """Exporting versus saving the battery for the car is already decided by the cost model.
 
@@ -677,6 +720,7 @@ def run_car_solar_tests(my_predbat):
         failed |= test_solar_reduces_paid_import(my_predbat)
         failed |= test_solar_slots_do_not_overlap(my_predbat)
         failed |= test_solar_windows_ignore_ready_time(my_predbat)
+        failed |= test_minimum_is_bought_before_the_ready_time(my_predbat)
         failed |= test_min_soc_splits_bought_from_solar(my_predbat)
         failed |= test_solar_surplus_floored_per_bucket(my_predbat)
         failed |= test_solar_window_needs_real_surplus(my_predbat)
