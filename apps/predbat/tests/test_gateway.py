@@ -5177,15 +5177,21 @@ class TestCommandAck:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
             clock["now"] = 1030.0
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1031.0
             self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1059.0
             self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="replay")
             entry = gw._pending_commands[self.CHARGE_RATE]
             assert entry["command_ids"] == ["PBAT1"]
             assert entry["state"] == "applied"
             assert self._logged(gw, "already applied by another send")
-            clock["now"] = 1040.0
+            # The replay is a refusal too: the window runs from it
+            clock["now"] = 1060.0
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
-        assert len(gw._published) == 2
+            assert len(gw._published) == 2
+            clock["now"] = 1089.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 3
 
     def test_replay_for_the_newest_id_with_only_an_older_attempts_ok_drops_the_entry(self):
         """An ok from an earlier attempt does not count: a replay of the fresh attempt's id re-sends straight away."""
@@ -5232,6 +5238,34 @@ class TestCommandAck:
             self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
         assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
 
+    def test_repeated_refusal_during_a_failing_publish_is_not_rolled_back(self):
+        """A refusal repeated while a later publish awaits the broker keeps its restarted window when that publish fails."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+
+            async def refusal_then_fail(command, command_id=None, **kwargs):
+                clock["now"] = 1035.0
+                self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+                raise RuntimeError("broker gone")
+
+            real_publish = gw.publish_command
+            gw.publish_command = refusal_then_fail
+            clock["now"] = 1031.0
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+            entry = gw._pending_commands[self.CHARGE_RATE]
+            assert entry["command_ids"] == ["PBAT1"]
+            assert entry["sent_at"] == 1035.0
+            clock["now"] = 1036.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 1
+
     def test_outcomes_do_not_grow_past_the_kept_ids(self):
         """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
         gw = self._make_gateway()
@@ -5244,6 +5278,19 @@ class TestCommandAck:
         entry = gw._pending_commands[self.CHARGE_RATE]
         assert len(entry["command_ids"]) == 16
         assert set(entry["outcomes"]) <= set(entry["command_ids"])
+
+    def test_attempt_ids_do_not_grow_without_acks(self):
+        """Subscribed but no acks ever: every call re-sends, and the id lists stay bounded."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(50):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        entry = gw._pending_commands[self.CHARGE_RATE]
+        assert len(gw._published) == 50
+        assert len(entry["command_ids"]) == 16
+        assert len(entry["attempt_ids"]) == 16
 
     def test_second_ok_ack_does_not_overwrite_cache(self):
         """Only the first ok ack for a command updates the cached slot times."""

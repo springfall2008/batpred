@@ -1973,7 +1973,7 @@ class GatewayMQTT(ComponentBase):
                     self._acks_seen = False
                     self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
             if not same:
-                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": []}
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": [], "acks": 0}
                 self._pending_commands[entity_id] = entry
             previous = {"command_ids": list(entry["command_ids"]), "attempt_ids": list(entry["attempt_ids"]), "outcomes": dict(entry["outcomes"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
             if entry["state"] != "sent":
@@ -1988,9 +1988,9 @@ class GatewayMQTT(ComponentBase):
             # Earlier ids of the same value stay matchable: an ack for any of them confirms it
             entry["command_ids"] = entry["command_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_ref]
             entry["outcomes"] = {key: value for key, value in entry["outcomes"].items() if key in entry["command_ids"]}
-            entry["attempt_ids"] = entry["attempt_ids"] + [command_ref]
+            entry["attempt_ids"] = [ref for ref in entry["attempt_ids"] if ref in entry["command_ids"]] + [command_ref]
             entry["sent_at"] = now
-            outcomes_sent = dict(entry["outcomes"])
+            acks_before = entry["acks"]
 
         try:
             await self.publish_command(command, command_id=command_id, **kwargs)
@@ -2003,7 +2003,7 @@ class GatewayMQTT(ComponentBase):
                 if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"] and command_ref not in entry["outcomes"]:
                     if not previous["command_ids"]:
                         del self._pending_commands[entity_id]
-                    elif entry["outcomes"] == outcomes_sent:
+                    elif entry["acks"] == acks_before:
                         # No ack arrived meanwhile: back to how the earlier attempt left it,
                         # including any id pruned to make room for this one
                         entry.update(previous)
@@ -2041,6 +2041,7 @@ class GatewayMQTT(ComponentBase):
             if entry is None or ack.get("command", entry["command"]) != entry["command"]:
                 return
             self._acks_seen = True
+            entry["acks"] += 1  # lets a failing publish tell whether any ack arrived meanwhile
             # A replay for the newest id, before any unit answered it, means the hub has seen that
             # id before and never considered this send. Drop the id; if nothing else has answered
             # the value, let the next attempt go out under a fresh id straight away. For an older
@@ -2051,6 +2052,7 @@ class GatewayMQTT(ComponentBase):
                 # Another send in this attempt already applied the value: only forget this id
                 entry["command_ids"].remove(command_id)
                 entry["attempt_ids"].remove(command_id)
+                entry["sent_at"] = _monotonic()  # still a refusal: the window runs from it
             elif drop_replay:
                 del self._pending_commands[entity_id]
             else:
