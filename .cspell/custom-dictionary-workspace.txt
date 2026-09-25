@@ -232,6 +232,7 @@ foxcloud
 foxess
 foxesscloud
 freephase
+fromisoformat
 fronius
 funcs
 futurerate
@@ -712,6 +713,7 @@ vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
+weakref
 weblink
 welink
 Werror
