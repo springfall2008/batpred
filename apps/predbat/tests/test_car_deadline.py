@@ -38,7 +38,6 @@ def setup_deadline_car(my_predbat, soc=10.0, limit=40.0, min_soc=0, ready_ahead=
     my_predbat.car_charging_plan_min_soc = min_soc
     my_predbat.manual_car_away_times = []
     my_predbat.manual_car_deadline_keep = {}
-    my_predbat.car_charging_solar_battery_soc = 0
     reset_rates(my_predbat, 30.0, 5.0)
 
 
@@ -243,7 +242,6 @@ def test_deadline_claims_sun_ahead_of_the_battery(my_predbat):
     failed = False
     setup_deadline_car(my_predbat)
     my_predbat.car_charging_solar = True
-    my_predbat.car_charging_solar_battery_soc = 100
     my_predbat.soc_max = 10.0
     my_predbat.soc_kw = 0.0
     my_predbat.battery_rate_max_charge = 5.0 / 60.0
@@ -334,7 +332,6 @@ def test_deadline_does_not_claim_sun_while_away(my_predbat):
     failed = False
     setup_deadline_car(my_predbat)
     my_predbat.car_charging_solar = True
-    my_predbat.car_charging_solar_battery_soc = 100
     my_predbat.soc_max = 10.0
     my_predbat.soc_kw = 0.0
     my_predbat.battery_rate_max_charge = 5.0 / 60.0
@@ -540,7 +537,6 @@ def run_car_deadline_tests(my_predbat):
         "car_charging_now",
         "car_charging_solar",
         "car_charging_solar_excess",
-        "car_charging_solar_battery_soc",
         "car_charging_rate_threshold_export",
         "car_charging_plan_min_soc",
         "manual_car_away_times",
