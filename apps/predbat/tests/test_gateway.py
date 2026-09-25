@@ -4711,6 +4711,7 @@ class TestCommandAck:
         gw._ack_topic_prefix = "predbat/devices/pbgw_test/ack/"
         gw._published = []  # (command, command_id, kwargs)
         gw.cache = {}  # entity_id -> cached state, as the generic write loop would read it back
+        gw._last_status = None
 
         async def fake_publish_command(command, command_id=None, **kwargs):
             gw._published.append((command, command_id, kwargs))
@@ -4918,19 +4919,61 @@ class TestCommandAck:
         assert len(gw._published) == 3
 
     def test_refusal_after_ok_from_another_unit_wins(self):
-        """A command reaching two units acks twice; a refusal after an ok is still reported and kept."""
+        """A command reaching two units acks twice; a refusal after an ok is reported, kept, and undoes the cache update."""
         gw = self._make_gateway()
+        gw.cache[self.SLOT_START] = "00:00:00"
+        gw._last_status = object()
+
+        def fake_inject_entities(status):
+            assert status is gw._last_status
+            gw.cache[self.SLOT_START] = "00:00:00"  # last telemetry: the old value
+            gw.cache[self.SLOT_END] = "00:00:00"
+
+        gw._inject_entities = fake_inject_entities
         clock, patcher = self._clock()
         with patcher:
             self._run(gw.select_event(self.SLOT_START, "00:30:00"))
             self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert gw.cache[self.SLOT_START] == "00:30:00"
             self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
             assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
             assert self._logged(gw, "refused by hub: modbus_write_failed")
+            assert gw.cache[self.SLOT_START] == "00:00:00"
             # A later ok for the same id changes nothing
-            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 45, "end": 1800, "slot": 1})
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
             assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+        assert gw.cache[self.SLOT_START] == "00:00:00"
+
+    def test_unusable_first_ok_does_not_block_a_later_cache_update(self):
+        """A staged ok from one unit, then a plain ok from another: the plain one still updates the cache."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
+            assert gw.cache == {}
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
         assert gw.cache[self.SLOT_START] == "00:30:00"
+
+    def test_refusal_restarts_the_window_even_when_another_send_succeeded(self):
+        """Any refusal restarts the cooldown, so an identical call is not re-sent within 30 s of it."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            gw._acks_seen = False  # force a second send of the same value
+            clock["now"] = 1002.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT2", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1025.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="modbus_write_failed")
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+            clock["now"] = 1040.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 2
+            clock["now"] = 1056.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 3
 
     def test_ok_for_a_later_send_beats_refusal_of_an_earlier_one(self):
         """Distinct sends of the same value: an ok for any of them means the value was applied."""

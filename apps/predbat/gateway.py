@@ -309,7 +309,7 @@ class GatewayMQTT(ComponentBase):
         # Command acks (predbat/devices/<id>/ack/<command_id>). Control writes are
         # tracked per entity so an identical re-send can wait for the hub's ack
         # instead of queueing another Modbus write every poll. See _send_control().
-        self._pending_commands = {}  # entity_id -> {command_ids, outcomes, command, kwargs, state, sent_at, resent, cached}
+        self._pending_commands = {}  # entity_id -> {command_ids, outcomes, command, kwargs, state, sent_at, resent, cached (id that updated the cache)}
         self._ack_subscribed = False  # broker granted the ack subscription on this connection
         self._acks_seen = False  # at least one ack matched a tracked command on this connection
         self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
@@ -1974,7 +1974,7 @@ class GatewayMQTT(ComponentBase):
                     self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
             if not same or entry["state"] != "sent":
                 # New value, or a fresh attempt after the previous one was answered
-                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": False}
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None}
                 self._pending_commands[entity_id] = entry
             previous = (entry["sent_at"], entry["resent"])
             if self._acks_seen and entry["command_ids"]:
@@ -2020,7 +2020,7 @@ class GatewayMQTT(ComponentBase):
         ok = ack.get("ok") is True
         error = ack.get("error") or "unknown"
         replay = not ok and error == "replay"
-        apply_cache = False
+        apply_cache = restore_status = False
 
         with self._command_lock:
             entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
@@ -2035,27 +2035,33 @@ class GatewayMQTT(ComponentBase):
                 # let the next attempt go out under a fresh id straight away.
                 del self._pending_commands[entity_id]
             else:
-                outcome = entry["outcomes"].get(command_id)
-                if outcome == "refused" or (ok and outcome == "ok"):
-                    return  # this id is already answered
+                if entry["outcomes"].get(command_id) == "refused":
+                    return  # a refusal for this id outranks any other unit's ok
                 entry["outcomes"][command_id] = "ok" if ok else "refused"
-                was_refused = entry["state"] == "refused"
                 entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
-                if entry["state"] == "refused" and not was_refused:
-                    entry["sent_at"] = _monotonic()  # the window runs from the refusal
-                if ok and entry["state"] == "applied" and not entry["cached"]:
-                    entry["cached"] = apply_cache = True
+                if not ok:
+                    entry["sent_at"] = _monotonic()  # the window runs from the latest refusal
+                    # Another unit refused the id whose ok updated the cache: that update overstated
+                    # what was applied, so put back the last telemetry until the next status arrives
+                    restore_status = entry["cached"] == command_id
+                    if restore_status:
+                        entry["cached"] = None
+                apply_cache = ok and entry["cached"] is None
             command = entry["command"]
             serial = entry["kwargs"].get("serial")
 
         if ok:
             self.log(f"Info: GatewayMQTT: {command} for {serial} acknowledged by hub ({command_id}) applied={ack.get('applied')}")
-            if apply_cache:
-                self._apply_ack(entity_id, command, ack.get("applied"))
+            if apply_cache and self._apply_ack(entity_id, command, ack.get("applied")):
+                with self._command_lock:
+                    if self._pending_commands.get(entity_id) is entry and entry["outcomes"].get(command_id) == "ok":
+                        entry["cached"] = command_id
         elif replay:
             self.log(f"Info: GatewayMQTT: {command} for {serial} rejected as a replay of {command_id}, will re-send with a new id")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
+            if restore_status and self._last_status is not None:
+                self._inject_entities(self._last_status)
 
     def _apply_ack(self, entity_id, command, applied):
         """Update the cached entity from an ok ack so the write's read-back matches without waiting for telemetry.
@@ -2063,28 +2069,34 @@ class GatewayMQTT(ComponentBase):
         Only the values that map cleanly are applied: slot start/end actually written and
         charge/discharge enables. Staged or recorded EMS slot endpoints are not written to
         the inverter, and numbers wait for telemetry.
+
+        Returns:
+            bool: True if a cached entity was updated.
         """
         if not isinstance(applied, dict):
-            return
+            return False
         if command in ("set_charge_slot", "set_discharge_slot"):
             if applied.get("staged") or applied.get("recorded"):
-                return
+                return False
             start, end = applied.get("start"), applied.get("end")
             if not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 2400 for v in (start, end)):
-                return
+                return False
             name = "discharge_slot1" if command == "set_discharge_slot" else "charge_slot1"
             suffix = next((f"_{name}_{field}" for field in ("start", "end") if entity_id.endswith(f"_{name}_{field}")), None)
             if suffix is None:
-                return
+                return False
             base = entity_id[: -len(suffix)]
             for field, hhmm in (("start", start), ("end", end)):
                 self.dashboard_item(f"{base}_{name}_{field}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{name}_{field}", {}), app="gateway")
+            return True
         elif command in ("set_charge_enable", "set_discharge_enable"):
             enable = applied.get("enable")
             if not isinstance(enable, bool):
-                return
+                return False
             name = "discharge_enabled" if command == "set_discharge_enable" else "charge_enabled"
             self.dashboard_item(entity_id, "on" if enable else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            return True
+        return False
 
     @staticmethod
     def _hhmm_to_time_str(hhmm):
