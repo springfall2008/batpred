@@ -1307,12 +1307,6 @@ class Fetch:
         # "everything but the most expensive" threshold, which the scan then replaces with the real
         # low-rate band. Rendering on the provisional value painted most of the day as cheap.
         self.log_dispatch_timelines()
-
-        # Work out car plan?
-        self.fetch_sensor_data_car_planning()
-        # Publish the car plan
-        self.publish_car_plan()
-
         # Work out iBoost plan
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
             self.iboost_plan = self.plan_iboost_smart()
@@ -1367,6 +1361,15 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
+        # Work out car plan? Runs after the PV forecast so car_charging_solar can place slots on predicted
+        # sunshine, and after the load forecast is finished - the modal filter above rewrites load_minutes,
+        # the history forecast adds to load_forecast, and load_inday_adjustment is only computed here, all
+        # three of which feed the house load that solar surplus is measured against. Nothing between the
+        # PV forecast and this point uses the car plan.
+        self.fetch_sensor_data_car_planning()
+        # Publish the car plan
+        self.publish_car_plan()
+
         force_replan = False
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
@@ -1404,12 +1407,17 @@ class Fetch:
                     self.log("Car {} on Octopus Intelligent, no active plan".format(car_n))
             elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                 limit_percent = dp1(self.car_charging_limit[car_n] / self.car_charging_battery_size[car_n] * 100) if self.car_charging_battery_size[car_n] else 0
+                # Report the bought-energy target as well as the overall limit: with car_charging_plan_min_soc
+                # lowered they differ, and a log showing only the limit makes a correct plan look wrong
+                min_soc_kwh = min(dp3(self.car_charging_plan_min_soc * self.car_charging_battery_size[car_n] / 100.0), self.car_charging_limit[car_n])
                 self.log(
-                    "Car {} plan charging from {}kWh to {}% ({}kWh), with slots {}, ready by {}".format(
+                    "Car {} plan charging from {}kWh to {}% ({}kWh), buying only up to {}% ({}kWh), with slots {}, ready by {}".format(
                         car_n,
                         self.car_charging_soc[car_n],
                         limit_percent,
                         self.car_charging_limit[car_n],
+                        self.car_charging_plan_min_soc,
+                        min_soc_kwh,
                         self.low_rates,
                         self.car_charging_plan_time[car_n],
                     )
@@ -2579,6 +2587,11 @@ class Fetch:
         self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
         self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
+        self.car_charging_solar = self.get_arg("car_charging_solar")
+        self.car_charging_solar_excess = self.get_arg("car_charging_solar_excess")
+        self.car_charging_solar_battery_soc = self.get_arg("car_charging_solar_battery_soc")
+        self.car_charging_rate_threshold_export = self.get_arg("car_charging_rate_threshold_export")
+        self.car_charging_plan_min_soc = self.get_arg("car_charging_plan_min_soc")
 
         # Car charging planned sensor
         for car_n in range(self.num_cars):
@@ -3333,6 +3346,10 @@ class Fetch:
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
+        # Deliberately not folded into manual_all_times below: that set forces charge and export
+        # windows into existence, and this does the opposite - a slot the car is away for should not
+        # have a window manufactured for it.
+        self.manual_car_away_times = self.manual_times("manual_car_away")
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))

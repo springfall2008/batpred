@@ -1693,6 +1693,11 @@ class UserInterface:
             values = new_value
         else:
             values = item.get("value", "")
+        # An item that is registered but has never been given a value reads back as None rather than
+        # "", which is what a config item gated behind an "enable" looks like before the UI has
+        # published it - and is what the headless annual bootstrap sees. Treat it as no selection
+        # rather than letting .replace() raise out of fetch_config_options().
+        values = values or ""
         values = values.replace("+", "")
         values_list = []
         if values:
