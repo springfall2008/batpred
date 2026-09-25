@@ -3929,6 +3929,13 @@ class TestSetChargeSlotPayload:
 
         gw = self._make_gateway()
         # 02:00:00 → HHMM 200, matching the expected {"start":200} in the hub spec
+        gw._loop = None
+
+        async def capture_control(command, cmd_json, serial):
+            """This serialization test stops at the control transport boundary."""
+            gw._raw_published.append(cmd_json.encode("utf-8"))
+
+        gw._publish_control_command = capture_control
         self._run(gw.select_event("select.predbat_gateway_30g499_charge_slot1_start", "02:00:00"))
 
         assert gw._raw_published, "No payload was published — serial lookup may have failed"
@@ -3936,7 +3943,7 @@ class TestSetChargeSlotPayload:
 
         expected = {
             "command": "set_charge_slot",
-            "command_id": "PBAT1",
+            "command_id": actual["command_id"],
             "serial": "CH2330G499",
             "schedule_json": '{"start": 200}',
         }
@@ -3947,6 +3954,7 @@ class TestSetChargeSlotPayload:
         print("---")
 
         assert actual == expected, f"Payload mismatch:\n  actual:   {actual}\n  expected: {expected}"
+        assert actual["command_id"].startswith("PBAT") and len(actual["command_id"]) == 36
 
 
 class TestEvTelemetry:
@@ -4686,6 +4694,7 @@ def test_ev_soc_battery_size_through_get_arg(my_predbat):
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
+    from tests.test_gateway_write_results import TestGatewayWriteResults
 
     test_classes = [
         TestProtobufDecode,
@@ -4720,6 +4729,7 @@ def run_gateway_tests(my_predbat=None):
         TestMaybeRefreshOnAuthError,
         TestRateAnchors,
         TestPublishRawLoopSafety,
+        TestGatewayWriteResults,
     ]
     for cls in test_classes:
         instance = cls()

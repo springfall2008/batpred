@@ -6,6 +6,8 @@ the sole data source and control interface for SaaS users with a
 gateway — no Home Assistant in the loop.
 """
 
+# cspell:words acks SUBACK
+
 import asyncio
 import datetime
 import json
@@ -19,7 +21,7 @@ from utils import calc_percent_limit, export_mode_of, export_target_of, export_p
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 import pytz as _pytz
 
-from component_base import ComponentBase
+from component_base import ComponentBase, ComponentWriteError
 
 try:
     import gateway_status_pb2 as pb
@@ -51,6 +53,11 @@ if not HAS_PROTOBUF:
 
 # Plan re-publish interval (seconds)
 _PLAN_REPUBLISH_INTERVAL = 5 * 60
+
+# A slot can need two writes, each with five Modbus receive/retry attempts.
+# Expiry means UNKNOWN outcome, never permission to resend the command.
+_COMMAND_ACK_TIMEOUT = 30
+_CONTROL_COMMANDS = frozenset({"set_charge_enable", "set_discharge_enable", "set_charge_rate", "set_discharge_rate", "set_reserve", "set_target_soc", "set_charge_slot", "set_discharge_slot"})
 
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
@@ -239,12 +246,17 @@ class GatewayMQTT(ComponentBase):
         self.topic_online = f"{self._topic_base}/online"
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
+        self.topic_ack = f"{self._topic_base}/ack/+"
         self.topic_ev_command = f"{self._topic_base}/ev/command"
 
         # Runtime state
         self._mqtt_client = None
         self._mqtt_task = None
         self._mqtt_connected = False
+        self._ack_subscribed = False
+        self._pending_command_acks = {}
+        self._ack_last_subscribe_attempt = None
+        self._ack_last_token_refresh = None
         # Event loop that owns self._mqtt_client (captured in run()). Control writes
         # arrive via ha.py::run_async(), which runs on its own throwaway loop on the
         # calling thread — publishing directly from there would bind the aiomqtt
@@ -254,6 +266,7 @@ class GatewayMQTT(ComponentBase):
         self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
+        self._last_empty_telemetry_time = 0
         self._last_plan_data = None
         self._last_plan_publish_time = 0
         # Entries and timezone of the last built plan, kept so the periodic re-publish
@@ -279,7 +292,6 @@ class GatewayMQTT(ComponentBase):
         self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
-        self._command_id = 0  # incrementing counter included in every published command
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
@@ -613,7 +625,7 @@ class GatewayMQTT(ComponentBase):
     async def _mqtt_loop(self):
         """Continuous MQTT listener with automatic reconnection.
 
-        Connects to the broker with TLS, subscribes to status and online
+        Connects to the broker with TLS, subscribes to status, online and ACK
         topics, and dispatches incoming messages. Reconnects on failure
         with exponential backoff.
         """
@@ -625,12 +637,13 @@ class GatewayMQTT(ComponentBase):
                 tls_context = ssl.create_default_context()
 
                 client_id = f"predbat-{self.gateway_device_id}-{uuid.uuid4().hex[:8]}"
+                connection_token = self.mqtt_token
 
                 async with aiomqtt.Client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
                     username=self.gateway_device_id,
-                    password=self.mqtt_token,
+                    password=connection_token,
                     tls_context=tls_context,
                     identifier=client_id,
                     keepalive=60,
@@ -644,17 +657,26 @@ class GatewayMQTT(ComponentBase):
                     # Subscribe to status and LWT topics
                     await client.subscribe(self.topic_status, qos=1)
                     await client.subscribe(self.topic_online, qos=1)
+                    if await self._subscribe_command_acks(client, connection_token, initial=True):
+                        self._mqtt_connected = False
+                        self._mqtt_client = None
+                        continue
                     self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_status} and {self.topic_online}")
 
                     async for message in client.messages:
                         if self.api_stop:
                             break
                         await self._handle_message(message)
+                        if not self._ack_subscribed and await self._subscribe_command_acks(client, connection_token):
+                            break
+                    self._fail_pending_command_acks("MQTT listener stopped")
 
             except asyncio.CancelledError:
+                self._fail_pending_command_acks("MQTT connection cancelled")
                 self.log("Info: GatewayMQTT: MQTT loop cancelled")
                 break
             except Exception as e:
+                self._fail_pending_command_acks("MQTT disconnected before command acknowledgement")
                 self._error_count += 1
                 self.log(f"Warn: GatewayMQTT: MQTT connection error: {e}")
                 self._mqtt_connected = False
@@ -687,6 +709,8 @@ class GatewayMQTT(ComponentBase):
         try:
             if topic == self.topic_status:
                 self._process_telemetry(message.payload)
+            elif topic.startswith(f"{getattr(self, '_topic_base', '')}/ack/"):
+                self._process_command_ack(message)
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
@@ -703,6 +727,54 @@ class GatewayMQTT(ComponentBase):
             self._error_count += 1
             self.log(f"Warn: GatewayMQTT: Error handling message on {topic}: {e}")
             self.log(f"Warn: {traceback.format_exc()}")
+
+    async def _subscribe_command_acks(self, client, connection_token, initial=False):
+        """Retry ACK access without dropping telemetry; request reconnect for a new JWT."""
+        if self.mqtt_token != connection_token:
+            return True
+        now = time.monotonic()
+        previous = getattr(self, "_ack_last_subscribe_attempt", None)
+        if not initial and previous is not None and now - previous < 60:
+            return False
+        self._ack_last_subscribe_attempt = now
+        try:
+            await client.subscribe(self.topic_ack, qos=1)
+            self._ack_subscribed = True
+            return False
+        except Exception as error:
+            self._ack_subscribed = False
+            self.log(f"Warn: GatewayMQTT: ACK subscription unavailable; retaining telemetry and retrying access: {error}")
+        # SUBACK failures may only carry generic code 128. A newly issued JWT
+        # can contain the additional ACK grant even before the old JWT expires.
+        previous_refresh = getattr(self, "_ack_last_token_refresh", None)
+        if previous_refresh is None or now - previous_refresh >= 60:
+            self._ack_last_token_refresh = now
+            await self._do_token_refresh()
+        return self.mqtt_token != connection_token
+
+    def _fail_pending_command_acks(self, reason):
+        """Wake waiting writes on disconnect, preserving their unknown physical outcome."""
+        self._ack_subscribed = False
+        for command, future in getattr(self, "_pending_command_acks", {}).values():
+            if not future.done():
+                future.set_exception(ComponentWriteError(f"GatewayMQTT: {command}: {reason}; outcome unknown", outcome_unknown=True))
+
+    def _process_command_ack(self, message):
+        """Accept only an ACK that is not retained and matches pending ID, topic and command."""
+        if getattr(message, "retain", False):
+            return
+        ack = json.loads(message.payload)
+        if not isinstance(ack, dict) or type(ack.get("ok")) is not bool:
+            return
+        command_id = ack.get("command_id")
+        if not isinstance(command_id, str) or str(message.topic) != f"{self._topic_base}/ack/{command_id}":
+            return
+        pending = self._pending_command_acks.get(command_id)
+        if pending is None:
+            return
+        command, future = pending
+        if ack.get("command") == command and not future.done():
+            future.set_result(ack)
 
     def _debug_dump(self, label, message=None, raw=None, message_type=None):
         """Log a protobuf message as readable text when debug logging is enabled.
@@ -745,10 +817,17 @@ class GatewayMQTT(ComponentBase):
         self._debug_dump("RX telemetry", status, raw=data)
 
         if len(status.inverters) == 0:
+            # Record that the device actively reported an empty topology, distinct
+            # from simply not having heard from it. _last_status/_last_telemetry_time
+            # deliberately stay untouched here: overwriting them would wipe a good
+            # binding and could trigger a spurious reconfigure. _check_control_target
+            # uses this timestamp to tell "no fresh news" from "fresh news is bad".
+            self._last_empty_telemetry_time = time.time()
             return
 
         self._last_status = status
         self._last_telemetry_time = time.time()
+        self._last_empty_telemetry_time = 0
         self.update_success_timestamp()
 
         self._inject_entities(status)
@@ -1674,8 +1753,17 @@ class GatewayMQTT(ComponentBase):
             command: Command name (set_charge_rate, set_reserve, etc.)
             **kwargs: Command-specific fields (power_w, target_soc, etc.).
         """
-        self._command_id += 1
-        cmd_json = self.build_command(command, command_id=self._command_id, **kwargs)
+        # PBAT prefix + 32 hex characters fits firmware's 36-character ID field.
+        # A process restart must never reuse IDs that old ACKs can still carry.
+        cmd_json = self.build_command(command, command_id=uuid.uuid4().hex, **kwargs)
+
+        if command in _CONTROL_COMMANDS:
+            if self._loop is not None and self._loop is not asyncio.get_running_loop():
+                if not self._loop.is_running():
+                    raise ComponentWriteError("GatewayMQTT: inverter command rejected: MQTT loop stopped")
+                future = asyncio.run_coroutine_threadsafe(self._publish_control_command(command, cmd_json, kwargs.get("serial")), self._loop)
+                return await asyncio.wrap_future(future)
+            return await self._publish_control_command(command, cmd_json, kwargs.get("serial"))
 
         self.log("Info: GatewayMQTT: publish_command: command={}, payload={}".format(command, cmd_json))
 
@@ -1684,6 +1772,69 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
         else:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
+
+    def _check_control_target(self, serial):
+        """Validate current target health on every write, including unchanged topology."""
+        if not self._mqtt_connected or self._mqtt_client is None:
+            raise ComponentWriteError("GatewayMQTT: inverter command rejected: MQTT disconnected")
+        if not self._gateway_online:
+            raise ComponentWriteError("GatewayMQTT: inverter command rejected: Hub offline")
+        # A fresh empty-inverters frame is stronger evidence than "no news": the device
+        # actively reported it currently has no inverters, so a still-fresh prior
+        # topology snapshot must not keep validating writes against it. Only a frame
+        # newer than our last good status counts — an empty frame older than the good
+        # one we already have (e.g. delivered out of order) says nothing new.
+        if self._last_empty_telemetry_time > self._last_telemetry_time and time.time() - self._last_empty_telemetry_time < _TELEMETRY_STALE_THRESHOLD:
+            raise ComponentWriteError(f"GatewayMQTT: inverter command rejected: no_inverters_reported ({serial})")
+        status = self._last_status
+        if status is None or time.time() - self._last_telemetry_time >= _TELEMETRY_STALE_THRESHOLD:
+            raise ComponentWriteError("GatewayMQTT: inverter command rejected: telemetry stale")
+        if status.timestamp and time.time() - status.timestamp >= _TELEMETRY_STALE_THRESHOLD:
+            raise ComponentWriteError("GatewayMQTT: inverter command rejected: device telemetry stale")
+        target = next((inv for inv in status.inverters if inv.serial == serial), None)
+        if target is None:
+            raise ComponentWriteError(f"GatewayMQTT: inverter command rejected: serial_not_found ({serial})")
+        if not target.connected or not target.active:
+            raise ComponentWriteError(f"GatewayMQTT: inverter command rejected: not_polled ({serial})")
+        # Proto3 booleans have no presence. All-false managed flags can mean an
+        # older sender omitted this field. In that case the Hub's command gate
+        # and correlated ACK provide the authoritative answer.
+        if any(inv.managed for inv in status.inverters) and not target.managed:
+            raise ComponentWriteError(f"GatewayMQTT: inverter command rejected: not_managed ({serial})")
+
+    async def _publish_control_command(self, command, cmd_json, serial):
+        """Publish once and await a correlated device result on the MQTT owner loop."""
+        self._check_control_target(serial)
+        if not self._ack_subscribed:
+            raise ComponentWriteError("GatewayMQTT: inverter command rejected: ACK subscription unavailable")
+        command_id = json.loads(cmd_json)["command_id"]
+        future = asyncio.get_running_loop().create_future()
+        self._pending_command_acks[command_id] = (command, future)
+        try:
+            try:
+                await self._publish_raw(self.topic_command, cmd_json.encode("utf-8"))
+            except Exception as error:
+                raise ComponentWriteError(f"GatewayMQTT: {command} publish failed; outcome unknown: {error}", outcome_unknown=True) from error
+            self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
+            try:
+                ack = await asyncio.wait_for(future, timeout=_COMMAND_ACK_TIMEOUT)
+            except asyncio.TimeoutError as error:
+                raise ComponentWriteError(f"GatewayMQTT: {command} acknowledgement timeout; outcome unknown", outcome_unknown=True) from error
+            if not ack["ok"]:
+                reason = ack.get("error", "unspecified failure")
+                if not isinstance(reason, str):
+                    reason = "unspecified failure"
+                # Only preflight rejections prove no write took place. A failed
+                # multi-register operation or lost reply may have physical effects.
+                definite = reason in {"serial_not_found", "serial_required", "not_managed", "not_polled", "read_only", "invalid_json", "expired", "clock_skew"}
+                raise ComponentWriteError(f"GatewayMQTT: {command} not confirmed by Hub: {reason}", outcome_unknown=not definite)
+            self.log(f"Info: GatewayMQTT: Hub acknowledged {command} ({command_id}); awaiting telemetry verification")
+        finally:
+            self._pending_command_acks.pop(command_id, None)
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()
 
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
