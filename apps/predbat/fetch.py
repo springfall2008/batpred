@@ -5343,6 +5343,7 @@ class Fetch:
         # existence, and this does the opposite - a slot the car is away for should not have a window
         # manufactured for it.
         self.manual_car_away_times = self.manual_times("manual_car_away")
+        self.manual_car_deadline_keep = self.manual_rates("manual_car_deadline", default_rate=self.get_arg("manual_car_deadline_value"))
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
