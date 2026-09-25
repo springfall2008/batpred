@@ -2036,10 +2036,10 @@ class GatewayMQTT(ComponentBase):
             if entry is None or ack.get("command", entry["command"]) != entry["command"]:
                 return
             self._acks_seen = True
-            # While still waiting, a replay means the hub has seen this id before and never
-            # considered the value: let the next attempt go out under a fresh id straight away.
-            # Once the command has an answer, a replay is just another unit's refusal.
-            drop_replay = replay and entry["state"] == "sent"
+            # A replay for the id still awaiting its first answer means the hub has seen that id
+            # before and never considered the value: let the next attempt go out under a fresh id
+            # straight away. For an older or already-answered id it is just another refusal.
+            drop_replay = replay and entry["state"] == "sent" and entry["command_ids"][-1] == command_id and command_id not in entry["outcomes"]
             if drop_replay:
                 del self._pending_commands[entity_id]
             else:

@@ -5146,6 +5146,29 @@ class TestCommandAck:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
         assert len(gw._published) == 1
 
+    def test_late_replay_for_an_earlier_id_does_not_drop_the_fresh_attempt(self):
+        """PBAT1 ok, fresh attempt PBAT2, then a late replay for PBAT1: PBAT2 stays tracked and the window restarts."""
+        gw = self._make_gateway()
+        gw._last_status = object()
+        restored = []
+        gw._inject_entities = lambda status: restored.append(status)
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            clock["now"] = 1032.0
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="replay")
+            entry = gw._pending_commands[self.SLOT_START]
+            assert entry["command_ids"] == ["PBAT1", "PBAT2"]
+            assert entry["sent_at"] == 1032.0
+            assert restored == [gw._last_status]
+            assert self._logged(gw, "refused by hub: replay")
+            clock["now"] = 1034.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+        assert len(gw._published) == 2
+
     def test_outcomes_do_not_grow_past_the_kept_ids(self):
         """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
         gw = self._make_gateway()
