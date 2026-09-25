@@ -439,6 +439,10 @@ class ComponentBase(ABC):
     def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         return self.base.get_history_wrapper(entity_id, days=days, required=required, tracked=tracked)
 
+    def set_history_alias(self, entity_id, legacy_entity_ids):
+        """Read the history of entity_id from legacy_entity_ids for the time before its own history starts (see PredBat.set_history_alias)."""
+        return self.base.set_history_alias(entity_id, legacy_entity_ids)
+
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
 
