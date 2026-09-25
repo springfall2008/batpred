@@ -1973,7 +1973,7 @@ class GatewayMQTT(ComponentBase):
                     self._acks_seen = False
                     self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
             if not same:
-                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None}
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": []}
                 self._pending_commands[entity_id] = entry
             previous = {"outcomes": dict(entry["outcomes"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
             if entry["state"] != "sent":
@@ -1994,7 +1994,9 @@ class GatewayMQTT(ComponentBase):
             # This id was never sent, so it must not hold back the next attempt; ids that
             # were sent earlier stay matchable
             with self._command_lock:
-                if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"]:
+                # An ack for this id may already have arrived while the publish was awaiting its
+                # broker confirmation: then the command did reach the hub, so keep it
+                if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"] and command_ref not in entry["outcomes"]:
                     entry["command_ids"].remove(command_ref)
                     if not entry["command_ids"]:
                         del self._pending_commands[entity_id]
@@ -2045,10 +2047,13 @@ class GatewayMQTT(ComponentBase):
                 entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
                 if not ok:
                     entry["sent_at"] = _monotonic()  # the window runs from the latest refusal
-                    # Another unit refused the id whose ok updated the cache: that update overstated
-                    # what was applied, so put back the last telemetry until the next status arrives
-                    restore_status = entry["cached"] == command_id
+                    # Another unit refused an id whose ok updated the cache (in this attempt or an
+                    # earlier one): that update overstated what was applied, so put back the last
+                    # telemetry until the next status arrives
+                    restore_status = command_id in entry["cached_ids"]
                     if restore_status:
+                        entry["cached_ids"].remove(command_id)
+                    if entry["cached"] == command_id:
                         entry["cached"] = None
                 apply_cache = ok and entry["cached"] is None
             command = entry["command"]
@@ -2060,8 +2065,9 @@ class GatewayMQTT(ComponentBase):
                 with self._command_lock:
                     if self._pending_commands.get(entity_id) is entry and entry["outcomes"].get(command_id) == "ok":
                         entry["cached"] = command_id
+                        entry["cached_ids"] = entry["cached_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_id]
         elif replay:
-            self.log(f"Info: GatewayMQTT: {command} for {serial} rejected as a replay of {command_id}, will re-send with a new id")
+            self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), re-sending with a new id")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
             if restore_status and self._last_status is not None:

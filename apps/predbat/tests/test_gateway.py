@@ -4874,7 +4874,8 @@ class TestCommandAck:
             clock["now"] = 1002.0
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
         assert [p[1] for p in gw._published] == [1, 2]
-        assert not self._logged(gw, "refused by hub")
+        assert self._logged(gw, "Warn: GatewayMQTT: set_charge_rate for CE123456789 refused by hub: replay")
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "sent"
 
     def test_without_ack_subscription_behaviour_is_unchanged(self):
         """No ack subscription: every call publishes, with the same arguments as before."""
@@ -5065,6 +5066,52 @@ class TestCommandAck:
             clock["now"] = 1055.0
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
         assert len(gw._published) == 2
+
+    def test_late_refusal_undoes_a_cache_update_from_an_earlier_attempt(self):
+        """PBAT1 ok updates the slot cache, PBAT2 is a fresh attempt, then another unit refuses PBAT1: telemetry is restored."""
+        gw = self._make_gateway()
+        gw._last_status = object()
+        restored = []
+
+        def fake_inject_entities(status):
+            restored.append(status)
+            gw.cache[self.SLOT_START] = "00:00:00"
+
+        gw._inject_entities = fake_inject_entities
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert gw.cache[self.SLOT_START] == "00:30:00"
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            assert [p[1] for p in gw._published] == [1, 2]
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+        assert restored == [gw._last_status]
+        assert gw.cache[self.SLOT_START] == "00:00:00"
+        assert self._logged(gw, "refused by hub: modbus_write_failed")
+
+    def test_publish_failure_after_its_ack_arrived_keeps_the_entry(self):
+        """The hub acknowledged the command while the publish was still awaiting the broker; the later publish error must not undo that."""
+        gw = self._make_gateway()
+
+        async def ack_then_fail(command, command_id=None, **kwargs):
+            gw._published.append((command, command_id, kwargs))
+            self._ack(gw, f"PBAT{command_id}", command, applied={"power_w": 2000, "slot": 0})
+            raise RuntimeError("connection lost before the broker confirmed")
+
+        gw.publish_command = ack_then_fail
+        clock, patcher = self._clock()
+        with patcher:
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+            assert gw._pending_commands[self.CHARGE_RATE]["command_ids"] == ["PBAT1"]
+            clock["now"] = 1002.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 1
 
     def test_second_ok_ack_does_not_overwrite_cache(self):
         """Only the first ok ack for a command updates the cached slot times."""
