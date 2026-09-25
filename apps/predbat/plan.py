@@ -5666,9 +5666,18 @@ class Plan:
         # built once and handed down rather than rebuilt per window - step_data_history walks every
         # previous day for every bucket and is far too expensive to call inside the loop.
         load_step = self.car_solar_load_forecast() if self.car_charging_solar else {}
-        candidate_windows = self.plan_car_charging_solar_windows(load_step)
-        for window_n in price_sorted:
-            candidate_windows.append(extra_slot if window_n == -1 else low_rates[window_n])
+        solar_windows = self.plan_car_charging_solar_windows(load_step)
+        bought_windows = [extra_slot if window_n == -1 else low_rates[window_n] for window_n in price_sorted]
+
+        # Only solar that lands before the ready time can count towards the guarantee, so it is planned
+        # first and the bought pass has to cover whatever it leaves. Solar after the deadline is held back
+        # until the bought slots are placed: it reaches for the full limit, and a single running car_soc is
+        # shared by both passes, so planning it first lets tomorrow's sunshine satisfy "60% by 07:30" and
+        # break the loop before one overnight slot is bought - reported from a live system as a car sitting
+        # at 50% all night against 39p import it was never offered.
+        solar_before_ready = [window for window in solar_windows if window["end"] <= ready_minutes]
+        solar_after_ready = [window for window in solar_windows if window["end"] > ready_minutes]
+        candidate_windows = solar_before_ready + bought_windows + solar_after_ready
 
         # Energy that must be there by the ready time, whatever the weather. Bought slots stop here;
         # solar carries on to the full limit, which is how "minimum from any source, the rest from sun"
