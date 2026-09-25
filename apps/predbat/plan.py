@@ -1844,26 +1844,12 @@ class Plan:
             pv_forecast_peak_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=None)
 
             # Auto-Tuner: Always runs to gather data and recommend a factor
-            import os
-            import json
-
-            auto_tune_file = os.path.join(self.config_root, "clipping_auto_tune.json")
-
             if not hasattr(self, "clipping_auto_amp"):
                 self.clipping_auto_amp = getattr(self, "clipping_amplification", 1.0)
                 self.clipping_auto_start_offset = getattr(self, "clipping_buffer_start_offset", 0)
                 self.clipping_auto_end_offset = getattr(self, "clipping_buffer_end_offset", 0)
+            if not hasattr(self, "clipping_last_tune_day"):
                 self.clipping_last_tune_day = None
-                if os.path.exists(auto_tune_file):
-                    try:
-                        with open(auto_tune_file, "r") as f:
-                            data = json.load(f)
-                            self.clipping_auto_amp = data.get("auto_amp", self.clipping_auto_amp)
-                            self.clipping_auto_start_offset = data.get("auto_start_offset", self.clipping_auto_start_offset)
-                            self.clipping_auto_end_offset = data.get("auto_end_offset", self.clipping_auto_end_offset)
-                            self.clipping_last_tune_day = data.get("last_tune_day", None)
-                    except Exception:
-                        pass
 
             auto_amp = self.clipping_auto_amp
             auto_start_offset = self.clipping_auto_start_offset
@@ -1891,7 +1877,7 @@ class Plan:
                 # Check inverter limit
                 limit = 0.0
                 if self.inverter_limit > 0:
-                    limit = self.inverter_limit / MINUTE_WATT
+                    limit = self.inverter_limit * 60.0
 
                 if limit > 0:
                     if limit * 0.98 <= max_pv_power <= limit * 1.02:
@@ -1909,15 +1895,10 @@ class Plan:
                         auto_end_offset = max(0, auto_end_offset - 5)
                         self.log("Clipping auto-tuner: No mechanical clipping detected (max PV {} kW). Decreased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(dp2(max_pv_power), auto_amp, auto_start_offset, auto_end_offset))
 
-                    try:
-                        with open(auto_tune_file, "w") as f:
-                            json.dump({"auto_amp": auto_amp, "auto_start_offset": auto_start_offset, "auto_end_offset": auto_end_offset, "last_tune_day": current_day}, f)
-                        self.clipping_auto_amp = auto_amp
-                        self.clipping_auto_start_offset = auto_start_offset
-                        self.clipping_auto_end_offset = auto_end_offset
-                        self.clipping_last_tune_day = current_day
-                    except Exception:
-                        pass
+                    self.clipping_auto_amp = auto_amp
+                    self.clipping_auto_start_offset = auto_start_offset
+                    self.clipping_auto_end_offset = auto_end_offset
+                    self.clipping_last_tune_day = current_day
 
             # If auto-tune is enabled, sync clipping configuration to the recommended values
             if getattr(self, "clipping_auto_tune", False):
@@ -4072,9 +4053,7 @@ class Plan:
         curr = self.currency_symbols[1]
         first = True
 
-        if self.calculate_best_export:
-            record_export_windows = min(record_export_windows, len(self.export_window_best))
-        if self.calculate_best_export and record_export_windows >= 1:
+        if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
             while swapped:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
@@ -4089,7 +4068,7 @@ class Plan:
                 first = False
                 swapped = False
 
-                for window_n_target in range(record_export_windows - 1, -1, -1):
+                for window_n_target in range(record_export_windows - 1, 0, -1):
                     previous_end_target = 0
                     if window_n_target > 0:
                         previous_end_target = self.export_window_best[window_n_target - 1]["end"]
