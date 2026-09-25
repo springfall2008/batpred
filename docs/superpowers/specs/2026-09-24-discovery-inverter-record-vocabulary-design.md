@@ -217,13 +217,13 @@ The definition is built from four sources:
    | `charge_time_format` | `charge_start_time`'s `format` |
    | `clock_time_format` | `inverter_time`'s `format` |
    | `soc_units` | which state-of-charge setting is bound: `soc_percent` -> `%`, `soc_kw` -> `kWh` |
-   | `output_charge_control` | `charge_rate`'s `unit`: W -> `power`, A -> `current`; no entity -> `none` |
+   | `output_charge_control` | `charge_rate`'s `unit`: W -> `power`, A -> `current`; no `charge_rate` but a bound `charge_rate_percent` (GE Cloud's percentage-rate models) -> `power`; neither -> `none` |
    | `current_dp` | the decimal places of `charge_rate`'s `step`, when its unit is A |
    | `time_button_press` | whether a `schedule_write_button` entity is present |
    | `num_load_entities` | 1 plus the number of consecutive `load_power_1`, `load_power_2`, ... entities bound (`inverter.py:1523` adds them into the load reading) |
 
-4. **The component** - `write_and_poll_sleep`, a constant on the component class. It is 2 for every
-   component-driven type today.
+4. **The component** - `write_and_poll_sleep`, a constant on the component class (`ComponentBase.WRITE_AND_POLL_SLEEP`).
+   It is 2 for the cloud types and 10 for the GivEnergy types (GE, GEC, GEE), which GivTCP and GE Cloud override.
 
 `has_mqtt_api` (Sofar's MQTT path) defaults to `False`, its value for every component-driven type.
 
