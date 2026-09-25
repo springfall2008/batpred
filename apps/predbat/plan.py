@@ -6004,16 +6004,19 @@ class Plan:
 
     def car_solar_reserved_for_car(self, load_step, car_n=0):
         """
-        Surplus the car needs from the slots it will actually be present for, in kWh
+        Surplus the car has first claim on ahead of the house battery, in kWh
 
-        The battery-priority hold assumes the car can catch up later, which is only true while the car
-        is going to be there. Mark the afternoon away and the morning becomes the car's last chance,
-        so banking it for a battery that has the whole day to fill is the wrong way round - and at a
-        100% priority level the car would never see a solar window at all.
+        The battery-priority hold assumes the car can catch up later, which stops being true in two cases.
+        Mark the afternoon away and the morning becomes the car's last chance, so banking it for a battery
+        that has the whole day to fill is the wrong way round - at a 100% priority level the car would never
+        see a solar window at all. And a one-off deadline means the car needs a level by a time the battery
+        has no stake in, so the sun before it should go to the car rather than force a purchase the battery
+        then saves itself from.
 
-        Returns what the car still needs, capped by what the present slots can actually deliver, so
-        the hold gives up exactly that much and no more. Zero when no away time is set, which leaves
-        the everyday behaviour untouched.
+        Each case claims what the car still needs, capped by what the slots it will be present for can
+        deliver before that case's cut-off - the whole forecast for away time, the deadline for a deadline -
+        so the hold gives up exactly that much and no more. The larger claim wins, since both are drawn from
+        the same earliest windows. Zero when neither is set, which leaves the everyday behaviour untouched.
 
         Args:
         - load_step: house load forecast, as used for the surplus calculation
@@ -6022,17 +6025,42 @@ class Plan:
         Returns:
         - float: kWh to keep back for the car, 0.0 when there is nothing to reserve
         """
-        if not self.manual_car_away_times or car_n >= self.num_cars:
+        if car_n >= self.num_cars:
             return 0.0
-        needed = self.car_charging_limit[car_n] - self.car_charging_soc[car_n]
-        if needed <= 0:
-            return 0.0
+        claims = []
+        if self.manual_car_away_times:
+            claims.append((self.car_charging_limit[car_n], None))
+        for deadline in self.car_one_off_deadlines(car_n):
+            claims.append((deadline["kwh"], deadline["minute"]))
+
+        reserved = 0.0
+        for target_kwh, until in claims:
+            needed = target_kwh - self.car_charging_soc[car_n]
+            if needed > 0:
+                reserved = max(reserved, self.car_solar_available_kwh(load_step, car_n, needed, until))
+        return reserved
+
+    def car_solar_available_kwh(self, load_step, car_n, needed, until=None):
+        """
+        Surplus the car could take from the slots it is present for, up to a cut-off, capped at needed
+
+        Args:
+        - load_step: house load forecast, as used for the surplus calculation
+        - car_n: which car
+        - needed: stop counting once this much is found
+        - until: absolute plan minute the energy must land by, or None for the whole forecast
+
+        Returns:
+        - float: kWh available, no more than needed
+        """
         available = 0.0
         rate_limit = self.car_charging_rate[car_n] * self.plan_interval_minutes / 60.0
         start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         for minute in range(start_minute, self.minutes_now + self.forecast_minutes, self.plan_interval_minutes):
             slot_start = max(minute, self.minutes_now)
             slot_end = minute + self.plan_interval_minutes
+            if until is not None and slot_end > until:
+                break
             if slot_end <= slot_start or self.car_slot_is_away(slot_start, slot_end):
                 continue
             available += min(self.car_solar_surplus_kwh(slot_start, slot_end, load_step), rate_limit)
@@ -6143,6 +6171,87 @@ class Plan:
             )
         return windows
 
+    def car_one_off_deadlines(self, car_n=0):
+        """
+        The charge levels promised by manual_car_deadline, as absolute plan minutes and kWh
+
+        manual_car_deadline is a one-off "have the car at this level by this time", set from the plan page for
+        a trip that does not fit the everyday ready time. The level is a percentage of the car's battery, so it
+        is applied to the first car only - one percentage across several cars of different sizes would promise
+        something nobody asked for. It is capped at car_charging_limit: the car will not charge past its own
+        limit whatever the plan says, and planning energy it will refuse would put phantom car load into the
+        forecast the battery is planned against.
+
+        Args:
+        - car_n: which car
+
+        Returns:
+        - list: {"minute", "kwh", "percent"} dicts in time order, empty when no deadline is set
+        """
+        keep = self.manual_car_deadline_keep
+        if not keep or car_n != 0 or car_n >= self.num_cars:
+            return []
+        deadlines = []
+        for minute in sorted(keep):
+            # manual_rates() fills every minute of the slot; the deadline is the slot's first minute
+            if (minute - 1) in keep:
+                continue
+            percent = keep[minute]
+            kwh = dp3(percent * self.car_charging_battery_size[car_n] / 100.0)
+            if kwh > self.car_charging_limit[car_n]:
+                self.log("Warn: Car {} ready-by level {}% at {} is above its charge limit of {}kWh, planning to the limit instead - raise the car's own limit to reach it".format(car_n, percent, self.time_abs_str(minute), self.car_charging_limit[car_n]))
+                kwh = self.car_charging_limit[car_n]
+            deadlines.append({"minute": minute, "kwh": kwh, "percent": percent})
+        return deadlines
+
+    def car_deadlines(self, car_n, ready_minutes, min_soc_kwh):
+        """
+        Every charge level the car has been promised, in time order
+
+        The everyday one is car_charging_plan_min_soc by car_charging_plan_time. manual_car_deadline adds a one-off
+        on top. Both are guarantees rather than hopes: the free sun that lands before each one is counted first,
+        and whatever it leaves is bought before the deadline passes.
+
+        Args:
+        - car_n: which car
+        - ready_minutes: the everyday ready time, as an absolute plan minute
+        - min_soc_kwh: the everyday minimum, in kWh
+
+        Returns:
+        - list: {"minute", "kwh", "one_off"} dicts sorted by minute
+        """
+        deadlines = [{"minute": ready_minutes, "kwh": min_soc_kwh, "one_off": False}]
+        for deadline in self.car_one_off_deadlines(car_n):
+            deadlines.append({"minute": deadline["minute"], "kwh": deadline["kwh"], "one_off": True})
+        deadlines.sort(key=lambda deadline: deadline["minute"])
+        return deadlines
+
+    def car_deadline_purchase_windows(self, car_n, deadline_minute):
+        """
+        Every import slot between now and a one-off deadline, in the order the car should buy them
+
+        The everyday minimum buys from low_rates, which only holds the windows under the import threshold. A
+        one-off deadline is an explicit "I need this", so it may buy from any slot before it: restricting it to
+        the cheap band would let a midday deadline fail on a tariff whose cheap band is overnight and has
+        already passed. Cheapest first in smart mode, soonest first otherwise, matching the everyday pass.
+
+        Args:
+        - car_n: which car
+        - deadline_minute: absolute plan minute the level is promised by
+
+        Returns:
+        - list: import windows as {"start", "end", "average"} dicts
+        """
+        windows = []
+        start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+        for minute in range(start_minute, deadline_minute, self.plan_interval_minutes):
+            windows.append({"start": minute, "end": minute + self.plan_interval_minutes, "average": self.rate_import.get(minute, self.rate_min)})
+        if windows and self.car_charging_plan_smart[car_n]:
+            order = self.sort_window_by_price(windows, reverse_time=True)
+            order.reverse()
+            windows = [windows[window_n] for window_n in order]
+        return windows
+
     def plan_car_charging(self, car_n, low_rates):
         """
         Plan when the car will charge, taking into account ready time and pricing
@@ -6181,26 +6290,38 @@ class Plan:
         solar_windows = self.plan_car_charging_solar_windows(load_step)
         bought_windows = [low_rates[window_n] for window_n in price_sorted]
 
-        # Only solar that lands before the ready time can count towards the guarantee, so it is planned
-        # first and the bought pass has to cover whatever it leaves. Solar after the deadline is held back
-        # until the bought slots are placed: it reaches for the full limit, and a single running car_soc is
-        # shared by both passes, so planning it first lets tomorrow's sunshine satisfy "60% by 07:30" and
-        # break the loop before one overnight slot is bought - reported from a live system as a car sitting
-        # at 50% all night against 39p import it was never offered.
-        solar_before_ready = [window for window in solar_windows if window["end"] <= ready_minutes]
-        solar_after_ready = [window for window in solar_windows if window["end"] > ready_minutes]
-        candidate_windows = solar_before_ready + bought_windows + solar_after_ready
-
         # Energy that must be there by the ready time, whatever the weather. Bought slots stop here;
         # solar carries on to the full limit, which is how "minimum from any source, the rest from sun"
         # is expressed. Left at 100% (the default) both targets are the same and nothing changes.
         min_soc_kwh = min(dp3(self.car_charging_plan_min_soc * self.car_charging_battery_size[car_n] / 100.0), self.car_charging_limit[car_n])
+        deadlines = self.car_deadlines(car_n, ready_minutes, min_soc_kwh)
+        horizon = self.minutes_now + self.forecast_minutes
 
-        for window in candidate_windows:
+        # Each deadline in turn gets the free sun that lands before it, then buys whatever that leaves. Only
+        # solar that fully lands before a deadline can count towards it: a single running car_soc is shared by
+        # every pass, so offering later sun first let tomorrow's sunshine satisfy "60% by 07:30" and break the
+        # loop before one overnight slot was bought - reported from a live system as a car left short all night
+        # against 39p import it was never offered. Solar reaches for the full limit wherever it appears, since
+        # it is free; only bought energy stops at the level promised. The everyday minimum buys from low_rates
+        # and honours car_charging_plan_max_price as it always has; a one-off deadline may buy any slot before
+        # it and ignores the price cap, because it is an explicit instruction that the charge is needed.
+        # Whatever sun is left then tops the car up towards the limit, whenever it arrives.
+        # Entries are (window, target_kwh, end_limit, capped_by_max_price).
+        candidates = []
+        for deadline in deadlines:
+            for window in solar_windows:
+                if window["end"] <= deadline["minute"]:
+                    candidates.append((window, self.car_charging_limit[car_n], horizon, False))
+            purchase = self.car_deadline_purchase_windows(car_n, deadline["minute"]) if deadline["one_off"] else bought_windows
+            for window in purchase:
+                candidates.append((window, deadline["kwh"], deadline["minute"], not deadline["one_off"]))
+            if deadline["one_off"]:
+                self.log("Car {} promised {}kWh by {}".format(car_n, deadline["kwh"], self.time_abs_str(deadline["minute"])))
+        for window in solar_windows:
+            candidates.append((window, self.car_charging_limit[car_n], horizon, False))
+
+        for window, window_target, end_limit, capped_by_max_price in candidates:
             is_solar = window.get("solar", False)
-            # Solar is opportunistic so it is not bound by the deadline; bought energy is the guarantee
-            window_target = self.car_charging_limit[car_n] if is_solar else min_soc_kwh
-            end_limit = (self.minutes_now + self.forecast_minutes) if is_solar else ready_minutes
 
             start = max(window["start"], self.minutes_now)
             end = min(window["end"], end_limit)
@@ -6219,8 +6340,8 @@ class Plan:
             if (car_soc + 0.1) >= self.car_charging_limit[car_n]:
                 break
 
-            # Enough charge for what this window is allowed to deliver. Skip rather than stop: solar
-            # windows come first and reach higher, so a later bought window may still owe the minimum
+            # Enough charge for what this window is allowed to deliver. Skip rather than stop: a later
+            # deadline may promise a higher level, and later sun still tops up towards the limit
             if (car_soc + 0.1) >= window_target:
                 continue
 
@@ -6233,8 +6354,9 @@ class Plan:
                 continue
 
             # Skip over prices when they are too high. Solar windows are exempt: their energy is not
-            # being bought, so the import price of that time of day says nothing about them.
-            if (max_price != 0) and price > max_price and not window.get("solar", False):
+            # being bought, so the import price of that time of day says nothing about them. So are a
+            # one-off deadline's purchases, which the user has said are needed whatever they cost.
+            if capped_by_max_price and (max_price != 0) and price > max_price and not is_solar:
                 continue
 
             # Compute amount of charge. A bought slot draws the charger's full rate because that is what
@@ -6281,6 +6403,15 @@ class Plan:
                 new_slot["octopus"] = False
                 new_slot["solar"] = window.get("solar", False)
                 plan.append(new_slot)
+
+        # Say so when a promise cannot be kept. Away time can leave too few slots before a deadline, and the
+        # charger rate caps what each one delivers - better a warning now than a car found short at the time.
+        for deadline in deadlines:
+            if not deadline["one_off"]:
+                continue
+            reached = self.car_charging_soc[car_n] + sum(slot["kwh"] * self.car_charging_loss for slot in plan if slot["end"] <= deadline["minute"])
+            if reached + 0.1 < deadline["kwh"]:
+                self.log("Warn: Car {} can only reach {}kWh of the {}kWh promised by {} - too few slots the car is present for before then, at its charge rate".format(car_n, dp2(reached), deadline["kwh"], self.time_abs_str(deadline["minute"])))
 
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)

@@ -2599,6 +2599,8 @@ chart.render();
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
         manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
+        manual_car_deadline_keep = self.base.manual_rates("manual_car_deadline", default_rate=self.base.get_arg("manual_car_deadline_value"), update=False)
+        manual_car_deadline_list = [{"minutes": k, "target": v} for k, v in manual_car_deadline_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2613,6 +2615,7 @@ chart.render();
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
             "manual_soc_max": manual_soc_max_list,
+            "manual_car_deadline": manual_car_deadline_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2700,6 +2703,8 @@ chart.render();
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
         manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
+        manual_car_deadline_keep = self.base.manual_rates("manual_car_deadline", default_rate=self.base.get_arg("manual_car_deadline_value"), update=False)
+        manual_car_deadline_list = [{"minutes": k, "target": v} for k, v in manual_car_deadline_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2714,6 +2719,7 @@ chart.render();
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
             "manual_soc_max": manual_soc_max_list,
+            "manual_car_deadline": manual_car_deadline_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -4930,6 +4936,17 @@ chart.render();
                 actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc_max", clear_option)
+            elif action == "Set Car Deadline":
+                # One deadline at a time: a new one replaces the old rather than promising two levels
+                rate = max(0.0, min(100.0, rate))
+                item = self.base.config_index.get("manual_car_deadline_value", {})
+                await self.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_car_deadline", "off")
+                await self.base.async_manual_select("manual_car_deadline", "{}={}".format(override_time.strftime("%a %H:%M"), rate))
+            elif action == "Clear Car Deadline":
+                # There is only ever one, and a slot picked from the HA dropdown is stored without its level,
+                # so rebuilding the exact "[time=level]" string to toggle it off would not always match
+                await self.base.async_manual_select("manual_car_deadline", "off")
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)

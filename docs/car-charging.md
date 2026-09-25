@@ -703,6 +703,9 @@ the battery always wins, with the car left to whatever it can buy at cheap rates
 much battery you want banked before a kWh is worth more in the car than in the pack. What the battery physically cannot absorb
 in a slot is not held back, since that surplus would otherwise be exported at whatever midday pays.
 
+- For a one-off level by a particular time - a trip rather than the daily routine - use **Car ready by** from the plan page, described under
+[select.predbat_manual_car_deadline](customisation.md#manual-control). It stacks with the everyday minimum below rather than replacing it.
+
 - **input_number.predbat_car_charging_plan_min_soc** sets how much of the car's charge Predbat will pay for, as a percentage.
 It defaults to 100%, meaning anything solar does not deliver is bought, which is the behaviour if you leave it alone.
 
