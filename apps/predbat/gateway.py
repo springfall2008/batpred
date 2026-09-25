@@ -1977,15 +1977,17 @@ class GatewayMQTT(ComponentBase):
                 self._pending_commands[entity_id] = entry
             previous = {"outcomes": dict(entry["outcomes"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
             if entry["state"] != "sent":
-                # A fresh attempt after the previous one was answered. Earlier ids stay
-                # matchable, so a late ack from another unit is still logged and acted on.
-                entry.update(outcomes={}, state="sent", resent=False, cached=None)
+                # A fresh attempt after the previous one was answered. Earlier ids and their
+                # outcomes stay, so a late ack from another unit is still logged and acted on and
+                # a refusal still outranks that id's later ok.
+                entry.update(state="sent", resent=False, cached=None)
             elif self._acks_seen and entry["command_ids"]:
                 entry["resent"] = True  # the one re-send after an unanswered window
             command_id = self._command_id = self._command_id + 1
             command_ref = f"PBAT{command_id}"
             # Earlier ids of the same value stay matchable: an ack for any of them confirms it
             entry["command_ids"] = entry["command_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_ref]
+            entry["outcomes"] = {key: value for key, value in entry["outcomes"].items() if key in entry["command_ids"]}
             entry["sent_at"] = now
 
         try:
@@ -2000,7 +2002,7 @@ class GatewayMQTT(ComponentBase):
                     entry["command_ids"].remove(command_ref)
                     if not entry["command_ids"]:
                         del self._pending_commands[entity_id]
-                    elif entry["state"] == "sent" and not entry["outcomes"]:
+                    elif entry["state"] == "sent" and entry["outcomes"] == previous["outcomes"]:
                         # No ack arrived meanwhile: back to how the earlier attempt left it
                         entry.update({key: previous[key] for key in ("outcomes", "state", "sent_at", "resent", "cached")})
             raise
@@ -2034,11 +2036,11 @@ class GatewayMQTT(ComponentBase):
             if entry is None or ack.get("command", entry["command"]) != entry["command"]:
                 return
             self._acks_seen = True
-            if replay:
-                if entry["state"] != "sent":
-                    return
-                # The hub has seen this id before, so the value was never considered:
-                # let the next attempt go out under a fresh id straight away.
+            # While still waiting, a replay means the hub has seen this id before and never
+            # considered the value: let the next attempt go out under a fresh id straight away.
+            # Once the command has an answer, a replay is just another unit's refusal.
+            drop_replay = replay and entry["state"] == "sent"
+            if drop_replay:
                 del self._pending_commands[entity_id]
             else:
                 if ok and entry["outcomes"].get(command_id) == "refused":
@@ -2066,7 +2068,7 @@ class GatewayMQTT(ComponentBase):
                     if self._pending_commands.get(entity_id) is entry and entry["outcomes"].get(command_id) == "ok":
                         entry["cached"] = command_id
                         entry["cached_ids"] = entry["cached_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_id]
-        elif replay:
+        elif drop_replay:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), re-sending with a new id")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")

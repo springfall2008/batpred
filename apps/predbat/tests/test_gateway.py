@@ -5113,6 +5113,52 @@ class TestCommandAck:
             self._run(gw.number_event(self.CHARGE_RATE, 2000))
         assert len(gw._published) == 1
 
+    def test_refusal_from_an_earlier_attempt_still_outranks_its_late_ok(self):
+        """PBAT1 refused, fresh attempt PBAT2, then another unit's late ok for PBAT1: it must not count as applied."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            assert [p[1] for p in gw._published] == [1, 2]
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
+            assert gw._pending_commands[self.SLOT_START]["state"] == "sent"
+            assert gw.cache == {}
+            # PBAT2's own ok still confirms the value
+            self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+        assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
+        assert gw.cache[self.SLOT_START] == "00:30:00"
+
+    def test_replay_after_an_answer_is_logged_as_a_refusal(self):
+        """A replay from another unit after the command was answered is logged and restarts the window."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1020.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="replay")
+            assert self._logged(gw, "Warn: GatewayMQTT: set_charge_rate for CE123456789 refused by hub: replay")
+            assert gw._pending_commands[self.CHARGE_RATE]["sent_at"] == 1020.0
+            clock["now"] = 1040.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 1
+
+    def test_outcomes_do_not_grow_past_the_kept_ids(self):
+        """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            for attempt in range(40):
+                clock["now"] = 1000.0 + attempt * 31
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+                self._ack(gw, f"PBAT{attempt + 1}", "set_charge_rate", ok=False, error="not_managed")
+        entry = gw._pending_commands[self.CHARGE_RATE]
+        assert len(entry["command_ids"]) == 16
+        assert set(entry["outcomes"]) <= set(entry["command_ids"])
+
     def test_second_ok_ack_does_not_overwrite_cache(self):
         """Only the first ok ack for a command updates the cached slot times."""
         gw = self._make_gateway()
