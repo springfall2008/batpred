@@ -451,7 +451,10 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # above: the allowlist covers the spellings we enumerated, this keeps the agent on the one
 # spelling that is certain to be covered, and asks it to say so loudly when a call is denied
 # anyway - #4758 quietly degraded to printing the comments it could not post, which reads like
-# a finished review in the log. Also carries the bot-disclosure requirement for these two flows:
+# a finished review in the log. It also moves comment bodies into a scratch file: PR #5229's
+# POSTs were endpoint-first and still denied, because a double-quoted body holding backticks is
+# command substitution to the shell, and the permission check denies the substituted commands
+# that no rule allows. Also carries the bot-disclosure requirement for these two flows:
 # /code-review's own instructions live in a skill we don't own, so this prompt is the only
 # lever available for it; /pr-cleanup's SKILL.md already asks for disclosure directly, and
 # this is the belt-and-braces backup for it, same reasoning as the endpoint-first steer.
@@ -507,8 +510,11 @@ JOURNAL_CAPTURE_PROMPT = (
 GH_API_ENDPOINT_FIRST_PROMPT = (
     "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
     "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
-    f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py`. "
+    f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py -F body=@{SCRATCH_DIR}/comment-1.md`. "
     'Other spellings (e.g. `gh api --method POST repos/...`, `gh api -X POST repos/...`, `gh api -H ... repos/...` or `gh api "repos/..."`) may be denied in restricted sessions even when the same request is allowed in endpoint-first form. '
+    f"Never put a comment body on the command line: write it to a file in {SCRATCH_DIR} with the Write tool first and pass it as `-F body=@<file>`. "
+    "An inline body in double quotes turns any backticks or `$(...)` in it into command substitution, which the permission check "
+    "sees as extra commands and denies - that is what blocked every comment in PR #5229's review. "
     "Keep each call to a single command: piping into head/tail/grep is fine, but redirecting output anywhere outside "
     f"{SCRATCH_DIR} or the repository clone - /tmp included - is denied as well. "
     "If a call is denied regardless, state that plainly in your final message and name the command; do not quietly fall back "
