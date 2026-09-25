@@ -743,6 +743,18 @@ class GhApiFormPromptTests(unittest.TestCase):
         completed review in the log. The prompt asks for a denial to be stated plainly."""
         self.assertIn("denied", triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
 
+    def test_steers_comment_bodies_into_a_scratch_file(self):
+        """PR #5229's review had its endpoint-first POST denied because the body was an inline
+        double-quoted argument holding backticks: the shell reads those as command substitution,
+        so the permission check saw extra commands no rule allows. A body read from a file with
+        `-F body=@<file>` never touches shell quoting, so the prompt must ask for exactly that,
+        in the scratch directory the flow is allowed to write, and the worked example must use it."""
+        prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
+        self.assertIn("-F body=@", prompt)
+        self.assertIn(str(triage_daemon.SCRATCH_DIR), prompt)
+        self.assertIn("backticks", prompt)
+        self.assertNotIn("-f body=", prompt)
+
     def test_requires_disclosure_on_every_posted_comment_or_reply(self):
         """/code-review's own instructions live in a skill we don't own, so this appended
         prompt is the only lever available to make its inline comments disclose they're
