@@ -719,6 +719,7 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz
