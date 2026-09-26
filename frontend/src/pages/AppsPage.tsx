@@ -63,7 +63,7 @@ const FRAME_STYLES = `
     box-shadow: 0 4px 16px rgb(15 23 42 / 8%);
     backdrop-filter: blur(8px);
   }
-  table {
+  table.apps-settings-table {
     width: 100%;
     min-width: 760px;
     border: 1px solid var(--apps-border);
@@ -75,7 +75,7 @@ const FRAME_STYLES = `
     font-size: .76rem;
     table-layout: fixed;
   }
-  thead th {
+  table.apps-settings-table > thead > tr > th {
     position: sticky;
     top: 58px;
     z-index: 20;
@@ -88,10 +88,27 @@ const FRAME_STYLES = `
     text-transform: uppercase;
     letter-spacing: .04em;
   }
-  thead th:nth-child(1) { width: 22%; }
-  thead th:nth-child(2) { width: 31%; }
-  thead th:nth-child(3) { width: 35%; }
-  thead th:nth-child(4) { width: 12%; }
+  table.apps-settings-table > thead > tr > th:nth-child(1) { width: 22%; }
+  table.apps-settings-table > thead > tr > th:nth-child(2) { width: 36%; }
+  table.apps-settings-table > thead > tr > th:nth-child(3) { width: 30%; }
+  table.apps-settings-table > thead > tr > th:nth-child(4) { width: 12%; }
+  table.apps-settings-table td table {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    border-collapse: collapse;
+    background: transparent;
+  }
+  table.apps-settings-table td table td {
+    padding: .25rem;
+    border: 0;
+    background: transparent;
+  }
+  table.apps-settings-table td table td:last-child,
+  table.apps-settings-table td table button {
+    width: auto;
+    white-space: nowrap;
+  }
   tr[data-apps-group] { --group-colour: #64748b; }
   tr[data-apps-group="system"] { --group-colour: #3b82f6; }
   tr[data-apps-group="solar"] { --group-colour: #d99a00; }
@@ -179,6 +196,7 @@ export default function AppsPage() {
     const table = frameDocument.querySelector('table')
     const body = table?.tBodies[0]
     if (!table || !body) return
+    table.classList.add('apps-settings-table')
 
     const rows = Array.from(body.rows).filter((row) => row.dataset.argName)
     const header = Array.from(body.rows).find((row) => !row.dataset.argName)

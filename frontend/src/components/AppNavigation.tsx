@@ -414,7 +414,12 @@ export default function AppNavigation({
 
         <nav className="navigation-menu">
           {navigationGroups.map((group) => (
-            <details className="navigation-group" key={group.label} open={layout === 'side' || mobileOpen || undefined}>
+            <details
+              className="navigation-group"
+              key={group.label}
+              name={layout === 'horizontal' ? 'predbat-navigation' : undefined}
+              open={layout === 'side' || mobileOpen || undefined}
+            >
               <summary className="navigation-group-label">{group.label}</summary>
 
               <div className="navigation-group-items">
