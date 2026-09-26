@@ -1911,6 +1911,7 @@ INVERTER_DEF = {
     },
     "GS": {
         "name": "Ginlong Solis",
+        "has_solis_energy_control": True,
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "current",
@@ -1939,6 +1940,7 @@ INVERTER_DEF = {
     },
     "GS_fb00": {
         "name": "Ginlong Solis (FB00)",
+        "has_solis_energy_control": True,
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "current",
@@ -2564,6 +2566,18 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority - No Timed Charge/Discharge": 96,
     "Feed-in priority": 98,
+}
+# FB00 firmware (Solax Modbus "Solis FB00" plugin) has no Timed Charge/Discharge bit in the switch -
+# slot enables replaced it - so its option names differ: "Self-Use" is 33 here, not 35
+SOLAX_SOLIS_MODES_FB00 = {
+    "Self-Use - No Grid Charging": 1,
+    "Backup/Reserve - No Grid Charging": 17,
+    "Self-Use": 33,
+    "Off-Grid Mode": 37,
+    "Battery Awaken": 41,
+    "Backup/Reserve": 49,
+    "Feed-in priority - No Grid Charging": 64,
+    "Feed-in priority": 96,
 }
 
 # Apps.yaml validation schema

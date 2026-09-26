@@ -22,7 +22,7 @@ import os
 import time
 import pytz
 from datetime import datetime, timedelta
-from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
+from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES, SOLAX_SOLIS_MODES_FB00
 from const import (
     MINUTE_WATT,
     TIME_FORMAT,
@@ -509,6 +509,7 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
+        self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -2163,6 +2164,12 @@ class Inverter:
         # SoC has no decimal places and clamp in min
         soc = int(max(soc, self.reserve_percent))
 
+        # A Solis with a target SoC (FB00) still needs its Energy Storage Control Switch managed - the
+        # target SoC does not bring it through mimic_target_soc below, and a switch left without its
+        # grid charging bit (a SolisCloud session leaves it that way) holds the battery through a charge slot
+        if self.inv_has_target_soc and self.inv_has_solis_energy_control:
+            self.alt_charge_discharge_enable("charge" if isCharging else "discharge" if isExporting else "eco", True)
+
         if isExporting and self.inv_has_target_soc and not self.inv_target_soc_used_for_discharge:
             self.log("Inverter {} Exporting, not adjusting SoC target".format(self.id))
             return
@@ -3016,38 +3023,33 @@ class Inverter:
         current_rate_charge = self.get_current_charge_rate()
         current_rate_discharge = self.get_current_discharge_rate()
 
-        if self.inverter_type == "GS":
+        if self.inv_has_solis_energy_control:
             # Solis just has a single switch for both directions
             # Need to check the logic of how this is called if both charging and exporting
-
-            solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
-
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            switch = solax_modes.get(str(self.base.get_state_wrapper(entity_id, "")), 0)
-
-            if direction == "charge":
-                if enable:
-                    new_switch = 35
-                else:
-                    new_switch = 33
-            elif direction == "discharge":
-                if enable:
-                    new_switch = 35
-                else:
-                    new_switch = 33
+            if not entity_id:
+                if direction == "charge" and enable:
+                    self.base.log(f"Warn: Inverter {self.id} energy_control_switch is not set in apps.yaml, so Predbat cannot make sure the inverter allows grid charging")
             else:
-                # ECO
-                new_switch = 35
+                if self.inv_has_charge_enable_time:
+                    # FB00 firmware: the slot enables turn timed charge and export on and off, so the switch
+                    # only has to stay on Self-Use - without its grid charging bit a charge slot cannot charge
+                    solax_modes = SOLAX_SOLIS_MODES_FB00
+                    new_switch = 33
+                else:
+                    # Older firmware: the switch's Timed Charge/Discharge bit is the enable itself
+                    solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
+                    new_switch = 35 if (enable or direction == "eco") else 33
 
-            # Find mode names
-            old_mode = {solax_modes[x]: x for x in solax_modes}[switch]
-            new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
+                old_mode = str(self.base.get_state_wrapper(entity_id, ""))
+                switch = solax_modes.get(old_mode, 0)
+                new_mode = {value: name for name, value in solax_modes.items()}[new_switch]
 
-            if new_switch != switch:
-                self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
-                self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
-            else:
-                self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
+                if new_switch != switch:
+                    self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
+                    self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
+                else:
+                    self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
 
         # MQTT
         if direction == "charge" and enable:
