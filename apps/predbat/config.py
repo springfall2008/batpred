@@ -167,6 +167,17 @@ CONFIG_ITEMS = [
         "default": 1.2,
     },
     {
+        "name": "ml_retrain_interval_hours",
+        "friendly_name": "ML Retrain Interval",
+        "type": "input_number",
+        "min": 1,
+        "max": 48,
+        "step": 1,
+        "unit": "hours",
+        "icon": "mdi:clock-end",
+        "default": 2,
+    },
+    {
         "name": "battery_rate_max_scaling",
         "friendly_name": "Battery rate max scaling charge",
         "type": "input_number",
