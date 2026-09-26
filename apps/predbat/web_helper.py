@@ -1993,7 +1993,10 @@ function discardAllChanges() {
     return text
 
 
-def get_html_config_css():
+def get_filter_css():
+    """
+    Return the CSS for the filter box, shared by the Config and Apps pages
+    """
     text = """
         <style>
         .filter-container {
@@ -2015,6 +2018,13 @@ def get_html_config_css():
             border-color: #555;
         }
         </style>
+    """
+    return text
+
+
+def get_html_config_css():
+    text = get_filter_css()
+    text += """
         <script>
         // Save and restore filter value between page loads
         function saveFilterValue() {
@@ -2057,6 +2067,69 @@ def get_html_config_css():
 
         // Register event to restore filter value after page load
         document.addEventListener('DOMContentLoaded', restoreFilterValue);
+        </script>
+    """
+    return text
+
+
+def get_apps_filter_js():
+    """
+    Return the client-side row filter for the apps.yaml page filter box
+    """
+    text = """
+        <script>
+        // Save and restore the filter value between page loads, as the apps page auto-refreshes
+        function saveAppsFilterValue() {
+            localStorage.setItem('appsFilterValue', document.getElementById('appsFilter').value);
+        }
+
+        function restoreAppsFilterValue() {
+            const savedFilter = localStorage.getItem('appsFilterValue');
+            if (savedFilter) {
+                document.getElementById('appsFilter').value = savedFilter;
+                filterApps();
+            }
+        }
+
+        function filterApps() {
+            const filterValue = document.getElementById('appsFilter').value.toLowerCase();
+            const rows = document.querySelectorAll('tr[data-arg-name], tr[data-nested-path]');
+
+            // Save filter value for persistence
+            saveAppsFilterValue();
+
+            rows.forEach(function(row) {
+                // A nested row's path starts with the name of the setting it sits under, so a
+                // match on a setting keeps everything nested below it visible with no extra work
+                const path = (row.getAttribute('data-nested-path') || row.getAttribute('data-arg-name') || '').toLowerCase();
+                let matched = path.includes(filterValue);
+                if (!matched) {
+                    // Only match the value of a leaf row - a parent's value cell holds the text of
+                    // every row nested below it, so matching it would show the whole subtree
+                    const valueCell = row.children[1];
+                    if (valueCell && !valueCell.querySelector('tr')) {
+                        matched = valueCell.textContent.toLowerCase().includes(filterValue);
+                    }
+                }
+                row.style.display = matched ? '' : 'none';
+            });
+
+            // Re-show the parents of every row left visible, so a match nested inside a setting
+            // whose own name does not match is still reachable
+            rows.forEach(function(row) {
+                if (row.style.display === 'none') {
+                    return;
+                }
+                let parent = row.parentElement ? row.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                while (parent) {
+                    parent.style.display = '';
+                    parent = parent.parentElement ? parent.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                }
+            });
+        }
+
+        // Register event to restore filter value after page load
+        document.addEventListener('DOMContentLoaded', restoreAppsFilterValue);
         </script>
     """
     return text
