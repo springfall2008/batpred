@@ -3021,6 +3021,36 @@ class Fetch:
 
         return validated_curve
 
+    def check_export_more_solar_effective(self):
+        """
+        Warn when export_more_solar is on but cannot have any effect.
+
+        export_more_solar works by enabling Freeze Export on idle solar slots, and optimise_solar() returns
+        immediately unless export windows are being calculated and set_export_freeze is on. Otherwise the
+        switch is on but does nothing, with no indication anywhere (#4865). Must run after
+        fetch_inverter_data(), which forces set_export_freeze off for an inverter without freeze support,
+        so the value read in fetch_config_options() is not yet the one the plan will use.
+
+        Warns once per incident rather than every cycle, as the combination may be deliberate, but again
+        whenever the reason changes - otherwise fixing one cause would silently leave the next one in place.
+        Re-arms once export_more_solar is effective so a later recurrence is reported.
+        """
+        reason = None
+        if self.export_more_solar:
+            if not self.calculate_best_export:
+                reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
+            elif not self.set_export_freeze:
+                # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off
+                # whatever the switch says, so advising the user to turn the switch on would change nothing.
+                if self.inverters and not self.inverters[0].inv_support_discharge_freeze:
+                    reason = "the inverter does not support Freeze Export. Turn export_more_solar off."
+                else:
+                    reason = "set_export_freeze is off. Enable set_export_freeze, or turn export_more_solar off."
+
+        if reason and reason != self.export_more_solar_warned_reason:
+            self.log("Warn: export_more_solar is enabled but has no effect, as it works by enabling Freeze Export on idle solar slots and " + reason)
+        self.export_more_solar_warned_reason = reason
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -3227,17 +3257,6 @@ class Fetch:
         self.set_freeze_export_during_demand = self.get_arg("set_freeze_export_during_demand")
         self.export_more_solar = self.get_arg("export_more_solar")
         self.export_more_solar_threshold = self.get_arg("export_more_solar_threshold")
-        # export_more_solar works by enabling Freeze Export on idle solar slots, so optimise_solar()
-        # returns immediately when set_export_freeze is off - the switch is then on but does nothing
-        # at all, with no indication anywhere. Warn once per incident rather than every cycle (same
-        # reasoning as car_charging_energy_warned below), and reset when the combination is fixed so
-        # a later recurrence is reported again.
-        if self.export_more_solar and not self.set_export_freeze:
-            if not self.export_more_solar_warned:
-                self.log("Warn: export_more_solar is enabled but set_export_freeze is off - export_more_solar has no effect, as it works by enabling Freeze Export on idle solar slots. Enable set_export_freeze, or turn export_more_solar off.")
-                self.export_more_solar_warned = True
-        else:
-            self.export_more_solar_warned = False
         # Mode
         self.predbat_mode = self.get_arg("mode")
         if self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_SOC]:
