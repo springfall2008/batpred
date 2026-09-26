@@ -2,7 +2,7 @@ export const CONFIG_GROUPS = ['System', 'Solar', 'Load', 'Battery', 'Plan', 'Inv
 
 /** Put each live setting in the first relevant, user-facing group. */
 export function configGroup(name: string): typeof CONFIG_GROUPS[number] {
-  if (/^(version|expert_|performance_|active$|compare_|update$|auto_update|debug_|chat_|ai_|set_.*notify|set_read_only|carbon_|saverestore)/.test(name)) return 'System'
+  if (/^(module$|class$|dependencies$|prefix$|timezone$|template$|web_ui$|version|expert_|performance_|active$|compare_|update$|auto_update|debug_|chat_|ai_|set_.*notify|set_read_only|carbon_|saverestore)/.test(name)) return 'System'
   if (/^(pv_|.*solar)/.test(name)) return 'Solar'
   if (/^(load_|holiday_)/.test(name)) return 'Load'
   if (/^(inverter_|balance_inverters)/.test(name)) return 'Inverter'
