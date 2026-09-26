@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_rates2, reset_inverter
+from config import CONFIG_ITEMS
 
 
 def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=8.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=True, plan_time="00:00:00", expect_cost=0, expect_kwh=0):
@@ -107,6 +108,25 @@ def run_car_charging_slot_integer_test(test_name, my_predbat, battery_size, soc,
     return failed
 
 
+def run_car_charging_smart_default_test():
+    """
+    Smart car planning must be on by default (#5237).
+
+    With it off, the car fills every low-rate slot in time order from plug-in. A one-off event
+    such as an Octopus saving session can lift the automatic import threshold high enough to
+    admit the ordinary peak into the low-rate slots, so a default install charged at peak rate.
+    """
+    print("**** Running Test: smart_default ****")
+    items = [item for item in CONFIG_ITEMS if item["name"] == "car_charging_plan_smart"]
+    if len(items) != 1:
+        print("ERROR: expected one car_charging_plan_smart config item, found {}".format(len(items)))
+        return True
+    if items[0]["default"] is not True:
+        print("ERROR: car_charging_plan_smart default should be True, got {}".format(items[0]["default"]))
+        return True
+    return False
+
+
 def run_car_charging_smart_tests(my_predbat):
     """
     Test car charging smart
@@ -115,6 +135,7 @@ def run_car_charging_smart_tests(my_predbat):
     reset_inverter(my_predbat)
 
     print("**** Running Car Charging Smart tests ****")
+    failed |= run_car_charging_smart_default_test()
     import_rate = 10.0
     export_rate = 5.0
     reset_rates2(my_predbat, import_rate, export_rate)
