@@ -456,12 +456,6 @@ class Plan:
             return (run[0], run[1])
         return None
 
-    def dynamic_load_car_in_slot(self, car_n, minute):
-        """
-        Whether minute (exact) falls inside one of car_n's dispatches.
-        """
-        return self.dynamic_load_car_dispatch(car_n, minute) is not None
-
     def dynamic_load_car_is_octopus(self, car_n):
         """
         Whether car_n's slots were built by Octopus Intelligent charging (load_octopus_slots() marks them).
@@ -552,9 +546,13 @@ class Plan:
 
     def dynamic_load_car_check_config(self):
         """
-        With octopus_intelligent_trust_slots Off, list the cars whose Octopus Intelligent slots can
-        never be trusted: no car_charging_now entity and not inside the CT clamp, so nothing can ever
-        show the car charging. Logged as a warning whenever that list changes, not every cycle.
+        Refresh which cars have a car_charging_now entity, and warn about settings that leave
+        octopus_intelligent_trust_slots Off without effect, or unable to confirm a slot - each logged only when it changes:
+        - octopus_intelligent_dynamic Off too: nothing confirms a slot, so Off has no effect;
+        - octopus_intelligent_charging Off: the dispatch rates are used as before;
+        - cars with no car_charging_now entity and not inside the CT clamp, whose slots can never be trusted.
+
+        Returns that list of cars.
         """
         self.dynamic_load_car_refresh_sensors()
         dynamic_off = (not self.octopus_intelligent_trust_slots) and (not self.octopus_intelligent_dynamic)
@@ -618,7 +616,7 @@ class Plan:
                 was_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
                 if cancelled != was_cancelled:
                     changed = True
-                    if cancelled and self.dynamic_load_car_in_slot(car_n, minute):
+                    if cancelled and self.dynamic_load_car_dispatch(car_n, minute) is not None:
                         reason = "is in a dispatch but not charging, cancelling its slots"
                     elif cancelled:
                         reason = "has not been seen charging in its dispatches yet, not trusting them"
