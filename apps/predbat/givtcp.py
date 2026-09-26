@@ -458,6 +458,11 @@ class GivTCPComponent(ComponentBase):
         # published points the arg at a non-existent entity, and get_arg then returns its default
         # instead of the user's own apps.yaml value.
         self.published_discovery = {}
+        # What each key held before automatic_config() first claimed it. A capability-gated claim is
+        # made on the fleet as it stands, which can include gap slots whose endpoint has not answered
+        # yet; if that endpoint turns out to lack the capability, the re-run hands the key back to
+        # this value rather than leaving the stale claim in place until restart.
+        self.claimed_from = {}
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -531,7 +536,14 @@ class GivTCPComponent(ComponentBase):
         self.refresh_discovery()
 
         if rediscover:
+            fleet_before = len(self.discovered)
             await self.rediscover()
+            if len(self.discovered) > fleet_before:
+                # automatic_config() below gates each discovery key on every managed inverter having
+                # published it, and the adopted inverter has not been published yet this cycle. Without
+                # this every such gate fails on the re-run and the key is handed back to apps.yaml for
+                # the whole fleet, with nothing to re-run it once the next poll does publish.
+                await self.publish_data()
 
         # Re-runs when the fleet has grown. Deliberately not when it shrinks: self.discovered is
         # append-only, because dropping an inverter that stopped answering would rebuild Predbat's
@@ -562,9 +574,8 @@ class GivTCPComponent(ComponentBase):
             if not data:
                 continue
             rest.inverter.rest_data = data
-            # Appended, never inserted. The order of self.discovered is Predbat's inverter
-            # numbering, so moving an existing entry would repoint a running inverter at different
-            # physical hardware mid-flight.
+            # The order of self.discovered carries no meaning: automatic_config() fills Predbat
+            # inverter n from REST endpoint n whatever order the endpoints answered in (#5209).
             self.discovered.append(n)
             self.identified.add(n)
             self.log(
@@ -821,34 +832,55 @@ class GivTCPComponent(ComponentBase):
                 continue
         return largest
 
-    def _keep_configured_tail(self, key, values, fleet_size):
+    def _per_endpoint_values(self, key, make, fleet_size):
         """
-        values for the inverters discovered here, followed by whatever is already configured for
-        any inverter beyond them.
+        One value per Predbat inverter, where Predbat inverter n is always REST endpoint n.
 
-        The discovered inverters take the leading slots; the rest of the fleet is configured some
-        other way, and replacing the whole list with only this component's entities left those
-        inverters pointing at nothing (#5029). A scalar value applies to every index, so it is
-        broadcast into the tail rather than dropped; a configured list shorter than the fleet is
-        left short rather than padded with a made-up entry - Inverter fills its own dummies in for
-        the keys that need one, and inventing a type or an entity here is how the inverter that is
-        not ours ends up mis-driven.
+        A discovered endpoint's slot gets make(n). Every other slot keeps whatever is already
+        configured for it. Filling the slots positionally from self.discovered instead meant an
+        endpoint that was down at startup shifted every later inverter's entities down one slot,
+        while per-inverter settings that are not auto-configured (inverter_limit_charge and the
+        like) stayed where they were - one physical inverter then got driven by two Predbat
+        inverters and another by none, and adopting the late endpoint on re-probe turned the shift
+        into a rotation (#5209).
+
+        Past the last discovered endpoint the rest of the fleet is configured some other way, and
+        replacing the whole list with only this component's entities left those inverters pointing
+        at nothing (#5029). A scalar value applies to every index, so it is broadcast rather than
+        dropped; a configured list shorter than the fleet is left short there rather than padded
+        with a made-up entry - Inverter fills its own dummies in for the keys that need one, and
+        inventing a type or an entity for an inverter that is not ours is how it ends up mis-driven.
+        A slot below the last discovered endpoint cannot be left out without renumbering everything
+        after it, and it is one of our own endpoints that has not answered yet, so where nothing is
+        configured for it, it gets make(n) - what it will be once it does.
         """
-        if fleet_size <= len(values):
-            return values
         configured = self._configured_value(key)
-        if configured is None:
-            return values
-        if not isinstance(configured, list):
+        if configured is not None and not isinstance(configured, list):
             configured = [configured] * fleet_size
-        return values + configured[len(values) : fleet_size]
+        last_discovered = max(self.discovered)
+        values = []
+        for n in range(fleet_size):
+            if n in self.discovered:
+                values.append(make(n))
+            elif configured is not None and n < len(configured):
+                values.append(configured[n])
+            elif n < last_discovered:
+                values.append(make(n))
+            else:
+                break
+        return values
 
     async def automatic_config(self):
         """Point Predbat's standard entity-based apps.yaml keys at the entities this component publishes."""
         # What gets claimed is driven by the endpoints that answered discovery, not by the length of
-        # the configured givtcp_rest list - claiming an entity for a URL with nothing behind it
-        # would have Predbat plan and execute against a phantom battery. The fleet size can still
-        # come out larger than that, but only where the user asked for it: see n_inverters below.
+        # the configured givtcp_rest list: no slot is claimed past the highest endpoint that
+        # answered, so the template's trailing placeholder URLs never become inverters. Below that
+        # endpoint Predbat inverter n has to be REST endpoint n (#5209), so a slot whose endpoint has
+        # not answered is claimed too - with the user's own configuration where there is one, and
+        # otherwise with the entities that endpoint will publish once it does. Until then Predbat
+        # plans that inverter without live data, which is the cost of not renumbering the fleet
+        # around it; the warning below says so. Past the highest endpoint the fleet can still come
+        # out larger, but only where the user asked for it: see n_inverters below.
         if not self.automatic:
             self.log("Info: GivTCP: givtcp_automatic is off - publishing entities but leaving apps.yaml to you")
             return
@@ -859,15 +891,29 @@ class GivTCPComponent(ComponentBase):
             return
 
         n_discovered = len(discovered)
-        # The fleet only ever grows here. An inverter this component cannot discover - another
-        # vendor's, or one configured by hand - is still part of the fleet, so writing the
+        # Predbat inverter n is REST endpoint n, so the fleet reaches at least the highest endpoint
+        # that answered. It only ever grows here: an inverter this component cannot discover -
+        # another vendor's, or one configured by hand - is still part of the fleet, so writing the
         # discovered count over a larger configured num_inverters dropped it from Predbat entirely
         # (#5029).
-        n_inverters = max(n_discovered, self._configured_num_inverters())
+        n_covered = max(discovered) + 1
+        n_inverters = max(n_covered, self._configured_num_inverters())
         self.log("GivTCP: configuring Predbat for {} discovered inverter(s)".format(n_discovered))
-        if n_inverters > n_discovered:
-            self.log("Info: GivTCP: {} inverter(s) are configured and {} answered here - leaving inverter {} onwards as configured".format(n_inverters, n_discovered, n_discovered))
-        self.set_arg_auto("inverter_type", self._keep_configured_tail("inverter_type", ["GE" for _ in range(n_discovered)], n_inverters))
+        # The two kinds of slot that did not answer are treated differently by _per_endpoint_values(),
+        # so they are reported separately: a gap below the highest endpoint that answered is bound
+        # to its own endpoint's entities wherever nothing is configured for it, a slot past it is
+        # only ever left as configured.
+        gap = [n for n in range(n_covered) if n not in discovered]
+        tail = list(range(n_covered, n_inverters))
+        if gap:
+            self.log(
+                "Warn: GivTCP: no inverter has answered yet at {} - Predbat inverter(s) {} keep their own slot and are bound to that endpoint's entities wherever nothing is configured for them, so they are planned without live data until it answers. Remove the URL from givtcp_rest if that inverter no longer exists.".format(
+                    ", ".join(self.rest[n].inverter.rest_api for n in gap), ", ".join(str(n) for n in gap)
+                )
+            )
+        if tail:
+            self.log("Info: GivTCP: {} inverter(s) are configured and {} answered here - leaving inverter(s) {} as configured".format(n_inverters, n_discovered, ", ".join(str(n) for n in tail)))
+        self.set_arg_auto("inverter_type", self._per_endpoint_values("inverter_type", lambda n: "GE", n_inverters))
         self.set_arg_auto("num_inverters", n_inverters)
 
         keys = list(GIVTCP_AUTO_CONFIG_KEYS)
@@ -926,11 +972,22 @@ class GivTCPComponent(ComponentBase):
             else:
                 self.log("Info: GivTCP: the battery pause time slots are not reported by every inverter - leaving pause_start_time/pause_end_time to your apps.yaml config")
 
+        # A key claimed on an earlier run whose gate has since failed - typically a late endpoint
+        # adopted on re-probe that lacks the capability the earlier fleet had - goes back to what it
+        # held before. Left alone, its gap-slot entry points at an entity that endpoint will never
+        # publish, so get_arg returns its default instead of the user's own apps.yaml value.
+        for key in [key for key in self.claimed_from if key not in keys]:
+            self.log("Info: GivTCP: {} is no longer supported by every managed inverter - handing it back to your apps.yaml config".format(key))
+            self.set_arg(key, self.claimed_from.pop(key))
+
         for key in keys:
+            if key not in self.claimed_from:
+                previous = self._configured_value(key)
+                self.claimed_from[key] = list(previous) if isinstance(previous, list) else previous
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
             if key == "battery_scaling":
-                self.set_arg_auto(key, self._keep_configured_tail(key, [self._entity_id("sensor", n, "battery_dod_soh") for n in discovered], n_inverters))
+                self.set_arg_auto(key, self._per_endpoint_values(key, lambda n: self._entity_id("sensor", n, "battery_dod_soh"), n_inverters))
                 continue
             # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
             # write, so renumbering would route the surviving inverter's writes at a dead client.
@@ -938,7 +995,7 @@ class GivTCPComponent(ComponentBase):
             # overwrite=False on the history-bearing energy totals leaves a sensor the user named
             # themselves in place, so its recorded history survives - set_arg_auto still fills the
             # key in when they named nothing.
-            self.set_arg_auto(key, self._keep_configured_tail(key, [self._entity_id(domain, n, key) for n in discovered], n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
+            self.set_arg_auto(key, self._per_endpoint_values(key, lambda n, domain=domain, key=key: self._entity_id(domain, n, key), n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
 
     def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
         """
