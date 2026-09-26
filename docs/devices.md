@@ -168,7 +168,7 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 
 **Determine if the car is charging now**
 
-Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat
+Holds the house battery for the car while it charges, including ad-hoc charging not planned via Predbat
 
 ```yaml
   car_charging_now:
@@ -276,7 +276,11 @@ Can be used both for the Car Charging Hold feature (to filter out previous car c
   car_charging_energy: 're:sensor.wallbox_portal_added_energy'
   car_charging_planned:
     - 're:sensor.wallbox_portal_status_description'
+  car_charging_now:
+    - 're:sensor.wallbox_portal_charging_power'
 ```
+
+Wallbox has no "charging" sensor, so **car_charging_now** uses its charging power instead: 200W or more counts as charging, and Predbat holds the house battery for the car while it does.
 
 Wallbox works with Octopus Intelligent GO and can be triggered via Octopus themselves or an HA automation linked to the Predbat slot sensor
 

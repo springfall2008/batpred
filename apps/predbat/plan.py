@@ -230,6 +230,8 @@ class Plan:
         Return True if load status has changed and hence we need to re-plan
         """
         prev_last_load_status = self.load_last_status
+        prev_car_charging_now_modelled = {car_n for car_n, slots in enumerate(self.car_charging_now_slots) if slots}
+        self.car_charging_now_slots = [[] for car_n in range(self.num_cars)]
 
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
         threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
@@ -257,10 +259,15 @@ class Plan:
         # Planned car energy is also an upper-bound estimate for a sensor that has not caught up
         # yet. Calculate it over the same trailing period as load_last_period, including partial
         # slot overlaps, then convert the per-minute kW values to kWh.
+        # A car reporting car_charging_now outside any slot is drawing power too, at its charging rate.
         car_load_planned = 0.0
         if self.car_energy_reported_load:
             for minute in range(self.minutes_now - PREDICT_STEP, self.minutes_now):
-                car_load_planned += sum(in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]) / 60
+                car_load = in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]
+                for car_n in range(self.num_cars):
+                    if not car_load[car_n] and self.car_charging_now_active(car_n) and car_n < len(self.car_charging_rate):
+                        car_load[car_n] = self.car_charging_rate[car_n]
+                car_load_planned += sum(car_load) / 60
 
         car_energy_sensor_used = False
         if self.car_energy_reported_load and self.car_charging_hold and self.car_charging_energy:
@@ -277,9 +284,12 @@ class Plan:
         if self.car_energy_reported_load and not car_energy_sensor_used:
             load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
 
+        minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
+        # A car charging now outside its plan is modelled whether or not dynamic load is on: execute_plan() holds the battery for it
+        # either way, and an export window the plan picked over it would skip that hold
+        self.dynamic_load_car_charging_now(minutes_end_slot)
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
-            minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
             # When dynamic load is enabled, increase the load prediction in the current self.plan_interval_minutes minute period to match the
             # actual load (if the load is higher than expected), extending into the following period too once the load has been high for two
             # consecutive checks in a row. Cancelling the slots of a car that is not charging is done earlier in the cycle, before the rates
@@ -302,7 +312,49 @@ class Plan:
                 self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
 
+        # Which cars are modelled charging now - not the slots themselves, whose start moves every cycle
+        car_charging_now_modelled = {car_n for car_n, slots in enumerate(self.car_charging_now_slots) if slots}
+        if car_charging_now_modelled != prev_car_charging_now_modelled:
+            self.log("Dynamic load cars modelled charging now changed from {} to {}".format(sorted(prev_car_charging_now_modelled), sorted(car_charging_now_modelled)))
+            return True
         return False
+
+    def car_charging_now_active(self, car_n):
+        """
+        Whether car_n reports charging now (car_charging_now, as read at the start of this cycle).
+        """
+        return car_n < len(self.car_charging_now) and bool(self.car_charging_now[car_n])
+
+    def dynamic_load_car_charging_now(self, minutes_end_slot):
+        """
+        Model a car that reports charging now, but that no slot with energy covers, as charging at its rate
+        until minutes_end_slot - the end of the current plan interval. Runs every cycle, whether or not
+        dynamic load is on, as execute_plan() holds the battery for such a car either way.
+
+        The slot goes into car_charging_now_slots, never car_charging_slots: that is the published car plan,
+        which drives binary_sensor.predbat_car_charging_slot and so the charger, and a slot there would keep
+        the charge going on its own. The live plan's prediction and export windows read it through
+        car_charging_slots_model(), so the battery is held for the car there as execute_plan() holds it.
+        """
+        for car_n in range(self.num_cars):
+            if not self.car_charging_now_active(car_n) or car_n >= len(self.car_charging_rate):
+                continue
+            covered = any(slot["start"] <= self.minutes_now < slot["end"] and slot.get("kwh", 0) > 0 for slot in (self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []))
+            if covered or minutes_end_slot <= self.minutes_now:
+                continue
+            kwh = dp3(self.car_charging_rate[car_n] * (minutes_end_slot - self.minutes_now) / 60)
+            self.car_charging_now_slots[car_n] = [{"start": self.minutes_now, "end": minutes_end_slot, "kwh": kwh, "octopus": False}]
+            self.log("Car {} is charging now outside its plan, modelling {}kWh until {}".format(car_n, kwh, self.time_abs_str(minutes_end_slot)))
+
+    def car_charging_slots_model(self):
+        """
+        The car slots the live plan models: car_charging_slots with any car_charging_now_slots in front, so
+        in_car_slot() - which stops at the first slot covering a minute - finds the charging-now slot ahead
+        of a covering slot with no energy left. The lists are new, the slot dicts are shared.
+        """
+        now_slots = self.car_charging_now_slots
+        # Always a fresh list per car, so a caller that edits the model can never edit the published plan
+        return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
 
     def dynamic_load_classify(self):
         """
@@ -334,20 +386,10 @@ class Plan:
         (car_energy_reported_load): otherwise its charging never shows in the load at all. The load test
         is skipped just after midnight, when the load_today sensor resets.
         """
-        entity_id = self.dynamic_load_car_sensors.get(car_n)
-        if entity_id:
-            # Read the entity cached by dynamic_load_car_refresh_sensors() rather than get_arg(index=...):
-            # the poll calls this every 15 seconds, and an indexed read of a single (non-list) sensor
-            # shared by several cars logs a set-up warning each time. No default: an entity HA does not
-            # have (deleted, renamed, integration reloading) must read as no evidence, not resolve to a
-            # "no" that looks like the car has stopped.
-            raw = self.resolve_arg("car_charging_now", entity_id, default=None)
-            if raw is None or (isinstance(raw, str) and raw.lower() in ("unknown", "unavailable")):
+        if car_n in self.dynamic_load_car_sensors:
+            charging = self.car_charging_now_reading(car_n)
+            if charging is None:
                 return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES
-            if isinstance(raw, str):
-                charging = raw.lower() in self.car_charging_now_response
-            else:
-                charging = bool(raw)
             return (not charging), DYNAMIC_LOAD_CAR_SENSOR_MINUTES
         if self.car_energy_reported_load:
             # No load history (e.g. a load_forecast-only install, where load_last_period is a hard-coded
@@ -356,6 +398,23 @@ class Plan:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
             return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES
         return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
+
+    def car_charging_now_reading(self, car_n):
+        """
+        Read car_n's car_charging_now entity live: True (charging), False (not charging) or None (no
+        entity, or no evidence).
+
+        Reads the entity cached by dynamic_load_car_refresh_sensors() rather than get_arg(index=...): the
+        polls call this every 15 seconds, and an indexed read of a single (non-list) sensor shared by
+        several cars logs a set-up warning each time. No default: an entity HA does not have (deleted,
+        renamed, integration reloading) must read as no evidence, not resolve to a "no" that looks like
+        the car has stopped.
+        """
+        entity_id = self.dynamic_load_car_sensors.get(car_n)
+        if not entity_id:
+            return None
+        # required_unit: a charging power sensor is compared in watts (see car_charging_now_value())
+        return self.car_charging_now_value(self.resolve_arg("car_charging_now", entity_id, default=None, required_unit="W"))
 
     def dynamic_load_car_in_slot(self, car_n, minute):
         """
@@ -561,6 +620,33 @@ class Plan:
 
         if due:
             self.log("Dynamic load: car charging state changed, will re-plan")
+            self.update_pending = True
+        return due
+
+    def car_charging_now_poll(self):
+        """
+        Called from the 15 second loop between plan cycles: ask for a replan as soon as a car_charging_now
+        entity flips, so "Hold for car" starts and stops with the charge rather than up to 5 minutes later.
+
+        A flip always changes the plan, which models a car charging now outside its plan, as well as the hold.
+        A static literal in apps.yaml is never polled and "unknown"/"unavailable" is no evidence (see
+        car_charging_now_reading()).
+
+        Returns True when it set update_pending.
+        """
+        if not self.num_cars:
+            return False
+
+        due = False
+        for car_n in self.dynamic_load_car_sensors:
+            if car_n >= len(self.car_charging_now):
+                continue
+            charging = self.car_charging_now_reading(car_n)
+            if charging is not None and charging != self.car_charging_now[car_n]:
+                due = True
+
+        if due:
+            self.log("Car charging now changed, will re-plan")
             self.update_pending = True
         return due
 
@@ -1779,7 +1865,7 @@ class Plan:
             self.calculate_yesterday()
 
         # Creation prediction object
-        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=self.car_charging_slots_model())
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
@@ -5636,30 +5722,11 @@ class Plan:
         if ready_minutes < self.minutes_now:
             ready_minutes += 24 * 60
 
-        # Car charging now override
-        extra_slot = {}
-        if self.car_charging_now[car_n]:
-            start = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
-            end = start + self.plan_interval_minutes
-            extra_slot["start"] = start
-            extra_slot["end"] = end
-            extra_slot["average"] = self.rate_import.get(start, self.rate_min)
-            self.log("Car is charging now slot {}".format(extra_slot))
-
-            for window_p in price_sorted:
-                window = low_rates[window_p]
-                if window["start"] == start:
-                    price_sorted.remove(window_p)
-                    self.log("Remove old window {}".format(window_p))
-                    break
-
-            price_sorted = [-1] + price_sorted
-
+        # car_charging_now never adds a slot here: this plan drives binary_sensor.predbat_car_charging_slot,
+        # which starts the charger, so a slot for "charging now" kept a charge going on its own. The hold
+        # for a car charging outside the plan is execute_plan()'s, and dynamic load models its load.
         for window_n in price_sorted:
-            if window_n == -1:
-                window = extra_slot
-            else:
-                window = low_rates[window_n]
+            window = low_rates[window_n]
 
             start = max(window["start"], self.minutes_now)
             end = min(window["end"], ready_minutes)
@@ -5807,8 +5874,9 @@ class Plan:
                 return hit
 
         hit = False
+        car_slots = self.car_charging_slots_model()
         for car_n in range(self.num_cars):
-            for window in self.car_charging_slots[car_n]:
+            for window in car_slots[car_n]:
                 if window["end"] > window_start and window["start"] < window_end and dp2(window["kwh"]) > 0:
                     hit = True
                     break

@@ -157,11 +157,12 @@ pred_bat:
     - 'plugged in'
     - 'waiting'
 
-  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
-  # The car charging now can be set to a sensor to indicate the car is charging and to plan
-  # for it to charge during this 30 minute slot
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
   #car_charging_now:
-  #  - off
+  #  - sensor.wallbox_portal_charging_power
 
   # Positive responses for car_charging_now
   car_charging_now_response:

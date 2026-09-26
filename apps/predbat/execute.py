@@ -772,40 +772,49 @@ class Execute:
             carHolding = False
             if self.set_charge_window and not self.car_charging_from_battery:
                 for car_n in range(self.num_cars):
-                    if self.car_charging_slots[car_n]:
+                    car_hold = False
+                    if car_n < len(self.car_charging_now) and self.car_charging_now[car_n]:
+                        # The car is drawing power now, in a slot or not. car_charging_now adds no slot (a slot drives the
+                        # charger, so it kept the charge going), so it holds here directly - and ahead of the modelled
+                        # car SoC, which a sensor reporting the car charging outranks.
+                        self.log("Car charging from battery is off, car {} is charging now".format(car_n))
+                        car_hold = True
+                    elif self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
                         if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
                             self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                         elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                            # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
-                            # from draining the battery
-                            if not isExporting:
-                                if inverter.inv_has_timed_pause:
-                                    if resetPause:
-                                        inverter.adjust_pause_mode(pause_discharge=True)
-                                        pause_discharge_requested = True
-                                        resetPause = False
+                            car_hold = True
+                    if car_hold:
+                        # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
+                        # from draining the battery
+                        if not isExporting:
+                            if inverter.inv_has_timed_pause:
+                                if resetPause:
+                                    inverter.adjust_pause_mode(pause_discharge=True)
+                                    pause_discharge_requested = True
+                                    resetPause = False
+                            else:
+                                if discharge_rate is None:
+                                    discharge_rate = 0
+                                # Not while actually charging: the battery is being filled from the grid, so it
+                                # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
+                                # write for every 1% of the climb (#3899). Left to reset below for the duration,
+                                # and latched at the SoC reached once charging stops - which is the point the
+                                # inverter returns to demand and the hold starts to mean something. The sibling
+                                # iBoost hold below already sits out a charge for the same reason.
+                                if self.set_reserve_enable and status != "Charging":
+                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    resetReserve = False
+                            carHolding = True
+                            self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
+                            if ("Hold for car" not in status) and (status_hold_car == ""):
+                                if status == "Demand":
+                                    status = "Hold for car"
                                 else:
-                                    if discharge_rate is None:
-                                        discharge_rate = 0
-                                    # Not while actually charging: the battery is being filled from the grid, so it
-                                    # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
-                                    # write for every 1% of the climb (#3899). Left to reset below for the duration,
-                                    # and latched at the SoC reached once charging stops - which is the point the
-                                    # inverter returns to demand and the hold starts to mean something. The sibling
-                                    # iBoost hold below already sits out a charge for the same reason.
-                                    if self.set_reserve_enable and status != "Charging":
-                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
-                                        resetReserve = False
-                                carHolding = True
-                                self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
-                                if ("Hold for car" not in status) and (status_hold_car == ""):
-                                    if status == "Demand":
-                                        status = "Hold for car"
-                                    else:
-                                        status_hold_car = ", Hold for car"
-                            break
+                                    status_hold_car = ", Hold for car"
+                        break
 
             # iBoost running?
             boostHolding = False

@@ -2938,24 +2938,6 @@ class Octopus:
         pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
-    def add_now_to_octopus_slot(self, car_n, octopus_slots, now_utc):
-        """
-        For intelligent charging, add in if the car is charging now as a low rate slot (workaround for Ohme)
-        """
-        if car_n < len(self.car_charging_now) and self.car_charging_now[car_n]:
-            minutes_start_slot = int(self.minutes_now / 30) * 30
-            minutes_end_slot = minutes_start_slot + 30
-            slot_start_date = self.midnight_utc + timedelta(minutes=minutes_start_slot)
-            slot_end_date = self.midnight_utc + timedelta(minutes=minutes_end_slot)
-            slot = {}
-            slot["start"] = slot_start_date.strftime(TIME_FORMAT)
-            slot["end"] = slot_end_date.strftime(TIME_FORMAT)
-            slot["source"] = "car_charging_now"
-            slot["kwh"] = self.car_charging_rate[car_n] * 30 / 60  # Scale to 30 minute slot
-            octopus_slots.append(slot)
-            self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
-        return octopus_slots
-
     def octopus_slots_signature(self, octopus_slots):
         """
         Build a single change-detection signature value for the intelligent dispatch slots.
