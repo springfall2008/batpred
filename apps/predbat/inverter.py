@@ -516,13 +516,12 @@ class Inverter:
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         # Whether this "power" mode inverter type needs a synthetic charge_rate/discharge_rate HA
         # entity auto-created when it has no inverter-source component covering it (see the
-        # elif self.inv_needs_charge_rate_entity branch below). Defaults True to match every "power" mode
-        # type's existing behaviour - the underlying need (a "power" inverter with no source
-        # component has nowhere else to persist the computed rate, #3311) isn't specific to one
-        # inverter, it applies to any of them run without a source (e.g. GE's own documented
-        # "if not using REST" case). An explicit, discoverable per-type flag rather than
-        # silently inferring "needs one" from whatever is/isn't already in args - and gives a lever
-        # to opt a specific type out later if one is found that genuinely never needs it.
+        # elif self.inv_needs_charge_rate_entity branch below). Defaults True because the need (a
+        # "power" inverter with no source component has nowhere else to persist the computed rate,
+        # #3311) isn't specific to one inverter - it applies to any of them run without a source
+        # (e.g. GE's own documented "if not using REST" case), and user-defined types copy GE's
+        # definition, which does not set it. An explicit per-type flag rather than inferring the need
+        # from whatever is or isn't already in args, and the lever to opt a type out.
         self.inv_needs_charge_rate_entity = INVERTER_DEF[self.inverter_type].get("has_charge_rate_entity", True)
 
         # If it's not a GE inverter then turn Quiet off
@@ -558,7 +557,12 @@ class Inverter:
             # default however capable the inverter really is, and every rate Predbat plans and
             # writes is scaled against it. Fall back to battery_rate_max, which GECloud already
             # populates from the device's own reported max_charge_rate (GH#4908).
-            if self.base.get_arg("charge_rate", indirect=False, index=self.id):
+            #
+            # Predbat's own dummy charge_rate (a source-less "power" inverter, see the
+            # inv_needs_charge_rate_entity branch below) has no "max" attribute either, so it is
+            # treated as unset too - otherwise every refresh after it was created fell back to 2600W.
+            charge_rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+            if charge_rate_entity and charge_rate_entity != self.dummy_entity_id("charge_rate"):
                 self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
             else:
                 self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
@@ -774,8 +778,19 @@ class Inverter:
                 configured = self.base.args.get(rate_arg)
                 if configured is not None and not isinstance(configured, list):
                     continue
-                if isinstance(configured, list) and self.id < len(configured) and configured[self.id] not in (None, ""):
+                slot = configured[self.id] if isinstance(configured, list) and self.id < len(configured) else None
+                if slot == self.dummy_entity_id(rate_arg):
+                    # Our own dummy from an earlier refresh, or from a previous object: re-assert it
+                    # rather than skip. HA drops it on a restart, and a fresh object needs it in
+                    # created_attributes or its writes strip the unit. create_entity() leaves an
+                    # existing state alone.
+                    self.create_entity(rate_arg, rate_default, uom="W", device_class="power")
                     continue
+                if isinstance(slot, str) and slot:
+                    continue
+                # A bare number in this inverter's slot is not an entity to write to - it is another
+                # inverter's create_missing_arg() default (a "current" mode inverter seeds [default] * 4)
+                # - so it is treated as unset rather than as configured.
                 if configured is None and source_active:
                     # A source component is active and has not written this key at all - either its
                     # automatic config is off (givtcp_automatic/ge_cloud_automatic: the user was told
@@ -787,6 +802,17 @@ class Inverter:
                     # this index is outside it (a component-backed inverter 0 alongside a
                     # script-driven Solax at 1), so the uncovered slot does need its own entity.
                     continue
+                if self.base.get_arg(rate_arg + "_percent", indirect=False, index=self.id, default=None):
+                    # The percentage register is this inverter's real rate control (GECloud's 3-phase
+                    # units, #4908) and get_current_charge_rate() reads it in preference, so the empty
+                    # power slot beside it is not a gap to fill.
+                    continue
+                if configured is None:
+                    # Start from an empty list rather than create_missing_arg()'s [default] * 4: a bare
+                    # number in another inverter's slot reads as configured to that inverter's own pass
+                    # through this loop, so only inverter 0 would ever get an entity. Padded with None
+                    # instead, as create_missing_arg() already does for a short list.
+                    self.base.args[rate_arg] = []
                 self.create_missing_arg(rate_arg, rate_default)
                 self.base.args[rate_arg][self.id] = self.create_entity(rate_arg, rate_default, uom="W", device_class="power")
 
@@ -1570,12 +1596,17 @@ class Inverter:
             self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(self.id, curve_type, soc_label, curve_type))
         return {}
 
+    def dummy_entity_id(self, entity_name):
+        """
+        The entity id create_entity() uses for this inverter's dummy of entity_name
+        """
+        return f"sensor.{self.base.prefix}_{self.inverter_type}_{self.id}_{entity_name}"
+
     def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
-        prefix = self.base.prefix
-        entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
+        entity_id = self.dummy_entity_id(entity_name)
 
         attributes = {
             "state_class": "measurement",

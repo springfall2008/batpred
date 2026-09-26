@@ -1011,6 +1011,280 @@ def test_low_power_mode_entity_filled_beyond_component_backed_fleet(test_name, m
     return failed
 
 
+def test_low_power_mode_entity_created_for_every_inverter_from_absent_key(test_name, my_predbat):
+    """
+    #4645 review: with the rate keys absent and two source-less "power" inverters, inverter 0 used to
+    seed the list as [its dummy, default, default, default]. Inverter 1 then found a bare number in
+    its own slot, took it for a configured value and skipped creation - so its rate writes went to
+    "5000.0" as if it were an entity id and get_current_charge_rate() read the default back, the
+    #3311 fault again for every inverter after the first.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["givtcp_rest"] = None
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        Inverter(my_predbat, 0)
+        inv1 = Inverter(my_predbat, 1)
+
+        for rate_arg in ["charge_rate", "discharge_rate"]:
+            slots = my_predbat.args.get(rate_arg, [])
+            for inverter_id in (0, 1):
+                expected = inv1.dummy_entity_id(rate_arg).replace("_1_", "_{}_".format(inverter_id))
+                if len(slots) <= inverter_id or slots[inverter_id] != expected:
+                    print("ERROR: {} {} slot {} should be its own dummy entity {}, got {}".format(test_name, rate_arg, inverter_id, expected, slots))
+                    failed = True
+
+            if any(not (slot is None or isinstance(slot, str)) for slot in slots):
+                print("ERROR: {} {} should hold only entity ids or None, not another inverter's bare default: {}".format(test_name, rate_arg, slots))
+                failed = True
+
+        inv1.adjust_charge_rate(1000, notify=False)
+        if inv1.get_current_charge_rate() != 1000:
+            print("ERROR: {} inverter 1's planned charge rate did not round-trip, read back {}".format(test_name, inv1.get_current_charge_rate()))
+            failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def test_low_power_mode_entity_not_created_when_percent_control_configured(test_name, my_predbat):
+    """
+    #4645 review: GECloud configures a 3-phase GivEnergy unit through charge_rate_percent and leaves
+    its charge_rate slot None (#4908). That slot is not a gap - the percentage register is the real
+    control, and get_current_charge_rate() reads it in preference - so no dummy should be created
+    for it. A dummy there would also be read back for the battery's maximum rate (see
+    test_low_power_mode_dummy_does_not_reset_battery_rate_max).
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["charge_rate"] = ["number.real_charge_rate", None]
+        my_predbat.args["discharge_rate"] = ["number.real_discharge_rate", None]
+        my_predbat.args["charge_rate_percent"] = [None, "number.real_charge_rate_percent"]
+        my_predbat.args["discharge_rate_percent"] = [None, "number.real_discharge_rate_percent"]
+
+        Inverter(my_predbat, 1)
+
+        for rate_arg in ["charge_rate", "discharge_rate"]:
+            if my_predbat.args[rate_arg][1] is not None:
+                print("ERROR: {} {} slot 1 has percentage control configured but got a dummy entity: {}".format(test_name, rate_arg, my_predbat.args[rate_arg]))
+                failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def test_low_power_mode_dummy_does_not_reset_battery_rate_max(test_name, my_predbat):
+    """
+    #4645 review: for GE/GEC/GEE types a configured charge_rate is read for its "max" attribute to
+    size the battery's rate. The auto-created dummy has no such attribute, so once it existed every
+    later refresh (each plan cycle, now that inverters persist) and every fresh build dropped
+    battery_rate_max_raw to the 2600W default - scaling every planned rate against the wrong maximum.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["battery_rate_max"] = 5000
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        inv = Inverter(my_predbat, 0)
+        first = inv.battery_rate_max_raw
+        if my_predbat.args.get("charge_rate", [None])[0] != inv.dummy_entity_id("charge_rate"):
+            print("ERROR: {} test fixture assumption broken - no dummy charge_rate was created: {}".format(test_name, my_predbat.args.get("charge_rate")))
+            failed = True
+
+        inv.refresh_config()
+        rebuilt = Inverter(my_predbat, 0)
+        for label, value in (("first build", first), ("refresh", inv.battery_rate_max_raw), ("fresh build", rebuilt.battery_rate_max_raw)):
+            if value != 5000:
+                print("ERROR: {} battery_rate_max_raw after {} should stay 5000, got {}".format(test_name, label, value))
+                failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def test_low_power_mode_dummy_reasserted(test_name, my_predbat):
+    """
+    #4645 review: once the dummy was in args the per-index gate skipped it as configured, so it was
+    never created again - after an HA restart the sensor stayed missing and reads fell back to
+    battery_rate_max, and a fresh Inverter object never learnt its attributes, so its writes dropped
+    the unit. Our own dummy is re-asserted on every refresh instead.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["givtcp_rest"] = None
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        inv = Inverter(my_predbat, 0)
+        entity_id = inv.dummy_entity_id("charge_rate")
+        my_predbat.ha_interface.dummy_items.pop(entity_id, None)  # as after an HA restart
+        inv.refresh_config()
+        if my_predbat.get_state_wrapper(entity_id) is None:
+            print("ERROR: {} dummy {} was not re-created on refresh after HA lost it".format(test_name, entity_id))
+            failed = True
+
+        fresh = Inverter(my_predbat, 0)
+        if fresh.created_attributes.get(entity_id, {}).get("unit_of_measurement") != "W":
+            print("ERROR: {} a fresh object should know its dummy's attributes, got {}".format(test_name, fresh.created_attributes.get(entity_id)))
+            failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def test_low_power_mode_bare_number_slot_is_unset(test_name, my_predbat):
+    """
+    #4645 review: a "current" mode inverter seeds the rate list as [default] * 4 via
+    create_missing_arg(). A source-less "power" inverter after it found a bare number in its slot and
+    took it as configured, so it got no entity - the #3311 fault by another route.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["charge_rate"] = [2600.0, 2600.0, 2600.0, 2600.0]
+        my_predbat.args["discharge_rate"] = [2600.0, 2600.0, 2600.0, 2600.0]
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        inv = Inverter(my_predbat, 1)
+        for rate_arg in ["charge_rate", "discharge_rate"]:
+            if my_predbat.args[rate_arg][1] != inv.dummy_entity_id(rate_arg):
+                print("ERROR: {} {} slot 1 held a bare number and should have got a dummy, got {}".format(test_name, rate_arg, my_predbat.args[rate_arg]))
+                failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def _run_custom_solax_charge(my_predbat, inverter_def):
+    """Build a user-defined script-driven "power" inverter, plan a 2500W charge and start it.
+
+    Mirrors templates/solax_sx4.yaml, the #3311 setup: a custom inverter_type with its own
+    inverter: block, rates sent to a script through charge_start_service's {power}. Returns the
+    services called. The rate is set before the service call so this checks the entity round trip
+    only - execute_plan() itself writes rates after its per-inverter loop, which is a separate
+    ordering question. The caller snapshots and restores the fixture; the custom type this adds to the
+    global INVERTER_DEF is removed here.
+    """
+    ha = my_predbat.ha_interface
+    my_predbat.args["inverter_type"] = ["SOLAX_TEST"]
+    my_predbat.args["inverter"] = inverter_def
+    my_predbat.args["givtcp_rest"] = None
+    my_predbat.args["battery_rate_max"] = 6000
+    my_predbat.args["charge_start_service"] = "charge_start"
+    my_predbat.args["charge_stop_service"] = "charge_stop"
+    my_predbat.args["discharge_stop_service"] = "discharge_stop"
+    my_predbat.args["charge_freeze_service"] = None
+    my_predbat.args["device_id"] = "DID0"
+    for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+        my_predbat.args.pop(key, None)
+
+    saved_hash = dict(my_predbat.last_service_hash)
+    saved_store = (ha.service_store_enable, list(ha.service_store))
+    try:
+        inv = Inverter(my_predbat, 0)
+        inv.adjust_charge_rate(2500, notify=False)
+        inv.soc_percent = 50
+        my_predbat.last_service_hash.pop("charge", None)
+        my_predbat.last_service_hash.pop("discharge", None)
+        ha.service_store_enable = True
+        ha.service_store = []
+        inv.adjust_charge_immediate(80)
+        return ha.get_service_store()
+    finally:
+        INVERTER_DEF.pop("SOLAX_TEST", None)
+        my_predbat.last_service_hash.clear()
+        my_predbat.last_service_hash.update(saved_hash)
+        ha.service_store_enable, ha.service_store = saved_store
+
+
+SOLAX_TEMPLATE_DEF = {
+    "name": "Solax Gen4+ (Modbus Power Control)",
+    "has_rest_api": False,
+    "has_service_api": True,
+    "output_charge_control": "power",
+    "charge_control_immediate": True,
+    "has_target_soc": False,
+}
+
+
+def test_low_power_mode_rate_reaches_custom_solax_script(test_name, my_predbat):
+    """
+    #3311 on the setup it was reported against: a user-defined inverter type (the
+    Solax template's inverter: block, which copies GE's definition and so relies on the
+    has_charge_rate_entity default) must send the planned rate to charge_start_service as {power},
+    not battery_rate_max.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        services = _run_custom_solax_charge(my_predbat, dict(SOLAX_TEMPLATE_DEF))
+        starts = [kwargs for service, kwargs in services if service == "charge_start"]
+        if len(starts) != 1 or starts[0].get("power") != 2500:
+            print("ERROR: {} charge_start_service should be called once with the planned power 2500, got {}".format(test_name, services))
+            failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
+def test_low_power_mode_entity_opt_out(test_name, my_predbat):
+    """
+    has_charge_rate_entity: False opts a type out - no dummy rate entity is created, so the service
+    keeps receiving battery_rate_max as before #3311.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    snapshot = _snapshot_inverter_fixture(my_predbat)
+    try:
+        services = _run_custom_solax_charge(my_predbat, dict(SOLAX_TEMPLATE_DEF, has_charge_rate_entity=False))
+        if "charge_rate" in my_predbat.args or "discharge_rate" in my_predbat.args:
+            print("ERROR: {} opted-out type still got a rate entity: {} / {}".format(test_name, my_predbat.args.get("charge_rate"), my_predbat.args.get("discharge_rate")))
+            failed = True
+        starts = [kwargs for service, kwargs in services if service == "charge_start"]
+        if len(starts) != 1 or starts[0].get("power") != 6000:
+            print("ERROR: {} opted-out type should fall back to battery_rate_max 6000, got {}".format(test_name, services))
+            failed = True
+    finally:
+        _restore_inverter_fixture(my_predbat, snapshot)
+
+    return failed
+
+
 def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, expect_mode=None):
     """
     Test the adjust_inverter_mode function
@@ -5264,6 +5538,13 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_low_power_mode_entity_filled_for_partial_multi_inverter_list("low_power_entity_partial_multi_inverter", my_predbat)
     failed |= test_low_power_mode_entity_not_created_for_rest_driven_power_inverter("low_power_entity_not_created_rest_driven", my_predbat)
     failed |= test_low_power_mode_entity_filled_beyond_component_backed_fleet("low_power_entity_filled_beyond_component_fleet", my_predbat)
+    failed |= test_low_power_mode_entity_created_for_every_inverter_from_absent_key("low_power_entity_every_inverter_absent_key", my_predbat)
+    failed |= test_low_power_mode_entity_not_created_when_percent_control_configured("low_power_entity_not_created_percent_control", my_predbat)
+    failed |= test_low_power_mode_dummy_does_not_reset_battery_rate_max("low_power_dummy_keeps_battery_rate_max", my_predbat)
+    failed |= test_low_power_mode_rate_reaches_custom_solax_script("low_power_rate_reaches_custom_solax_script", my_predbat)
+    failed |= test_low_power_mode_entity_opt_out("low_power_entity_opt_out", my_predbat)
+    failed |= test_low_power_mode_dummy_reasserted("low_power_dummy_reasserted", my_predbat)
+    failed |= test_low_power_mode_bare_number_slot_is_unset("low_power_bare_number_slot_unset", my_predbat)
     if failed:
         return failed
 

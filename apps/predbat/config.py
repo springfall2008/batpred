@@ -2013,8 +2013,9 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
-        # Script-driven "power" mode, no REST/native register to persist the computed
-        # charge/discharge rate - the originating case for this flag (#3311).
+        # Script-driven "power" mode with no REST/native register to hold the computed
+        # charge/discharge rate. Stated explicitly although it is the default; the Solax Gen4+
+        # template (templates/solax_sx4.yaml, the #3311 setup) sets it in its own inverter: block.
         "has_charge_rate_entity": True,
     },
     "SF": {
