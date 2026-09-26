@@ -3730,7 +3730,7 @@ class Octopus:
         # The feed is re-read every cycle, so the same minutes are stripped again each time - log only
         # when that changes, not every 5 minutes for the length of a cancellation
         if stripped and stripped != self.dynamic_load_car_stripped:
-            self.log("Dynamic load: removed the Intelligent dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
+            self.log("Octopus Intelligent: removed the dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
         self.dynamic_load_car_stripped = stripped
         return rates
 
