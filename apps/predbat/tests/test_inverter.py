@@ -42,6 +42,71 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
     return failed
 
 
+def test_has_solis_energy_control_is_opt_in():
+    """
+    has_solis_energy_control says Predbat drives the Solis Energy Storage Control Switch. Both
+    Modbus Solis types need it - FB00 firmware moved the timed charge enable into the slot
+    registers, but the switch's grid charging bit still decides whether a charge slot can charge
+    from the grid at all, and a SolisCloud session can leave it cleared.
+    """
+    failed = False
+    expect_solis = {"GS", "GS_fb00"}
+
+    for inverter_type, definition in INVERTER_DEF.items():
+        declared = definition.get("has_solis_energy_control", False)
+        if declared != (inverter_type in expect_solis):
+            print("ERROR: {} has_solis_energy_control should be {}, got {}".format(inverter_type, inverter_type in expect_solis, declared))
+            failed = True
+    return failed
+
+
+def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_state, isCharging, isExporting, expect_state, configured=True):
+    """
+    adjust_battery_target leaves the Solis Energy Storage Control Switch where the inverter type needs it.
+
+    GS has no target SoC, so it reaches the switch through mimic_target_soc and uses its
+    Timed Charge/Discharge bit as the charge enable (35). GS_fb00 has a target SoC and slot enables,
+    so the switch only has to stay on Self-Use (33) with grid charging allowed.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entity_id = "select.solis_energy_storage_control_switch"
+    # Restored whole: constructing a GS Inverter repoints charge_limit and friends at Predbat-made sensors
+    saved_args = copy.deepcopy(my_predbat.args)
+    services = []
+    orig_call = my_predbat.call_service_wrapper
+    try:
+        my_predbat.args["inverter_type"] = [inverter_type]
+        if configured:
+            my_predbat.args["energy_control_switch"] = entity_id
+        else:
+            my_predbat.args.pop("energy_control_switch", None)
+        ha.dummy_items[entity_id] = switch_state
+        ha.dummy_items["number.charge_limit"] = 100
+
+        inv = Inverter(my_predbat, 0, quiet=True)
+        inv.sleep = dummy_sleep
+        inv.soc_percent = 50
+        my_predbat.call_service_wrapper = lambda service, **kwargs: services.append((service, kwargs.get("entity_id"))) or orig_call(service, **kwargs)
+        inv.adjust_battery_target(100, isCharging=isCharging, isExporting=isExporting)
+    finally:
+        my_predbat.call_service_wrapper = orig_call
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    state = ha.get_state(entity_id)
+    if state != expect_state:
+        print("ERROR: {}: energy control switch should be {} got {}".format(test_name, expect_state, state))
+        failed = True
+
+    switch_writes = [service for service, target in services if target == entity_id]
+    if state == switch_state and switch_writes:
+        print("ERROR: {}: switch already at {} but was written {}".format(test_name, state, switch_writes))
+        failed = True
+    return failed
+
+
 def test_support_feedin_first_is_opt_in():
     """
     support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
@@ -4682,6 +4747,7 @@ def run_inverter_tests(my_predbat_dummy):
     print("**** Running Inverter tests ****")
     failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
     failed |= test_support_feedin_first_is_opt_in()
+    failed |= test_has_solis_energy_control_is_opt_in()
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -4913,6 +4979,19 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=True)
     failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=False)  # No change, no button press
     failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50, has_inv_time_button_press=False, expect_button_press=False)  # No button press feature
+    if failed:
+        return failed
+
+    # Solis Energy Storage Control Switch - FB00 left on "No Grid Charging" by a SolisCloud session froze the battery through a charge slot
+    failed |= test_solis_energy_control("solis_fb00_charge_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", True, False, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_idle_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", False, False, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_export_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", False, True, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_already_self_use", my_predbat, ha, "GS_fb00", "Self-Use", True, False, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", True, False, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", True, False, "Self-Use - No Grid Charging", configured=False)
+    failed |= test_solis_energy_control("solis_gs_charge_timed", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", True, False, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_already_timed", my_predbat, ha, "GS", "Self-Use", True, False, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_unavailable", my_predbat, ha, "GS", "unavailable", True, False, "Self-Use")
     if failed:
         return failed
 

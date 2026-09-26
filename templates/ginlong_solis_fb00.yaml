@@ -98,6 +98,10 @@ pred_bat:
   scheduled_discharge_enable:
     - switch.inverter_timed_discharge_slot_1_enable
 
+  # Predbat keeps the Energy Storage Control Switch on Self-Use, which allows the charge slots to charge from the grid
+  energy_control_switch:
+    - select.solis_inverter_energy_storage_control_switch
+
   charge_limit:
     - number.solis_inverter_timed_charge_soc
 
