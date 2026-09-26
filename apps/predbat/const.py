@@ -24,6 +24,13 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 
+# Dynamic load: how long a car inside one of its charging slots must show "not charging" before its
+# slots, and their cheap rate, are cancelled. car_charging_now reports the car directly, so two
+# minutes (one charger/integration update after the slot starts) is enough. The load test reads a
+# PREDICT_STEP average that the rest of the house also moves, so it needs two full periods.
+DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
+DYNAMIC_LOAD_CAR_LOAD_MINUTES = 10
+
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
 CLOUD_FACTOR_PV10 = 0.2
