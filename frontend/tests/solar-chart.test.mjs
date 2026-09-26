@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import vm from 'node:vm'
+import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
+
+import ts from 'typescript'
+
+const utilityPath = fileURLToPath(new URL('../src/utils/solarChart.ts', import.meta.url))
+
+function loadSolarChartUtilities() {
+  const source = fs.readFileSync(utilityPath, 'utf8')
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2023
+    }
+  }).outputText
+  const module = { exports: {} }
+
+  vm.runInNewContext(compiled, { module, exports: module.exports })
+  return module.exports
+}
+
+test('solar helpers build calendar ranges and join historical and future forecasts at Now', () => {
+  const { combineSolarForecast, getSolarChartWindow, peakSolarPower, solarAccuracy, sumDailyCumulative } = loadSolarChartUtilities()
+  const now = Date.parse('2026-09-18T12:00:00Z')
+  const before = Date.parse('2026-09-18T11:30:00Z')
+  const after = Date.parse('2026-09-18T12:30:00Z')
+  const combined = combineSolarForecast(
+    [{ x: before, y: 2.5 }, { x: after, y: 3 }],
+    [{ x: before, y: 2.7 }, { x: after, y: 3.4 }],
+    now
+  )
+
+  assert.deepEqual(Array.from(combined, (point) => ({ ...point })), [
+    { x: before, y: 2.5 },
+    { x: after, y: 3.4 }
+  ])
+  assert.equal(peakSolarPower(combined), 3.4)
+
+  const oneDay = getSolarChartWindow('2026-09-18T12:00:00', 1)
+  const sevenDays = getSolarChartWindow('2026-09-18T12:00:00', 7)
+  assert.equal((oneDay.end - oneDay.start) / 86400000, 1)
+  assert.equal((sevenDays.end - sevenDays.start) / 86400000, 7)
+  assert.deepEqual({ ...solarAccuracy(8.5, 10) }, { difference: -1.5, achieved: 85 })
+  assert.deepEqual({ ...solarAccuracy(null, 10) }, { difference: null, achieved: null })
+  assert.equal(sumDailyCumulative([
+    { x: Date.parse('2026-09-17T10:00:00Z'), y: 3 },
+    { x: Date.parse('2026-09-17T18:00:00Z'), y: 8 },
+    { x: Date.parse('2026-09-18T10:00:00Z'), y: 2 },
+    { x: Date.parse('2026-09-18T18:00:00Z'), y: 5 }
+  ]), 13)
+})

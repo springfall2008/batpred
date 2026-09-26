@@ -9,10 +9,15 @@ services:
     volumes:
       - ./apps/predbat/web.py:/addon/web.py
       - ./apps/predbat/web_helper.py:/addon/web_helper.py
+      - ./apps/predbat/hass.py:/addon/hass.py
+      - ./apps/predbat/utils.py:/addon/utils.py
+      - ./apps/predbat/const.py:/addon/const.py
 
       # Predbat backend files currently being developed
       - ./apps/predbat/output.py:/addon/output.py
       - ./apps/predbat/predbat.py:/addon/predbat.py
+      - ./apps/predbat/config.py:/addon/config.py
+      - ./apps/predbat/frontend.zip:/addon/frontend.zip
 
       - ./dev-config:/config
 

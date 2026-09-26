@@ -36,6 +36,23 @@ def run_web_functions_tests(my_predbat):
     web = make_web(my_predbat)
     prefix = my_predbat.prefix
 
+    print("Test: legacy UI is the default and the bundled modern UI is selectable")
+    had_web_ui = "web_ui" in my_predbat.args
+    original_web_ui = my_predbat.args.get("web_ui")
+    my_predbat.args.pop("web_ui", None)
+    if web.get_web_ui() != "legacy":
+        print("  ERROR: missing web_ui should select the legacy interface")
+        failed += 1
+    my_predbat.args["web_ui"] = "modern"
+    modern_response = asyncio.run(web.html_plan(None))
+    if modern_response.status != 200 or '<div id="root"></div>' not in modern_response.text:
+        print("  ERROR: web_ui modern did not serve the bundled React interface")
+        failed += 1
+    if had_web_ui:
+        my_predbat.args["web_ui"] = original_web_ui
+    else:
+        my_predbat.args.pop("web_ui", None)
+
     charging_entity = "binary_sensor." + prefix + "_charging"
     exporting_entity = "binary_sensor." + prefix + "_exporting"
     soc_entity = prefix + ".soc_kw"
@@ -326,6 +343,10 @@ def run_compare_empty_state_tests(my_predbat, web):
     if "7 day rolling average chart loading (please wait)" in text:
         print(f"  ERROR: should not show the stuck '7 day rolling average' message when nothing is configured")
         failed += 1
+    data = web.get_compare_data()
+    if data["configured"] or data["ready"] or data["tariffs"]:
+        print(f"  ERROR: modern Compare API should return a clean unconfigured state")
+        failed += 1
 
     # -------------------------------------------------------------------------
     print("Test: a configured but not-yet-computed compare_list keeps the genuine loading message")
@@ -337,6 +358,10 @@ def run_compare_empty_state_tests(my_predbat, web):
         failed += 1
     if "Loading chart (please wait)" not in text:
         print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
+        failed += 1
+    data = web.get_compare_data()
+    if not data["configured"] or data["ready"] or data["tariffs"][0]["name"] != "Test tariff":
+        print(f"  ERROR: modern Compare API should expose configured tariffs before results exist")
         failed += 1
 
     my_predbat.args = original_args

@@ -119,6 +119,7 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
         paths = {str(route.resource.canonical) for route in app.router.routes()}
         expected_routes = [
             "/chat",
+            "/legacy_chat",
             "/chat/conversations",
             "/chat/history",
             "/chat/send",
@@ -165,6 +166,18 @@ def test_routes_always_registered_handlers_404_unconfigured(my_predbat):
             if expected not in paths:
                 print("ERROR: route {} was not registered with a chat component present, got {}".format(expected, sorted(paths)))
                 failed = True
+
+        modern_interface = _make_web(my_predbat)
+        modern_interface.get_web_ui = lambda: "modern"
+        modern_app = aiohttp_web.Application()
+        modern_interface._register_chat_routes(modern_app)
+        modern_routes = {(route.method, route.resource.canonical): route.handler for route in modern_app.router.routes()}
+        if modern_routes[("GET", "/chat")] != modern_interface.html_modern_ui:
+            print("ERROR: /chat should serve the modern UI when web_ui is modern")
+            failed = True
+        if modern_routes[("GET", "/legacy_chat")] != modern_interface.chat_page.html_chat:
+            print("ERROR: /legacy_chat should retain the complete existing Chat page")
+            failed = True
     finally:
         my_predbat.components = original_components
 
