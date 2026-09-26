@@ -1184,6 +1184,9 @@ class Fetch:
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
         self.dispatch_timeline_pending = []
         self.fetch_sensor_data_cars(save=save)
+        # Dynamic load: cancel the Octopus Intelligent slots of a car that is in one but not charging -
+        # before the rates are built, so a cancelled dispatch never gets its cheap rate
+        dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1237,6 +1240,7 @@ class Fetch:
         if import_rates:
             self.rate_scan(import_rates, print=False)
             self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -1367,7 +1371,7 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = False
+        force_replan = dynamic_load_car_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do
@@ -3216,8 +3220,10 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.octopus_intelligent_trust_slots = self.get_arg("octopus_intelligent_trust_slots")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
+        self.dynamic_load_car_check_config()
         self.load_inday_adjustment = 1.0
 
         self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
