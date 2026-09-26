@@ -2707,6 +2707,7 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 5. Predbat keeps the inverter's Energy Storage Control Switch (**energy_control_switch** in `apps.yaml`) on `Self-Use`.
    This firmware has no separate `Timed Charge/Discharge` control mode - timed charging and exporting are turned on and off for each slot instead, and Predbat does this using the slot 1 enable switches (**scheduled_charge_enable** and **scheduled_discharge_enable** in `apps.yaml`).
    The switch still decides whether a charge slot may charge from the grid: in any of the `No Grid Charging` modes the battery just holds through a charge slot, so Predbat puts it back to `Self-Use` if it finds it there (for example after a period controlled by SolisCloud).
+   Predbat uses that hold on purpose for **freeze charging** (and for holding the battery while a car or iBoost charges): it switches to `Self-Use - No Grid Charging` for the freeze and back to `Self-Use` afterwards.
    If **energy_control_switch** is missing from your `apps.yaml`, Predbat warns during charge slots and you will need to keep the switch on `Self-Use` yourself.
    If you use the pre-FB00 setup (`inverter_type: "GS"`) on this firmware, charging can appear to work but exports will not, and Predbat will repeatedly report control interference on the Energy Storage Control Switch.
 

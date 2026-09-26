@@ -57,16 +57,23 @@ def test_has_solis_energy_control_is_opt_in():
         if declared != (inverter_type in expect_solis):
             print("ERROR: {} has_solis_energy_control should be {}, got {}".format(inverter_type, inverter_type in expect_solis, declared))
             failed = True
+
+    # FB00 freezes a charge by switching grid charging off inside the charge slot
+    if INVERTER_DEF["GS_fb00"]["support_charge_freeze"] is not True:
+        print("ERROR: GS_fb00 support_charge_freeze should be True, got {}".format(INVERTER_DEF["GS_fb00"]["support_charge_freeze"]))
+        failed = True
     return failed
 
 
-def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_state, isCharging, isExporting, expect_state, configured=True):
+def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_state, action, expect_state, configured=True):
     """
-    adjust_battery_target leaves the Solis Energy Storage Control Switch where the inverter type needs it.
+    The Solis Energy Storage Control Switch ends up where the inverter type needs it after action(inv).
 
-    GS has no target SoC, so it reaches the switch through mimic_target_soc and uses its
-    Timed Charge/Discharge bit as the charge enable (35). GS_fb00 has a target SoC and slot enables,
-    so the switch only has to stay on Self-Use (33) with grid charging allowed.
+    GS has no target SoC, so adjust_battery_target reaches the switch through mimic_target_soc and
+    uses its Timed Charge/Discharge bit as the charge enable (35). GS_fb00 has a target SoC and slot
+    enables, so adjust_charge_immediate - which execute calls every cycle - keeps the switch on Self-Use
+    (33) with grid charging allowed, except in a freeze or hold, where Self-Use - No Grid Charging (1)
+    stops a charge slot charging from the grid. Each type has exactly one writer, so the two never fight.
     """
     failed = False
     print("Test: {}".format(test_name))
@@ -89,7 +96,7 @@ def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_s
         inv.sleep = dummy_sleep
         inv.soc_percent = 50
         my_predbat.call_service_wrapper = lambda service, **kwargs: services.append((service, kwargs.get("entity_id"))) or orig_call(service, **kwargs)
-        inv.adjust_battery_target(100, isCharging=isCharging, isExporting=isExporting)
+        action(inv)
     finally:
         my_predbat.call_service_wrapper = orig_call
         my_predbat.args.clear()
@@ -4983,15 +4990,22 @@ def run_inverter_tests(my_predbat_dummy):
         return failed
 
     # Solis Energy Storage Control Switch - FB00 left on "No Grid Charging" by a SolisCloud session froze the battery through a charge slot
-    failed |= test_solis_energy_control("solis_fb00_charge_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", True, False, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_idle_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", False, False, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_export_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", False, True, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_already_self_use", my_predbat, ha, "GS_fb00", "Self-Use", True, False, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", True, False, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", True, False, "Self-Use - No Grid Charging", configured=False)
-    failed |= test_solis_energy_control("solis_gs_charge_timed", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", True, False, "Self-Use")
-    failed |= test_solis_energy_control("solis_gs_already_timed", my_predbat, ha, "GS", "Self-Use", True, False, "Self-Use")
-    failed |= test_solis_energy_control("solis_gs_unavailable", my_predbat, ha, "GS", "unavailable", True, False, "Self-Use")
+    charge = lambda inv: inv.adjust_charge_immediate(100)
+    idle = lambda inv: inv.adjust_charge_immediate(0)
+    freeze = lambda inv: inv.adjust_charge_immediate(50, freeze=True)
+    target = lambda inv: inv.adjust_battery_target(100, isCharging=True, isExporting=False)
+    failed |= test_solis_energy_control("solis_fb00_charge_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_idle_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", idle, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_already_self_use", my_predbat, ha, "GS_fb00", "Self-Use", charge, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", charge, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use - No Grid Charging", configured=False)
+    failed |= test_solis_energy_control("solis_fb00_freeze_blocks_grid", my_predbat, ha, "GS_fb00", "Self-Use", freeze, "Self-Use - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_freeze_already_blocked", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", freeze, "Self-Use - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_battery_target_leaves_switch", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", target, "Self-Use - No Grid Charging")
+    failed |= test_solis_energy_control("solis_gs_charge_timed", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", target, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_already_timed", my_predbat, ha, "GS", "Self-Use", target, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_unavailable", my_predbat, ha, "GS", "unavailable", target, "Self-Use")
+    failed |= test_solis_energy_control("solis_gs_charge_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", charge, "Self-Use - No Timed Charge/Discharge")
     if failed:
         return failed
 
