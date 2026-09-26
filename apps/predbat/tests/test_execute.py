@@ -33,6 +33,8 @@ class ActiveTestInverter:
         self.immediate_discharge_soc_target = -1
         self.immediate_charge_soc_freeze = False
         self.immediate_discharge_soc_freeze = False
+        self.immediate_charge_power = None
+        self.immediate_discharge_power = None
         self.charge_start_time_minutes = -1
         self.charge_end_time_minutes = -1
         self.charge_rate = 1000
@@ -114,13 +116,18 @@ class ActiveTestInverter:
         self.charge_time_enable = True
         # print("Charge start_time {} charge_end_time {}".format(self.charge_start_time_minutes, self.charge_end_time_minutes))
 
-    def adjust_charge_immediate(self, target_soc, freeze=False):
+    def adjust_charge_immediate(self, target_soc, freeze=False, rate=None):
         self.immediate_charge_soc_target = target_soc
         self.immediate_charge_soc_freeze = freeze
+        # The {power} the real service call would carry: the passed rate, else the stored one (#5252)
+        if target_soc > 0:
+            self.immediate_charge_power = rate if rate is not None else self.charge_rate
 
-    def adjust_export_immediate(self, target_soc, freeze=False):
+    def adjust_export_immediate(self, target_soc, freeze=False, rate=None):
         self.immediate_discharge_soc_target = target_soc
         self.immediate_discharge_soc_freeze = freeze
+        if target_soc < 100:
+            self.immediate_discharge_power = rate if rate is not None else self.discharge_rate
 
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         self.force_export = force_export
@@ -319,6 +326,8 @@ def run_execute_test(
         # rather than inheriting whatever the previous scenario in this run happened to leave behind.
         inverter.immediate_charge_soc_target = -1
         inverter.immediate_discharge_soc_target = -1
+        inverter.immediate_charge_power = None
+        inverter.immediate_discharge_power = None
         if soc_kw_array:
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
@@ -494,6 +503,14 @@ def run_execute_test(
             failed = True
         if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
+            failed = True
+        # A service-driven inverter is sent {power} in the same cycle the rate is planned, so it must be
+        # the rate this cycle writes - not the previous cycle's (#5252)
+        if inverter.immediate_charge_power is not None and inverter.immediate_charge_power != inverter.charge_rate:
+            print("ERROR: Inverter {} charge service power {} should match this cycle's charge rate {}".format(inverter.id, inverter.immediate_charge_power, inverter.charge_rate))
+            failed = True
+        if inverter.immediate_discharge_power is not None and inverter.immediate_discharge_power != inverter.discharge_rate:
+            print("ERROR: Inverter {} export service power {} should match this cycle's discharge rate {}".format(inverter.id, inverter.immediate_discharge_power, inverter.discharge_rate))
             failed = True
 
     # Validate isCharging binary sensor state: must be True for any charging status (Freeze charging, Hold charging, Charging variants)
