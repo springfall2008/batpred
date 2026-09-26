@@ -28,6 +28,7 @@ import time
 import aiohttp
 import yaml
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from tou_schedule import TouScheduleMixin, MINUTES_PER_DAY
@@ -49,6 +50,7 @@ from sunsynk_const import (
     SUNSYNK_CHARGE_VOLT_FIELD,
     SUNSYNK_CHARGE_CURRENT_FIELDS,
     SUNSYNK_EXPORT_LIMIT_FIELD,
+    SUNSYNK_IMPORT_LIMIT_FIELD,
     SUNSYNK_RATED_POWER_FIELD,
     SUNSYNK_BATTERY_LOW_CAP_FIELD,
     LIFEPO4_CELL_COUNTS,
@@ -81,6 +83,20 @@ from sunsynk_const import (
     encode_setting,
     rsa_encrypt_pkcs1v15,
 )
+
+# The seven INVERTER_DEF behaviour keys (coordinator.CAPABILITY_KEYS) every SunsynkCloud inverter has,
+# matching the SunsynkCloud row in config.py. A literal, never read back from INVERTER_DEF: the discovery
+# completeness test rebuilds the row from the record, and a record copied from the row would prove nothing.
+SUNSYNK_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    # Freeze Export selects Selling First, which runs PV -> load -> grid ahead of the battery
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
 
 
 class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
@@ -144,6 +160,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        # chargeVolt values nominal_pack_voltage() has already warned fit no LiFePO4 stack
+        self._stack_size_warned = set()
+        # {sn: last battery Ah rating seen} - build_discovery() keeps it through a poll that omits it
+        self._discovery_battery_ratings = {}
+        # {sn: sensor-backed settings once reported} - build_discovery() keeps their bindings likewise
+        self._discovery_sensors = {}
         # The most recent body-level API failure message (the `msg` field only - see
         # _request - never a credential), and whether the last discovery attempt actually
         # reached the API. Both exist so the standalone CLI (test_sunsynk_api) can name
@@ -569,8 +591,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         candidates = [(abs(charge_volts / cells - LIFEPO4_CHARGE_VOLTS_TYPICAL), cells) for cells in LIFEPO4_CELL_COUNTS if LIFEPO4_CHARGE_VOLTS_MIN <= charge_volts / cells <= LIFEPO4_CHARGE_VOLTS_MAX]
         if not candidates:
             # A charge target that fits no standard stack is not something to guess at: a
-            # wrong soc_max makes Predbat plan against a battery that does not exist.
-            self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
+            # wrong soc_max makes Predbat plan against a battery that does not exist. Warned
+            # once per value - this is reached several times a cycle, and chargeVolt rarely moves.
+            if charge_volts not in self._stack_size_warned:
+                self._stack_size_warned.add(charge_volts)
+                self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
             return 0.0
         return min(candidates)[1] * LIFEPO4_NOMINAL_VOLTS_PER_CELL
 
@@ -1537,6 +1562,174 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    def _discovery_ratings(self, sn):
+        """The figures one inverter reports about itself, keyed by Predbat setting name in Predbat's units.
+
+        Only figures the device reports go here (spec D14). inverter_limit is the hardware rating
+        (ratePower, W). export_limit and import_limit are the configured grid caps exactly as set -
+        pvMaxLimit and importPower, W - never bounded by the rating: export_limit() is the lower of
+        pvMaxLimit and the rating, which conflates two limits (spec D1), so it is not used here.
+        battery_min_soc is the inverter's own floor (batteryLowCap, %).
+
+        soc_max is deliberately NOT a rating: Sunsynk reports amp-hours, and battery_capacity() turns
+        them into kWh with a pack voltage Predbat infers from chargeVolt or the user sets
+        (sunsynk_battery_nominal_voltage). A derived or user-overridden figure is an entity only (D14),
+        so soc_max appears in entities, bound to the battery_capacity sensor. The Ah the battery
+        endpoint returned is reported as the descriptive battery_capacity_ah. That endpoint is re-read
+        every poll and can omit the field, so the last Ah seen is kept (_discovery_battery_ratings)
+        rather than thinning the report on a partial poll; nothing is reported for an inverter whose
+        battery fields have never been seen.
+
+        A figure that is not known (0) is left out rather than reported as 0.
+        """
+        ratings = {}
+        rated_w = self.inverter_limit(sn)
+        if rated_w > 0:
+            ratings["inverter_limit"] = rated_w
+        settings = self.device_settings.get(sn, {})
+        export_cap = self._as_float(settings.get(SUNSYNK_EXPORT_LIMIT_FIELD))
+        if export_cap > 0:
+            ratings["export_limit"] = export_cap
+        import_cap = self._as_float(settings.get(SUNSYNK_IMPORT_LIMIT_FIELD))
+        if import_cap > 0:
+            ratings["import_limit"] = import_cap
+        floor = self.battery_reserve_min(sn)
+        if floor > 0:
+            ratings["battery_min_soc"] = floor
+        capacity_ah = self._as_float(self.device_values.get(sn, {}).get(SUNSYNK_CAPACITY_AH_FIELD))
+        if capacity_ah > 0:
+            self._discovery_battery_ratings[sn] = {"battery_capacity_ah": capacity_ah}
+        ratings.update(self._discovery_battery_ratings.get(sn, {}))
+        return ratings
+
+    def _discovery_sensor_bindings(self, sn):
+        """The sensor-backed settings automatic_config() binds only once a value is reported: {setting: (sensor leaf, unit)}.
+
+        automatic_config() binds each of these only when every inverter reports the value, using the
+        accessor named beside it here. A record describes its own device, not the fleet (spec D10), so
+        this is the per-device half of that test: an inverter's record carries its own sensors whatever
+        the other inverters report, and the coordinator applies whatever fleet rule it keeps.
+        automatic_ignore_pv does not remove pv_today either - that is the user's opt-out, which the
+        coordinator applies (D11).
+
+        Once reported, a binding is kept (_discovery_sensors). publish_data() skips a sensor whose value
+        a poll did not bring, so Home Assistant keeps its last state and the binding stays good;
+        dropping it would thin the report on a partial poll and restore it on the next.
+        """
+        seen = self._discovery_sensors.setdefault(sn, set())
+        candidates = {
+            "soc_max": ("battery_capacity", "kWh", self.battery_capacity(sn) > 0),
+            "battery_rate_max": ("battery_rate_max", "W", self.battery_rate_max(sn) > 0),
+            "inverter_limit": ("inverter_limit", "W", self.inverter_limit(sn) > 0),
+            # This sensor's state is export_limit(), the lower of pvMaxLimit and the rating - that is the
+            # binding automatic_config() makes, recorded as it is. The export_limit RATING is the raw
+            # pvMaxLimit (_discovery_ratings, spec D1), so the two can legitimately differ.
+            "export_limit": ("export_limit", "W", self.export_limit(sn) > 0),
+            "battery_min_soc": ("battery_reserve_min", "%", self.battery_reserve_min(sn) > 0),
+        }
+        for leaf in SUNSYNK_ENERGY:
+            candidates[leaf] = (leaf, "kWh", leaf in self.device_energy.get(sn, {}))
+        bindings = {}
+        for setting, (leaf, unit, reported) in candidates.items():
+            if reported:
+                seen.add(setting)
+            if setting in seen:
+                bindings[setting] = (leaf, unit)
+        return bindings
+
+    def _discovery_entities(self, sn):
+        """Every setting automatic_config() binds for one inverter, as discovery entity descriptors.
+
+        Entity ids come from the same _sensor_name()/_control_name() calls automatic_config() makes, so
+        the two cannot drift; tests/test_sunsynk_config.py checks they agree both ways. Sensors are read
+        (access "r"); the schedule controls, the reserve and the write button are written ("rw"). The
+        schedule selects carry HH:MM:SS, the format publish_schedule_settings_ha() publishes and
+        inverter.py expects of them. No descriptor carries invert: publish_data() already emits
+        Predbat's sign conventions, which is why automatic_config() sets every *_power_invert False,
+        and a missing invert means False.
+
+        pv_power is bound whatever automatic_ignore_pv says: the record describes the device, and the
+        user's opt-out is applied by whoever configures from it (spec D11).
+        """
+
+        def sensor(leaf, unit):
+            """A read-only binding to one of this inverter's published sensors."""
+            return {"entity_id": self._sensor_name(sn, leaf), "access": "r", "unit": unit}
+
+        def control(domain, leaf, **fields):
+            """A binding to one of the schedule control entities Predbat writes."""
+            return {"entity_id": self._control_name(domain, sn, leaf), "access": "rw", "domain": domain, **fields}
+
+        entities = {
+            "soc_percent": sensor("soc", "%"),
+            "battery_power": sensor("battery_power", "W"),
+            "grid_power": sensor("grid_power", "W"),
+            "load_power": sensor("load_power", "W"),
+            "battery_temperature": sensor("temperature", "°C"),
+            "reserve": control("number", "battery_schedule_reserve", unit="%"),
+            "charge_start_time": control("select", "battery_schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "battery_schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "battery_schedule_charge_soc", unit="%"),
+            "charge_rate": control("number", "battery_schedule_charge_power", unit="W"),
+            "scheduled_charge_enable": control("switch", "battery_schedule_charge_enable"),
+            "discharge_start_time": control("select", "battery_schedule_export_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "battery_schedule_export_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "battery_schedule_export_soc", unit="%"),
+            "discharge_rate": control("number", "battery_schedule_export_power", unit="W"),
+            "scheduled_discharge_enable": control("switch", "battery_schedule_export_enable"),
+            "schedule_write_button": control("switch", "battery_schedule_charge_write"),
+            "pv_power": sensor("pv_power", "W"),
+        }
+        for setting, (leaf, unit) in self._discovery_sensor_bindings(sn).items():
+            entities[setting] = sensor(leaf, unit)
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the discovered Sunsynk inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, the telemetry, settings and the
+        rating, capacity and export-limit accessors - so this adds no API calls and cannot change what
+        Sunsynk does. Reporting is independent of self.automatic.
+
+        Discovery applies no device-type filter and automatic_config() registers every serial as
+        "SunsynkCloud" with no further test, binding PV and battery entities for each. Nothing
+        Sunsynk returns tells a PV-only unit from a hybrid, so neither can this: every record
+        carries inverter_type "SunsynkCloud" and functions solar and battery, mirroring
+        automatic_config() as the source of truth. No device is excluded here either: discovery
+        and automatic_config() both register every serial, so there is no excluded-device case to
+        mirror.
+
+        Each record carries SUNSYNK_CAPABILITIES, the entities automatic_config() binds for that
+        inverter (_discovery_entities) and its ratings under Predbat's setting names
+        (_discovery_ratings). Together they rebuild the SunsynkCloud INVERTER_DEF row
+        (coordinator.inverter_definition()), which tests/test_sunsynk_config.py proves.
+
+        Deliberately not reported: model, firmware and any station ID - none is held, and Sunsynk
+        has no station grouping at all.
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.device_list:
+            return None
+
+        inverters = []
+        for sn in self.device_list:
+            inverters.append(
+                inverter_record(
+                    "sunsynk:{}".format(sn),
+                    inverter_type="SunsynkCloud",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=dict(SUNSYNK_CAPABILITIES),
+                    hardware_ids={"serial": sn},
+                    ratings=self._discovery_ratings(sn),
+                    entities=self._discovery_entities(sn),
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
     async def refresh_static(self):
         """Re-discover inverters and refresh their static detail. Returns True if discovery worked.
 
@@ -1685,6 +1878,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             await self.publish_schedule_settings_ha(sn)
 
         await self.publish_data()
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Sunsynk's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         if first and not live_ok:
             # Startup has not really succeeded without telemetry: automatic_config() runs on

@@ -17,6 +17,7 @@ import copy
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
@@ -384,6 +385,20 @@ SOLIS_API_CODES_NO_RETRY = {SOLIS_API_CODE_QUOTA_EXCEEDED, SOLIS_API_CODE_DATALO
 SOLIS_DATALOGGER_COOLDOWN_REASONS = {
     SOLIS_API_CODE_DATALOGGER_OFFLINE: "offline or disconnected",
     SOLIS_API_CODE_DATALOGGER_ABNORMAL: "returning data abnormally (B0600)",
+}
+
+# The seven INVERTER_DEF behaviour keys for a SolisCloud inverter, reported as the discovery record's
+# capabilities. Stated here as literals, never read back from INVERTER_DEF["SolisCloud"]: the record
+# has to rebuild that row on its own, and reading the row would make the completeness test prove
+# nothing (docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md, 1.1).
+SOLIS_CLOUD_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
 }
 
 # Time options for selectors (HH:MM:SS format)
@@ -1783,6 +1798,215 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         self.log("Solis API: Automatic configuration complete")
         return True
+
+    def _discovery_pv_entities(self, sn):
+        """The PV sensors automatic_config() binds for every inverter it lists in pv_devices, battery or not.
+
+        automatic_config() builds pv_today and pv_power over every discovered inverter so a PV-only
+        inverter's generation still counts (GH#4922). A PV-only record carries just these (spec D12); a
+        driven record carries them among the rest (_discovery_entities()). Each entity id is the same
+        f-string automatic_config() builds, over the same lower-cased serial.
+        """
+        prefix = self.prefix
+        device = sn.lower()
+        return {
+            "pv_today": {"entity_id": f"sensor.{prefix}_solis_{device}_pv_energy_total", "access": "r"},
+            "pv_power": {"entity_id": f"sensor.{prefix}_solis_{device}_pv_power", "access": "r"},
+        }
+
+    def _discovery_entities(self, sn):
+        """The settings automatic_config() binds for one battery inverter, as discovery entity descriptors.
+
+        Each entity id is the same f-string automatic_config() builds for that setting, over the same
+        lower-cased serial, so the two cannot drift without the agreement test failing. access is "rw"
+        for a setting inverter.py writes (the slot 1 schedule, SoC and power controls) and "r" for one
+        it only reads.
+
+        Two automatic_config() bindings are deliberately absent. reserve: SolisCloud does not write
+        the reserve, the row has has_reserve_soc False and inverter.py replaces the binding with a
+        dummy, so the record reports battery_min_soc - the same over_discharge_soc number - instead
+        (spec D9). battery_power_invert: it becomes invert on battery_power.
+
+        load_today, pv_today, load_power and pv_power are carried even when solis_cloud_pv_load_ignore
+        stops automatic_config() binding them: the record describes the device, and the user's opt-out
+        is the coordinator's to apply (spec D11).
+        """
+        prefix = self.prefix
+        device = sn.lower()
+        entities = {
+            "soc_percent": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_soc", "access": "r", "unit": "%"},
+            "battery_scaling": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_soh", "access": "r"},
+            "battery_power": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_power", "access": "r", "invert": True},
+            "grid_power": {"entity_id": f"sensor.{prefix}_solis_{device}_grid_power", "access": "r"},
+            "battery_voltage": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_voltage", "access": "r"},
+            "load_today": {"entity_id": f"sensor.{prefix}_solis_{device}_total_load_energy", "access": "r"},
+            "load_power": {"entity_id": f"sensor.{prefix}_solis_{device}_load_power", "access": "r"},
+        }
+        entities.update(self._discovery_pv_entities(sn))
+        entities.update(
+            {
+                "import_today": {"entity_id": f"sensor.{prefix}_solis_{device}_today_import_energy", "access": "r"},
+                "export_today": {"entity_id": f"sensor.{prefix}_solis_{device}_today_export_energy", "access": "r"},
+                "battery_min_soc": {"entity_id": f"number.{prefix}_solis_{device}_over_discharge_soc", "access": "r", "unit": "%"},
+                "charge_start_time": {"entity_id": f"select.{prefix}_solis_{device}_charge_slot1_start_time", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
+                "charge_end_time": {"entity_id": f"select.{prefix}_solis_{device}_charge_slot1_end_time", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
+                "charge_limit": {"entity_id": f"number.{prefix}_solis_{device}_charge_slot1_soc", "access": "rw", "unit": "%"},
+                "charge_rate": {"entity_id": f"number.{prefix}_solis_{device}_charge_slot1_power", "access": "rw", "unit": "W"},
+                "scheduled_charge_enable": {"entity_id": f"switch.{prefix}_solis_{device}_charge_slot1_enable", "access": "rw", "domain": "switch"},
+                "discharge_start_time": {"entity_id": f"select.{prefix}_solis_{device}_discharge_slot1_start_time", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
+                "discharge_end_time": {"entity_id": f"select.{prefix}_solis_{device}_discharge_slot1_end_time", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
+                "discharge_target_soc": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_soc", "access": "rw", "unit": "%"},
+                "discharge_rate": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_power", "access": "rw", "unit": "W"},
+                "scheduled_discharge_enable": {"entity_id": f"switch.{prefix}_solis_{device}_discharge_slot1_enable", "access": "rw", "domain": "switch"},
+                "battery_rate_max": {"entity_id": f"number.{prefix}_solis_{device}_max_charge_power", "access": "r", "unit": "W"},
+                "inverter_limit": {"entity_id": f"sensor.{prefix}_solis_{device}_inverter_size", "access": "r"},
+                "export_limit": {"entity_id": f"number.{prefix}_solis_{device}_max_export_power", "access": "r", "unit": "W"},
+            }
+        )
+        return entities
+
+    def _discovery_export_limit(self, sn):
+        """The configured maximum export power (register 499) in watts, or None when there is no configured figure.
+
+        Converted exactly as publish_entities() presents the max_export_power number that
+        automatic_config() binds export_limit to: a value under 200 is in 100 W units. publish_entities()
+        shows an unread or 0 register as 99999 W, a "no limit" placeholder rather than a configured
+        figure, so neither is reported as a rating.
+        """
+        try:
+            value = float(self.cached_values.get(sn, {}).get(SOLIS_CID_MAX_EXPORT_POWER))
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        if value < 200:
+            value *= 100
+        return value
+
+    def build_discovery(self):
+        """
+        Describe the discovered Solis inverters for the discovery catalogue.
+
+        Reads only what the component already holds - self.inverter_sn, self.inverter_details,
+        self.cached_values and self.parallel_battery_count - so this adds no API calls and cannot
+        change what Solis does. Reporting is independent of self.automatic.
+
+        inverter_type "SolisCloud" is set with automatic_config()'s own test for a battery inverter
+        it configures, duplicated here rather than shared so the control path is untouched:
+        _reports_no_battery() must be false AND batteryHealthSoh must parse as a number (0 is a
+        valid reading). "battery" in functions is the hardware fact alone - details read and
+        Solis Cloud not saying "no battery" - so a battery inverter automatic_config() declines is
+        still described. Every inverter reports "solar": automatic_config() puts every inverter in
+        pv_devices, battery or not. An inverter whose detail has not been read yet (empty, or a
+        failed fetch) reports no functions at all rather than a misleading solar-only guess - the
+        same "not read yet" state automatic_config() retries rather than treats as PV-only.
+
+        Only an inverter automatic_config() configures carries capabilities (SOLIS_CLOUD_CAPABILITIES),
+        the full entity map (_discovery_entities()) and the reports_soh flag. Any other inverter whose
+        detail has been read - PV-only, or a battery automatic_config() declines - carries just its
+        pv_today and pv_power (_discovery_pv_entities(), spec D12), because automatic_config() puts it in
+        pv_devices. One whose detail has not been read yet claims nothing at all.
+
+        Ratings are keyed by Predbat setting name where one exists. inverter_limit is inverterDetail's
+        power in powerStr's unit - defaulted to "kW" exactly as publish_entities() does - reported only
+        for a unit this code knows how to convert, never guessed. For a driven inverter,
+        battery_min_soc is the over-discharge SoC register (158) and export_limit the configured export
+        cap (_discovery_export_limit()), each only once the register has been read.
+
+        A rating is a figure the device reports (spec D14), so two Predbat derivations are left out.
+        battery_rate_max is an entity only: the max_charge_power number is register current x
+        get_nominal_voltage(). soc_max is not reported at all: a kWh capacity is register 172 x a
+        voltage that is either inferred (for an HV pack still a live reading, GH#5090) or the user's
+        solis_nominal_voltage, and automatic_config() binds no soc_max entity either.
+
+        Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
+        per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
+        parallel_battery_count, the same product publish_entities() uses - so it means the same
+        thing here as on every other reporter. battery_pack_count carries the pack count alongside
+        it, and both are always reported for a battery inverter.
+
+        Deliberately not reported: inverterName (user-set free text that can hold an address);
+        firmware (inverterDetail carries none); any station or account ID (none is held).
+        The TOU V2 register layout is reported as the flag "tou_v2" - how the inverter is driven,
+        not something it can do.
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.inverter_sn:
+            return None
+
+        inverters = []
+        for sn in self.inverter_sn:
+            detail = self.inverter_details.get(sn, {}) or {}
+            has_battery = bool(detail) and not self._reports_no_battery(detail)
+            try:
+                float(detail.get("batteryHealthSoh"))
+                reports_soh = True
+            except (TypeError, ValueError):
+                reports_soh = False
+            # automatic_config()'s own predicate for an inverter it configures - the source of truth.
+            drives_it = not self._reports_no_battery(detail) and reports_soh
+
+            info = {}
+            if detail.get("productModel"):
+                info["model"] = str(detail["productModel"])
+
+            ratings = {}
+            try:
+                power = float(detail.get("power"))
+            except (TypeError, ValueError):
+                power = 0.0
+            power_unit = str(detail.get("powerStr", "kW")).strip()
+            if power > 0 and power_unit == "kW":
+                ratings["inverter_limit"] = power * 1000.0
+            elif power > 0 and power_unit == "W":
+                ratings["inverter_limit"] = power
+            if has_battery:
+                try:
+                    capacity_ah = float(self.cached_values.get(sn, {}).get(SOLIS_CID_BATTERY_CAPACITY))
+                except (TypeError, ValueError):
+                    capacity_ah = 0.0
+                if capacity_ah > 0:
+                    pack_count = self.parallel_battery_count.get(sn, 1)
+                    ratings["battery_capacity_ah"] = capacity_ah * pack_count
+                    ratings["battery_pack_count"] = pack_count
+            if drives_it:
+                min_soc = parse_cid_int(self.cached_values.get(sn, {}).get(SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC))
+                if min_soc is not None:
+                    ratings["battery_min_soc"] = min_soc
+                export_limit = self._discovery_export_limit(sn)
+                if export_limit is not None:
+                    ratings["export_limit"] = export_limit
+
+            if drives_it:
+                entities = self._discovery_entities(sn)
+            elif detail:
+                entities = self._discovery_pv_entities(sn)
+            else:
+                entities = None
+
+            flags = []
+            if drives_it:
+                flags.append("reports_soh")
+            if self.is_tou_v2_mode(sn):
+                flags.append("tou_v2")
+
+            inverters.append(
+                inverter_record(
+                    "solis:{}".format(sn),
+                    inverter_type="SolisCloud" if drives_it else None,
+                    composition="direct",
+                    functions=(["solar", "battery"] if has_battery else ["solar"]) if detail else None,
+                    capabilities=dict(SOLIS_CLOUD_CAPABILITIES) if drives_it else None,
+                    flags=flags,
+                    hardware_ids={"serial": sn},
+                    info=info,
+                    ratings=ratings,
+                    entities=entities,
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
 
     async def poll_inverter_data(self, inverter_sn, cid_list, batch=True):
         """Poll CID values for specific inverter"""
@@ -3803,6 +4027,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Publish entities after polling
         if first or (seconds % 60 == 0):
             await self.publish_entities()
+
+        # Filed every cycle, right after this cycle's publish and before the automatic_config()
+        # gate below. Solis's automatic_config() never raises, but it runs only when
+        # self.automatic is set and automatic_config_done is not, so a report filed after it
+        # would depend on unrelated auto-config state. refresh_discovery() owns the
+        # compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Auto-configure Predbat if enabled. Retried on later cycles rather than being a
         # first-cycle-only step: when the first cycle can't read the inverter details (an exhausted

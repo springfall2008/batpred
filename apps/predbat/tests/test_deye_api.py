@@ -12,8 +12,10 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+from coordinator import validate_report
 from deye import DeyeAPI
-from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS
+from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS, DEYE_LATEST_BODY_KEY
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import run_async as run_async_local
 
 # Inverter AC rating handed to test doubles. Self-use TOU slots are written at the
@@ -624,6 +626,282 @@ def test_run_first_cycle_publishes_and_configures():
     assert not failed, "test_run_first_cycle_publishes_and_configures"
 
 
+DEYE_LIVE_BATTERY_CONFIG = {"maxChargeCurrent": 185, "maxDischargeCurrent": 185, "battLowCapacity": 14, "battShutDownCapacity": 9, "battCapacity": 1200}
+
+
+def _deye_fleet(station_ids=(10,)):
+    """A MockDeye holding one inverter populated from the live device/latest and config/battery samples.
+
+    The pack voltage and derived capacity come from the component's own derive_battery_capacity()
+    run on LIVE_DATA_LIST - test setup is allowed its side effects; the reporter never calls it.
+    """
+    d = MockDeye()
+    sn = "INV1"
+    d.device_list = [sn]
+    d.station_ids = list(station_ids)
+    flat = d._datalist_to_dict(LIVE_DATA_LIST)
+    d.device_rated_power[sn] = d._as_float(flat.get("RatedPower"), 0.0)
+    d.device_battery_config[sn] = dict(DEYE_LIVE_BATTERY_CONFIG)
+    d.derive_battery_capacity(sn, flat)
+    return d
+
+
+def test_deye_catalogue_describes_each_inverter():
+    """Each inverter is a DeyeCloud record with the live sample's own ratings."""
+    failed = False
+    d = _deye_fleet()
+    record = d.build_discovery()["inverters"][0]
+    checks = [
+        (record["device_id"], "deye:INV1"),
+        (record["inverter_type"], "DeyeCloud"),
+        (record["composition"], "direct"),
+        (record["functions"], ["solar", "battery"]),
+        (record["hardware_ids"], {"serial": "INV1"}),
+        (record["account_ids"], {"station_id": 10}),
+        (
+            record["capabilities"],
+            {
+                "support_charge_freeze": True,
+                "support_discharge_freeze": True,
+                "support_feedin_first": True,
+                "can_span_midnight": False,
+                "charge_discharge_with_rate": False,
+                "charge_control_immediate": False,
+                "target_soc_used_for_discharge": True,
+            },
+        ),
+        (
+            record["ratings"],
+            {"inverter_limit": 8000.0, "battery_min_soc": 14, "battery_capacity_ah": 1200.0},
+        ),
+    ]
+    for actual, expected in checks:
+        if actual != expected:
+            print("ERROR: expected {!r}, got {!r}".format(expected, actual))
+            failed = True
+    # Deye holds no grid export or import cap anywhere (deye.py, deye_const.py), so neither rating may appear;
+    # soc_max and battery_rate_max are Predbat derivations (scaled by an inferred pack voltage), so entities only (D14)
+    for absent in ("export_limit", "import_limit", "inverter_w", "battery_kwh", "soc_max", "battery_rate_max"):
+        if absent in record["ratings"]:
+            print("ERROR: rating {} must not be reported: {}".format(absent, record["ratings"]))
+            failed = True
+    if "info" in record:
+        print("ERROR: Deye holds no model or firmware, so info must be absent: {}".format(record["info"]))
+        failed = True
+    return failed
+
+
+def test_deye_catalogue_station_id_only_when_unambiguous():
+    """A station ID is attributed only when the account has exactly one station: devices are not held per station."""
+    failed = False
+    for stations, expect in (((10,), {"station_id": 10}), ((10, 11), None), ((), None)):
+        record = _deye_fleet(station_ids=stations).build_discovery()["inverters"][0]
+        if record.get("account_ids") != expect:
+            print("ERROR: stations {} should give account_ids {!r}, got {!r}".format(stations, expect, record.get("account_ids")))
+            failed = True
+    return failed
+
+
+def test_deye_catalogue_does_not_derive_capacity():
+    """The reporter reads battery_capacity() and never calls derive_battery_capacity(), which logs and writes state."""
+    d = _deye_fleet()
+    d.derive_battery_capacity = MagicMock(side_effect=AssertionError("the reporter must not call derive_battery_capacity()"))
+    d.log_messages.clear()
+    d.build_discovery()
+    if d.log_messages:
+        print("ERROR: build_discovery() logged: {}".format(d.log_messages))
+        return True
+    return False
+
+
+def test_deye_catalogue_none_before_discovery():
+    """With no inverters there is nothing to describe."""
+    if MockDeye().build_discovery() is not None:
+        print("ERROR: an empty device_list must report None")
+        return True
+    return False
+
+
+def test_deye_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every Deye record back unchanged."""
+    report = _deye_fleet().build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "deye", warnings.append)
+    if warnings or cleaned.get("inverters") != report["inverters"]:
+        print("ERROR: validation changed or warned on the report: {} {}".format(warnings, cleaned.get("inverters")))
+        return True
+    return False
+
+
+def test_deye_catalogue_filed_when_first_cycle_defers():
+    """run() files the report even on a first cycle that defers startup because the live poll failed.
+
+    `if first and not live_ok: return False` - and automatic_config() after it - would otherwise
+    swallow the report on exactly the installs whose dump most needs to say what hardware was found.
+    Built on test_run_first_cycle_publishes_and_configures(); only fetch_device_data() differs.
+    """
+    from unittest.mock import patch
+
+    failed = False
+    d = MockDeye(auth_method="oauth")
+    d.access_token = "tok"
+    d.automatic = True
+    seq = {"configured": 0}
+    reports = []
+    d.report_discovery = reports.append
+
+    async def fake_dev_list():
+        """Discover one inverter."""
+        d.device_list = ["INV1"]
+        return ["INV1"]
+
+    async def fake_data(sn):
+        """Fail the live poll: refresh_live() treats a falsy result as no data."""
+        return {}
+
+    async def fake_batt(sn):
+        """Return no battery config."""
+        return {}
+
+    async def fake_publish():
+        """Publish nothing."""
+
+    async def fake_pub_sched(sn):
+        """Publish no schedule."""
+
+    async def fake_get_sched(sn):
+        """Read no schedule."""
+        return {}
+
+    async def fake_auto():
+        """Record that automatic_config() ran."""
+        seq["configured"] += 1
+
+    with patch.multiple(
+        d,
+        get_device_list=fake_dev_list,
+        fetch_device_data=fake_data,
+        fetch_battery_config=fake_batt,
+        publish_data=fake_publish,
+        publish_schedule_settings_ha=fake_pub_sched,
+        get_schedule_settings_ha=fake_get_sched,
+        automatic_config=fake_auto,
+    ):
+        ok = run_async_local(d.run(0, True))
+    if ok:
+        print("ERROR: run() should defer startup (return False) when the first live poll fails")
+        failed = True
+    if seq["configured"]:
+        print("ERROR: automatic_config() must not run on a deferred first cycle")
+        failed = True
+    if len(reports) != 1 or reports[0]["inverters"][0]["device_id"] != "deye:INV1":
+        print("ERROR: the report must be filed before the deferring return, got {}".format(reports))
+        failed = True
+    return failed
+
+
+def _deye_driven_fleet(*serials, station_ids=(10,)):
+    """A MockDeye whose inverters were each read from the live device/latest and config/battery samples.
+
+    fetch_device_data() fills telemetry, the daily energy counters, RatedPower and the derived pack
+    voltage exactly as a live cycle does, so automatic_config() binds every setting it can - gated
+    ones included - and the record has to match all of them.
+    """
+    d = MockDeye()
+    d.device_list = list(serials or ("INV1",))
+    d.station_ids = list(station_ids)
+
+    async def fake_post(endpoint_key, body):
+        """Answer device/latest with the live sample for whichever serial was asked for."""
+        return {"success": True, "deviceDataList": [{"deviceSn": body[DEYE_LATEST_BODY_KEY][0], "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        for sn in d.device_list:
+            run_async_local(d.fetch_device_data(sn))
+            d.device_battery_config[sn] = dict(DEYE_LIVE_BATTERY_CONFIG)
+    return d
+
+
+def test_deye_record_rebuilds_inverter_def():
+    """Completeness: the record alone, with no INVERTER_DEF row as a base, rebuilds the DeyeCloud row."""
+    for record in validated_inverters(_deye_driven_fleet("INV1").build_discovery()):
+        assert_definition_complete(record, DeyeAPI.WRITE_AND_POLL_SLEEP)
+    return False
+
+
+def test_deye_record_agrees_with_automatic_config():
+    """Agreement both ways: every setting automatic_config() binds is in the record, and the record binds nothing else."""
+    d = _deye_driven_fleet("INV1")
+    records = validated_inverters(d.build_discovery())
+    captured = capture_automatic_config(d)
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    # The fixture drives every conditional binding, so this proves the full set rather than a subset
+    for name in ("pv_power", "pv_today", "load_today", "import_today", "export_today", "soc_max", "battery_min_soc", "battery_rate_max", "inverter_limit", "schedule_write_button"):
+        assert name in records[0]["entities"], (name, sorted(records[0]["entities"]))
+    return False
+
+
+def test_deye_two_inverters_give_two_distinct_records():
+    """Two inverters give two records binding the same settings to different, per-serial entities."""
+    d = _deye_driven_fleet("INV1", "INV2")
+    records = validated_inverters(d.build_discovery())
+    assert [record["device_id"] for record in records] == ["deye:INV1", "deye:INV2"], records
+    captured = capture_automatic_config(d)
+    for index, record in enumerate(records):
+        assert_definition_complete(record, DeyeAPI.WRITE_AND_POLL_SLEEP)
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    first, second = records[0]["entities"], records[1]["entities"]
+    assert set(first) == set(second), (sorted(first), sorted(second))
+    same = [name for name in first if first[name]["entity_id"] == second[name]["entity_id"]]
+    assert not same, "entity ids shared between inverters: {}".format(same)
+    return False
+
+
+def test_deye_record_keeps_pv_when_automatic_ignore_pv():
+    """automatic_ignore_pv is the user's opt-out, not a device fact (D11): the record still carries pv_power and pv_today."""
+    d = _deye_driven_fleet("INV1")
+    d.automatic_ignore_pv = True
+    record = validated_inverters(d.build_discovery())[0]
+    captured = capture_automatic_config(d)
+    assert "pv_power" not in captured and "pv_today" not in captured, sorted(captured)
+    assert record["entities"]["pv_power"]["entity_id"] == d._sensor_name("INV1", "pv_power"), record["entities"].get("pv_power")
+    assert record["entities"]["pv_today"]["entity_id"] == d._sensor_name("INV1", "pv_today"), record["entities"].get("pv_today")
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured, allowed_extra=("pv_power", "pv_today"))
+    return False
+
+
+def test_deye_record_is_per_device_in_a_mixed_fleet():
+    """Each record lists what its own inverter publishes, not automatic_config()'s fleet-wide gate (D10).
+
+    automatic_config() binds battery_min_soc, battery_rate_max and each energy counter as ONE list
+    across every inverter, so when INV2 has no config/battery and no load_today it binds them for
+    neither. INV1's record still carries them - its sensors are published - and INV2's does not.
+    """
+    d = _deye_driven_fleet("INV1", "INV2")
+    d.device_battery_config.pop("INV2")
+    d.device_energy["INV2"].pop("load_today")
+    records = validated_inverters(d.build_discovery())
+    captured = capture_automatic_config(d)
+    withheld = ("battery_min_soc", "battery_rate_max", "load_today")
+    for name in withheld:
+        assert name not in captured, (name, sorted(captured))
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index, allowed_extra=withheld)
+    inv1, inv2 = records[0]["entities"], records[1]["entities"]
+    for name, leaf in (("battery_min_soc", "battery_reserve_min"), ("battery_rate_max", "battery_rate_max"), ("load_today", "load_today")):
+        assert inv1[name]["entity_id"] == d._sensor_name("INV1", leaf), (name, inv1.get(name))
+        assert name not in inv2, (name, sorted(inv2))
+    assert "soc_max" in inv2 and "inverter_limit" in inv2, sorted(inv2)
+    assert records[0]["ratings"]["battery_min_soc"] == 14, records[0]["ratings"]
+    assert "battery_min_soc" not in records[1]["ratings"], records[1]["ratings"]
+    return False
+
+
 def run_deye_api_tests(my_predbat):
     """Run all DEYE API tests."""
     failed = False
@@ -647,6 +925,17 @@ def run_deye_api_tests(my_predbat):
         ("fetch_battery_config_success", test_fetch_battery_config_caches_on_success),
         ("fetch_battery_config_failure", test_fetch_battery_config_failure_returns_empty),
         ("run_first_cycle", test_run_first_cycle_publishes_and_configures),
+        ("catalogue_describes_each_inverter", test_deye_catalogue_describes_each_inverter),
+        ("catalogue_station_id_only_when_unambiguous", test_deye_catalogue_station_id_only_when_unambiguous),
+        ("catalogue_does_not_derive_capacity", test_deye_catalogue_does_not_derive_capacity),
+        ("catalogue_none_before_discovery", test_deye_catalogue_none_before_discovery),
+        ("catalogue_round_trips", test_deye_catalogue_round_trips_through_validate_report),
+        ("catalogue_filed_when_first_cycle_defers", test_deye_catalogue_filed_when_first_cycle_defers),
+        ("record_rebuilds_inverter_def", test_deye_record_rebuilds_inverter_def),
+        ("record_agrees_with_automatic_config", test_deye_record_agrees_with_automatic_config),
+        ("two_inverters_two_records", test_deye_two_inverters_give_two_distinct_records),
+        ("record_keeps_pv_when_ignored", test_deye_record_keeps_pv_when_automatic_ignore_pv),
+        ("record_is_per_device_in_mixed_fleet", test_deye_record_is_per_device_in_a_mixed_fleet),
     ]:
         try:
             if fn():

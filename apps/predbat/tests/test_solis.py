@@ -12,7 +12,7 @@ import asyncio
 import solis as solis_module
 from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, patch
-from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
+from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE, SOLIS_CID_BATTERY_CAPACITY
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
 from solis import SOLIS_CID_TOU_V2_MODE, SOLIS_CID_LIST_TOU_V2
@@ -24,6 +24,9 @@ from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_OFF_GRID
+from solis import SOLIS_CID_MAX_EXPORT_POWER, SOLIS_CLOUD_CAPABILITIES
+from coordinator import inverter_definition, validate_report
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 
 
 class MockBase:
@@ -1227,6 +1230,414 @@ async def _run_automatic_config(details):
     return recorded, api
 
 
+def _solis_fleet():
+    """A MockSolisAPI holding one captured battery inverter and one captured PV-only inverter.
+
+    Both details are the live-captured _DETAIL_WITH_BATTERY / _DETAIL_NO_BATTERY. The battery
+    inverter additionally carries productModel from test_publish_entities' sample and a DERIVED
+    power/powerStr pair: the repository holds no captured power field, so 5.0 kW follows the
+    sample's "Solis-5G-Hybrid" rating and the API's <field>Str "kW" convention.
+    """
+    api = MockSolisAPI()
+    api.inverter_sn = ["BAT001", "PV001"]
+    api.inverter_details = {
+        "BAT001": dict(_DETAIL_WITH_BATTERY, productModel="Solis-5G-Hybrid", power=5.0, powerStr="kW"),
+        "PV001": dict(_DETAIL_NO_BATTERY),
+    }
+    api.cached_values = {"BAT001": {SOLIS_CID_BATTERY_CAPACITY: "100", SOLIS_CID_TOU_V2_MODE: "43605"}}
+    api.parallel_battery_count = {"BAT001": 2}
+    api.nominal_pack_voltage = None
+    # build_discovery() reads the CID 6798 register via is_tou_v2_mode(), so the real
+    # cached_values-based detection is bound here rather than MockSolisAPI's _test_v2_mode
+    # shortcut (same reasoning as _StorageModeInverter's override, #4774).
+    api.is_tou_v2_mode = SolisAPI.is_tou_v2_mode.__get__(api)
+    return api
+
+
+def test_solis_catalogue_describes_battery_and_pv_only():
+    """A battery inverter is a SolisCloud inverter; a PV-only one reports solar with no inverter_type.
+
+    A third serial carries no entry in inverter_details at all - not read yet, or a failed fetch -
+    which automatic_config() retries rather than treats as settled; its record must claim neither
+    "solar" nor any other function, rather than the misleading PV-only guess it would get if empty
+    detail were treated the same as a confirmed no-battery detail (_DETAIL_NO_BATTERY, on PV001,
+    which does have a read detail and must still get ["solar"]).
+    """
+    api = _solis_fleet()
+    api.inverter_sn = api.inverter_sn + ["NODETAIL001"]
+    report = api.build_discovery()
+    by_id = {record["device_id"]: record for record in report["inverters"]}
+    assert set(by_id) == {"solis:BAT001", "solis:PV001", "solis:NODETAIL001"}, sorted(by_id)
+    battery = by_id["solis:BAT001"]
+    assert battery["inverter_type"] == "SolisCloud"
+    assert battery["composition"] == "direct"
+    assert battery["functions"] == ["solar", "battery"]
+    assert battery["hardware_ids"] == {"serial": "BAT001"}
+    assert battery["info"] == {"model": "Solis-5G-Hybrid"}
+    assert battery["capabilities"] == SOLIS_CLOUD_CAPABILITIES, battery["capabilities"]
+    assert battery["flags"] == ["reports_soh", "tou_v2"], battery["flags"]
+    pv = by_id["solis:PV001"]
+    assert "inverter_type" not in pv, "a PV-only inverter is not one automatic_config() configures"
+    assert pv["functions"] == ["solar"], "every Solis inverter feeds the PV totals (automatic_config's pv_devices)"
+    assert "capabilities" not in pv, pv
+    assert set(pv["entities"]) == {"pv_power", "pv_today"}, "a PV-only record carries only its PV sensors (spec D12)"
+    no_detail = by_id["solis:NODETAIL001"]
+    assert "functions" not in no_detail, "no detail read yet must not claim PV-only"
+    assert "inverter_type" not in no_detail
+    # Review Focus 2: a device whose detail has not been read claims no entities and no capabilities
+    assert "capabilities" not in no_detail and "entities" not in no_detail, no_detail
+    return False
+
+
+def test_solis_catalogue_battery_ratings_carry_only_stated_facts():
+    """battery_capacity_ah is the bank total (register 172 x pack count); no kWh rating, even with the voltage configured.
+
+    The fixture is 100 Ah per pack (register 172) with 2 packs, so the bank total is 200.0 Ah -
+    publish_entities() multiplies by parallel_battery_count the same way, so battery_capacity_ah
+    means the same thing here as on every other reporter.
+
+    Spec D14: a rating is a figure the device reports. A kWh capacity is Predbat's product of the
+    register and a voltage - inferred, or the user's solis_nominal_voltage (GH#5090) - so it is not
+    reported as soc_max whether or not the voltage is configured.
+    """
+    api = _solis_fleet()
+    ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+    assert ratings == {"inverter_limit": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
+    api.nominal_pack_voltage = 51.2
+    ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+    assert ratings == {"inverter_limit": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
+    return False
+
+
+async def test_solis_catalogue_inverter_type_tracks_automatic_config():
+    """inverter_type is set exactly where the real automatic_config() would configure the inverter.
+
+    Uses the existing _run_automatic_config() helper, which runs the real automatic_config() over the
+    captured details and returns the set_arg_auto args it recorded. "battery but no SoH field" is the
+    case the predicate excludes despite a battery: automatic_config() needs batteryHealthSoh to parse.
+    """
+    cases = {
+        "with battery": _DETAIL_WITH_BATTERY,
+        "no battery": _DETAIL_NO_BATTERY,
+        "no battery, alt firmware": _DETAIL_NO_BATTERY_ALT_FIRMWARE,
+        "with battery, alt firmware": _DETAIL_WITH_BATTERY_ALT_FIRMWARE,
+        "battery but no SoH field": {key: value for key, value in _DETAIL_WITH_BATTERY.items() if key != "batteryHealthSoh"},
+    }
+    for label, detail in cases.items():
+        recorded, api = await _run_automatic_config({"INV001": dict(detail)})
+        record = api.build_discovery()["inverters"][0]
+        assert ("inverter_type" in record) == ("inverter_type" in recorded), "{}: catalogue says {!r}, automatic_config configured {!r}".format(label, record.get("inverter_type"), recorded.get("inverter_type"))
+    return False
+
+
+def test_solis_catalogue_never_reports_the_inverter_name():
+    """inverterName is user-set free text and must never reach the report."""
+    api = _solis_fleet()
+    api.inverter_details["BAT001"]["inverterName"] = "12 Acacia Avenue"
+    assert "Acacia" not in str(api.build_discovery()), "inverterName leaked into the report"
+    return False
+
+
+def test_solis_catalogue_none_before_discovery():
+    """With no inverters there is nothing to describe."""
+    assert MockSolisAPI().build_discovery() is None
+    return False
+
+
+def test_solis_catalogue_round_trips_through_validate_report():
+    """validate_report() hands every Solis record back unchanged."""
+    api = _solis_fleet()
+    api.nominal_pack_voltage = 51.2
+    report = api.build_discovery()
+    warnings = []
+    cleaned = validate_report(report, "solis", warnings.append)
+    assert not warnings, warnings
+    assert cleaned["inverters"] == report["inverters"], (report["inverters"], cleaned["inverters"])
+    return False
+
+
+def _solis_battery_pair():
+    """A MockSolisAPI holding two battery inverters, both with the captured _DETAIL_WITH_BATTERY (plan Review Focus 1)."""
+    api = _solis_fleet()
+    api.inverter_sn = ["BAT001", "BAT002"]
+    api.inverter_details = {
+        "BAT001": dict(_DETAIL_WITH_BATTERY, productModel="Solis-5G-Hybrid", power=5.0, powerStr="kW"),
+        "BAT002": dict(_DETAIL_WITH_BATTERY, productModel="Solis-5G-Hybrid", power=3.6, powerStr="kW"),
+    }
+    api.cached_values = {sn: {SOLIS_CID_BATTERY_CAPACITY: "100", SOLIS_CID_TOU_V2_MODE: "43605"} for sn in api.inverter_sn}
+    api.parallel_battery_count = {"BAT001": 2, "BAT002": 1}
+    return api
+
+
+# automatic_config() builds these lists over every inverter (pv_devices, PV-only ones included - GH#4922),
+# and every other per-device list over the battery inverters it drives only.
+SOLIS_PV_LIST_SETTINGS = ("pv_today", "pv_power")
+
+# The settings solis_cloud_pv_load_ignore stops automatic_config() binding; the record keeps them (spec D11).
+SOLIS_PV_LOAD_IGNORED = ("load_today", "pv_today", "load_power", "pv_power")
+
+
+def _captured_for_device(captured, battery_index, pv_index):
+    """automatic_config()'s bindings for one inverter, each list cut down to that inverter's own entry.
+
+    One serial sits at different positions in automatic_config()'s two kinds of list: in a fleet of
+    [PV001, BAT001], BAT001 is index 0 of soc_percent but index 1 of pv_power. Each list is picked at the
+    index that belongs to it and returned as a one-entry list, so the shared contract checks run at index
+    0 without depending on how the fixture orders its inverters. battery_index is None for an inverter
+    automatic_config() does not drive, whose battery lists then come back empty (nothing bound).
+    """
+    device = {}
+    for setting, value in captured.items():
+        if not isinstance(value, list):
+            device[setting] = value
+            continue
+        index = pv_index if setting in SOLIS_PV_LIST_SETTINGS else battery_index
+        device[setting] = [value[index]] if index is not None and index < len(value) else []
+    return device
+
+
+def _assert_solis_fleet_agrees(api, allowed_extra=()):
+    """Every record agrees with automatic_config() in both directions, each at its own index in each kind of list.
+
+    A driven record runs both shared checks. A PV-only record has no inverter_type for them to key on,
+    so it is compared directly: exactly pv_today and pv_power, read-only, with the ids automatic_config()
+    binds at its pv_devices position (spec D12). A record whose detail has not been read carries no
+    entities, although automatic_config() still lists its serial in pv_devices (Review Focus 2).
+    Returns the records by serial.
+    """
+    records = validated_inverters(api.build_discovery())
+    captured = capture_automatic_config(api)
+    by_serial = {record["hardware_ids"]["serial"]: record for record in records}
+    assert list(by_serial) == list(api.inverter_sn), (list(by_serial), api.inverter_sn)
+    driven = [sn for sn in api.inverter_sn if by_serial[sn].get("inverter_type")]
+    for sn in api.inverter_sn:
+        record = by_serial[sn]
+        pv_index = api.inverter_sn.index(sn)
+        battery_index = driven.index(sn) if sn in driven else None
+        device = _captured_for_device(captured, battery_index, pv_index)
+        if battery_index is not None:
+            assert_record_agrees(record, device, index=0)
+            assert_record_binds_nothing_extra(record, device, index=0, allowed_extra=allowed_extra)
+        elif "functions" not in record:
+            assert "entities" not in record and "capabilities" not in record, record
+        else:
+            assert "inverter_type" not in record and "capabilities" not in record, record
+            expected = {setting: {"entity_id": "sensor.{}_solis_{}_{}".format(api.prefix, sn.lower(), "pv_energy_total" if setting == "pv_today" else "pv_power"), "access": "r"} for setting in SOLIS_PV_LIST_SETTINGS}
+            assert record["entities"] == expected, record["entities"]
+            for setting in SOLIS_PV_LIST_SETTINGS:
+                if setting not in allowed_extra:
+                    assert device[setting] == [expected[setting]["entity_id"]], (setting, device[setting])
+    return by_serial
+
+
+def test_solis_catalogue_record_rebuilds_the_row():
+    """The driven inverter's record alone rebuilds INVERTER_DEF["SolisCloud"], with no row as a base (spec section 2)."""
+    api = _solis_fleet()
+    checked = 0
+    for record in validated_inverters(api.build_discovery()):
+        if record.get("inverter_type"):
+            assert_definition_complete(record, SolisAPI.WRITE_AND_POLL_SLEEP)
+            checked += 1
+    assert checked == 1, "expected exactly one driven SolisCloud record, checked {}".format(checked)
+    return False
+
+
+def test_solis_catalogue_record_agrees_with_automatic_config():
+    """Every record matches exactly what the real automatic_config() binds for it, in both directions."""
+    by_serial = _assert_solis_fleet_agrees(_solis_fleet())
+    assert by_serial["BAT001"]["inverter_type"] == "SolisCloud" and "inverter_type" not in by_serial["PV001"]
+    return False
+
+
+def test_solis_catalogue_mixed_fleet_matches_each_list_by_position():
+    """A PV-only inverter listed first puts the battery inverter at different indexes in the two kinds of list.
+
+    [PV001, BAT001, NODETAIL001]: BAT001 is index 0 of automatic_config()'s battery lists but index 1 of
+    pv_today/pv_power; PV001 is index 0 of those; NODETAIL001 (detail not read) is index 2 of them and
+    its record still carries nothing.
+    """
+    api = _solis_fleet()
+    api.inverter_sn = ["PV001", "BAT001", "NODETAIL001"]
+    captured = capture_automatic_config(api)
+    assert captured["soc_percent"] == ["sensor.predbat_solis_bat001_battery_soc"], captured["soc_percent"]
+    assert captured["pv_power"] == ["sensor.predbat_solis_pv001_pv_power", "sensor.predbat_solis_bat001_pv_power", "sensor.predbat_solis_nodetail001_pv_power"], captured["pv_power"]
+    by_serial = _assert_solis_fleet_agrees(api)
+    assert by_serial["PV001"]["entities"]["pv_power"]["entity_id"] == "sensor.predbat_solis_pv001_pv_power"
+    assert by_serial["BAT001"]["entities"]["pv_power"]["entity_id"] == "sensor.predbat_solis_bat001_pv_power"
+    assert "entities" not in by_serial["NODETAIL001"], by_serial["NODETAIL001"]
+    return False
+
+
+def test_solis_catalogue_pv_load_ignore_keeps_the_entities():
+    """Spec D11: solis_cloud_pv_load_ignore stops automatic_config() binding the PV/load sensors, not the record carrying them."""
+    records = {}
+    for ignore in (False, True):
+        api = _solis_fleet()
+        api.get_arg = lambda name, default=None, ignore=ignore: ignore if name == "solis_cloud_pv_load_ignore" else default
+        captured = capture_automatic_config(api)
+        for setting in SOLIS_PV_LOAD_IGNORED:
+            assert (setting in captured) == (not ignore), (setting, ignore)
+        records[ignore] = _assert_solis_fleet_agrees(api, allowed_extra=SOLIS_PV_LOAD_IGNORED if ignore else ())
+    assert records[True] == records[False], "the record must not change with solis_cloud_pv_load_ignore"
+    for setting in SOLIS_PV_LOAD_IGNORED:
+        assert setting in records[True]["BAT001"]["entities"], setting
+    return False
+
+
+def test_solis_catalogue_two_inverters_get_their_own_entities():
+    """Two battery inverters give two records, each matching its own index of automatic_config()'s lists."""
+    api = _solis_battery_pair()
+    by_serial = _assert_solis_fleet_agrees(api)
+    for record in by_serial.values():
+        assert_definition_complete(record, SolisAPI.WRITE_AND_POLL_SLEEP)
+    first, second = by_serial["BAT001"]["entities"], by_serial["BAT002"]["entities"]
+    assert set(first) == set(second), (sorted(first), sorted(second))
+    for setting in first:
+        assert "bat001" in first[setting]["entity_id"] and "bat002" in second[setting]["entity_id"], setting
+    return False
+
+
+def test_solis_catalogue_reports_battery_min_soc_not_reserve():
+    """Spec D9: the record carries battery_min_soc (read-only entity plus rating) and no reserve.
+
+    automatic_config() binds reserve and battery_min_soc to the same over_discharge_soc number, and
+    inverter.py dummies the reserve binding because the SolisCloud row has has_reserve_soc False -
+    so the record leaves reserve out and the derived has_reserve_soc is False. Also pins the row's
+    time_button_press False (no schedule_write_button is bound) and battery_power_invert's string
+    "True" becoming invert on battery_power.
+    """
+    api = _solis_fleet()
+    api.cached_values["BAT001"][SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC] = "20"
+    record = validated_inverters(api.build_discovery())[0]
+    entities = record["entities"]
+    assert "reserve" not in entities, entities.get("reserve")
+    assert entities["battery_min_soc"] == {"entity_id": "number.predbat_solis_bat001_over_discharge_soc", "access": "r", "unit": "%"}, entities["battery_min_soc"]
+    assert record["ratings"]["battery_min_soc"] == 20, record["ratings"]
+    captured = capture_automatic_config(api)
+    assert captured["reserve"] == captured["battery_min_soc"], "automatic_config() binds both to over_discharge_soc"
+    definition, gaps, _ = inverter_definition(record, SolisAPI.WRITE_AND_POLL_SLEEP)
+    assert not gaps, gaps
+    assert definition["has_reserve_soc"] is False
+    assert "schedule_write_button" not in entities and "schedule_write_button" not in captured
+    assert definition["time_button_press"] is False
+    assert captured["battery_power_invert"] == ["True"] and entities["battery_power"]["invert"] is True, entities["battery_power"]
+    return False
+
+
+def test_solis_catalogue_export_limit_is_the_configured_register():
+    """export_limit is register 499 in watts, converted as publish_entities() presents it; 0 or unread gives no rating.
+
+    publish_entities() shows an unset or 0 register as 99999 W ("no limit") - a placeholder, not a
+    configured figure, so no rating is reported for it. A value under 200 is in 100 W units there.
+    """
+    api = _solis_fleet()
+
+    def ratings():
+        """The battery inverter's ratings as currently reported."""
+        return {record["device_id"]: record for record in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+
+    assert "export_limit" not in ratings(), "register not read yet"
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "0"
+    assert "export_limit" not in ratings(), "0 means no limit"
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "37"
+    assert ratings()["export_limit"] == 3700.0, ratings()
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "3680"
+    assert ratings()["export_limit"] == 3680.0, ratings()
+    return False
+
+
+async def test_solis_catalogue_filed_even_when_automatic_config_configures_nothing():
+    """run() files the report on a cycle where the real automatic_config() finds no battery inverter.
+
+    Solis's automatic_config() returns False rather than raising, and is gated on
+    automatic_config_done; the report must not depend on either. Built on _make_run_api() and
+    test_run_first_success(): the discovered inverter has the captured no-battery detail.
+    """
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], automatic=True)
+    # _make_run_api() stubs automatic_config(); put the real one back so it genuinely runs.
+    api.automatic_config = SolisAPI.automatic_config.__get__(api)
+    configured = {}
+    api.set_arg_auto = lambda key, value: configured.__setitem__(key, value)
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    # _make_run_api()'s fetch_inverter_details stub only records the call, so this detail survives.
+    api.inverter_details = {sn: dict(_DETAIL_NO_BATTERY)}
+    reports = []
+    api.report_discovery = reports.append
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+    # automatic_config() found no battery inverter. It returns details_read (True here), so
+    # automatic_config_done DOES become True - "done, nothing to configure" - which is why this
+    # asserts on what it configured, not on that flag.
+    assert "inverter_type" not in configured, "automatic_config() found no battery inverter, so it must configure nothing: {}".format(configured)
+    assert len(reports) == 1 and reports[0]["inverters"][0]["device_id"] == "solis:" + sn, reports
+    return False
+
+
+async def test_solis_catalogue_filed_when_automatic_config_gate_is_closed():
+    """run() files the report even when the auto-configure gate never opens.
+
+    The neighbouring test (_configures_nothing, above) runs with the gate open
+    (self.automatic=True), so moving refresh_discovery() inside `if self.automatic and
+    self.inverter_sn and not self.automatic_config_done:` in run() would not be caught by it -
+    that block still executes on that cycle and the call would still fire. Here self.automatic is
+    False (the _make_run_api() default), so the gate never opens at all; automatic_config() must
+    not even be called, and the report must still be filed.
+    """
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_details = {sn: dict(_DETAIL_NO_BATTERY)}
+    reports = []
+    api.report_discovery = reports.append
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+    assert api.automatic_config_calls == 0, "the gate must stay closed for this test to prove anything: {}".format(api.automatic_config_calls)
+    assert len(reports) == 1 and reports[0]["inverters"][0]["device_id"] == "solis:" + sn, reports
+    return False
+
+
+async def test_solis_catalogue_refiled_on_a_later_cycle():
+    """run() files a second, different report once a reported fact changes on a later cycle.
+
+    Every wiring test above only drives first=True, so none of them proves the refresh_discovery()
+    call sits outside a one-shot `if first:` block. Here run() is driven twice - first=True, then
+    first=False after the pack's cached Ah rating changes - and both reports must be filed and
+    differ from each other.
+    """
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_details = {sn: dict(_DETAIL_WITH_BATTERY)}
+    api.cached_values = {sn: {SOLIS_CID_BATTERY_CAPACITY: "100"}}
+    api.parallel_battery_count = {sn: 1}
+    reports = []
+    api.report_discovery = reports.append
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+        # A changed fact on a later cycle - the bank's cached Ah rating moved.
+        api.cached_values[sn][SOLIS_CID_BATTERY_CAPACITY] = "150"
+        await api.run(60, False)
+    assert len(reports) == 2, "a changed rating on a later cycle must file a second report: {}".format(reports)
+    assert reports[0] != reports[1], "the second report must actually differ from the first: {}".format(reports)
+    return False
+
+
 async def test_automatic_config_skips_no_battery_inverter():
     """An inverter SolisCloud reports as having no battery must not be enrolled as a battery inverter.
 
@@ -1475,6 +1886,22 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
+        failed |= test_solis_catalogue_describes_battery_and_pv_only()
+        failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
+        failed |= asyncio.run(test_solis_catalogue_inverter_type_tracks_automatic_config())
+        failed |= test_solis_catalogue_never_reports_the_inverter_name()
+        failed |= test_solis_catalogue_none_before_discovery()
+        failed |= test_solis_catalogue_round_trips_through_validate_report()
+        failed |= test_solis_catalogue_record_rebuilds_the_row()
+        failed |= test_solis_catalogue_record_agrees_with_automatic_config()
+        failed |= test_solis_catalogue_mixed_fleet_matches_each_list_by_position()
+        failed |= test_solis_catalogue_pv_load_ignore_keeps_the_entities()
+        failed |= test_solis_catalogue_two_inverters_get_their_own_entities()
+        failed |= test_solis_catalogue_reports_battery_min_soc_not_reserve()
+        failed |= test_solis_catalogue_export_limit_is_the_configured_register()
+        failed |= asyncio.run(test_solis_catalogue_filed_even_when_automatic_config_configures_nothing())
+        failed |= asyncio.run(test_solis_catalogue_filed_when_automatic_config_gate_is_closed())
+        failed |= asyncio.run(test_solis_catalogue_refiled_on_a_later_cycle())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())

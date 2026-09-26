@@ -6,7 +6,8 @@ import inspect
 from datetime import datetime
 
 from mock_base import MockBase
-from coordinator import CONTAINER_SPEC, Coordinator, Redactor, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, inverter_record, validate_report
+from coordinator import CAPABILITY_KEYS, CONTAINER_SPEC, Coordinator, NOT_APPLICABLE_DEFAULTS, Redactor, SCHEMA_VERSION, SECTION_SPEC, VOCAB_CONTAINERS, inverter_definition, inverter_record, validate_report
+from config import INVERTER_DEF
 
 
 def _coordinator():
@@ -24,12 +25,12 @@ def test_report_keeps_valid_containers():
         "functions": ["solar", "battery"],
         "hardware_ids": {"serial": "SN1"},
         "info": {"firmware": "D0.451"},
-        "ratings": {"battery_kwh": 9.5, "max_charge_w": 3600},
+        "ratings": {"soc_max": 9.5, "battery_rate_max": 3600},
         "entities": {"soc_kw": {"entity_id": "sensor.predbat_givtcp_0_soc_kw", "domain": "sensor", "access": "r", "unit": "kWh"}},
     }]})
     record = coordinator.reports["givtcp"]["inverters"][0]
     assert record["hardware_ids"] == {"serial": "SN1"}
-    assert record["ratings"]["battery_kwh"] == 9.5
+    assert record["ratings"]["soc_max"] == 9.5
     assert record["functions"] == ["solar", "battery"]
     assert record["entities"]["soc_kw"]["entity_id"] == "sensor.predbat_givtcp_0_soc_kw"
     print("PASS: valid containers preserved")
@@ -318,7 +319,7 @@ def test_inverter_record_keeps_everything_populated():
         serials=["S1", "S2"],
         measures_meter="fox:meter:M1",
         functions=["solar"],
-        capabilities=["export_limit"],
+        capabilities={"support_charge_freeze": True},
         hardware_ids={"serial": "ABC123"},
         info={"model": "H3-10.0"},
         ratings={"battery_kwh": 10.4, "max_charge_w": 0},
@@ -326,7 +327,7 @@ def test_inverter_record_keeps_everything_populated():
     )
     assert record["serials"] == ["S1", "S2"]
     assert record["measures_meter"] == "fox:meter:M1"
-    assert record["capabilities"] == ["export_limit"]
+    assert record["capabilities"] == {"support_charge_freeze": True}
     assert record["hardware_ids"] == {"serial": "ABC123"}
     assert record["ratings"]["max_charge_w"] == 0, "a real zero rating is data, not an empty container"
     assert record["entities"]["charge_rate"]["domain"] == "number"
@@ -432,6 +433,7 @@ def test_inverter_record_normalises_sets_and_tuples():
     assert record["functions"] == ["battery", "solar"], "a frozenset should become a sorted list: {}".format(record.get("functions"))
     assert "capabilities" not in record, "an empty frozenset is empty and must be omitted: {}".format(record)
     assert record["flags"] == ["monitor_only"], "a tuple should become a list: {}".format(record.get("flags"))
+    assert "capabilities" not in inverter_record("gecloud:gateway001", capabilities={}), "an empty capabilities dict must be omitted too"
     print("PASS: inverter_record sorts sets, lists tuples and omits an empty frozenset")
     return 0
 
@@ -1347,6 +1349,115 @@ def test_shorter_original_does_not_fragment_a_longer_one():
 # --- Review round 2: adversarial pass - a raw identifier used as a dict key, not a value ---
 
 
+def test_declared_serials_stay_readable_wherever_they_appear():
+    """A hardware serial is not secret, so an all-digit one stays readable - and so does what is built from it.
+
+    Solis, Deye and Sunsynk serials are nothing but digits (these are real shapes: 16, 10 and 10
+    digits), which the misfiled-identifier guard used to treat as a possible MPAN. That hid the
+    serial, the device_id built from it and the duplicate_serial observation naming it, and logged
+    a Warn per inverter on every catalogue read. A serial a record declares - hardware_ids.serial
+    or an entry in serials - is now clear everywhere it appears as a whole token.
+
+    Deye also reports its station id in account_ids, which used to mark the record's device_id as
+    identity-derived and replace it wholesale. That rule is for a device_id built from an account
+    identifier (Octopus's "octopus:{mpan}"); "deye:{serial}" is built from the serial, contains no
+    account identifier, and stays readable while the station id itself is still pseudonymised.
+    """
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+    coordinator.report("solis", {"inverters": [{"device_id": "solis:1031260253072197", "hardware_ids": {"serial": "1031260253072197"}}]})
+    coordinator.report("sunsynk", {"inverters": [{"device_id": "sunsynk:2405116013", "hardware_ids": {"serial": "2405116013"}}]})
+    coordinator.report("deye", {"inverters": [{"device_id": "deye:2306178123", "hardware_ids": {"serial": "2306178123"}, "account_ids": {"station_id": 61234567}}]})
+    # A gateway fronting all-digit battery serials, one of which Sunsynk also claims
+    coordinator.report("gecloud", {"inverters": [{"device_id": "gecloud:GW2242G123", "composition": "gateway", "hardware_ids": {"serial": "GW2242G123"}, "serials": ["2405116013", "7700112233"]}]})
+
+    catalogue = coordinator.catalogue()
+
+    by_id = {record["device_id"]: record for record in catalogue["inverters"]}
+    assert set(by_id) == {"solis:1031260253072197", "sunsynk:2405116013", "deye:2306178123", "gecloud:GW2242G123"}, sorted(by_id)
+    assert by_id["solis:1031260253072197"]["hardware_ids"] == {"serial": "1031260253072197"}
+    assert by_id["sunsynk:2405116013"]["hardware_ids"] == {"serial": "2405116013"}
+    assert by_id["deye:2306178123"]["hardware_ids"] == {"serial": "2306178123"}
+    assert by_id["gecloud:GW2242G123"]["serials"] == ["2405116013", "7700112233"]
+    station = by_id["deye:2306178123"]["account_ids"]["station_id"]
+    assert station != 61234567 and str(station).startswith("#"), "the station id is an account identifier and is still pseudonymised"
+    duplicates = [entry for entry in catalogue["observations"]["conflicts"] if entry.get("kind") == "duplicate_serial"]
+    assert [entry["serial"] for entry in duplicates] == ["2405116013"], duplicates
+    assert not [message for message in messages if "looks like an identifier" in message], messages
+    print("PASS: declared serials, and the device_ids and observations built from them, stay readable")
+    return 0
+
+
+def test_declared_serials_do_not_shelter_a_misfiled_identifier():
+    """Keeping serials readable must not let anything else through.
+
+    A serial is only ignored where it appears as a whole token: a short serial that happens to sit
+    inside a longer number must not break that number's digit run and let an MPAN through. A value
+    under any other hardware_ids key is still guarded as before, and a device_id that is built from
+    an account identifier is still replaced wholesale even when the record also declares a serial.
+    """
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "solis",
+        {
+            "inverters": [
+                {
+                    "device_id": "solis:inv1",
+                    "hardware_ids": {"serial": "123456", "mpan_misfiled": "1234567890123"},
+                    "info": {"note": "MPAN 1234567890123"},
+                },
+                {"device_id": "solis:SERIAL01:ACCT123456", "hardware_ids": {"serial": "SERIAL01"}, "account_ids": {"account": "ACCT123456"}},
+            ]
+        },
+    )
+
+    catalogue = coordinator.catalogue()
+
+    text = str(catalogue)
+    assert "1234567890123" not in text, "a serial inside a longer number must not unhide it"
+    first = catalogue["inverters"][0]
+    assert first["hardware_ids"]["serial"] == "123456"
+    assert str(first["hardware_ids"]["mpan_misfiled"]).startswith("#"), "another hardware_ids key is still guarded"
+    assert "ACCT123456" not in text, "the account identifier is still hidden"
+    assert str(catalogue["inverters"][1]["device_id"]).startswith("#"), "a device_id built from an account identifier is still replaced wholesale"
+    assert catalogue["inverters"][1]["hardware_ids"]["serial"] == "SERIAL01"
+    print("PASS: declared serials shelter nothing but themselves")
+    return 0
+
+
+def test_serial_derived_device_id_needs_whole_tokens():
+    """A device_id is only treated as built from its serial on whole-token matches, both ways.
+
+    The serial must stand as a whole token in the device_id - merely sitting inside a longer token
+    is coincidence, not construction - and any account_ids value that stands as a whole token in it
+    marks the device_id as identity-derived however short that value is, since a short account id
+    is not otherwise caught by the substring pass (MIN_SUBSTITUTE).
+    """
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(
+        "deye",
+        {
+            "inverters": [
+                # the serial only sits inside "inv98765432", so nothing says the device_id is built from it
+                {"device_id": "deye:inv98765432", "hardware_ids": {"serial": "98765"}, "account_ids": {"account": "XY12"}},
+                # built from the serial, but a short station id stands in it as a whole token too
+                {"device_id": "deye:2306178123:ST42", "hardware_ids": {"serial": "2306178123"}, "account_ids": {"station_id": "ST42"}},
+            ]
+        },
+    )
+
+    catalogue = coordinator.catalogue()
+
+    first, second = catalogue["inverters"]
+    assert str(first["device_id"]).startswith("#"), "a serial inside a longer token does not make the device_id serial-derived: {}".format(first["device_id"])
+    assert str(second["device_id"]).startswith("#"), "a short account id in the device_id makes it identity-derived: {}".format(second["device_id"])
+    assert "ST42" not in str(catalogue), "the station id must not survive"
+    assert second["hardware_ids"]["serial"] == "2306178123", "the serial itself stays readable"
+    print("PASS: serial-derived device_ids need whole-token matches, both ways")
+    return 0
+
+
 def test_misfiled_identifier_used_as_a_container_key_caught():
     """Adversarial: a component keys hardware_ids by the serial itself instead of naming the field.
     Before this fix only VALUES were shape-guarded and only NOTED originals were substituted into
@@ -1582,6 +1693,250 @@ def test_publish_writes_sensor():
     return 0
 
 
+def _one_inverter(**fields):
+    """Validate a single inverter record carrying the given fields and return what survives."""
+    record = {"device_id": "test:SN1", "inverter_type": "SunsynkCloud"}
+    record.update(fields)
+    logs = []
+    cleaned = validate_report({"inverters": [record]}, "test", logs.append)
+    return (cleaned.get("inverters") or [{}])[0], logs
+
+
+def test_schema_version_is_two():
+    """The document shape changed (dict capabilities, renamed ratings, required access), so the version moved."""
+    assert SCHEMA_VERSION == 2
+    print("PASS: schema version 2")
+    return 0
+
+
+def test_capabilities_dict_keeps_known_bool_keys():
+    """A capabilities dict of the seven behaviour keys survives validation intact."""
+    capabilities = {key: True for key in CAPABILITY_KEYS}
+    capabilities["can_span_midnight"] = False
+    record, _ = _one_inverter(capabilities=capabilities)
+    assert record["capabilities"] == capabilities, record
+    print("PASS: capabilities dict preserved")
+    return 0
+
+
+def test_capabilities_drops_unknown_key_and_non_bool():
+    """An unknown key, or a value that is not a bool, is dropped and logged; the rest survives."""
+    record, logs = _one_inverter(capabilities={"support_charge_freeze": True, "has_reserve_soc": True, "can_span_midnight": 1})
+    assert record["capabilities"] == {"support_charge_freeze": True}, record
+    assert any("has_reserve_soc" in line for line in logs), logs
+    assert any("can_span_midnight" in line for line in logs), logs
+    print("PASS: capabilities rejects unknown keys and non-bools")
+    return 0
+
+
+def test_capabilities_list_is_dropped():
+    """Schema 2: capabilities is a dict of the seven behaviour keys, so a token list no longer validates."""
+    record, _ = _one_inverter(capabilities=["schedule", "target_soc"])
+    assert "capabilities" not in record, record
+    base, coordinator = _coordinator()
+    coordinator.report("test", {"inverters": [{"device_id": "test:SN1", "capabilities": ["schedule"]}]})
+    assert "capabilities" not in coordinator.catalogue()["inverters"][0]
+    print("PASS: capability token list dropped")
+    return 0
+
+
+def test_descriptor_requires_access():
+    """An entities descriptor without access rw or r is dropped."""
+    record, _ = _one_inverter(entities={
+        "soc_percent": {"entity_id": "sensor.a", "access": "r"},
+        "charge_limit": {"entity_id": "number.b"},
+        "reserve": {"entity_id": "number.c", "access": "write"},
+    })
+    assert set(record["entities"]) == {"soc_percent"}, record
+    print("PASS: descriptor needs access")
+    return 0
+
+
+def test_descriptor_needs_exactly_one_of_entity_id_and_value():
+    """entity_id and value are alternatives: both, or neither, drops the descriptor."""
+    record, _ = _one_inverter(entities={
+        "pv_power": {"value": 0, "access": "r"},
+        "grid_power": {"entity_id": "sensor.g", "value": 0, "access": "r"},
+        "load_power": {"access": "r"},
+    })
+    assert record["entities"] == {"pv_power": {"value": 0, "access": "r"}}, record
+    print("PASS: exactly one of entity_id/value")
+    return 0
+
+
+def test_descriptor_value_rejects_free_text():
+    """A string value must pass the info-string guard: no "@", no over-long text."""
+    record, _ = _one_inverter(entities={
+        "battery_power_invert_note": {"value": "True", "access": "r"},
+        "email": {"value": "someone@example.com", "access": "r"},
+        "blob": {"value": "x" * 200, "access": "r"},
+    })
+    assert set(record["entities"]) == {"battery_power_invert_note"}, record
+    print("PASS: descriptor value rejects free text")
+    return 0
+
+
+def test_descriptor_invert_must_be_bool():
+    """invert is kept when it is a bool and dropped (descriptor kept) when it is not."""
+    record, _ = _one_inverter(entities={
+        "grid_power": {"entity_id": "sensor.g", "access": "r", "invert": True},
+        "battery_power": {"entity_id": "sensor.b", "access": "r", "invert": "yes"},
+    })
+    assert record["entities"]["grid_power"]["invert"] is True, record
+    assert "invert" not in record["entities"]["battery_power"], record
+    print("PASS: invert must be bool")
+    return 0
+
+
+def test_new_containers_survive_redaction_unchanged():
+    """Bool capabilities, a strftime format and a string value stand-in pass the redactor untouched."""
+    base, coordinator = _coordinator()
+    coordinator.report("test", {"inverters": [{
+        "device_id": "test:SN1",
+        "capabilities": {"support_charge_freeze": True},
+        "entities": {
+            "inverter_time": {"entity_id": "sensor.t", "access": "r", "format": "%Y-%m-%d %H:%M:%S"},
+            "pv_power": {"value": "0", "access": "r"},
+        },
+    }]})
+    record = coordinator.catalogue()["inverters"][0]
+    assert record["capabilities"] == {"support_charge_freeze": True}, record
+    assert record["entities"]["inverter_time"]["format"] == "%Y-%m-%d %H:%M:%S", record
+    assert record["entities"]["pv_power"]["value"] == "0", record
+    print("PASS: new containers survive redaction")
+    return 0
+
+
+def _full_record():
+    """A record carrying every source inverter_definition() reads, shaped like a cloud inverter."""
+    return {
+        "device_id": "test:SN1",
+        "inverter_type": "SunsynkCloud",
+        "capabilities": {key: key != "can_span_midnight" for key in CAPABILITY_KEYS},
+        "entities": {
+            "soc_percent": {"entity_id": "sensor.soc", "access": "r", "unit": "%"},
+            "charge_rate": {"entity_id": "number.rate", "access": "rw", "unit": "W"},
+            "charge_start_time": {"entity_id": "select.start", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
+            "charge_limit": {"entity_id": "number.limit", "access": "rw"},
+            "reserve": {"entity_id": "number.reserve", "access": "rw"},
+            "scheduled_charge_enable": {"entity_id": "switch.c", "access": "rw"},
+            "scheduled_discharge_enable": {"entity_id": "switch.d", "access": "rw"},
+            "schedule_write_button": {"entity_id": "switch.w", "access": "rw"},
+        },
+    }
+
+
+def test_inverter_definition_builds_every_field_without_a_base():
+    """A full record yields every derived field and no gaps."""
+    definition, gaps, not_applicable = inverter_definition(_full_record(), 2)
+    assert gaps == [], gaps
+    assert not_applicable == ["clock_time_format", "current_dp"], not_applicable
+    assert definition["support_charge_freeze"] is True and definition["can_span_midnight"] is False
+    assert definition["has_charge_enable_time"] and definition["has_discharge_enable_time"]
+    assert definition["has_target_soc"] and definition["has_reserve_soc"]
+    assert not definition["has_idle_time"] and not definition["has_timed_pause"]
+    assert not definition["has_ge_inverter_mode"] and not definition["has_ge_eco_toggle"] and not definition["has_mqtt_api"]
+    assert definition["charge_time_entity_is_option"] is True and definition["charge_time_format"] == "HH:MM:SS"
+    assert definition["clock_time_format"] == NOT_APPLICABLE_DEFAULTS["clock_time_format"]
+    assert definition["soc_units"] == "%" and definition["output_charge_control"] == "power"
+    assert definition["time_button_press"] is True and definition["num_load_entities"] == 1
+    assert definition["write_and_poll_sleep"] == 2 and definition["name"] == "SunsynkCloud"
+    print("PASS: definition built without a base")
+    return 0
+
+
+def test_inverter_definition_presence_needs_a_real_rw_entity():
+    """An r entry, or a value stand-in, does not make a presence flag True."""
+    record = _full_record()
+    record["entities"]["reserve"] = {"entity_id": "number.reserve", "access": "r"}
+    record["entities"]["charge_limit"] = {"value": 100, "access": "rw"}
+    record["entities"]["pause_mode"] = {"entity_id": "select.pause", "access": "rw"}
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["has_reserve_soc"] is False and definition["has_target_soc"] is False
+    assert definition["has_timed_pause"] is True
+    print("PASS: presence needs rw entity")
+    return 0
+
+
+def test_inverter_definition_ge_mode_flags_follow_inverter_mode_domain():
+    """inverter_mode as a select means a GE inverter-mode select; as a switch, GE Cloud's eco toggle."""
+    record = _full_record()
+    record["entities"]["inverter_mode"] = {"entity_id": "select.mode", "access": "rw", "domain": "select"}
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["has_ge_inverter_mode"] is True and definition["has_ge_eco_toggle"] is False
+    record["entities"]["inverter_mode"] = {"entity_id": "switch.eco", "access": "rw", "domain": "switch"}
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["has_ge_inverter_mode"] is False and definition["has_ge_eco_toggle"] is True
+    print("PASS: GE mode flags from inverter_mode domain")
+    return 0
+
+
+def test_inverter_definition_charge_rate_units():
+    """Amps mean current control with decimal places from the step; no charge_rate means none, unless charge_rate_percent is bound."""
+    record = _full_record()
+    record["entities"]["charge_rate"] = {"entity_id": "number.amps", "access": "rw", "unit": "A", "step": 0.1}
+    definition, gaps, not_applicable = inverter_definition(record, 2)
+    assert definition["output_charge_control"] == "current" and definition["current_dp"] == 1, definition
+    assert "current_dp" not in not_applicable and gaps == []
+    record["entities"]["charge_rate"]["step"] = 1
+    assert inverter_definition(record, 2)[0]["current_dp"] == 0
+    del record["entities"]["charge_rate"]
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["output_charge_control"] == "none"
+    record["entities"]["charge_rate_percent"] = {"entity_id": "number.pct", "access": "rw", "unit": "%"}
+    definition, gaps, _ = inverter_definition(record, 2)
+    assert definition["output_charge_control"] == "power" and "output_charge_control" not in gaps, "a percentage-rate model is still power control"
+    del record["entities"]["charge_rate_percent"]
+    record["entities"]["charge_rate"] = {"entity_id": "number.rate", "access": "rw"}
+    _, gaps, _ = inverter_definition(record, 2)
+    assert "output_charge_control" in gaps, gaps
+    print("PASS: charge_rate unit handling")
+    return 0
+
+
+def test_inverter_definition_gaps_and_not_applicable():
+    """A bound entity missing its format is a gap; an unbound source is not applicable; a missing capability is a gap."""
+    record = _full_record()
+    del record["entities"]["charge_start_time"]["format"]
+    del record["capabilities"]["support_feedin_first"]
+    record["entities"]["inverter_time"] = {"entity_id": "sensor.t", "access": "r", "format": "%H:%M:%S"}
+    definition, gaps, not_applicable = inverter_definition(record, 2)
+    assert "charge_time_format" in gaps and "support_feedin_first" in gaps, gaps
+    assert "charge_time_format" not in definition and "support_feedin_first" not in definition
+    assert definition["clock_time_format"] == "%H:%M:%S" and "clock_time_format" not in not_applicable
+    del record["entities"]["charge_start_time"]
+    _, gaps, not_applicable = inverter_definition(record, 2)
+    assert "charge_time_format" in not_applicable and "charge_time_format" not in gaps
+    print("PASS: gaps vs not applicable")
+    return 0
+
+
+def test_inverter_definition_counts_load_entities():
+    """num_load_entities is 1 plus the consecutive load_power_N entities bound."""
+    record = _full_record()
+    record["entities"]["load_power"] = {"entity_id": "sensor.l0", "access": "r"}
+    record["entities"]["load_power_1"] = {"entity_id": "sensor.l1", "access": "r"}
+    record["entities"]["load_power_3"] = {"entity_id": "sensor.l3", "access": "r"}
+    assert inverter_definition(record, 2)[0]["num_load_entities"] == 2
+    print("PASS: load entity count")
+    return 0
+
+
+def test_inverter_definition_base_fills_gaps_and_is_never_mutated():
+    """With the live INVERTER_DEF row as base, a gap keeps the base value and the row is untouched."""
+    row = INVERTER_DEF["SunsynkCloud"]
+    before = dict(row)
+    record = _full_record()
+    record["capabilities"] = {}
+    definition, gaps, _ = inverter_definition(record, 2, base=row)
+    assert set(CAPABILITY_KEYS) <= set(gaps)
+    assert definition["support_charge_freeze"] == row["support_charge_freeze"]
+    definition["support_charge_freeze"] = "changed"
+    assert INVERTER_DEF["SunsynkCloud"] == before, "inverter_definition() must never mutate INVERTER_DEF"
+    print("PASS: base fills gaps, never mutated")
+    return 0
+
+
 def test_coordinator_all(my_predbat=None):
     """Run every coordinator test, returning the number of failures."""
     failures = 0
@@ -1640,6 +1995,9 @@ def test_coordinator_all(my_predbat=None):
     failures += test_location_shaped_key_pseudonymised_regardless_of_value_shape()
     failures += test_legitimate_long_float_survives_unchanged_and_still_numeric()
     failures += test_hardware_ids_only_flags_all_digit_values_not_prefixed_serials()
+    failures += test_declared_serials_stay_readable_wherever_they_appear()
+    failures += test_declared_serials_do_not_shelter_a_misfiled_identifier()
+    failures += test_serial_derived_device_id_needs_whole_tokens()
     failures += test_pseudonymised_value_substituted_inside_entity_id_value()
     failures += test_account_ids_value_does_not_corrupt_structural_or_descriptor_keys()
     failures += test_account_ids_value_equal_to_a_structural_name_does_not_delete_it()
@@ -1660,4 +2018,20 @@ def test_coordinator_all(my_predbat=None):
     failures += test_load_salt_round_trips_through_storage()
     failures += test_report_discovery_helper()
     failures += test_publish_writes_sensor()
+    failures += test_schema_version_is_two()
+    failures += test_capabilities_dict_keeps_known_bool_keys()
+    failures += test_capabilities_drops_unknown_key_and_non_bool()
+    failures += test_capabilities_list_is_dropped()
+    failures += test_descriptor_requires_access()
+    failures += test_descriptor_needs_exactly_one_of_entity_id_and_value()
+    failures += test_descriptor_value_rejects_free_text()
+    failures += test_descriptor_invert_must_be_bool()
+    failures += test_new_containers_survive_redaction_unchanged()
+    failures += test_inverter_definition_builds_every_field_without_a_base()
+    failures += test_inverter_definition_presence_needs_a_real_rw_entity()
+    failures += test_inverter_definition_ge_mode_flags_follow_inverter_mode_domain()
+    failures += test_inverter_definition_charge_rate_units()
+    failures += test_inverter_definition_gaps_and_not_applicable()
+    failures += test_inverter_definition_counts_load_entities()
+    failures += test_inverter_definition_base_fills_gaps_and_is_never_mutated()
     return failures

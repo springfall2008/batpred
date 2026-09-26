@@ -58,14 +58,22 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 
 | Section | What it holds |
 | ------- | -------------- |
-| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), and - where the reporter has a table mapping Predbat's controls to its entities (GivTCP today) - those entities |
+| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), its behaviour (`capabilities`), its fixed ratings under Predbat's own setting names, and every setting Predbat's automatic configuration binds for it (`entities`) |
 | `chargers` | EV chargers, cross-linked to the cars they serve |
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
 | `forecasts` | Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers |
 | `programmes` | Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to |
 
-No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox) populates `programmes` yet - it is part of
+Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
+their automatic configuration treats every discovered inverter as a battery inverter. Their
+records follow that configuration - `solar` and `battery` on every inverter - rather than
+evidence about the hardware, and Solis's `solar` works the same way, since every Solis inverter
+is configured as a PV source. A PV-only unit that has been configured as a battery inverter will
+usually show it in its record: `battery` among its functions, but no `battery_capacity_ah` rating
+and no `soc_max` entity.
+
+No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
 rather than missing from the document.
 
@@ -139,9 +147,14 @@ wherever it is nested; a value that looks like a misfiled identifier is pseudony
 container that is not supposed to hold one - a 10-or-more-digit run is enough anywhere it turns up
 in a clear container's value (embedded in a longer string too, e.g. `"MPAN 1234567890123"`), except
 inside `hardware_ids`, where a value is only flagged when it is *nothing but* digits, so a
-letter-prefixed vendor serial like `HV2160123456` stays readable; and a field literally named
-`latitude`, `longitude` or `postcode` is pseudonymised regardless of what it contains, since a
-location cannot otherwise be recognised from one value alone. A debug dump is safe to attach to a
+letter-prefixed vendor serial like `HV2160123456` stays readable. A serial a record declares -
+`hardware_ids.serial`, or an entry in `serials` - is never flagged, whatever its shape: Solis, Deye
+and Sunsynk serials are nothing but digits, and they stay readable wherever they appear as a whole
+token, in a `device_id` built from one or a `duplicate_serial` observation that names one. Only the
+serial itself is let through - a digit run left beside it, or one it merely sits inside, is still
+checked. Finally, a field literally named `latitude`, `longitude` or `postcode` is pseudonymised
+regardless of what it contains, since a location cannot otherwise be recognised from one value
+alone. A debug dump is safe to attach to a
 public issue; **the equivalent in-process, unredacted view exists only for Predbat's own internal
 diagnostics and must never be written anywhere.**
 
@@ -152,6 +165,8 @@ pseudonymised one loses its `"octopus:"` prefix entirely and reads as a bare `#`
 `device_id` in most other sections. Nothing is lost functionally - cross-links between records still
 resolve to the same token, and the record is still tagged with its `source` - but a maintainer
 comparing sections will notice the inconsistency and should not have to wonder whether it is a bug.
+A `device_id` built from the record's own serial is not replaced, even when the record also carries
+`account_ids`: Deye's `"deye:{serial}"` stays readable beside its pseudonymised station id.
 
 ## For developers: the report schema
 
@@ -191,11 +206,12 @@ class* that value gets:
 | --------- | ------- | --------- |
 | `hardware_ids` | Short strings | Clear |
 | `info` | Short strings, no `@` | Clear |
-| `ratings` | Numbers and booleans | Clear |
+| `ratings` | Numbers and booleans, keyed by Predbat's setting name where one exists (`inverter_limit`, `export_limit`, `import_limit`, `battery_rate_max`, `soc_max`, `battery_min_soc`) | Clear |
 | `coverage` | A number/boolean, or a list of lowercase tokens | Clear |
-| `entities` | An entity descriptor (`entity_id` plus typed fields like `domain`, `unit`, `min`/`max`) | Clear |
+| `entities` | An entity descriptor: `access` (`rw` or `r`, required), exactly one of `entity_id` or a fixed `value`, and typed fields such as `domain`, `unit`, `format`, `min`/`max`, `invert` | Clear |
+| `capabilities` | `true`/`false` for the seven behaviour keys of an inverter definition (`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`, `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`) | Clear |
 | `account_ids` | Any scalar | Pseudonymised |
-| `functions` / `capabilities` / `flags` / `effects` | Lists of short lowercase tokens | Clear |
+| `functions` / `flags` / `effects` | Lists of short lowercase tokens | Clear |
 
 A value that does not fit its container's declared type is silently **dropped**, not coerced and
 not raised as an error - a string offered to `ratings`, or free text over 64 characters offered to
@@ -204,6 +220,17 @@ rests on: it does not depend on enumerating every dangerous field name a compone
 introduce, because a container that only accepts numbers structurally cannot carry a name, an
 address or a pasted credential, however the schema grows. Choose whichever container matches the
 *kind* of fact you are reporting, not the one that happens to accept the value you have.
+
+### Inverter records and inverter definitions
+
+An inverter record holds enough to rebuild that inverter's definition - the per-type table
+(`INVERTER_DEF`) that tells Predbat how to drive it. `capabilities` carries its behaviour; whether it
+has a reserve, a target SoC, charge/discharge enable switches, idle times or a timed pause follows
+from which settings `entities` binds to a writable (`rw`) entity; and protocol detail such as the time
+format or whether the charge rate is set in watts or amps is read from those entities' descriptors.
+A setting Predbat replaces with a placeholder for this inverter type - SolisCloud's `reserve`, say - is
+left out of `entities`. See the design in
+`docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md`.
 
 ### Writing a reporter
 

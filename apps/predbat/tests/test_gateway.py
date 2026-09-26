@@ -294,6 +294,8 @@ class TestInjectEntities:
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
         gw._suffix_to_serial = {}  # set by automatic_config; empty = nothing bound yet
+        gw._last_read_only = None  # no set_read_only command sent yet
+        gw._read_only_mismatch_logged = False
         gw._dashboard_calls = {}  # entity_id → (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
@@ -373,6 +375,87 @@ class TestInjectEntities:
         # Table attributes should also be merged in
         for k, v in GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}).items():
             assert attrs[k] == v
+
+    def test_gateway_read_only_entity_true(self):
+        """A gateway reporting read_only=true publishes the binary sensor True with table attributes."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.read_only = True
+        gw._inject_entities(status)
+
+        entity = "binary_sensor.predbat_gateway_read_only"
+        assert entity in gw._dashboard_calls
+        state, attrs = gw._dashboard_calls[entity]
+        assert state is True
+        for k, v in GATEWAY_ATTRIBUTE_TABLE.get("gateway_read_only", {}).items():
+            assert attrs[k] == v
+        # The online sensor carries the same value as an attribute
+        _, online_attrs = gw._dashboard_calls["binary_sensor.predbat_gateway_online"]
+        assert online_attrs["read_only"] is True
+
+    def test_gateway_read_only_entity_false(self):
+        """read_only present and false publishes False, not an absent entity."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.read_only = False
+        gw._inject_entities(status)
+
+        state, _ = gw._dashboard_calls["binary_sensor.predbat_gateway_read_only"]
+        assert state is False
+        _, online_attrs = gw._dashboard_calls["binary_sensor.predbat_gateway_online"]
+        assert online_attrs["read_only"] is False
+
+    def test_gateway_read_only_absent_is_unknown(self):
+        """Firmware predating the field reports nothing: no entity, and the attribute is None."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        assert not status.HasField("read_only")
+        gw._inject_entities(status)
+
+        assert "binary_sensor.predbat_gateway_read_only" not in gw._dashboard_calls
+        _, online_attrs = gw._dashboard_calls["binary_sensor.predbat_gateway_online"]
+        assert online_attrs["read_only"] is None
+
+    def test_gateway_read_only_mismatch_warns_once(self):
+        """A gateway disagreeing with the last set_read_only warns once, and agreement clears the latch."""
+        gw = self._make_gateway()
+        gw._last_read_only = True  # PredBat asked for read-only
+
+        status = self._make_status()
+        status.read_only = False  # gateway is not enforcing it
+        gw._inject_entities(status)
+
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert len(warnings) == 1, warnings
+        assert warnings[0].startswith("Warn:")
+        assert "requested True" in warnings[0]
+        assert gw._read_only_mismatch_logged is True
+
+        # A second identical status must not repeat the warning
+        gw._inject_entities(status)
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert len(warnings) == 1, warnings
+
+        # Once the gateway agrees the latch clears, so a later mismatch warns again
+        status.read_only = True
+        gw._inject_entities(status)
+        assert gw._read_only_mismatch_logged is False
+        status.read_only = False
+        gw._inject_entities(status)
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert len(warnings) == 2, warnings
+
+    def test_gateway_read_only_no_mismatch_before_first_send(self):
+        """Nothing sent yet (_last_read_only None) means nothing to compare, so no warning."""
+        gw = self._make_gateway()
+        status = self._make_status()
+        status.read_only = True
+        gw._inject_entities(status)
+
+        warnings = [c[0][0] for c in gw.log.call_args_list if "read_only" in c[0][0]]
+        assert warnings == []
 
     def test_inverter_time_sensor(self):
         """Inverter time sensor is published using the primary inverter serial suffix."""
@@ -5040,6 +5123,744 @@ def test_ev_soc_battery_size_through_get_arg(my_predbat):
         my_predbat.current_status = original_status
 
 
+class TestCommandAck:
+    """Control writes are sent once and confirmed by the hub's ack instead of being re-sent every poll."""
+
+    SLOT_START = "select.predbat_gateway_456789_charge_slot1_start"
+    SLOT_END = "select.predbat_gateway_456789_charge_slot1_end"
+    CHARGE_ENABLED = "switch.predbat_gateway_456789_charge_enabled"
+    CHARGE_RATE = "number.predbat_gateway_456789_charge_rate"
+
+    def _make_gateway(self, subscribed=True, acks_seen=True):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.prefix = "predbat"
+        gw._suffix_to_serial = {"456789": "CE123456789"}
+        gw._mqtt_connected = True
+        gw._command_id = 0
+        gw._pending_commands = {}
+        gw._ack_subscribed = subscribed
+        gw._acks_seen = acks_seen
+        gw._ack_subscribe_warned = False
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.topic_ack = "predbat/devices/pbgw_test/ack/+"
+        gw._ack_topic_prefix = "predbat/devices/pbgw_test/ack/"
+        gw._published = []  # (command, command_id, kwargs)
+        gw.cache = {}  # entity_id -> cached state, as the generic write loop would read it back
+        gw._last_status = None
+
+        async def fake_publish_command(command, command_id=None, **kwargs):
+            gw._published.append((command, command_id, kwargs))
+
+        def fake_dashboard_item(entity_id, state=None, attributes=None, app=None):
+            gw.cache[entity_id] = state
+
+        gw.publish_command = fake_publish_command
+        gw.dashboard_item = fake_dashboard_item
+        gw.get_state_wrapper = lambda entity_id=None, **kwargs: gw.cache.get(entity_id)
+        return gw
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def _clock(self):
+        """A controllable clock for the ack window."""
+        from unittest.mock import patch
+
+        clock = {"now": 1000.0}
+        patcher = patch("gateway._monotonic", lambda: clock["now"])
+        return clock, patcher
+
+    def _ack(self, gw, command_id, command, ok=True, error=None, applied=None):
+        import json
+
+        ack = {"command_id": command_id, "command": command, "ok": ok}
+        if error:
+            ack["error"] = error
+        if applied is not None:
+            ack["applied"] = applied
+        gw._process_ack(json.dumps(ack).encode("utf-8"))
+
+    def _logged(self, gw, text):
+        return any(text in str(call.args[0]) for call in gw.log.call_args_list)
+
+    def test_slow_ack_publishes_once_and_confirms(self):
+        """The generic loop polls every 2 s; an ack arriving after 10 s means one publish, then a matching read-back."""
+        gw = self._make_gateway()
+        gw.cache[self.SLOT_START] = "00:00:00"
+        clock, patcher = self._clock()
+        with patcher:
+            matched = False
+            for step in range(10):
+                clock["now"] = 1000.0 + step * 2
+                if clock["now"] >= 1010.0 and not matched:
+                    self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+                if gw.cache.get(self.SLOT_START) == "00:30:00":
+                    matched = True
+                    break
+                self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+        assert matched
+        assert len(gw._published) == 1
+        assert gw._published[0][1] == 1
+        assert gw.cache[self.SLOT_END] == "18:00:00"
+
+    def test_refusal_logged_and_not_resent_within_window(self):
+        """A refused command logs the hub's reason and is not re-sent until the window has passed."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_END, "00:00:00"))
+            clock["now"] = 1001.0
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="would_disable_charge_zero_length_slot")
+            for step in range(1, 15):
+                clock["now"] = 1001.0 + step * 2
+                self._run(gw.select_event(self.SLOT_END, "00:00:00"))
+            assert len(gw._published) == 1
+            assert self._logged(gw, "Warn: GatewayMQTT: set_charge_slot for CE123456789 refused by hub: would_disable_charge_zero_length_slot")
+            # The refusal does not update the cached value
+            assert self.SLOT_END not in gw.cache
+            # After the window a new attempt goes out
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_END, "00:00:00"))
+        assert len(gw._published) == 2
+
+    def test_no_ack_resends_once_after_window_then_falls_back(self):
+        """No ack: suppressed for the window, re-sent once, then acks stop being relied on."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            for step in range(1, 15):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 1
+            clock["now"] = 1030.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert [p[1] for p in gw._published] == [1, 2]
+            clock["now"] = 1040.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 2
+            # The re-send is unanswered too: fall back to today's behaviour
+            clock["now"] = 1060.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 3
+            assert gw._acks_seen is False
+            clock["now"] = 1062.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 4
+
+    def test_new_value_while_in_flight_publishes_immediately(self):
+        """A different value is not held back by the pending one, and the stale ack is ignored."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            clock["now"] = 1001.0
+            self._run(gw.select_event(self.SLOT_START, "01:00:00"))
+            assert [p[1] for p in gw._published] == [1, 2]
+            # The superseded command's ack must not overwrite the cache
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert self.SLOT_START not in gw.cache
+            self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 100, "end": 1800, "slot": 0})
+            assert gw.cache[self.SLOT_START] == "01:00:00"
+
+    def test_ok_ack_updates_switch_and_suppresses_duplicates(self):
+        """An ok ack updates an enable switch from `applied` and later identical calls are not re-sent."""
+        gw = self._make_gateway()
+        gw.cache[self.CHARGE_ENABLED] = "off"
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.switch_event(self.CHARGE_ENABLED, "turn_on"))
+            self._ack(gw, "PBAT1", "set_charge_enable", applied={"enable": True, "slot": 0})
+            assert gw.cache[self.CHARGE_ENABLED] == "on"
+            clock["now"] = 1002.0
+            self._run(gw.switch_event(self.CHARGE_ENABLED, "turn_on"))
+        assert len(gw._published) == 1
+
+    def test_staged_or_recorded_slot_ack_does_not_update_cache(self):
+        """EMS staged/recorded endpoints were not written to the inverter, so the cache is left alone."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
+            self._run(gw.select_event(self.SLOT_END, "05:00:00"))
+            self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 500, "slot": 0, "recorded": True})
+        assert gw.cache == {}
+
+    def test_number_ack_does_not_update_cache(self):
+        """Numbers wait for telemetry; only slots and enables are applied from the ack."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+        assert gw.cache == {}
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+
+    def test_replay_error_resends_with_new_id(self):
+        """A 'replay' rejection means the value was never considered: the next call publishes under a new id."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="replay")
+            clock["now"] = 1002.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert [p[1] for p in gw._published] == [1, 2]
+        assert self._logged(gw, "Warn: GatewayMQTT: set_charge_rate for CE123456789 refused by hub: replay")
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "sent"
+
+    def test_without_ack_subscription_behaviour_is_unchanged(self):
+        """No ack subscription: every call publishes, with the same arguments as before."""
+        gw = self._make_gateway(subscribed=False, acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for _ in range(3):
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert gw._published == [("set_charge_rate", None, {"power_w": 2000, "serial": "CE123456789"})] * 3
+        assert gw._pending_commands == {}
+
+    def test_no_suppression_until_an_ack_has_been_seen(self):
+        """Subscribed but no ack matched yet (e.g. firmware without acks): publish every call, as before."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1002.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 2
+            # The first matched ack switches suppression on
+            self._ack(gw, "PBAT2", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            assert gw._acks_seen is True
+            clock["now"] = 1004.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 2
+
+    def test_ack_for_an_earlier_send_of_the_same_value_counts(self):
+        """Before suppression is on, each poll re-sends under a new id; an ack for any of them confirms the value."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(3):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert [p[1] for p in gw._published] == [1, 2, 3]
+            # Only the first send's ack arrives
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            assert gw._acks_seen is True
+            clock["now"] = 1006.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 3
+
+    def test_refusal_after_ok_from_another_unit_wins(self):
+        """A command reaching two units acks twice; a refusal after an ok is reported, kept, and undoes the cache update."""
+        gw = self._make_gateway()
+        gw.cache[self.SLOT_START] = "00:00:00"
+        gw._last_status = object()
+
+        def fake_inject_entities(status):
+            assert status is gw._last_status
+            gw.cache[self.SLOT_START] = "00:00:00"  # last telemetry: the old value
+            gw.cache[self.SLOT_END] = "00:00:00"
+
+        gw._inject_entities = fake_inject_entities
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert gw.cache[self.SLOT_START] == "00:30:00"
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+            assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+            assert self._logged(gw, "refused by hub: modbus_write_failed")
+            assert gw.cache[self.SLOT_START] == "00:00:00"
+            # A later ok for the same id changes nothing
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
+            assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+        assert gw.cache[self.SLOT_START] == "00:00:00"
+
+    def test_unusable_first_ok_does_not_block_a_later_cache_update(self):
+        """A staged ok from one unit, then a plain ok from another: the plain one still updates the cache."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"staged": True, "start": 30, "slot": 0})
+            assert gw.cache == {}
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
+        assert gw.cache[self.SLOT_START] == "00:30:00"
+
+    def test_refusal_restarts_the_window_even_when_another_send_succeeded(self):
+        """Any refusal restarts the cooldown, so an identical call is not re-sent within 30 s of it."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            gw._acks_seen = False  # force a second send of the same value
+            clock["now"] = 1002.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT2", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1025.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="modbus_write_failed")
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+            clock["now"] = 1040.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 2
+            clock["now"] = 1056.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 3
+
+    def test_ok_for_a_later_send_beats_refusal_of_an_earlier_one(self):
+        """Distinct sends of the same value: an ok for any of them means the value was applied."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            clock["now"] = 1002.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+            assert gw._pending_commands[self.SLOT_START]["state"] == "refused"
+            self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
+            assert gw.cache[self.SLOT_START] == "00:30:00"
+            # A delayed refusal of an earlier send does not undo the later success
+            clock["now"] = 1004.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+        assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
+        assert len(gw._published) == 2
+
+    def test_failed_retry_keeps_earlier_ids_matchable(self):
+        """A publish that raises drops only its own id; an ack for an earlier send still counts."""
+        gw = self._make_gateway(acks_seen=False)
+        real_publish = gw.publish_command
+
+        async def failing_publish_command(command, command_id=None, **kwargs):
+            raise RuntimeError("broker gone")
+
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1002.0
+            gw.publish_command = failing_publish_command
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+            assert gw._pending_commands[self.CHARGE_RATE]["command_ids"] == ["PBAT1"]
+            assert gw._pending_commands[self.CHARGE_RATE]["sent_at"] == 1000.0
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+        assert gw._acks_seen is True
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+
+    def test_slot_cache_uses_the_entity_suffix_not_the_first_match(self):
+        """A prefix that itself contains 'charge_slot1_' does not redirect the cache update."""
+        gw = self._make_gateway()
+        gw.prefix = "house_charge_slot1_x"
+        entity = "select.house_charge_slot1_x_gateway_456789_charge_slot1_start"
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(entity, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+        assert gw.cache == {entity: "00:30:00", "select.house_charge_slot1_x_gateway_456789_charge_slot1_end": "18:00:00"}
+
+    def test_late_refusal_for_an_earlier_attempt_is_still_handled(self):
+        """After an answered attempt, a fresh attempt keeps earlier ids: a late refusal is logged and restarts the window."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1031.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert gw._pending_commands[self.CHARGE_RATE]["command_ids"] == ["PBAT1", "PBAT2"]
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "sent"
+            clock["now"] = 1032.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+            assert self._logged(gw, "refused by hub: not_managed")
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "refused"
+            assert gw._pending_commands[self.CHARGE_RATE]["sent_at"] == 1032.0
+
+    def test_each_refusal_for_the_same_id_is_logged_and_restarts_the_window(self):
+        """Two units refusing one command: both reasons are logged and the window runs from the second."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1001.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+            clock["now"] = 1025.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="modbus_write_failed")
+            assert self._logged(gw, "refused by hub: not_managed")
+            assert self._logged(gw, "refused by hub: modbus_write_failed")
+            clock["now"] = 1031.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 1
+            clock["now"] = 1055.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 2
+
+    def test_late_refusal_undoes_a_cache_update_from_an_earlier_attempt(self):
+        """PBAT1 ok updates the slot cache, PBAT2 is a fresh attempt, then another unit refuses PBAT1: telemetry is restored."""
+        gw = self._make_gateway()
+        gw._last_status = object()
+        restored = []
+
+        def fake_inject_entities(status):
+            restored.append(status)
+            gw.cache[self.SLOT_START] = "00:00:00"
+
+        gw._inject_entities = fake_inject_entities
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            assert gw.cache[self.SLOT_START] == "00:30:00"
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            assert [p[1] for p in gw._published] == [1, 2]
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+        assert restored == [gw._last_status]
+        assert gw.cache[self.SLOT_START] == "00:00:00"
+        assert self._logged(gw, "refused by hub: modbus_write_failed")
+
+    def test_publish_failure_after_its_ack_arrived_keeps_the_entry(self):
+        """The hub acknowledged the command while the publish was still awaiting the broker; the later publish error must not undo that."""
+        gw = self._make_gateway()
+
+        async def ack_then_fail(command, command_id=None, **kwargs):
+            gw._published.append((command, command_id, kwargs))
+            self._ack(gw, f"PBAT{command_id}", command, applied={"power_w": 2000, "slot": 0})
+            raise RuntimeError("connection lost before the broker confirmed")
+
+        gw.publish_command = ack_then_fail
+        clock, patcher = self._clock()
+        with patcher:
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+            assert gw._pending_commands[self.CHARGE_RATE]["command_ids"] == ["PBAT1"]
+            clock["now"] = 1002.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 1
+
+    def test_refusal_from_an_earlier_attempt_still_outranks_its_late_ok(self):
+        """PBAT1 refused, fresh attempt PBAT2, then another unit's late ok for PBAT1: it must not count as applied."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="modbus_write_failed")
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            assert [p[1] for p in gw._published] == [1, 2]
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 1})
+            assert gw._pending_commands[self.SLOT_START]["state"] == "sent"
+            assert gw.cache == {}
+            # PBAT2's own ok still confirms the value
+            self._ack(gw, "PBAT2", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+        assert gw._pending_commands[self.SLOT_START]["state"] == "applied"
+        assert gw.cache[self.SLOT_START] == "00:30:00"
+
+    def test_replay_after_an_answer_is_logged_as_a_refusal(self):
+        """A replay from another unit after the command was answered is logged and restarts the window."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1020.0
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="replay")
+            assert self._logged(gw, "Warn: GatewayMQTT: set_charge_rate for CE123456789 refused by hub: replay")
+            assert gw._pending_commands[self.CHARGE_RATE]["sent_at"] == 1020.0
+            clock["now"] = 1040.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 1
+
+    def test_late_replay_for_an_earlier_id_does_not_drop_the_fresh_attempt(self):
+        """PBAT1 ok, fresh attempt PBAT2, then a late replay for PBAT1: PBAT2 stays tracked and the window restarts."""
+        gw = self._make_gateway()
+        gw._last_status = object()
+        restored = []
+        gw._inject_entities = lambda status: restored.append(status)
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            clock["now"] = 1031.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            clock["now"] = 1032.0
+            self._ack(gw, "PBAT1", "set_charge_slot", ok=False, error="replay")
+            entry = gw._pending_commands[self.SLOT_START]
+            assert entry["command_ids"] == ["PBAT1", "PBAT2"]
+            assert entry["sent_at"] == 1032.0
+            assert restored == [gw._last_status]
+            assert self._logged(gw, "refused by hub: replay")
+            clock["now"] = 1034.0
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+        assert len(gw._published) == 2
+
+    def test_replay_for_the_newest_id_after_an_earlier_send_applied(self):
+        """PBAT1 unanswered, PBAT2 re-sent, PBAT1 ok, then PBAT2 replay: PBAT2 is forgotten and the applied value stays suppressed."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1030.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            clock["now"] = 1031.0
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1059.0
+            self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="replay")
+            entry = gw._pending_commands[self.CHARGE_RATE]
+            assert entry["command_ids"] == ["PBAT1"]
+            assert entry["state"] == "applied"
+            assert self._logged(gw, "already applied by another send")
+            # The replay is a refusal too: the window runs from it
+            clock["now"] = 1060.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            assert len(gw._published) == 2
+            clock["now"] = 1089.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 3
+
+    def test_replay_for_the_newest_id_with_only_an_older_attempts_ok_drops_the_entry(self):
+        """An ok from an earlier attempt does not count: a replay of the fresh attempt's id re-sends straight away."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+            clock["now"] = 1031.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="replay")
+            assert self.CHARGE_RATE not in gw._pending_commands
+            clock["now"] = 1032.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert [p[1] for p in gw._published] == [1, 2, 3]
+
+    def test_failed_publish_with_full_id_history_restores_the_pruned_id(self):
+        """With 16 ids kept, a failed 17th send puts back the pruned oldest id and the earlier timing."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(16):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            before = dict(gw._pending_commands[self.CHARGE_RATE])
+            before_ids = list(before["command_ids"])
+            assert len(before_ids) == 16
+
+            async def failing_publish_command(command, command_id=None, **kwargs):
+                raise RuntimeError("broker gone")
+
+            real_publish = gw.publish_command
+            gw.publish_command = failing_publish_command
+            clock["now"] = 1100.0
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+            entry = gw._pending_commands[self.CHARGE_RATE]
+            assert entry["command_ids"] == before_ids
+            assert entry["sent_at"] == before["sent_at"]
+            # The oldest id is still matchable
+            self._ack(gw, "PBAT1", "set_charge_rate", applied={"power_w": 2000, "slot": 0})
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+
+    def test_repeated_refusal_during_a_failing_publish_is_not_rolled_back(self):
+        """A refusal repeated while a later publish awaits the broker keeps its restarted window when that publish fails."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+
+            async def refusal_then_fail(command, command_id=None, **kwargs):
+                clock["now"] = 1035.0
+                self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="not_managed")
+                raise RuntimeError("broker gone")
+
+            real_publish = gw.publish_command
+            gw.publish_command = refusal_then_fail
+            clock["now"] = 1031.0
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+            entry = gw._pending_commands[self.CHARGE_RATE]
+            assert entry["command_ids"] == ["PBAT1"]
+            assert entry["sent_at"] == 1035.0
+            clock["now"] = 1036.0
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        assert len(gw._published) == 1
+
+    def test_full_history_failing_publish_with_concurrent_ack_keeps_all_earlier_ids(self):
+        """16 ids kept, a 17th send fails while an ack for PBAT2 arrives: PBAT1..PBAT16 all stay matchable."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(16):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+
+            async def ack_other_then_fail(command, command_id=None, **kwargs):
+                self._ack(gw, "PBAT2", "set_charge_rate", ok=False, error="not_managed")
+                self._ack(gw, "PBAT1", "set_charge_rate", ok=False, error="modbus_write_failed")
+                raise RuntimeError("broker gone")
+
+            real_publish = gw.publish_command
+            gw.publish_command = ack_other_then_fail
+            clock["now"] = 1100.0
+            try:
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            except RuntimeError:
+                pass
+            gw.publish_command = real_publish
+        entry = gw._pending_commands[self.CHARGE_RATE]
+        assert entry["command_ids"] == [f"PBAT{n}" for n in range(1, 17)]
+        assert entry["outcomes"] == {"PBAT2": "refused", "PBAT1": "refused"}
+        assert self._logged(gw, "refused by hub: modbus_write_failed")
+
+    def test_outcomes_do_not_grow_past_the_kept_ids(self):
+        """Per-id outcomes are pruned with the ids, so a value re-sent for a long time does not grow the entry."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            for attempt in range(40):
+                clock["now"] = 1000.0 + attempt * 31
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+                self._ack(gw, f"PBAT{attempt + 1}", "set_charge_rate", ok=False, error="not_managed")
+        entry = gw._pending_commands[self.CHARGE_RATE]
+        assert len(entry["command_ids"]) == 16
+        assert set(entry["outcomes"]) <= set(entry["command_ids"])
+
+    def test_attempt_ids_do_not_grow_without_acks(self):
+        """Subscribed but no acks ever: every call re-sends, and the id lists stay bounded."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            for step in range(50):
+                clock["now"] = 1000.0 + step * 2
+                self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        entry = gw._pending_commands[self.CHARGE_RATE]
+        assert len(gw._published) == 50
+        assert len(entry["command_ids"]) == 16
+        assert len(entry["attempt_ids"]) == 16
+
+    def test_second_ok_ack_does_not_overwrite_cache(self):
+        """Only the first ok ack for a command updates the cached slot times."""
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.select_event(self.SLOT_START, "00:30:00"))
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 1800, "slot": 0})
+            self._ack(gw, "PBAT1", "set_charge_slot", applied={"start": 30, "end": 900, "slot": 1})
+        assert gw.cache[self.SLOT_END] == "18:00:00"
+
+    def test_command_ids_do_not_restart_at_one(self):
+        """initialize() seeds the id counter from the clock so a restart does not reuse recent ids."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok")
+        assert gw._command_id > 1_000_000_000_000
+        assert gw.topic_ack == "predbat/devices/pbgw_test/ack/+"
+
+    def test_unknown_or_mismatched_acks_ignored(self):
+        """Acks for ids PredBat is not tracking, or for a different command, change nothing."""
+        gw = self._make_gateway(acks_seen=False)
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            self._ack(gw, "PBAT99", "set_charge_rate")
+            self._ack(gw, "PBAT1", "set_reserve")
+            gw._process_ack(b"not json")
+            gw._process_ack(b"[1, 2]")
+        assert gw._acks_seen is False
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "sent"
+
+    def test_failed_publish_is_not_left_in_flight(self):
+        """A publish that raises must not suppress the next attempt."""
+        gw = self._make_gateway()
+
+        async def failing_publish_command(command, command_id=None, **kwargs):
+            raise RuntimeError("broker gone")
+
+        gw.publish_command = failing_publish_command
+        try:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+        except RuntimeError:
+            pass
+        assert gw._pending_commands == {}
+
+    def test_ack_topic_routed_to_ack_handler(self):
+        """Messages on ack/<command_id> reach the ack handler."""
+        import json
+        from unittest.mock import MagicMock
+
+        gw = self._make_gateway()
+        clock, patcher = self._clock()
+        with patcher:
+            self._run(gw.number_event(self.CHARGE_RATE, 2000))
+            message = MagicMock()
+            message.topic = "predbat/devices/pbgw_test/ack/PBAT1"
+            message.payload = json.dumps({"command_id": "PBAT1", "command": "set_charge_rate", "ok": True}).encode("utf-8")
+            self._run(gw._handle_message(message))
+        assert gw._pending_commands[self.CHARGE_RATE]["state"] == "applied"
+
+    def test_denied_ack_subscription_warns_once(self):
+        """A refused ack subscription is tolerated and logged once, not on every reconnect."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = self._make_gateway(subscribed=False, acks_seen=False)
+        client = MagicMock()
+        client.subscribe = AsyncMock(return_value=(0x80,))
+        assert self._run(gw._subscribe_acks(client)) is False
+        assert self._run(gw._subscribe_acks(client)) is False
+        warnings = [c for c in gw.log.call_args_list if "Cannot subscribe to command acks" in str(c.args[0])]
+        assert len(warnings) == 1
+        client.subscribe = AsyncMock(side_effect=Exception("not authorised"))
+        assert self._run(gw._subscribe_acks(client)) is False
+        client.subscribe = AsyncMock(return_value=(0,))
+        assert self._run(gw._subscribe_acks(client)) is True
+
+    def test_publish_command_uses_preallocated_id(self):
+        """publish_command sends the id it is given, and allocates the next one when not given one."""
+        import json
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw._mqtt_connected = True
+        gw._command_id = 7
+        gw.topic_command = "predbat/devices/pbgw_test/command"
+        sent = []
+
+        async def fake_publish_raw(topic, payload, retain=False):
+            sent.append(json.loads(payload))
+
+        gw._publish_raw = fake_publish_raw
+        self._run(gw.publish_command("set_charge_rate", command_id=42, power_w=100))
+        self._run(gw.publish_command("set_charge_rate", power_w=100))
+        assert [s["command_id"] for s in sent] == ["PBAT42", "PBAT8"]
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -5062,6 +5883,7 @@ def run_gateway_tests(my_predbat=None):
         TestSelectEvent,
         TestNumberEvent,
         TestSwitchEvent,
+        TestCommandAck,
         TestTokenRefresh,
         TestPlanHookConversion,
         TestMQTTIntegration,

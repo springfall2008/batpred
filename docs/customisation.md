@@ -189,7 +189,12 @@ This setting will not impact the real calculated costs and is only used for plan
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
-If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
+If your car is charged by Octopus Intelligent and the current time is inside one of its charging slots but the car is not charging, Predbat cancels that slot and every later one, so the battery is no longer held for the car and the plan can include potential export again.
+The dispatch's cheap rate is withdrawn too, as Octopus may bill a dispatch the car does not use at the full rate.
+Slots Predbat plans itself (Predbat-led charging) are never cancelled, as Predbat is the one deciding when the car charges.
+Whether the car is charging is taken from **car_charging_now** when it is set to a real Home Assistant entity, after 2 minutes of it reporting not charging.
+Without that sensor, if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load** On), the house load is used instead, after 10 minutes of load too low for a car to be charging.
+The slots come back as soon as the car starts charging again or the current slot ends.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
@@ -302,6 +307,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
 - **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
+- **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
@@ -348,7 +354,7 @@ By default with this option On the latest export slots of the same value will be
 
 **switch.predbat_export_more_solar** When turned On, late in the planning stage Predbat will try enabling Freeze Export on every otherwise Idle slot that has predicted solar generation. With Freeze Export the battery is not charged from the surplus solar, so that solar is exported to the grid instead.
 
-This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour.
+This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour. If you turn this on when it cannot have any effect - **switch.predbat_set_export_freeze** is off, your inverter does not support freeze export, or **select.predbat_mode** is not _Control charge & discharge_ - Predbat will log a warning saying so.
 
 ## Battery margins and metrics options
 
@@ -763,7 +769,7 @@ Selected slots will be shown in the list in square brackets, and you can cancel 
 
 When you use the Manual Control features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-The **off** option at the bottom of the list will cancel all selected force charges.
+The **off** option at the top of the list will cancel all selected force charges.
 
 ![image](images/manual_select.png)
 
