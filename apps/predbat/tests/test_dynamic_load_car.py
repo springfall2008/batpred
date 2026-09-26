@@ -563,7 +563,7 @@ def _run_rates(my_predbat):
                 my_predbat.dynamic_load_car_strip_feed_rates({minute: 7.0 for minute in range(0, 2 * 24 * 60)})
         finally:
             my_predbat.log = saved_log
-        strip_logs = [message for message in logged if "removed the Intelligent dispatch rate" in message]
+        strip_logs = [message for message in logged if "removed the dispatch rate" in message]
         failed |= _check("t13d logged once", len(strip_logs) == 1, "logged {}".format(strip_logs))
 
         my_predbat.dynamic_load_car_effective = {}
