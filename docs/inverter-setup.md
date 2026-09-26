@@ -2698,7 +2698,7 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 - Check that each entity name matches the ones your Solax Modbus integration created, as the prefixes depend on the name you gave the integration
 
-- Optionally set **grid_power** to a sensor that measures your grid connection (see the comments in the template)
+- **grid_power** uses the Solis meter (`sensor.solis_meter_active_power`), which already reports import as negative so no invert is needed. If your Solis meter is not at the grid connection, point it at another grid sensor instead (see the comments in the template)
 
 - Lastly you will need to comment out or delete the **template** line to enable the configuration
 

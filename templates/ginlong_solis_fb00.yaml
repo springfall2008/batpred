@@ -63,11 +63,11 @@ pred_bat:
   pv_power:
     - sensor.solis_pv_total_power
 
-  # Grid power in W - should be negative for import and positive for export, set grid_power_invert to true if yours is the other way around
-  # Point this at whichever sensor measures your grid connection, e.g. the Solis meter (sensor.solis_meter_active_power) or another CT clamp
-  # If no single sensor reports it in that form, create a Home Assistant template sensor that does and use that here
-  #grid_power:
-  #  - sensor.solis_meter_active_power
+  # Grid power from the Solis meter - negative for import and positive for export, which is what Predbat expects so no invert is needed
+  # This assumes the Solis meter/CT is at your grid connection. If it isn't, point this at another sensor that measures the grid
+  # (e.g. a CT clamp), set grid_power_invert to true if it reports import as positive, or create a Home Assistant template sensor that does
+  grid_power:
+    - sensor.solis_meter_active_power
   #grid_power_invert:
   #  - true
 
