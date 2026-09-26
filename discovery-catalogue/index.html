@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Discovery Catalogue - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Catalogue";
+        var mkdocs_page_input_path = "discovery-catalogue.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Discovery Catalogue</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#what-it-is">What it is</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#where-to-find-it">Where to find it</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#what-each-section-describes">What each section describes</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#conflicts">Conflicts</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#what-is-and-is-not-redacted">What is, and is not, redacted</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#for-developers-the-report-schema">For developers: the report schema</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#the-container-model-and-why-it-is-typed">The container model, and why it is typed</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#inverter-records-and-inverter-definitions">Inverter records and inverter definitions</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#writing-a-reporter">Writing a reporter</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Discovery Catalogue</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-catalogue">Discovery Catalogue</h1>
+<h2 id="what-it-is">What it is</h2>
+<p>The discovery catalogue is a single document describing the hardware and accounts Predbat's
+components have actually found on your installation - inverters, EV chargers, cars, electricity
+meters and solar forecast providers - built once at startup from what each component reports about
+itself.</p>
+<p>It exists because a real installation is rarely as simple as one inverter and one tariff: several
+components can each see part of the same physical setup (a GivEnergy inverter visible through both
+GivTCP and GE Cloud, say), or claim the same car slot, and today those situations are resolved
+silently by whichever component happens to run first. The catalogue does not change that behaviour</p>
+<ul>
+<li><strong>nothing about it writes to your configuration, or changes anything Predbat does</strong>. It only
+makes what was already happening visible, so a maintainer reading a bug report can see the whole
+picture at a glance instead of reconstructing it from log lines, and so a genuine ambiguity (two
+components both claiming the same inverter) is recorded as an observation rather than staying an
+invisible coincidence of startup order.</li>
+</ul>
+<h2 id="where-to-find-it">Where to find it</h2>
+<p><strong>The Discovery page in the web UI.</strong> The quickest way to look: open <strong>Discovery</strong> in the Predbat
+web interface. It shows the per-section record counts, any conflicts, a status for every component,
+and a card per record, with the entity map collapsed behind a toggle and the whole document
+available at the bottom in the same YAML form a debug dump carries.</p>
+<p>The page is <strong>redacted by default</strong> - what you see is what a bug report would contain. "Show raw
+values" (<code>?raw=1</code>) switches to the unredacted document, so you can confirm your own serial number
+or MPAN was captured correctly. The raw view is labelled on screen and is <strong>not safe to share</strong>:
+Predbat's web interface has no authentication of its own, so treat raw mode the way you already
+treat the Apps page.</p>
+<p><strong>A debug dump.</strong> Every <code>predbat_debug.yaml</code> (written to <code>debug/</code> when
+<code>switch.predbat_debug_enable</code> is on, and what you normally attach to a bug report) carries the full
+catalogue under a top-level <code>discovery:</code> key. This is the complete document, and the redacted form
+described below - safe to attach to a public GitHub issue.</p>
+<p><strong><code>sensor.predbat_discovery</code>.</strong> This entity carries a summary rather than the full document: its
+state is the total number of records found, and its attributes carry <code>schema_version</code>, <code>generated</code>,
+a per-section count, a status for every component Predbat knows about, and any conflicts observed
+(see below). The full per-section data - which inverter has which entities, and so on - is
+deliberately <strong>not</strong> in the entity's attributes; Home Assistant's recorder writes every attribute
+change to disk, and the full catalogue is tens of kilobytes even on a modest install. Read the debug
+dump for the complete picture.</p>
+<p>The latest report from each component is kept - a new one replaces that component's previous
+report rather than adding to it - and the catalogue is re-assembled fresh each time
+it is actually read. A debug dump always reflects the latest state, including anything reported
+<em>after</em> Predbat started - a rediscovered inverter, a changed tariff, a newly-discovered forecast
+site, a retry that succeeded on a later cycle - not only what was known at the "discovery barrier"
+(the point straight after every component has started or timed out). <code>sensor.predbat_discovery</code> is
+different: its summary is <em>published</em> only once, at that same discovery barrier, and does not
+refresh itself afterwards even though the underlying document it was built from keeps moving -
+restart Predbat, or read a fresh debug dump, to see anything reported later than startup.</p>
+<h2 id="what-each-section-describes">What each section describes</h2>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>What it holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inverters</code></td>
+<td>Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (<code>solar</code>, <code>battery</code>), its behaviour (<code>capabilities</code>), its fixed ratings under Predbat's own setting names, and every setting Predbat's automatic configuration binds for it (<code>entities</code>)</td>
+</tr>
+<tr>
+<td><code>chargers</code></td>
+<td>EV chargers, cross-linked to the cars they serve</td>
+</tr>
+<tr>
+<td><code>cars</code></td>
+<td>Electric vehicles, cross-linked to the charger that charges them</td>
+</tr>
+<tr>
+<td><code>meters</code></td>
+<td>Electricity (and gas) supply points, each with a direction (<code>import</code>/<code>export</code>) and, where known, a nested tariff record</td>
+</tr>
+<tr>
+<td><code>forecasts</code></td>
+<td>Solar forecast providers (Solcast, forecast.solar, Open-Meteo, or your own HA sensors) and what each one covers</td>
+</tr>
+<tr>
+<td><code>programmes</code></td>
+<td>Flexibility enrolments (a VPP, a saving session, a free-electricity event) that emit events and may constrain Predbat, cross-linked to the meter they apply to</td>
+</tr>
+</tbody>
+</table>
+<p>Deye and Sunsynk cannot tell a PV-only inverter from a hybrid: their APIs give no signal, and
+their automatic configuration treats every discovered inverter as a battery inverter. Their
+records follow that configuration - <code>solar</code> and <code>battery</code> on every inverter - rather than
+evidence about the hardware, and Solis's <code>solar</code> works the same way, since every Solis inverter
+is configured as a PV source. A PV-only unit that has been configured as a battery inverter will
+usually show it in its record: <code>battery</code> among its functions, but no <code>battery_capacity_ah</code> rating
+and no <code>soc_max</code> entity.</p>
+<p>No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates <code>programmes</code> yet - it is part of
+the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
+rather than missing from the document.</p>
+<p>Every record carries a <code>source</code> field naming the component that reported it, a <code>device_id</code> unique
+within that component, and whichever typed containers below the component chose to populate. Two
+extra top-level sections describe the fleet as a whole rather than any one device:</p>
+<ul>
+<li>
+<p><strong><code>components</code></strong> - a status (<code>ok</code>, <code>no_report</code>, <code>not_started</code> or <code>load_error</code>) for each component
+  that either reported, or was expected to and did not. A component that should be describing your
+  hardware but is not shows up as clearly as one that is. <code>load_error</code> says only <em>that</em> the
+  component failed to start; the reason is an arbitrary exception message, which is free text this
+  document deliberately does not carry - look in the Predbat log, which records it in full
+  alongside a traceback.</p>
+<p>Two kinds of component are deliberately left out, because their silence carries no
+information: one you never configured (its absence is its status - the full registry is in
+<code>components.py</code>), and one that is running fine but has no reporter at all. Most components are
+in that second group - <code>web</code>, <code>ha</code>, <code>chat</code>, <code>carbon</code>, <code>temperature</code> and the rest are not
+hardware sources and will never report. Listing them all made the map thirty-odd entries of
+which a handful said anything, and buried the case that matters: a component that <em>can</em> report
+and did not
+- <strong><code>observations</code></strong> - things noticed about the assembled picture rather than about any one
+  component: <code>conflicts</code> (see below) and <code>resulting_config</code>, the handful of apps.yaml keys
+  (<code>num_inverters</code>, <code>num_cars</code>, <code>inverter_type</code>) discovery can be compared against</p>
+</li>
+</ul>
+<h3 id="conflicts">Conflicts</h3>
+<p><code>observations.conflicts</code> records situations that today resolve silently by whichever component
+happened to run first - the catalogue observes them, it does not resolve them:</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fires when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>duplicate_serial</code></td>
+<td>Two components claim the same hardware serial - including a serial a gateway record fronts on behalf of the batteries behind it, not only the serial identifying the record itself</td>
+</tr>
+<tr>
+<td><code>multiple_inverter_sources</code></td>
+<td>More than one component reports an inverter record at all (e.g. both GivTCP and GE Cloud)</td>
+</tr>
+<tr>
+<td><code>multiple_import_meters</code></td>
+<td>More than one component reports an import meter</td>
+</tr>
+<tr>
+<td><code>contested_car_slots</code></td>
+<td>A car is reported by a component that reports no charger, alongside a component that reports both a charger and a car - two components with a different idea of what should occupy a car slot</td>
+</tr>
+</tbody>
+</table>
+<h2 id="what-is-and-is-not-redacted">What is, and is not, redacted</h2>
+<p>The document you get from a debug dump or <code>sensor.predbat_discovery</code> has already been through
+redaction - the catalogue in memory is never published in its raw form. Two classes of information
+are treated very differently, deliberately:</p>
+<p><strong>Pseudonymised</strong> - never appears in the clear: account and site identifiers that trace back to
+<em>you specifically</em> - an MPAN, an Octopus/utility account number, a Solcast site id. Each is replaced
+with a short stable token (<code>#</code> followed by 8 hex characters) derived from the value and a random
+salt generated once per installation, so the <em>same</em> identifier always maps to the <em>same</em> token
+within one install's dumps (letting you correlate two records that share an account), but a
+different installation's token for the identical MPAN is completely unrelated - there is nothing to
+compare across users. Anywhere that identifier would otherwise be echoed elsewhere in the document -
+inside an entity id, a free-text note - is caught and replaced too, including a case- or
+<code>-</code>/<code>_</code>-folded form the same value can appear in (either direction: an upper-cased echo of a
+lower-cased original is caught exactly as a lower-cased echo of an upper-cased one is). This
+echo-substitution only fires for an original of six characters or more - anything shorter would
+corrupt more ordinary text as a false-positive substring match than it would ever hide, so a very
+short identifier is only ever replaced where it appears whole, not embedded inside a longer string.</p>
+<p><strong>Kept readable, deliberately</strong> - a hardware serial number, a firmware version string, a device
+model name, and a tariff or product code. None of these identify <em>you</em>; they identify a public
+product or a specific physical device, and stripping them would make a bug report undiagnosable -
+"my GivEnergy inverter won't discharge" is a much harder bug to chase without knowing which
+inverter, which firmware, or which tariff is in play. <strong>Entity ids are published verbatim too</strong> -
+exactly the <code>sensor.</code>/<code>number.</code>/... id Home Assistant knows the entity by - since that is what lets
+you match a catalogue record back to something you can see on your own dashboard; a component is
+expected to build its entity ids from public naming, never from a value this catalogue treats as
+sensitive (and where one is, the redactor still catches it - see the guards below).</p>
+<p>A handful of further guards run regardless of which container a value landed in: anything that
+looks like a credential by its field name (<code>api_key</code>, <code>password</code>, <code>token</code>, ...) is refused outright,
+wherever it is nested; a value that looks like a misfiled identifier is pseudonymised even inside a
+container that is not supposed to hold one - a 10-or-more-digit run is enough anywhere it turns up
+in a clear container's value (embedded in a longer string too, e.g. <code>"MPAN 1234567890123"</code>), except
+inside <code>hardware_ids</code>, where a value is only flagged when it is <em>nothing but</em> digits, so a
+letter-prefixed vendor serial like <code>HV2160123456</code> stays readable. A serial a record declares -
+<code>hardware_ids.serial</code>, or an entry in <code>serials</code> - is never flagged, whatever its shape: Solis, Deye
+and Sunsynk serials are nothing but digits, and they stay readable wherever they appear as a whole
+token, in a <code>device_id</code> built from one or a <code>duplicate_serial</code> observation that names one. Only the
+serial itself is let through - a digit run left beside it, or one it merely sits inside, is still
+checked. Finally, a field literally named <code>latitude</code>, <code>longitude</code> or <code>postcode</code> is pseudonymised
+regardless of what it contains, since a location cannot otherwise be recognised from one value
+alone. A debug dump is safe to attach to a
+public issue; <strong>the equivalent in-process, unredacted view exists only for Predbat's own internal
+diagnostics and must never be written anywhere.</strong></p>
+<p>One visible side effect of pseudonymisation worth knowing about when reading a dump: a <code>device_id</code>
+built from a sensitive identifier is replaced <em>wholesale</em> by its pseudonym token rather than having
+just that part of it swapped out. Octopus's meter <code>device_id</code> is <code>"octopus:{mpan}"</code>, so a
+pseudonymised one loses its <code>"octopus:"</code> prefix entirely and reads as a bare <code>#</code> token, unlike a
+<code>device_id</code> in most other sections. Nothing is lost functionally - cross-links between records still
+resolve to the same token, and the record is still tagged with its <code>source</code> - but a maintainer
+comparing sections will notice the inconsistency and should not have to wonder whether it is a bug.
+A <code>device_id</code> built from the record's own serial is not replaced, even when the record also carries
+<code>account_ids</code>: Deye's <code>"deye:{serial}"</code> stays readable beside its pseudonymised station id.</p>
+<h2 id="for-developers-the-report-schema">For developers: the report schema</h2>
+<p>A component describes what it found by implementing <code>build_discovery()</code>, returning a plain dict:</p>
+<pre><code class="language-python">def build_discovery(self):
+    return {
+        &quot;automatic&quot;: self.automatic,   # whether THIS component wired apps.yaml to what it found
+        &quot;inverters&quot;: [...],            # any section keys you have records for - omit the rest
+    }
+</code></pre>
+<p>and reporting it - typically once per <code>run()</code> cycle - via the base class helper:</p>
+<pre><code class="language-python">self.report_discovery(report)
+</code></pre>
+<p>which routes to <code>Coordinator.report(component_name, report)</code> if a coordinator is running, and is a
+safe no-op otherwise (the standalone CLI harnesses have no registry at all). The coordinator
+validates the report - see the container model below - keyed on <code>component_name</code>
+(<code>ComponentBase</code> sets this to your registry key automatically), and a later <code>report()</code> call for the
+same component fully replaces its previous one; there is no need to compute a diff yourself.</p>
+<p>A record needs a <code>device_id</code> (a string, unique within your component - anything else is dropped
+with a warning) plus whichever <em>structural</em> fields that section defines (<code>inverter_type</code>,
+<code>direction</code>, <code>serves_cars</code>, ...) and <em>containers</em> you have facts for.</p>
+<h3 id="the-container-model-and-why-it-is-typed">The container model, and why it is typed</h3>
+<p>Rather than trying to name every field a future reporter might need, the schema instead defines a
+small set of <strong>containers</strong>, each declaring the <em>type</em> of value it accepts and the <em>redaction
+class</em> that value gets:</p>
+<table>
+<thead>
+<tr>
+<th>Container</th>
+<th>Accepts</th>
+<th>Redaction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_ids</code></td>
+<td>Short strings</td>
+<td>Clear</td>
+</tr>
+<tr>
+<td><code>info</code></td>
+<td>Short strings, no <code>@</code></td>
+<td>Clear</td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>Numbers and booleans, keyed by Predbat's setting name where one exists (<code>inverter_limit</code>, <code>export_limit</code>, <code>import_limit</code>, <code>battery_rate_max</code>, <code>soc_max</code>, <code>battery_min_soc</code>)</td>
+<td>Clear</td>
+</tr>
+<tr>
+<td><code>coverage</code></td>
+<td>A number/boolean, or a list of lowercase tokens</td>
+<td>Clear</td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td>An entity descriptor: <code>access</code> (<code>rw</code> or <code>r</code>, required), exactly one of <code>entity_id</code> or a fixed <code>value</code>, and typed fields such as <code>domain</code>, <code>unit</code>, <code>format</code>, <code>min</code>/<code>max</code>, <code>invert</code></td>
+<td>Clear</td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td><code>true</code>/<code>false</code> for the seven behaviour keys of an inverter definition (<code>support_charge_freeze</code>, <code>support_discharge_freeze</code>, <code>support_feedin_first</code>, <code>can_span_midnight</code>, <code>charge_discharge_with_rate</code>, <code>charge_control_immediate</code>, <code>target_soc_used_for_discharge</code>)</td>
+<td>Clear</td>
+</tr>
+<tr>
+<td><code>account_ids</code></td>
+<td>Any scalar</td>
+<td>Pseudonymised</td>
+</tr>
+<tr>
+<td><code>functions</code> / <code>flags</code> / <code>effects</code></td>
+<td>Lists of short lowercase tokens</td>
+<td>Clear</td>
+</tr>
+</tbody>
+</table>
+<p>A value that does not fit its container's declared type is silently <strong>dropped</strong>, not coerced and
+not raised as an error - a string offered to <code>ratings</code>, or free text over 64 characters offered to
+<code>info</code>, simply never reaches the assembled catalogue. This is the actual safety property the design
+rests on: it does not depend on enumerating every dangerous field name a component might one day
+introduce, because a container that only accepts numbers structurally cannot carry a name, an
+address or a pasted credential, however the schema grows. Choose whichever container matches the
+<em>kind</em> of fact you are reporting, not the one that happens to accept the value you have.</p>
+<h3 id="inverter-records-and-inverter-definitions">Inverter records and inverter definitions</h3>
+<p>An inverter record holds enough to rebuild that inverter's definition - the per-type table
+(<code>INVERTER_DEF</code>) that tells Predbat how to drive it. <code>capabilities</code> carries its behaviour; whether it
+has a reserve, a target SoC, charge/discharge enable switches, idle times or a timed pause follows
+from which settings <code>entities</code> binds to a writable (<code>rw</code>) entity; and protocol detail such as the time
+format or whether the charge rate is set in watts or amps is read from those entities' descriptors.
+A setting Predbat replaces with a placeholder for this inverter type - SolisCloud's <code>reserve</code>, say - is
+left out of <code>entities</code>. See the design in
+<code>docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md</code>.</p>
+<h3 id="writing-a-reporter">Writing a reporter</h3>
+<p>A component reports by defining <strong><code>build_discovery()</code></strong>, returning its report dict - or <code>None</code> when
+it has not discovered enough to describe yet (no serial, no account) - and calling
+<strong><code>self.refresh_discovery()</code></strong> once per <code>run()</code> cycle, unconditionally. That is the whole contract.
+<code>ComponentBase.refresh_discovery()</code> owns the reporting loop itself, and with it three rules the
+first five reporters each had to remember, and between them got wrong more than once:</p>
+<ul>
+<li><strong>A report is rebuilt and compared in full on every call</strong>, never keyed on a hand-maintained
+  snapshot of whatever <code>build_discovery()</code> reads. Such a key has to be kept in step with the build
+  by hand, and when it drifts the report freezes in its first, incomplete state for the life of the
+  process. Comparing the built report cannot drift, and needs no completeness check either: a
+  report that fills in later simply differs from the stored one and replaces it. Builds are dict
+  work over data already in hand, so rebuilding to compare costs nothing measurable, and nothing is
+  filed unless something actually moved.</li>
+<li><strong>The marker only advances after a report is filed</strong>, never on the failure path, so a transient
+  failure is retried next cycle. This is why the call must sit <em>outside</em> any one-shot <code>if first:</code>
+  gate: <code>first</code> flips to False forever the instant <code>run()</code> returns True, so a single failed cycle
+  inside it could never be retried.</li>
+<li><strong>A failure is caught and logged, never raised.</strong> An observer must not be able to degrade the
+  health of the component it observes - an exception escaping <code>run()</code> withholds the success
+  timestamp and eventually pushes a healthy component toward unhealthy. It is logged only, never
+  through <code>non_fatal_error_occurred()</code>, which would set <code>had_errors</code> and suppress <code>record_status()</code>.</li>
+</ul>
+<p>Two rules remain yours to follow:</p>
+<ol>
+<li>
+<p><strong>Report only entities that actually exist in the state store, never every entry in a static
+   table.</strong> An entity spec describes what a component <em>can</em> publish, not what it <em>has</em> published on
+   this particular install with this particular firmware version. Pass your descriptors through
+   <code>self.discovery_entities(descriptors)</code>, which keeps only those Home Assistant has actually seen -
+   claiming an entity exists that Home Assistant has never seen is worse than omitting it.</p>
+</li>
+<li>
+<p><strong>Never invent a record to resolve a cross-link - a dangling one is fine.</strong> A device can point at
+   another with a cross-link field (<code>measures_meter</code>, <code>charged_by</code>, ...) without the thing on the
+   other end existing as a record in its own right. GE Cloud's CT-clamp cross-link is the clearest
+   example: a battery can report which meter serial its own clamp measures without a <code>meters</code>
+   section record ever being fabricated for that clamp, because a CT clamp is not itself a billing
+   supply point. Resolving a dangling cross-link against a genuine record reported by another
+   component is exactly what <code>observations</code> is for - it is not this reporter's job to guess one into
+   existence.</p>
+</li>
+</ol>
+<p>For the <code>inverters</code> section, build each record with <code>inverter_record()</code> from <code>coordinator.py</code>
+rather than assembling the dict by hand. It takes the section's fields as keyword-only parameters and
+omits whatever is unset or empty, so a reporter can pass everything it gathered without writing
+its own <code>if info: record["info"] = info</code> ladder. A mistyped field name is a <code>TypeError</code> at the
+call site rather than a key silently dropped from a user's dump.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../components/" class="btn btn-neutral float-left" title="Predbat Components"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../load-ml/" class="btn btn-neutral float-right" title="ML Load Prediction">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../components/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../load-ml/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

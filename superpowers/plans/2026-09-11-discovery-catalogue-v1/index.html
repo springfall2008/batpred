@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery Catalogue v1 (Observe Only) — Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery Catalogue v1 (Observe Only) \u2014 Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-09-11-discovery-catalogue-v1.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery Catalogue v1 (Observe Only) — Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-catalogue-v1-observe-only-implementation-plan">Discovery Catalogue v1 (Observe Only) — Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Components describe what they discovered into a single assembled, redacted catalogue published in the debug YAML dump, so real user topologies can be read before any allocation rules are designed.</p>
+<p><strong>Architecture:</strong> New <code>apps/predbat/coordinator.py</code> holds a thread-safe <code>Coordinator</code>. Components report a dict built from typed containers during their first successful <code>run()</code>; the coordinator validates, assembles by category, derives a status for every component in the registry, records observed conflicts, and redacts at source. Five components gain a <code>build_discovery()</code> and one reporting call. <strong>No existing behaviour changes</strong> — nothing is allocated and nothing is written to <code>self.args</code>.</p>
+<p><strong>Tech Stack:</strong> Python 3, stdlib only (<code>hashlib</code>, <code>secrets</code>, <code>threading</code>). Existing test harness (<code>unit_test.py</code> + <code>MockBase</code>), Storage component for the pseudonym salt.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Branch <code>feat/discovery-coordinator</code> already exists and is checked out; both spec documents are committed on it. Do not create a new branch.</li>
+<li>CLAUDE.md mandates: run <code>impact({target: "&lt;symbol&gt;", direction: "upstream"})</code> before modifying any existing function/method named in a task, and <code>detect_changes()</code> before every commit; warn on HIGH/CRITICAL. The GitNexus index is stale — run <code>node .gitnexus/run.cjs analyze</code> once before Task 4, the first task that touches existing symbols.</li>
+<li>Tests run from <code>coverage/</code> (<code>source setup.csh</code> first time). <strong>Always</strong> redirect output to a log file and grep it: <code>./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -E "PASS|FAIL|Error" test_coordinator.log</code>. Never commit <code>.log</code> files.</li>
+<li><code>./run_pre_commit</code> lives in <code>coverage/</code>, not the repo root. It runs the hooks <strong>and</strong> the full test suite. <code>git add</code> new files before running it (pre-commit skips untracked files).</li>
+<li>100% docstring coverage (<code>interrogate</code>): every function, class and method needs one. British English (<code>en-gb</code>) for CSpell; new words go in <code>.cspell/custom-dictionary-workspace.txt</code>, which is auto-sorted, so re-stage after.</li>
+<li>Line length 256 (Black) / 250 (Flake8). Naming <code>lower_case_with_underscores</code>.</li>
+<li><strong>The v1 invariant:</strong> no task may write to <code>self.args</code>, change an <code>automatic_config()</code>, or alter any existing behaviour. Task 10 asserts this.</li>
+<li><code>run_async</code> is imported from <code>ha</code> (<code>from ha import run_async</code>), as <code>predbat.py:94</code> does.</li>
+</ul>
+<h2 id="container-model-used-by-every-task">Container model (used by every task)</h2>
+<p>A record is a small set of structural fields plus typed containers. Only structural fields are enumerated by the spec; containers extend freely because their type constraint provides the safety.</p>
+<table>
+<thead>
+<tr>
+<th>Container</th>
+<th>Accepts</th>
+<th>On share</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hardware_ids</code></td>
+<td>Strings ≤64 identifying a device (serial, model number); rejects <code>@</code></td>
+<td>clear</td>
+</tr>
+<tr>
+<td><code>account_ids</code></td>
+<td>Any scalar identifying a person, supply point or account</td>
+<td>pseudonymised</td>
+</tr>
+<tr>
+<td><code>info</code></td>
+<td>Vendor descriptive strings ≤64; rejects <code>@</code></td>
+<td>clear</td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>int / float / bool only</td>
+<td>clear</td>
+</tr>
+<tr>
+<td><code>coverage</code></td>
+<td>int / float / bool, or vocabulary tokens</td>
+<td>clear</td>
+</tr>
+<tr>
+<td><code>functions</code>, <code>capabilities</code>, <code>flags</code>, <code>effects</code></td>
+<td>Lists of tokens matching <code>^[a-z0-9_]{1,32}$</code></td>
+<td>clear</td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td>Entity descriptors keyed by Predbat standard name</td>
+<td>clear</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="task-1-coordinator-core-containers-validation-reports">Task 1: Coordinator core — containers, validation, reports</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/coordinator.py</code>
+- Create: <code>apps/predbat/tests/test_coordinator.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import block ~line 263; <code>TEST_REGISTRY</code> ~line 654)</p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Coordinator(base)</code> with <code>report(component_name, report)</code> and attribute <code>reports: dict</code>; module constants <code>SCHEMA_VERSION = 1</code>, <code>CONTAINER_SPEC</code>, <code>VOCAB_CONTAINERS</code>, <code>SECTION_SPEC</code>; helper <code>validate_report(report, component_name, log)</code> returning the cleaned dict.
+- Consumes: <code>MockBase</code> from <code>mock_base.py</code>; <code>is_secret_key</code> from <code>utils</code>.
+- Contract: validation <strong>drops</strong> offending values and logs; it never raises and never partially fails a report.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_coordinator.py</code>:</p>
+<pre><code class="language-python"># fmt: off
+# pylint: disable=line-too-long
+&quot;&quot;&quot;Unit tests for the discovery catalogue coordinator (coordinator.py) - container validation and report collection.&quot;&quot;&quot;
+
+from mock_base import MockBase
+from coordinator import Coordinator, SCHEMA_VERSION
+
+
+def _coordinator():
+    &quot;&quot;&quot;A Coordinator on a bare MockBase.&quot;&quot;&quot;
+    base = MockBase()
+    return base, Coordinator(base)
+
+
+def test_report_keeps_valid_containers():
+    &quot;&quot;&quot;A well-formed inverter record survives validation intact.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{
+        &quot;device_id&quot;: &quot;givtcp:SN1&quot;,
+        &quot;inverter_type&quot;: &quot;GE&quot;,
+        &quot;functions&quot;: [&quot;solar&quot;, &quot;battery&quot;],
+        &quot;hardware_ids&quot;: {&quot;serial&quot;: &quot;SN1&quot;},
+        &quot;info&quot;: {&quot;firmware&quot;: &quot;D0.451&quot;},
+        &quot;ratings&quot;: {&quot;battery_kwh&quot;: 9.5, &quot;max_charge_w&quot;: 3600},
+        &quot;entities&quot;: {&quot;soc_kw&quot;: {&quot;entity_id&quot;: &quot;sensor.predbat_givtcp_0_soc_kw&quot;, &quot;domain&quot;: &quot;sensor&quot;, &quot;access&quot;: &quot;r&quot;, &quot;unit&quot;: &quot;kWh&quot;}},
+    }]})
+    record = coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;][0]
+    assert record[&quot;hardware_ids&quot;] == {&quot;serial&quot;: &quot;SN1&quot;}
+    assert record[&quot;ratings&quot;][&quot;battery_kwh&quot;] == 9.5
+    assert record[&quot;functions&quot;] == [&quot;solar&quot;, &quot;battery&quot;]
+    assert record[&quot;entities&quot;][&quot;soc_kw&quot;][&quot;entity_id&quot;] == &quot;sensor.predbat_givtcp_0_soc_kw&quot;
+    print(&quot;PASS: valid containers preserved&quot;)
+    return 0
+
+
+def test_ratings_rejects_non_numeric():
+    &quot;&quot;&quot;A numbers-only container drops a string value rather than emitting it - the structural safety guarantee.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:SN1&quot;, &quot;ratings&quot;: {&quot;battery_kwh&quot;: 9.5, &quot;owner&quot;: &quot;Bob Smith, 12 Acacia Ave&quot;}}]})
+    ratings = coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;][0][&quot;ratings&quot;]
+    assert ratings == {&quot;battery_kwh&quot;: 9.5}, ratings
+    print(&quot;PASS: non-numeric dropped from ratings&quot;)
+    return 0
+
+
+def test_vocabulary_rejects_free_text():
+    &quot;&quot;&quot;Vocabulary lists take short lowercase tokens only, so free text cannot ride in on one.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:SN1&quot;, &quot;functions&quot;: [&quot;battery&quot;, &quot;My Home Battery!&quot;, &quot;SOLAR&quot;]}]})
+    assert coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;][0][&quot;functions&quot;] == [&quot;battery&quot;]
+    print(&quot;PASS: vocabulary constraint enforced&quot;)
+    return 0
+
+
+def test_info_rejects_email_shaped_and_long_strings():
+    &quot;&quot;&quot;info takes vendor descriptors, not addresses - an @ or an over-long string is dropped.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;ohme&quot;, {&quot;chargers&quot;: [{&quot;device_id&quot;: &quot;ohme:CH1&quot;, &quot;info&quot;: {&quot;vendor&quot;: &quot;Ohme&quot;, &quot;login&quot;: &quot;bob@example.com&quot;, &quot;notes&quot;: &quot;x&quot; * 200}}]})
+    assert coordinator.reports[&quot;ohme&quot;][&quot;chargers&quot;][0][&quot;info&quot;] == {&quot;vendor&quot;: &quot;Ohme&quot;}
+    print(&quot;PASS: info rejects email-shaped and over-long values&quot;)
+    return 0
+
+
+def test_credential_named_field_rejected():
+    &quot;&quot;&quot;A field whose NAME trips is_secret_key is refused in any container, however it is nested.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;fox&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;fox:SN1&quot;, &quot;info&quot;: {&quot;model&quot;: &quot;H3&quot;, &quot;api_key&quot;: &quot;abcd1234&quot;, &quot;auth_token&quot;: &quot;zzz&quot;}}]})
+    assert coordinator.reports[&quot;fox&quot;][&quot;inverters&quot;][0][&quot;info&quot;] == {&quot;model&quot;: &quot;H3&quot;}
+    print(&quot;PASS: credential-named fields refused&quot;)
+    return 0
+
+
+def test_unknown_container_dropped():
+    &quot;&quot;&quot;A container this schema does not know is dropped - there is no untyped path into the catalogue.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:SN1&quot;, &quot;scratchpad&quot;: {&quot;anything&quot;: &quot;at all&quot;}}]})
+    assert &quot;scratchpad&quot; not in coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;][0]
+    print(&quot;PASS: unknown container dropped&quot;)
+    return 0
+
+
+def test_record_without_device_id_dropped():
+    &quot;&quot;&quot;device_id is the one genuinely required field; a record without it cannot be referred to, so it is dropped.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;hardware_ids&quot;: {&quot;serial&quot;: &quot;SN1&quot;}}, {&quot;device_id&quot;: &quot;givtcp:SN2&quot;}]})
+    records = coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;]
+    assert len(records) == 1 and records[0][&quot;device_id&quot;] == &quot;givtcp:SN2&quot;
+    print(&quot;PASS: record without device_id dropped&quot;)
+    return 0
+
+
+def test_report_is_idempotent_and_versioned():
+    &quot;&quot;&quot;Re-reporting replaces the prior report, and the schema version is stamped.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;}]})
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;}, {&quot;device_id&quot;: &quot;givtcp:B&quot;}]})
+    assert len(coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;]) == 2
+    assert coordinator.reports[&quot;givtcp&quot;][&quot;schema_version&quot;] == SCHEMA_VERSION
+    print(&quot;PASS: report replaces and is versioned&quot;)
+    return 0
+
+
+def test_meter_sub_record_validated():
+    &quot;&quot;&quot;A meter's nested tariff record is validated with the same container rules.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;octopus&quot;, {&quot;meters&quot;: [{
+        &quot;device_id&quot;: &quot;octopus:m1&quot;, &quot;direction&quot;: &quot;import&quot;,
+        &quot;account_ids&quot;: {&quot;mpan&quot;: &quot;1234567890123&quot;},
+        &quot;tariff&quot;: {&quot;info&quot;: {&quot;tariff_code&quot;: &quot;E-1R-AGILE-24-10-01-A&quot;}, &quot;flags&quot;: [&quot;agile&quot;], &quot;ratings&quot;: {&quot;standing_charge_p&quot;: 47.5}, &quot;secret_token&quot;: &quot;nope&quot;},
+    }]})
+    tariff = coordinator.reports[&quot;octopus&quot;][&quot;meters&quot;][0][&quot;tariff&quot;]
+    assert tariff[&quot;info&quot;][&quot;tariff_code&quot;] == &quot;E-1R-AGILE-24-10-01-A&quot;
+    assert tariff[&quot;flags&quot;] == [&quot;agile&quot;]
+    assert &quot;secret_token&quot; not in tariff
+    print(&quot;PASS: nested tariff record validated&quot;)
+    return 0
+
+
+def test_coordinator_all(my_predbat=None):
+    &quot;&quot;&quot;Run every coordinator test, returning the number of failures.&quot;&quot;&quot;
+    failures = 0
+    failures += test_report_keeps_valid_containers()
+    failures += test_ratings_rejects_non_numeric()
+    failures += test_vocabulary_rejects_free_text()
+    failures += test_info_rejects_email_shaped_and_long_strings()
+    failures += test_credential_named_field_rejected()
+    failures += test_unknown_container_dropped()
+    failures += test_record_without_device_id_dropped()
+    failures += test_report_is_idempotent_and_versioned()
+    failures += test_meter_sub_record_validated()
+    return failures
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the test and verify it fails</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code>, beside the other tests imports: <code>from tests.test_coordinator import test_coordinator_all</code>, and in <code>TEST_REGISTRY</code> beside the <code>components</code> entry: <code>("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),</code></p>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -E "PASS|FAIL|ModuleNotFound" test_coordinator.log</code>
+Expected: FAIL — <code>ModuleNotFoundError: No module named 'coordinator'</code></p>
+<ul>
+<li>[ ] <strong>Step 3: Implement coordinator.py</strong></li>
+</ul>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+&quot;&quot;&quot;Discovery catalogue: what each component found, assembled into one document.
+
+Components report inverters, chargers, cars, meters, forecast providers and flexibility
+programmes as plain dicts during their first successful run. The coordinator validates,
+assembles and redacts them into a catalogue published in the debug YAML dump, so real user
+topologies can be read. Nothing here allocates anything or writes to self.args - see
+docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
+
+Safety comes from typed containers rather than from enumerating every field: a record is a
+few structural fields plus containers that each declare what they accept and what happens
+to them when shared. A container taking only numbers cannot leak a name or a credential
+however the catalogue grows, so components add facts freely by choosing a container.
+&quot;&quot;&quot;
+
+import re
+import threading
+
+from utils import is_secret_key
+
+SCHEMA_VERSION = 1
+
+MAX_STRING = 64
+VOCAB_RE = re.compile(r&quot;^[a-z0-9_]{1,32}$&quot;)
+
+# Containers whose value is a list of vocabulary tokens
+VOCAB_CONTAINERS = (&quot;functions&quot;, &quot;capabilities&quot;, &quot;flags&quot;, &quot;effects&quot;)
+
+# Descriptor attributes carried through; anything else on a descriptor is dropped
+DESCRIPTOR_FIELDS = (&quot;entity_id&quot;, &quot;domain&quot;, &quot;access&quot;, &quot;unit&quot;, &quot;device_class&quot;, &quot;min&quot;, &quot;max&quot;, &quot;step&quot;, &quot;options&quot;, &quot;format&quot;, &quot;precision&quot;)
+
+SECTION_SPEC = {
+    &quot;inverters&quot;: {&quot;structural&quot;: (&quot;device_id&quot;, &quot;inverter_type&quot;, &quot;control&quot;, &quot;composition&quot;, &quot;measures_meter&quot;, &quot;serials&quot;), &quot;sub_records&quot;: ()},
+    &quot;chargers&quot;: {&quot;structural&quot;: (&quot;device_id&quot;, &quot;serves_cars&quot;), &quot;sub_records&quot;: ()},
+    &quot;cars&quot;: {&quot;structural&quot;: (&quot;device_id&quot;, &quot;charged_by&quot;), &quot;sub_records&quot;: ()},
+    &quot;meters&quot;: {&quot;structural&quot;: (&quot;device_id&quot;, &quot;direction&quot;), &quot;sub_records&quot;: (&quot;tariff&quot;,)},
+    &quot;forecasts&quot;: {&quot;structural&quot;: (&quot;device_id&quot;, &quot;kind&quot;), &quot;sub_records&quot;: ()},
+    &quot;programmes&quot;: {&quot;structural&quot;: (&quot;device_id&quot;, &quot;kind&quot;, &quot;meter&quot;), &quot;sub_records&quot;: ()},
+}
+
+
+def _clean_string(value):
+    &quot;&quot;&quot;A vendor descriptor string, or None if it is not one.
+
+    Length-capped and free of &quot;@&quot; so an address, an email or a pasted blob cannot ride in on
+    a descriptive field. Vendor model and firmware strings are comfortably inside the cap.
+    &quot;&quot;&quot;
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) &gt; MAX_STRING or &quot;@&quot; in value:
+        return None
+    return value
+
+
+def _clean_number(value):
+    &quot;&quot;&quot;A numeric or boolean fact, or None. Strings are refused however numeric they look.&quot;&quot;&quot;
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _clean_token(value):
+    &quot;&quot;&quot;A vocabulary token (lower case, no spaces), or None.&quot;&quot;&quot;
+    return value if isinstance(value, str) and VOCAB_RE.match(value) else None
+
+
+def _clean_scalar(value):
+    &quot;&quot;&quot;Any scalar, for account_ids - the container pseudonymises whatever it holds, so its type is open.&quot;&quot;&quot;
+    return value if isinstance(value, (str, int, float, bool)) else None
+
+
+def _clean_token_list(value):
+    &quot;&quot;&quot;A list of vocabulary tokens, dropping any entry that is not one.&quot;&quot;&quot;
+    if not isinstance(value, list):
+        return None
+    return [token for token in (_clean_token(entry) for entry in value) if token is not None]
+
+
+def _clean_descriptor_map(value):
+    &quot;&quot;&quot;An entities map: Predbat standard name -&gt; descriptor, keeping only known descriptor fields.&quot;&quot;&quot;
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for name, descriptor in value.items():
+        if not isinstance(name, str) or not isinstance(descriptor, dict):
+            continue
+        if not isinstance(descriptor.get(&quot;entity_id&quot;), str):
+            continue
+        kept = {}
+        for field in DESCRIPTOR_FIELDS:
+            if field in descriptor and descriptor[field] is not None:
+                kept[field] = descriptor[field]
+        out[name] = kept
+    return out
+
+
+# container name -&gt; (redaction class, value cleaner applied per key, or None for whole-value cleaners)
+CONTAINER_SPEC = {
+    &quot;hardware_ids&quot;: (&quot;clear&quot;, _clean_string),
+    &quot;account_ids&quot;: (&quot;pseudonym&quot;, _clean_scalar),
+    &quot;info&quot;: (&quot;clear&quot;, _clean_string),
+    &quot;ratings&quot;: (&quot;clear&quot;, _clean_number),
+    &quot;coverage&quot;: (&quot;clear&quot;, _clean_number),
+}
+
+
+class Coordinator:
+    &quot;&quot;&quot;Collects component discovery reports and assembles them into one catalogue.
+
+    Thread-safe: components report from their own threads while assembly runs on the main
+    thread at startup.
+    &quot;&quot;&quot;
+
+    def __init__(self, base):
+        &quot;&quot;&quot;Create an empty coordinator.&quot;&quot;&quot;
+        self.base = base
+        self.log = base.log
+        self.lock = threading.Lock()
+        self.reports = {}
+
+    def report(self, component_name, report):
+        &quot;&quot;&quot;Validate and store one component's discovery report, replacing any previous one.&quot;&quot;&quot;
+        cleaned = validate_report(report, component_name, self.log)
+        with self.lock:
+            self.reports[component_name] = cleaned
+        counts = &quot;, &quot;.join(&quot;{} {}&quot;.format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
+        self.log(&quot;Coordinator: {} reported {}&quot;.format(component_name, counts or &quot;nothing&quot;))
+
+
+def _validate_container(container_name, value, component_name, section, log):
+    &quot;&quot;&quot;Clean one container's contents against its declared type, dropping and logging what does not fit.&quot;&quot;&quot;
+    if container_name in VOCAB_CONTAINERS:
+        return _clean_token_list(value)
+    if container_name == &quot;entities&quot;:
+        return _clean_descriptor_map(value)
+    _, cleaner = CONTAINER_SPEC[container_name]
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key, entry in value.items():
+        if not isinstance(key, str):
+            continue
+        if is_secret_key(key):
+            log(&quot;Warn: Coordinator: {} {} field '{}' looks like a credential - refused&quot;.format(component_name, section, key))
+            continue
+        cleaned = cleaner(entry)
+        if cleaned is None:
+            log(&quot;Warn: Coordinator: {} {}.{} value does not fit the container's type - dropped&quot;.format(component_name, container_name, key))
+            continue
+        out[key] = cleaned
+    return out
+
+
+def _validate_record(record, section, component_name, log):
+    &quot;&quot;&quot;Clean one record: its structural fields, its containers and any nested sub-records.&quot;&quot;&quot;
+    if not isinstance(record, dict) or not isinstance(record.get(&quot;device_id&quot;), str):
+        log(&quot;Warn: Coordinator: {} {} record without a device_id - dropped&quot;.format(component_name, section))
+        return None
+    spec = SECTION_SPEC[section]
+    out = {}
+    for field in spec[&quot;structural&quot;]:
+        if field not in record or record[field] is None:
+            continue
+        value = record[field]
+        if isinstance(value, list):
+            out[field] = [entry for entry in value if isinstance(entry, str) and len(entry) &lt;= MAX_STRING]
+        elif isinstance(value, bool) or isinstance(value, (int, float)):
+            out[field] = value
+        elif isinstance(value, str) and len(value) &lt;= MAX_STRING:
+            out[field] = value
+    for container_name in list(CONTAINER_SPEC) + list(VOCAB_CONTAINERS) + [&quot;entities&quot;]:
+        if container_name in record:
+            cleaned = _validate_container(container_name, record[container_name], component_name, section, log)
+            if cleaned:
+                out[container_name] = cleaned
+    for sub_name in spec[&quot;sub_records&quot;]:
+        sub = record.get(sub_name)
+        if isinstance(sub, dict):
+            sub_out = {}
+            for container_name in list(CONTAINER_SPEC) + list(VOCAB_CONTAINERS) + [&quot;entities&quot;]:
+                if container_name in sub:
+                    cleaned = _validate_container(container_name, sub[container_name], component_name, section, log)
+                    if cleaned:
+                        sub_out[container_name] = cleaned
+            if sub_out:
+                out[sub_name] = sub_out
+    return out
+
+
+def validate_report(report, component_name, log):
+    &quot;&quot;&quot;Return a cleaned copy of one component's report - never raises, drops what does not fit.&quot;&quot;&quot;
+    cleaned = {&quot;schema_version&quot;: SCHEMA_VERSION, &quot;automatic&quot;: bool(report.get(&quot;automatic&quot;, True))}
+    for section in SECTION_SPEC:
+        records = []
+        for record in report.get(section, []) or []:
+            validated = _validate_record(record, section, component_name, log)
+            if validated:
+                records.append(validated)
+        if records:
+            cleaned[section] = records
+    return cleaned
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests, verify pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator &gt; test_coordinator.log 2&gt;&amp;1; grep -cE "^PASS" test_coordinator.log; grep -E "FAIL|Error|Traceback" test_coordinator.log</code>
+Expected: 9 PASS, no failures.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/coordinator.py apps/predbat/tests/test_coordinator.py apps/predbat/unit_test.py
+./run_pre_commit   # from coverage/
+git commit -m &quot;feat(coordinator): discovery report containers and validation&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-assembly-merge-component-status-observations">Task 2: Assembly — merge, component status, observations</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/coordinator.py</code>
+- Test: <code>apps/predbat/tests/test_coordinator.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Coordinator.assemble()</code> returning the unredacted assembled dict with keys <code>schema_version</code>, <code>generated</code>, <code>components</code>, the six section lists, and <code>observations</code>; <code>Coordinator.assembled</code> caching the last result.
+- Status values per component in <code>COMPONENT_LIST</code>: <code>ok</code> (reported), <code>no_report</code> (active and alive but does not report — the unmigrated majority, not an error), <code>not_started</code> (active but <code>is_alive()</code> false, i.e. started late or timed out), <code>load_error</code> (constructed and failed, with <code>error</code>), <code>not_configured</code> (never initialised).
+- Conflict kinds: <code>duplicate_serial</code>, <code>multiple_inverter_sources</code>, <code>multiple_import_meters</code>, <code>contested_car_slots</code>.
+- Consumes: <code>base.components</code> (<code>get_all()</code>, <code>is_active()</code>, <code>is_alive()</code>, <code>load_error()</code>) when present; degrades to reported-components-only when <code>base.components</code> is None.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> (append; register each in <code>test_coordinator_all</code>)</li>
+</ul>
+<pre><code class="language-python">class _StubRegistry:
+    &quot;&quot;&quot;Stands in for Components so assemble() can derive a status for every registry entry.&quot;&quot;&quot;
+
+    def __init__(self, active=(), alive=(), errors=None, all_names=()):
+        &quot;&quot;&quot;Record which component names are active, alive, failed to load, and known at all.&quot;&quot;&quot;
+        self._active = set(active)
+        self._alive = set(alive)
+        self._errors = errors or {}
+        self._all = list(all_names)
+
+    def get_all(self):
+        &quot;&quot;&quot;Every component name the registry knows.&quot;&quot;&quot;
+        return list(self._all)
+
+    def is_active(self, name):
+        &quot;&quot;&quot;Whether the component was constructed.&quot;&quot;&quot;
+        return name in self._active
+
+    def is_alive(self, name):
+        &quot;&quot;&quot;Whether the component is running and fresh.&quot;&quot;&quot;
+        return name in self._alive
+
+    def load_error(self, name):
+        &quot;&quot;&quot;Why the component failed to construct, or None.&quot;&quot;&quot;
+        return self._errors.get(name)
+
+
+def test_assemble_merges_sections_and_tags_source():
+    &quot;&quot;&quot;Records from several components merge into one list per section, each tagged with its source.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.report(&quot;gecloud&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;gecloud:b&quot;, &quot;inverter_type&quot;: &quot;GEC&quot;}]})
+    catalogue = coordinator.assemble()
+    sources = sorted(record[&quot;source&quot;] for record in catalogue[&quot;inverters&quot;])
+    assert sources == [&quot;gecloud&quot;, &quot;givtcp&quot;], sources
+    assert catalogue[&quot;schema_version&quot;] == SCHEMA_VERSION
+    assert catalogue[&quot;generated&quot;]
+    print(&quot;PASS: sections merged and tagged with source&quot;)
+    return 0
+
+
+def test_assemble_component_status():
+    &quot;&quot;&quot;Every registry entry gets a status, distinguishing silent from timed out from failed from absent.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    base.components = _StubRegistry(active=[&quot;givtcp&quot;, &quot;octopus&quot;, &quot;gecloud&quot;], alive=[&quot;givtcp&quot;, &quot;octopus&quot;],
+                                    errors={&quot;fox&quot;: &quot;No module named 'protobuf'&quot;},
+                                    all_names=[&quot;givtcp&quot;, &quot;octopus&quot;, &quot;gecloud&quot;, &quot;fox&quot;, &quot;solis&quot;])
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;}]})
+    components = coordinator.assemble()[&quot;components&quot;]
+    assert components[&quot;givtcp&quot;][&quot;status&quot;] == &quot;ok&quot;
+    assert components[&quot;octopus&quot;][&quot;status&quot;] == &quot;no_report&quot;      # alive, simply does not report yet
+    assert components[&quot;gecloud&quot;][&quot;status&quot;] == &quot;not_started&quot;    # active but not alive
+    assert components[&quot;fox&quot;][&quot;status&quot;] == &quot;load_error&quot;
+    assert components[&quot;solis&quot;][&quot;status&quot;] == &quot;not_configured&quot;
+    print(&quot;PASS: component statuses derived&quot;)
+    return 0
+
+
+def test_observations_duplicate_serial():
+    &quot;&quot;&quot;The same serial claimed by two components is recorded, not resolved.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:SN1&quot;, &quot;hardware_ids&quot;: {&quot;serial&quot;: &quot;SA2242&quot;}}]})
+    coordinator.report(&quot;gecloud&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;gecloud:sn1&quot;, &quot;hardware_ids&quot;: {&quot;serial&quot;: &quot;sa2242&quot;}}]})
+    conflicts = coordinator.assemble()[&quot;observations&quot;][&quot;conflicts&quot;]
+    duplicate = [entry for entry in conflicts if entry[&quot;kind&quot;] == &quot;duplicate_serial&quot;]
+    assert duplicate and sorted(duplicate[0][&quot;claimed_by&quot;]) == [&quot;gecloud&quot;, &quot;givtcp&quot;]
+    assert any(entry[&quot;kind&quot;] == &quot;multiple_inverter_sources&quot; for entry in conflicts)
+    print(&quot;PASS: duplicate serial and multiple sources observed&quot;)
+    return 0
+
+
+def test_observations_contested_cars_and_meters():
+    &quot;&quot;&quot;A charger component and an intelligent-device component both claiming cars is recorded, as are two import meters.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.report(&quot;ohme&quot;, {&quot;chargers&quot;: [{&quot;device_id&quot;: &quot;ohme:CH1&quot;}], &quot;cars&quot;: [{&quot;device_id&quot;: &quot;ohme:v1&quot;}]})
+    coordinator.report(&quot;octopus&quot;, {&quot;cars&quot;: [{&quot;device_id&quot;: &quot;octopus:d1&quot;}], &quot;meters&quot;: [{&quot;device_id&quot;: &quot;octopus:m1&quot;, &quot;direction&quot;: &quot;import&quot;}]})
+    coordinator.report(&quot;kraken&quot;, {&quot;meters&quot;: [{&quot;device_id&quot;: &quot;kraken:m1&quot;, &quot;direction&quot;: &quot;import&quot;}]})
+    conflicts = coordinator.assemble()[&quot;observations&quot;][&quot;conflicts&quot;]
+    kinds = {entry[&quot;kind&quot;] for entry in conflicts}
+    assert &quot;contested_car_slots&quot; in kinds and &quot;multiple_import_meters&quot; in kinds, kinds
+    print(&quot;PASS: contested cars and multiple import meters observed&quot;)
+    return 0
+
+
+def test_observations_resulting_config():
+    &quot;&quot;&quot;The config discovery did NOT set is recorded alongside it, for comparison.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    base.args.update({&quot;num_inverters&quot;: 2, &quot;num_cars&quot;: 1, &quot;inverter_type&quot;: [&quot;GE&quot;, &quot;GEC&quot;]})
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;}]})
+    resulting = coordinator.assemble()[&quot;observations&quot;][&quot;resulting_config&quot;]
+    assert resulting[&quot;num_inverters&quot;] == 2 and resulting[&quot;inverter_type&quot;] == [&quot;GE&quot;, &quot;GEC&quot;]
+    print(&quot;PASS: resulting config recorded&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run, verify the new tests fail</strong> (<code>AttributeError: ... no attribute 'assemble'</code>)</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> — add to <code>coordinator.py</code> (<code>from datetime import datetime, timezone</code> at the top):</p>
+</li>
+</ul>
+<pre><code class="language-python">    def assemble(self):
+        &quot;&quot;&quot;Merge every report into one catalogue, with a status per component and the observation layer.
+
+        Unredacted: catalogue() is what consumers get. Called after phase-1 startup, which is
+        the point at which every component has started or timed out.
+        &quot;&quot;&quot;
+        with self.lock:
+            reports = {name: report for name, report in self.reports.items()}
+        catalogue = {&quot;schema_version&quot;: SCHEMA_VERSION, &quot;generated&quot;: datetime.now(timezone.utc).isoformat(), &quot;components&quot;: self._component_status(reports)}
+        for section in SECTION_SPEC:
+            merged = []
+            for name in sorted(reports):
+                for record in reports[name].get(section, []):
+                    entry = {&quot;source&quot;: name}
+                    entry.update(record)
+                    merged.append(entry)
+            catalogue[section] = merged
+        catalogue[&quot;observations&quot;] = {&quot;conflicts&quot;: self._conflicts(catalogue), &quot;resulting_config&quot;: self._resulting_config()}
+        self.assembled = catalogue
+        return catalogue
+
+    def _component_status(self, reports):
+        &quot;&quot;&quot;A status for every component the registry knows, not only those that reported.
+
+        A component that never reports is not an error: in this version only a handful report
+        at all, so &quot;no_report&quot; has to read differently from &quot;started but never answered&quot;.
+        &quot;&quot;&quot;
+        components = getattr(self.base, &quot;components&quot;, None)
+        names = components.get_all() if components else sorted(reports)
+        out = {}
+        for name in names:
+            entry = {&quot;status&quot;: &quot;not_configured&quot;, &quot;reported_at&quot;: None}
+            if name in reports:
+                entry[&quot;status&quot;] = &quot;ok&quot;
+                entry[&quot;automatic&quot;] = reports[name].get(&quot;automatic&quot;, True)
+                entry[&quot;counts&quot;] = {section: len(reports[name][section]) for section in SECTION_SPEC if reports[name].get(section)}
+            elif components and components.load_error(name):
+                entry[&quot;status&quot;] = &quot;load_error&quot;
+                entry[&quot;error&quot;] = components.load_error(name)
+            elif components and components.is_active(name):
+                entry[&quot;status&quot;] = &quot;no_report&quot; if components.is_alive(name) else &quot;not_started&quot;
+            out[name] = entry
+        return out
+
+    def _conflicts(self, catalogue):
+        &quot;&quot;&quot;Collisions that today resolve silently by component ordering - recorded, never resolved.&quot;&quot;&quot;
+        conflicts = []
+        serials = {}
+        for record in catalogue[&quot;inverters&quot;]:
+            serial = record.get(&quot;hardware_ids&quot;, {}).get(&quot;serial&quot;)
+            if serial:
+                serials.setdefault(str(serial).casefold(), set()).add(record[&quot;source&quot;])
+        for serial, sources in sorted(serials.items()):
+            if len(sources) &gt; 1:
+                conflicts.append({&quot;kind&quot;: &quot;duplicate_serial&quot;, &quot;serial&quot;: serial, &quot;claimed_by&quot;: sorted(sources)})
+        inverter_sources = sorted({record[&quot;source&quot;] for record in catalogue[&quot;inverters&quot;]})
+        if len(inverter_sources) &gt; 1:
+            conflicts.append({&quot;kind&quot;: &quot;multiple_inverter_sources&quot;, &quot;claimed_by&quot;: inverter_sources})
+        import_sources = sorted({record[&quot;source&quot;] for record in catalogue[&quot;meters&quot;] if record.get(&quot;direction&quot;) == &quot;import&quot;})
+        if len(import_sources) &gt; 1:
+            conflicts.append({&quot;kind&quot;: &quot;multiple_import_meters&quot;, &quot;claimed_by&quot;: import_sources})
+        charger_sources = {record[&quot;source&quot;] for record in catalogue[&quot;chargers&quot;]}
+        car_sources = {record[&quot;source&quot;] for record in catalogue[&quot;cars&quot;]}
+        if charger_sources and (car_sources - charger_sources):
+            conflicts.append({&quot;kind&quot;: &quot;contested_car_slots&quot;, &quot;claimed_by&quot;: sorted(car_sources | charger_sources)})
+        return conflicts
+
+    def _resulting_config(self):
+        &quot;&quot;&quot;What apps.yaml actually ended up as, so every dump compares discovered against configured.&quot;&quot;&quot;
+        return {key: self.base.get_arg(key, None) for key in (&quot;num_inverters&quot;, &quot;num_cars&quot;, &quot;inverter_type&quot;)}
+</code></pre>
+<p>Add <code>self.assembled = None</code> to <code>__init__</code>.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 4: Run tests, verify pass</strong> (14 PASS)</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u &amp;&amp; git commit -m &quot;feat(coordinator): assemble catalogue with component status and observed conflicts&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-redaction">Task 3: Redaction</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/coordinator.py</code>
+- Test: <code>apps/predbat/tests/test_coordinator.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Coordinator.catalogue()</code> (redacted, what every consumer gets), <code>Coordinator.catalogue_raw()</code> (unredacted, in-process only), <code>Redactor(salt)</code> with <code>redact(catalogue)</code>, <code>Coordinator.load_salt()</code>.
+- Salt: <code>secrets.token_hex(16)</code>, loaded from / saved to Storage as <code>("coordinator", "salt")</code> via <code>run_async</code>; when no Storage exists (MockBase, CLI harnesses) a per-process random salt is generated so nothing ever falls back to unsalted.
+- Pseudonym form: <code>"#" + sha256(salt + str(value))[:8]</code>. Applied to every value in an <code>account_ids</code> container, to the <code>device_id</code> of any record that has an <code>account_ids</code> container, and to the cross-link fields <code>meter</code> and <code>measures_meter</code>.
+- Substitution: every pseudonymised original of length ≥ 6 is also replaced wherever it appears inside any string in the catalogue, entity ids included.
+- Value-shape guard: in a clear container, a value that is a digit run of ≥ 10 characters, contains <code>@</code>, or is a float pair shaped like coordinates is pseudonymised defensively and logged as misfiled.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> (append; register in <code>test_coordinator_all</code>)</li>
+</ul>
+<pre><code class="language-python">def _redacting_coordinator():
+    &quot;&quot;&quot;A coordinator with a fixed salt, so pseudonym tokens are reproducible inside one test.&quot;&quot;&quot;
+    base, coordinator = _coordinator()
+    coordinator.salt = &quot;test-salt-0001&quot;
+    return base, coordinator
+
+
+def test_account_ids_pseudonymised_and_stable():
+    &quot;&quot;&quot;account_ids values never appear in the clear, and the same value maps to the same token throughout.&quot;&quot;&quot;
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(&quot;octopus&quot;, {
+        &quot;meters&quot;: [{&quot;device_id&quot;: &quot;octopus:1234567890123&quot;, &quot;direction&quot;: &quot;import&quot;, &quot;account_ids&quot;: {&quot;mpan&quot;: &quot;1234567890123&quot;, &quot;account&quot;: &quot;A-1234ABCD&quot;}}],
+        &quot;programmes&quot;: [{&quot;device_id&quot;: &quot;axle:site1&quot;, &quot;kind&quot;: &quot;vpp&quot;, &quot;meter&quot;: &quot;octopus:1234567890123&quot;}],
+    })
+    catalogue = coordinator.catalogue()
+    text = str(catalogue)
+    assert &quot;1234567890123&quot; not in text, &quot;raw MPAN must not survive redaction&quot;
+    assert &quot;A-1234ABCD&quot; not in text
+    meter = catalogue[&quot;meters&quot;][0]
+    assert meter[&quot;account_ids&quot;][&quot;mpan&quot;].startswith(&quot;#&quot;)
+    # the cross-link still resolves to the same meter
+    assert catalogue[&quot;programmes&quot;][0][&quot;meter&quot;] == meter[&quot;device_id&quot;]
+    print(&quot;PASS: account ids pseudonymised, cross-link preserved&quot;)
+    return 0
+
+
+def test_pseudonym_differs_across_salts():
+    &quot;&quot;&quot;The same value under a different installation salt produces a different token.&quot;&quot;&quot;
+    base_a, coordinator_a = _redacting_coordinator()
+    base_b, coordinator_b = _coordinator()
+    coordinator_b.salt = &quot;a-different-salt&quot;
+    report = {&quot;meters&quot;: [{&quot;device_id&quot;: &quot;octopus:m&quot;, &quot;direction&quot;: &quot;import&quot;, &quot;account_ids&quot;: {&quot;mpan&quot;: &quot;1234567890123&quot;}}]}
+    coordinator_a.report(&quot;octopus&quot;, report)
+    coordinator_b.report(&quot;octopus&quot;, report)
+    token_a = coordinator_a.catalogue()[&quot;meters&quot;][0][&quot;account_ids&quot;][&quot;mpan&quot;]
+    token_b = coordinator_b.catalogue()[&quot;meters&quot;][0][&quot;account_ids&quot;][&quot;mpan&quot;]
+    assert token_a != token_b
+    print(&quot;PASS: tokens differ across installations&quot;)
+    return 0
+
+
+def test_pseudonym_substituted_inside_entity_ids():
+    &quot;&quot;&quot;A vendor that embeds an identifier in an entity name does not republish what the field just hid.&quot;&quot;&quot;
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(&quot;solar&quot;, {&quot;forecasts&quot;: [{
+        &quot;device_id&quot;: &quot;solcast:abcdef123456&quot;, &quot;kind&quot;: &quot;solar&quot;,
+        &quot;account_ids&quot;: {&quot;site_id&quot;: &quot;abcdef123456&quot;},
+        &quot;entities&quot;: {&quot;pv_forecast_today&quot;: {&quot;entity_id&quot;: &quot;sensor.predbat_solcast_abcdef123456_today&quot;, &quot;domain&quot;: &quot;sensor&quot;, &quot;access&quot;: &quot;r&quot;}},
+    }]})
+    catalogue = coordinator.catalogue()
+    assert &quot;abcdef123456&quot; not in str(catalogue), catalogue[&quot;forecasts&quot;][0][&quot;entities&quot;]
+    print(&quot;PASS: pseudonymised value substituted inside entity ids&quot;)
+    return 0
+
+
+def test_serials_and_tariff_codes_stay_clear():
+    &quot;&quot;&quot;Hardware identity and product codes stay readable - they are what makes a bug report diagnosable.&quot;&quot;&quot;
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:SA2242G123&quot;, &quot;hardware_ids&quot;: {&quot;serial&quot;: &quot;SA2242G123&quot;}, &quot;info&quot;: {&quot;firmware&quot;: &quot;D0.451&quot;}}]})
+    coordinator.report(&quot;octopus&quot;, {&quot;meters&quot;: [{&quot;device_id&quot;: &quot;octopus:m&quot;, &quot;direction&quot;: &quot;import&quot;, &quot;tariff&quot;: {&quot;info&quot;: {&quot;tariff_code&quot;: &quot;E-1R-AGILE-24-10-01-A&quot;}}}]})
+    text = str(coordinator.catalogue())
+    assert &quot;SA2242G123&quot; in text and &quot;D0.451&quot; in text and &quot;E-1R-AGILE-24-10-01-A&quot; in text
+    print(&quot;PASS: serials, firmware and tariff codes kept clear&quot;)
+    return 0
+
+
+def test_misfiled_identifier_caught_by_shape_guard():
+    &quot;&quot;&quot;An MPAN is a number, so ratings accepts it - the shape guard pseudonymises it anyway and logs.&quot;&quot;&quot;
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(&quot;octopus&quot;, {&quot;meters&quot;: [{&quot;device_id&quot;: &quot;octopus:m&quot;, &quot;direction&quot;: &quot;import&quot;, &quot;ratings&quot;: {&quot;standing_charge_p&quot;: 47.5, &quot;supply_number&quot;: 1234567890123}}]})
+    catalogue = coordinator.catalogue()
+    assert &quot;1234567890123&quot; not in str(catalogue)
+    assert catalogue[&quot;meters&quot;][0][&quot;ratings&quot;][&quot;standing_charge_p&quot;] == 47.5, &quot;a real measurement is untouched&quot;
+    print(&quot;PASS: misfiled identifier caught by the shape guard&quot;)
+    return 0
+
+
+def test_catalogue_raw_is_unredacted():
+    &quot;&quot;&quot;catalogue_raw is the in-process view and keeps originals, so the redacted path is demonstrably doing work.&quot;&quot;&quot;
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(&quot;octopus&quot;, {&quot;meters&quot;: [{&quot;device_id&quot;: &quot;octopus:m&quot;, &quot;direction&quot;: &quot;import&quot;, &quot;account_ids&quot;: {&quot;mpan&quot;: &quot;1234567890123&quot;}}]})
+    assert &quot;1234567890123&quot; in str(coordinator.catalogue_raw())
+    print(&quot;PASS: raw catalogue retains originals&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run, verify failures</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> — add to <code>coordinator.py</code> (<code>import hashlib</code>, <code>import secrets</code>, <code>from ha import run_async</code>):</p>
+</li>
+</ul>
+<pre><code class="language-python"># A clear-container value shaped like an identifier rather than a measurement. An MPAN is a
+# number so it satisfies ratings; this is the safety net for that, not the classifier.
+DIGIT_RUN_RE = re.compile(r&quot;^\d{10,}$&quot;)
+
+
+class Redactor:
+    &quot;&quot;&quot;Applies the catalogue's redaction classes to an assembled document.
+
+    Pseudonymises everything in account_ids and anything cross-linking to it, substitutes
+    those originals wherever else they appear (entity ids included), and defensively
+    pseudonymises identifier-shaped values misfiled into a clear container.
+    &quot;&quot;&quot;
+
+    # Cross-link fields holding another record's pseudonymised device_id
+    CROSS_LINKS = (&quot;meter&quot;, &quot;measures_meter&quot;)
+
+    # Minimum length of an original before it is substituted inside other strings; below this a
+    # substring replacement would corrupt unrelated text more often than it would hide anything.
+    MIN_SUBSTITUTE = 6
+
+    def __init__(self, salt, log=None):
+        &quot;&quot;&quot;Hold the installation salt and an optional logger for misfiled values.&quot;&quot;&quot;
+        self.salt = salt
+        self.log = log
+        self.originals = {}
+
+    def token(self, value):
+        &quot;&quot;&quot;The stable pseudonym for one value under this installation's salt.&quot;&quot;&quot;
+        digest = hashlib.sha256((self.salt + str(value)).encode(&quot;utf-8&quot;)).hexdigest()
+        return &quot;#&quot; + digest[:8]
+
+    def _note(self, value):
+        &quot;&quot;&quot;Record an original so it is also substituted out of every other string later.&quot;&quot;&quot;
+        text = str(value)
+        token = self.token(text)
+        self.originals[text] = token
+        return token
+
+    def _misfiled(self, value):
+        &quot;&quot;&quot;Whether a clear-container value looks like an identifier rather than a measurement.&quot;&quot;&quot;
+        text = str(value)
+        if &quot;@&quot; in text:
+            return True
+        return bool(DIGIT_RUN_RE.match(text.replace(&quot; &quot;, &quot;&quot;)))
+
+    def _walk(self, node, container=None):
+        &quot;&quot;&quot;Recursively redact a node, pseudonymising by container and catching misfiled values.&quot;&quot;&quot;
+        if isinstance(node, dict):
+            out = {}
+            for key, value in node.items():
+                if key == &quot;account_ids&quot;:
+                    out[key] = {name: self._note(entry) for name, entry in value.items()}
+                elif key in (&quot;hardware_ids&quot;, &quot;info&quot;, &quot;ratings&quot;, &quot;coverage&quot;):
+                    cleaned = {}
+                    for name, entry in value.items():
+                        if self._misfiled(entry):
+                            if self.log:
+                                self.log(&quot;Warn: Coordinator: {}.{} looks like an identifier in a clear container - pseudonymised&quot;.format(key, name))
+                            cleaned[name] = self._note(entry)
+                        else:
+                            cleaned[name] = entry
+                    out[key] = cleaned
+                else:
+                    out[key] = self._walk(value, container=key)
+            return out
+        if isinstance(node, list):
+            return [self._walk(entry, container=container) for entry in node]
+        return node
+
+    def _substitute(self, node):
+        &quot;&quot;&quot;Replace every noted original wherever it appears inside a string.&quot;&quot;&quot;
+        if isinstance(node, dict):
+            return {key: self._substitute(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [self._substitute(entry) for entry in node]
+        if isinstance(node, str):
+            for original, token in self.originals.items():
+                if len(original) &gt;= self.MIN_SUBSTITUTE and original in node:
+                    node = node.replace(original, token)
+            return node
+        return node
+
+    def redact(self, catalogue):
+        &quot;&quot;&quot;Return a redacted copy of an assembled catalogue.&quot;&quot;&quot;
+        walked = self._walk(catalogue)
+        # device_id and cross-links are derived from identifiers, so they are substituted rather
+        # than classified: the substitution pass rewrites them wherever the original appears.
+        return self._substitute(walked)
+</code></pre>
+<p>And on <code>Coordinator</code>:</p>
+<pre><code class="language-python">    def load_salt(self):
+        &quot;&quot;&quot;The per-installation pseudonym salt, generated and stored on first use.
+
+        Without Storage (CLI harnesses, unit tests) a per-process salt is generated instead, so
+        redaction never silently falls back to an unsalted digest - a 13-digit MPAN under one of
+        those is brute-forceable in seconds.
+        &quot;&quot;&quot;
+        if self.salt:
+            return self.salt
+        components = getattr(self.base, &quot;components&quot;, None)
+        storage = components.get_component(&quot;storage&quot;) if components else None
+        if storage:
+            try:
+                stored = run_async(storage.load(&quot;coordinator&quot;, &quot;salt&quot;))
+                if isinstance(stored, dict) and stored.get(&quot;salt&quot;):
+                    self.salt = str(stored[&quot;salt&quot;])
+                    return self.salt
+            except Exception as e:
+                self.log(&quot;Warn: Coordinator: could not load the pseudonym salt: {}&quot;.format(e))
+        self.salt = secrets.token_hex(16)
+        if storage:
+            try:
+                run_async(storage.save(&quot;coordinator&quot;, &quot;salt&quot;, {&quot;salt&quot;: self.salt}, format=&quot;json&quot;))
+            except Exception as e:
+                self.log(&quot;Warn: Coordinator: could not save the pseudonym salt: {}&quot;.format(e))
+        return self.salt
+
+    def catalogue(self):
+        &quot;&quot;&quot;The assembled catalogue, redacted. This is what every consumer gets.&quot;&quot;&quot;
+        return Redactor(self.load_salt(), log=self.log).redact(self.assembled or self.assemble())
+
+    def catalogue_raw(self):
+        &quot;&quot;&quot;The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere.&quot;&quot;&quot;
+        return self.assembled or self.assemble()
+</code></pre>
+<p>Add <code>self.salt = None</code> to <code>__init__</code>.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 4: Run tests, verify pass</strong> (21 PASS)</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u &amp;&amp; git commit -m &quot;feat(coordinator): redact the catalogue at source with salted pseudonyms&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-lifecycle-registry-ownership-reporting-helper-debug-dump-sensor">Task 4: Lifecycle — registry ownership, reporting helper, debug dump, sensor</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/components.py</code> (<code>Components.__init__</code> ~line 748)
+- Modify: <code>apps/predbat/component_base.py</code> (<code>__init__</code> ~line 56)
+- Modify: <code>apps/predbat/predbat.py</code> (<code>initialize()</code> ~line 1932)
+- Modify: <code>apps/predbat/userinterface.py</code> (<code>create_debug_yaml</code> ~line 848)
+- Modify: <code>apps/predbat/mock_base.py</code> (add <code>components = None</code> already present; no change expected — verify)
+- Test: <code>apps/predbat/tests/test_coordinator.py</code>, <code>apps/predbat/tests/test_debug_yaml_scope.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Components.coordinator</code> (a <code>Coordinator</code>); <code>ComponentBase.component_name</code> (registry key, set by <code>Components.initialize()</code>); <code>ComponentBase.report_discovery(report)</code> which finds the coordinator and calls <code>report(self.component_name, report)</code>, doing nothing when there is no coordinator (CLI harnesses); <code>Coordinator.publish()</code> writing <code>sensor.predbat_discovery</code>.
+- <code>PredBat.initialize()</code> calls <code>self.components.coordinator.assemble()</code> after the phase-1 start block and again after phase 2, then <code>publish()</code>.
+- <code>create_debug_yaml()</code> gains <code>debug["discovery"] = self.components.coordinator.catalogue()</code> guarded for a missing coordinator.</p>
+<ul>
+<li>[ ] <strong>Step 1: Refresh the index and run impact analysis</strong></li>
+</ul>
+<pre><code class="language-bash">node .gitnexus/run.cjs analyze
+</code></pre>
+<p>Then <code>impact</code> upstream on <code>Components.__init__</code>, <code>ComponentBase.__init__</code>, <code>PredBat.initialize</code> and <code>create_debug_yaml</code>. Report the blast radius. Expect HIGH on the first two — state that every change is strictly additive (new attributes and a new method; no signature or behaviour change).</p>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing tests</strong></li>
+</ul>
+<p>In <code>test_coordinator.py</code> (register in <code>test_coordinator_all</code>):</p>
+<pre><code class="language-python">def test_report_discovery_helper():
+    &quot;&quot;&quot;A component reports through the base-class helper, and does nothing harmless when there is no coordinator.&quot;&quot;&quot;
+    from component_base import ComponentBase
+
+    class _FakeComponent(ComponentBase):
+        &quot;&quot;&quot;Minimal component used to exercise report_discovery.&quot;&quot;&quot;
+
+        def initialize(self, **kwargs):
+            &quot;&quot;&quot;Nothing to set up.&quot;&quot;&quot;
+            pass
+
+        async def run(self, seconds, first):
+            &quot;&quot;&quot;Never called here.&quot;&quot;&quot;
+            return True
+
+    base, coordinator = _coordinator()
+    component = _FakeComponent(base)
+    component.component_name = &quot;givtcp&quot;
+    component.report_discovery({&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;}]})   # no coordinator yet - must not raise
+    assert coordinator.reports == {}
+
+    class _Registry:
+        &quot;&quot;&quot;Registry stub exposing the coordinator, as Components does.&quot;&quot;&quot;
+
+        def __init__(self):
+            &quot;&quot;&quot;Hold the coordinator.&quot;&quot;&quot;
+            self.coordinator = coordinator
+
+        def get_all(self):
+            &quot;&quot;&quot;One known component.&quot;&quot;&quot;
+            return [&quot;givtcp&quot;]
+
+        def is_active(self, name):
+            &quot;&quot;&quot;Active.&quot;&quot;&quot;
+            return True
+
+        def is_alive(self, name):
+            &quot;&quot;&quot;Alive.&quot;&quot;&quot;
+            return True
+
+        def load_error(self, name):
+            &quot;&quot;&quot;No error.&quot;&quot;&quot;
+            return None
+
+    base.components = _Registry()
+    component.report_discovery({&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;}]})
+    assert coordinator.reports[&quot;givtcp&quot;][&quot;inverters&quot;][0][&quot;device_id&quot;] == &quot;givtcp:A&quot;
+    print(&quot;PASS: report_discovery routes to the coordinator and no-ops without one&quot;)
+    return 0
+
+
+def test_publish_writes_sensor():
+    &quot;&quot;&quot;The catalogue is published as an entity for the web viewer to read later.&quot;&quot;&quot;
+    base, coordinator = _redacting_coordinator()
+    coordinator.report(&quot;givtcp&quot;, {&quot;inverters&quot;: [{&quot;device_id&quot;: &quot;givtcp:A&quot;, &quot;inverter_type&quot;: &quot;GE&quot;}]})
+    coordinator.assemble()
+    coordinator.publish()
+    assert base.entities.get(&quot;sensor.predbat_discovery&quot;), base.entities
+    print(&quot;PASS: discovery sensor published&quot;)
+    return 0
+</code></pre>
+<p>In <code>test_debug_yaml_scope.py</code>, add a test asserting <code>create_debug_yaml(write_file=False)</code> output contains a <code>discovery:</code> key and that a seeded MPAN does not appear in it. Follow that module's existing arrangement for building a Predbat with a debug dump.</p>
+<ul>
+<li>[ ] <strong>Step 3: Run, verify failures</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator --test debug_yaml_scope &gt; test_task4.log 2&gt;&amp;1; grep -E "FAIL|AttributeError" test_task4.log</code></p>
+<ul>
+<li>[ ] <strong>Step 4: Implement</strong></li>
+</ul>
+<p><code>coordinator.py</code> — add:</p>
+<pre><code class="language-python">    def publish(self):
+        &quot;&quot;&quot;Publish the redacted catalogue as an entity, for the web viewer and HA users.&quot;&quot;&quot;
+        catalogue = self.catalogue()
+        counts = {section: len(catalogue.get(section, [])) for section in SECTION_SPEC}
+        attributes = {&quot;friendly_name&quot;: &quot;Predbat discovery&quot;, &quot;icon&quot;: &quot;mdi:sitemap&quot;}
+        attributes.update(catalogue)
+        self.base.dashboard_item(&quot;sensor.{}_discovery&quot;.format(self.base.prefix), state=sum(counts.values()), attributes=attributes)
+</code></pre>
+<p><code>components.py</code> — <code>from coordinator import Coordinator</code> at the top; in <code>Components.__init__</code>: <code>self.coordinator = Coordinator(base)</code>; in <code>initialize()</code>, immediately after <code>self.components[component_name] = component_class(self.base, **arg_dict)</code>, add <code>self.components[component_name].component_name = component_name</code>.</p>
+<p><code>component_base.py</code> — in <code>__init__</code>, before <code>self.initialize(**kwargs)</code>: <code>self.component_name = self.__class__.__name__</code>. Add:</p>
+<pre><code class="language-python">    def report_discovery(self, report):
+        &quot;&quot;&quot;Report what this component discovered to the discovery catalogue.
+
+        Silently does nothing when there is no coordinator - the standalone CLI harnesses run a
+        component against a MockBase with no registry at all.
+        &quot;&quot;&quot;
+        components = getattr(self.base, &quot;components&quot;, None)
+        coordinator = getattr(components, &quot;coordinator&quot;, None) if components else None
+        if coordinator:
+            coordinator.report(self.component_name, report)
+</code></pre>
+<p><code>predbat.py</code> — after the phase-2 start block (line ~1937), before <code>load_user_config(register=True)</code>:</p>
+<pre><code class="language-python">            # Discovery barrier: every component has now started or timed out, so assemble what
+            # they reported into the catalogue. Observe only - nothing here changes configuration.
+            try:
+                self.components.coordinator.assemble()
+                self.components.coordinator.publish()
+            except Exception as e:
+                self.log(&quot;Warn: Failed to assemble the discovery catalogue: {}&quot;.format(e))
+</code></pre>
+<p>Wrapped because an observer must never be able to break startup.</p>
+<p><code>userinterface.py</code> — in <code>create_debug_yaml</code>, after <code>debug["CONFIG_ITEMS"] = ...</code>:</p>
+<pre><code class="language-python">        # Explicit: &quot;components&quot; is in DEBUG_EXCLUDE_LIST so nothing under it is dumped
+        # automatically, and a plain redacted dict avoids the object-graph walk described above.
+        coordinator = self.components.coordinator if self.components else None
+        if coordinator:
+            try:
+                debug[&quot;discovery&quot;] = coordinator.catalogue()
+            except Exception as e:
+                self.log(&quot;Warn: Failed to add the discovery catalogue to the debug dump: {}&quot;.format(e))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the affected suites, verify pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test coordinator --test debug_yaml_scope --test components --test component_base &gt; test_task4.log 2&gt;&amp;1; grep -cE "^PASS" test_task4.log; grep -E "FAIL|Error|Traceback" test_task4.log</code></p>
+<ul>
+<li>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(coordinator): wire the catalogue into startup, the debug dump and an entity&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-givtcp-reporter">Task 5: GivTCP reporter</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/givtcp.py</code> (<code>run()</code> ~lines 479-482)
+- Test: <code>apps/predbat/tests/test_givtcp_component.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>GivTCPComponent.build_discovery()</code> returning <code>{"automatic": self.automatic, "inverters": [...]}</code>, one record per discovered endpoint. <code>device_id</code> is <code>"givtcp:{serial}"</code> falling back to <code>"givtcp:{rest_api}"</code> when no serial is reported. Descriptors are built from <code>GIVTCP_CONTROLS</code> (domain, <code>access: "rw"</code>) and <code>GIVTCP_SENSORS</code> (<code>access: "r"</code>), each carrying the same min/max/step/options/unit the component already publishes as HA attributes, with the per-device rate maximum from <code>rest.max_battery_rate()</code> overriding the generic ceiling. <code>functions</code> is <code>["solar", "battery"]</code>. <code>capabilities</code> records <code>rest_v3</code>, <code>pause_mode</code>, <code>pause_slots</code>, <code>soh</code>, <code>charge_enable</code>, <code>discharge_target</code> from the same probes <code>automatic_config()</code> already gates on.
+- Reports from <code>run()</code> alongside the existing <code>automatic_config()</code> trigger. <strong><code>automatic_config()</code> itself is not modified.</strong></p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>GivTCPComponent.run</code>; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> (append to <code>test_givtcp_component.py</code>, registered via its existing <code>test_givtcp_component</code> runner)</p>
+</li>
+</ul>
+<pre><code class="language-python">def test_build_discovery_shape():
+    &quot;&quot;&quot;One record per discovered endpoint, with descriptors carrying the real per-device rate maximum.&quot;&quot;&quot;
+    base, component = _make_component(rest_urls=[&quot;http://a:6345&quot;])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    report = component.build_discovery()
+    assert report[&quot;automatic&quot;] is True
+    record = report[&quot;inverters&quot;][0]
+    assert record[&quot;device_id&quot;].startswith(&quot;givtcp:&quot;)
+    assert record[&quot;inverter_type&quot;] == &quot;GE&quot;
+    assert &quot;battery&quot; in record[&quot;functions&quot;] and &quot;solar&quot; in record[&quot;functions&quot;]
+    charge_rate = record[&quot;entities&quot;][&quot;charge_rate&quot;]
+    assert charge_rate[&quot;domain&quot;] == &quot;number&quot; and charge_rate[&quot;access&quot;] == &quot;rw&quot;
+    assert charge_rate[&quot;entity_id&quot;] == &quot;number.predbat_givtcp_0_charge_rate&quot;
+    assert charge_rate[&quot;step&quot;] == 100
+    soc_kw = record[&quot;entities&quot;][&quot;soc_kw&quot;]
+    assert soc_kw[&quot;access&quot;] == &quot;r&quot; and soc_kw[&quot;unit&quot;] == &quot;kWh&quot;
+    print(&quot;PASS: GivTCP discovery record shape&quot;)
+    return 0
+
+
+def test_build_discovery_uses_device_rate_max():
+    &quot;&quot;&quot;The descriptor carries the inverter's own maximum rate, not the generic 20kW ceiling.&quot;&quot;&quot;
+    base, component = _make_component(rest_urls=[&quot;http://a:6345&quot;])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    component.rest[0].max_battery_rate = lambda: 3600
+    assert component.build_discovery()[&quot;inverters&quot;][0][&quot;entities&quot;][&quot;charge_rate&quot;][&quot;max&quot;] == 3600
+    print(&quot;PASS: per-device rate maximum used&quot;)
+    return 0
+
+
+def test_build_discovery_only_discovered_endpoints():
+    &quot;&quot;&quot;A configured but unanswered endpoint produces no record - the shipped apps.yaml over-provisions givtcp_rest.&quot;&quot;&quot;
+    base, component = _make_component(rest_urls=[&quot;http://a:6345&quot;, &quot;http://b:6345&quot;])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component, indices=[0])
+    assert len(component.build_discovery()[&quot;inverters&quot;]) == 1
+    print(&quot;PASS: only discovered endpoints reported&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all --test givtcp_component &gt; test_givtcp.log 2&gt;&amp;1; grep -E "FAIL|AttributeError" test_givtcp.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> — add <code>build_discovery()</code> to <code>givtcp.py</code>, and in <code>run()</code> report beside the existing trigger:</p>
+</li>
+</ul>
+<pre><code class="language-python">        if self.discovered != self.configured_for:
+            await self.automatic_config()
+            self.configured_for = list(self.discovered)
+            self.automatic_config_done = True
+        if self.discovered != self.reported_for:
+            self.report_discovery(self.build_discovery())
+            self.reported_for = list(self.discovered)
+</code></pre>
+<p>with <code>self.reported_for = []</code> added in <code>initialize</code>. Reporting is deliberately independent of <code>self.automatic</code>: the catalogue describes what is there whether or not this component wired it.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 5: Run the module's suites, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all --test givtcp_component --test givtcp_rest &gt; test_givtcp.log 2&gt;&amp;1; grep -cE "^PASS" test_givtcp.log; grep -E "FAIL|Error" test_givtcp.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(givtcp): report discovered inverters to the catalogue&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-ge-cloud-reporter">Task 6: GE Cloud reporter</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/gecloud.py</code> (<code>run()</code> first-pass block ~lines 1690-1694)
+- Test: <code>apps/predbat/tests/test_ge_cloud.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>GECloudDirect.build_discovery(devices)</code> returning <code>{"automatic": ..., "inverters": [...], "meters": [...]}</code>.
+  - One inverter record per battery device with <code>functions: ["solar", "battery"]</code>, plus one per entry in <code>devices["pv"]</code> with <code>functions: ["solar"]</code> — the sensor-only devices that motivated the separate index pool.
+  - <code>composition</code> is <code>gateway</code> when the gateway fronts multiple batteries (the collapse at <code>gecloud.py:1148-1151</code>), <code>ems</code> on the EMS path, else <code>direct</code>; the fronted serials go in the structural <code>serials</code> list.
+  - <code>capabilities</code> from the existing register sniffing: <code>charge_rate_power</code>, <code>charge_rate_percent</code>, <code>pause_mode</code>, <code>pause_slots</code>, <code>discharge_target</code>.
+  - <code>measures_meter</code> set from the device's meter serial where GE Cloud knows it, so the shared-CT case (<code>gecloud.py:1281-1312</code>) shows up as two devices measuring one meter.
+- Reports from the existing <code>if first:</code> block. <code>async_automatic_config()</code> is <strong>not</strong> modified; reporting happens whether or not <code>self.automatic</code> is set.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>GECloudDirect.run</code>; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> in <code>test_ge_cloud.py</code>, reusing the devices/settings fixture from the existing <code>_test_async_automatic_config</code> (<code>test_ge_cloud.py:283</code>): (a) a battery-only fixture yields one inverter record with <code>composition: "direct"</code> and <code>functions</code> containing <code>battery</code>; (b) two batteries plus a gateway and no EMS yields records whose <code>composition</code> is <code>gateway</code> with both battery serials in <code>serials</code>; (c) with <code>ge_cloud_automatic_split_pv</code> set, each PV device yields a record with <code>functions == ["solar"]</code> and no <code>inverter_type</code>; (d) two devices sharing a meter serial both carry the same <code>measures_meter</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all --test ge_cloud &gt; test_gecloud.log 2&gt;&amp;1; grep -E "FAIL|AttributeError" test_gecloud.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> <code>build_discovery(devices)</code> plus <code>self.report_discovery(self.build_discovery(self.devices_dict))</code> inside the existing <code>if first:</code> block, outside the <code>if self.automatic:</code> guard.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all --test ge_cloud &gt; test_gecloud.log 2&gt;&amp;1; grep -cE "^PASS" test_gecloud.log; grep -E "FAIL|Error" test_gecloud.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(gecloud): report inverters, PV-only devices and meters to the catalogue&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-octopus-reporter-meters-tariffs-and-cars">Task 7: Octopus reporter — meters, tariffs and cars</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/octopus.py</code> (beside the <code>automatic_config(self.tariffs)</code> calls at lines 678, 685 and 881)
+- Test: <code>apps/predbat/tests/test_octopus_intelligent_devices.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>OctopusAPI.build_discovery()</code> returning <code>{"meters": [...], "cars": [...]}</code>.
+  - One meter per direction present in <code>self.tariffs</code> (<code>import</code>, <code>export</code>, <code>gas</code>). <code>account_ids</code> carries <code>mpan</code> (where known) and <code>account</code>; <code>device_id</code> is <code>"octopus:{mpan or direction}"</code>. The nested <code>tariff</code> sub-record carries <code>info.tariff_code</code> and <code>info.product_code</code>, and <code>flags</code> built from the existing classifiers — <code>intelligent_go</code> from <code>is_intelligent_go_tariff()</code>, <code>six_hour_cap</code> from <code>has_six_hour_cap()</code>, plus <code>agile</code> when the product code contains <code>AGILE</code>.
+  - One car per <strong>active</strong> (non-suspended) intelligent device, matching the filter <code>automatic_config()</code> already applies, with <code>device_id</code> <code>"octopus:{device_id}"</code>, <code>ratings</code> from the device's vehicle battery size and charge-point power where reported, and <code>entities</code> for <code>octopus_intelligent_slot</code>, <code>octopus_ready_time</code> and <code>octopus_charge_limit</code> built with the existing <code>get_entity_name(..., index=device_id_to_index_suffix(device_id))</code>.
+- Reports beside each existing <code>automatic_config()</code> call, so a device-set or tariff change refreshes the report. <code>automatic_config()</code> is not modified.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>OctopusAPI.automatic_config</code> and its <code>run()</code> call sites; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> in <code>test_octopus_intelligent_devices.py</code> using its existing device fixtures: (a) two active devices and one suspended yields exactly two car records; (b) an Intelligent Go tariff fixture yields a meter whose <code>tariff.flags</code> contains <code>intelligent_go</code>; (c) the car entity map matches the entity names the existing <code>automatic_config</code> tests assert; (d) an import and an export tariff yield two meter records with distinct <code>direction</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all -k octopus_ &gt; test_octopus.log 2&gt;&amp;1; grep -E "FAIL|AttributeError" test_octopus.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> <code>build_discovery()</code> and add <code>self.report_discovery(self.build_discovery())</code> immediately after each of the three <code>automatic_config(self.tariffs)</code> calls.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all -k octopus_ &gt; test_octopus.log 2&gt;&amp;1; grep -cE "^PASS" test_octopus.log; grep -E "FAIL|Error" test_octopus.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(octopus): report meters, tariffs and intelligent-device cars to the catalogue&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-ohme-reporter-the-charger-and-car-split">Task 8: Ohme reporter — the charger and car split</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/ohme.py</code> (the <code>if first and self.client.serial:</code> block ~lines 259-266)
+- Test: <code>apps/predbat/tests/test_ohme.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>OhmeAPI.build_discovery()</code> returning <code>{"automatic": self.ohme_automatic, "chargers": [...], "cars": [...]}</code>.
+  - One charger: <code>device_id</code> <code>"ohme:{serial}"</code>, <code>hardware_ids.serial</code>, <code>info.vendor</code> <code>"Ohme"</code> plus model where known, <code>ratings.max_power_kw</code>, <code>serves_cars</code> listing the car it feeds, and <code>entities</code> for the charger facts (<code>car_charging_planned</code> → <code>binary_sensor.predbat_ohme_connected</code>, <code>car_charging_energy</code> → <code>ENERGY_TODAY_ENTITY</code>, <code>car_charging_power</code> → <code>POWER_WATTS_ENTITY</code>).
+  - One car. When the Ohme API reports a current vehicle (<code>self.client._cars</code> / <code>current_vehicle</code>, discarded today), <code>device_id</code> is <code>"ohme:{vehicle id}"</code> with <code>info.make</code>/<code>info.model</code>; otherwise a stub with <code>device_id</code> <code>"ohme:{serial}:car"</code> and <code>info.stub</code> true. Its <code>entities</code> carry the car facts (<code>car_charging_soc</code> → <code>sensor.predbat_ohme_battery_percent</code>, plus the three Octopus Intelligent entities Ohme publishes), and <code>charged_by</code> links back to the charger.
+- Reports inside the existing <code>if first and self.client.serial:</code> block, outside the <code>if self.ohme_automatic:</code> guard. Neither <code>automatic_config()</code> nor <code>octopus_intelligent_wanted()</code> is modified.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>OhmeAPI.run</code> and <code>OhmeAPI.automatic_config</code>; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> in <code>test_ohme.py</code> using its existing client fixtures: (a) a charger record and a car record are produced, cross-linked in both directions; (b) with no vehicle known the car record is a stub with <code>info.stub</code> true; (c) with a vehicle known the car carries its make and model and a non-stub <code>device_id</code>; (d) charger entities and car entities land in the right record (<code>car_charging_planned</code> on the charger, <code>car_charging_soc</code> on the car).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all --test ohme &gt; test_ohme.log 2&gt;&amp;1; grep -E "FAIL|AttributeError" test_ohme.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> <code>build_discovery()</code> and add <code>self.report_discovery(self.build_discovery())</code> in the first-run block.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all --test ohme &gt; test_ohme.log 2&gt;&amp;1; grep -cE "^PASS" test_ohme.log; grep -E "FAIL|Error" test_ohme.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(ohme): report the charger and its car separately to the catalogue&quot;
+</code></pre>
+<hr />
+<h3 id="task-9-solcast-reporter-the-forecasts-section">Task 9: Solcast reporter — the forecasts section</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/solcast.py</code> (site loop ~lines 560-580; <code>run()</code> ~line 96)
+- Test: <code>apps/predbat/tests/test_solcast.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>SolarAPI.build_discovery()</code> returning <code>{"forecasts": [...]}</code>, one record per solar forecast provider actually used this fetch.
+  - Solcast: one record per resource id seen in the site loop, accumulated into <code>self.discovered_sites</code> (a list, append-only, preserving order) as that loop walks them. <code>device_id</code> <code>"solcast:{resource_id}"</code>, <code>account_ids.site_id</code> the resource id (so it is pseudonymised), <code>kind</code> <code>"solar"</code>, <code>info.vendor</code> <code>"Solcast"</code>, <code>coverage.horizon_hours</code> 168 and <code>coverage.resolution_minutes</code> 30.
+  - forecast.solar and Open-Meteo: one record each when enabled, <code>device_id</code> <code>"forecast_solar"</code> / <code>"open_meteo"</code>, with their own <code>coverage</code>.
+  - <code>entities</code> carries whichever of <code>pv_forecast_today</code>, <code>pv_forecast_tomorrow</code>, <code>pv_forecast_d3</code>, <code>pv_forecast_d4</code> are configured.
+  - No site <em>name</em> is reported — user-authored free text is excluded by the spec, and Solcast site names are user-chosen.
+- Reports from <code>run()</code> after <code>fetch_pv_forecast()</code> returns, only when the discovered set has changed since the last report.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Impact analysis</strong> on <code>SolarAPI.run</code> and the site-fetch method; report.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Write the failing tests</strong> in <code>test_solcast.py</code> using its existing mocked-fetch fixtures: (a) two Solcast resource ids yield two forecast records with <code>kind: "solar"</code>; (b) the resource id appears in <code>account_ids</code>, not in <code>info</code>, so redaction pseudonymises it; (c) no user-authored site name appears anywhere in the record; (d) with forecast.solar enabled its own record is produced alongside.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run, verify failures</strong>: <code>cd coverage &amp;&amp; ./run_all --test solcast &gt; test_solcast.log 2&gt;&amp;1; grep -E "FAIL|AttributeError" test_solcast.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Implement</strong> the <code>self.discovered_sites</code> accumulation, <code>build_discovery()</code>, and the report call in <code>run()</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Run, verify pass</strong>: <code>cd coverage &amp;&amp; ./run_all --test solcast --test solar_model &gt; test_solcast.log 2&gt;&amp;1; grep -cE "^PASS" test_solcast.log; grep -E "FAIL|Error" test_solcast.log</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: detect_changes, pre-commit, commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &amp;&amp; git add -u apps/predbat &amp;&amp; git commit -m &quot;feat(solcast): report solar forecast providers to the catalogue&quot;
+</code></pre>
+<hr />
+<h3 id="task-10-end-to-end-test-the-v1-invariant-and-documentation">Task 10: End-to-end test, the v1 invariant, and documentation</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tests/test_discovery_catalogue.py</code>
+- Create: <code>docs/discovery-catalogue.md</code>
+- Modify: <code>apps/predbat/unit_test.py</code>, <code>mkdocs.yml</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: every reporter from Tasks 5-9 plus the coordinator from Tasks 1-4.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the end-to-end test</strong></li>
+</ul>
+<p>One <code>MockBase</code> shared by a real <code>GivTCPComponent</code> and <code>MockGECloudDirect</code>, both reporting into one <code>Coordinator</code>, then <code>assemble()</code> and <code>catalogue()</code>. Assert: both components' inverters appear in one <code>inverters</code> list tagged by <code>source</code>; <code>observations.conflicts</code> contains <code>multiple_inverter_sources</code>; the assembled catalogue survives <code>yaml.safe_dump</code> and <code>json.dumps</code>; GE Cloud's PV-only device has <code>functions == ["solar"]</code> and no <code>inverter_type</code>; and every component in the stub registry has a status.</p>
+<ul>
+<li>[ ] <strong>Step 2: Write the v1 invariant test</strong></li>
+</ul>
+<p>The heart of this release. Snapshot <code>dict(base.args)</code> before any reporting, run every reporter, assemble, redact and publish, then assert <code>base.args</code> is byte-for-byte unchanged:</p>
+<pre><code class="language-python">def test_discovery_writes_no_config(my_predbat=None):
+    &quot;&quot;&quot;Discovery is observe-only: nothing it does may change a single apps.yaml key.&quot;&quot;&quot;
+    base, components = _build_reporting_fleet()
+    before = copy.deepcopy(base.args)
+    for component in components:
+        component.report_discovery(component.build_discovery())
+    base.components.coordinator.assemble()
+    base.components.coordinator.catalogue()
+    base.components.coordinator.publish()
+    assert base.args == before, &quot;discovery must not write configuration in v1&quot;
+    print(&quot;PASS: discovery changed no configuration&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Write the redaction corpus test</strong></li>
+</ul>
+<p>Seed a report with a credential-shaped value, a 13-digit MPAN, an email, a postcode and a coordinate pair spread across several containers, then assert none of the original strings appears anywhere in <code>str(catalogue())</code>, while a serial, a firmware string and a tariff code all do.</p>
+<ul>
+<li>[ ] <strong>Step 4: Register and run</strong></li>
+</ul>
+<p>Add to <code>unit_test.py</code>: <code>from tests.test_discovery_catalogue import test_discovery_catalogue_all</code> and <code>("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),</code></p>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test discovery_catalogue &gt; test_e2e.log 2&gt;&amp;1; grep -E "PASS|FAIL|Error|Traceback" test_e2e.log</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Full suite regression</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all &gt; test_full.log 2&gt;&amp;1; grep -E "FAIL|Error:" test_full.log | head -40</code>
+Expected: no new failures against <code>main</code>. Any failure in an untouched area means a reporter changed behaviour it should not have.</p>
+<ul>
+<li>[ ] <strong>Step 6: Write the documentation</strong></li>
+</ul>
+<p><code>docs/discovery-catalogue.md</code>: what the catalogue is and why it exists; how to find it (the <code>discovery:</code> section of a debug dump, and <code>sensor.predbat_discovery</code>); what each section describes; what is redacted and what deliberately is not, so users know a dump is safe to attach and maintainers know serials and tariff codes are readable; and a developer section on adding a reporter (<code>build_discovery()</code>, <code>report_discovery()</code>, choose a container, never invent a field outside one). Add the page to <code>mkdocs.yml</code>.</p>
+<p>Verify: <code>mkdocs build &gt; docs_build.log 2&gt;&amp;1; grep -iE "error|warning" docs_build.log</code></p>
+<ul>
+<li>[ ] <strong>Step 7: detect_changes, pre-commit, commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tests/test_discovery_catalogue.py docs/discovery-catalogue.md
+./run_pre_commit &amp;&amp; git add -u &amp;&amp; git commit -m &quot;test(coordinator): end-to-end catalogue assembly and the observe-only invariant&quot;
+</code></pre>
+<hr />
+<h2 id="self-review-notes">Self-review notes</h2>
+<ul>
+<li>Spec coverage: containers and validation → Task 1; assembly, status and observations → Task 2; the four redaction classes, salt, substitution and guards → Task 3; lifecycle, debug dump and sensor → Task 4; the five named reporters → Tasks 5-9; the observe-only non-goal → Task 10's invariant test; documentation → Task 10.</li>
+<li>Type consistency: <code>report(component_name, report)</code>, <code>build_discovery()</code> returning the report dict, <code>report_discovery(report)</code>, <code>assemble()</code>, <code>catalogue()</code>, <code>catalogue_raw()</code> and the container names are used identically in every task. Only GE Cloud's <code>build_discovery(devices)</code> takes an argument, which its Interfaces block states.</li>
+<li>Deliberate scope limits carried from the spec: no allocation, no writes, no <code>automatic_config()</code> changes, no persistence beyond the salt, no web page. Components beyond the five named keep reporting nothing and show as <code>no_report</code>, which is a status rather than an error.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

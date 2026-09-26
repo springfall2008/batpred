@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Fold Balance Into Execute — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Fold Balance Into Execute \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-09-18-balance-into-execute-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Fold Balance Into Execute — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="fold-balance-into-execute-design">Fold Balance Into Execute — Design</h1>
+<p>Date: 2026-09-18. Status: agreed with maintainer.
+Prompted by GH#5141 (mgazza, "Multi-inverter SoC balancing: should PredBat own it, and when
+should it act?") and the multi-inverter rework tracking issue GH#4856.</p>
+<h2 id="purpose">Purpose</h2>
+<p><code>balance_inverters()</code> runs on its own 60-second timer, builds its own <code>Inverter</code> objects, knows
+nothing about the plan, and writes charge and discharge rates that <code>execute_plan()</code> has just
+set. Two independent writers disagreeing over the same registers is the root of several
+long-open faults.</p>
+<p>This design makes <strong><code>execute_plan()</code> the only writer of inverter rates</strong>. Balancing becomes a
+function that mutates the executor's intent before it is applied, rather than a subsystem that
+overwrites the executor's work afterwards.</p>
+<p>Two behavioural changes ride along:</p>
+<ul>
+<li><strong>Per-inverter export rate allocation</strong>, mirroring the per-inverter treatment charge already
+  gets, so the fleet holds the export power the planner costed instead of sagging as inverters
+  reach target.</li>
+<li><strong>Cross-charge prevention becomes the default balancing behaviour</strong>; SoC balancing on charge
+  and on export stay fully functional but default off.</li>
+</ul>
+<h2 id="why-this-shape">Why this shape</h2>
+<p>Balanced SoC is not, in itself, an important goal — which is why balance charge and balance
+export default off. The critical behaviour is preventing one inverter charging from another
+during eco/idle, where energy cycles A into B at roughly 13% round-trip loss for no benefit.</p>
+<p>The merge is worth doing independently of any balancing policy, because the two-writer seam is
+what makes the current behaviour unpredictable, and because a single write point is a
+precondition for any future proportional balancing.</p>
+<h2 id="non-goals">Non-goals</h2>
+<p>Explicitly out of scope, each deferred to a follow-up:</p>
+<ul>
+<li><strong>F1</strong> — capacity-proportional target split in <code>adjust_battery_target_multi()</code>. The rate-share
+  split stays. Consequence: the export allocator tracks targets that do not converge SoC. This
+  is accepted, not overlooked.</li>
+<li><strong>F2</strong> — fleet undershoot on charge above ~90%.</li>
+<li>A <em>per-inverter</em> PV-aware cross-charge rule — see "Amended during implementation" below for what
+  was done instead, and what remains undone.</li>
+<li>Proportional balancing actuators. The actuator stays rate 0, as today.</li>
+<li><code>inverter_limit</code> / <code>export_limit</code> (AC-side caps) in the export allocation.</li>
+<li>Making pause mode part of the mutable intent.</li>
+</ul>
+<h2 id="amended-during-implementation">Amended during implementation</h2>
+<p>Two items listed above as deferred were fixed after all, because moving the algorithm into a pure
+function made faults visible that could not responsibly be left in place. Recorded here so a later
+reader does not treat them as outstanding work.</p>
+<p><strong>F7 — the partner ring (was: "moves verbatim").</strong> Fixed. Reviewing the relocated algorithm on a
+3+ inverter fleet showed the same logical fleet giving different answers depending on the order
+the inverters happened to be configured in. Two coupled faults came with it:</p>
+<ul>
+<li>A pass could hold a charger and a discharger at once — the <code>elif</code> chain limits each <em>inverter</em>
+  to one action, but the loop runs over every inverter. The units share an AC bus, so the rest
+  simply absorb or supply whatever the held pair stopped doing.</li>
+<li><code>can_power_house</code> asks "if I stop this one, can the rest cover?", so two holds in one pass each
+  passed a check computed for one.</li>
+</ul>
+<p>A pass now commits to a single direction, holds within it are applied cumulatively, the energy
+guards ask whether <em>any</em> other inverter qualifies, and the rate guards consult no partner at all.</p>
+<p><strong>Cross-charge detection (was: "today's power-sign rule moves unchanged").</strong> Changed. The
+power-sign rule chose direction from <code>sign(total_battery_power)</code>, a battery-side proxy for a
+whole-site question. On an export window with a large PV surplus it held every inverter that was
+correctly absorbing that surplus, because one inverter discharging into it made the batteries net
+out as discharging.</p>
+<p>Direction now comes from the site energy balance. Per-inverter load and PV readings cannot settle
+it — one inverter discharging looks like less load to another, PV wiring is not declared, and an
+AC-coupled unit has no PV of its own — but the fleet totals can. With grid +ve export and battery
++ve discharging, <code>load = pv + battery - grid</code>, so <code>spare PV = total_grid - total_battery</code>, needing
+no PV attribution.</p>
+<p><strong>Still undone:</strong> the per-inverter case. Today's rule still cannot tell a hybrid absorbing its own
+DC-coupled PV from one pulling off the bus; only the fleet aggregate is handled.</p>
+<h2 id="mode-audit">Mode audit</h2>
+<p>The refactor collapsed several distinct "should we write a rate at all?" conditions into one
+<code>None</code> sentinel meaning "reset to maximum". Each mode that needed a different answer had to be
+restored individually as review found it, so this is the systematic pass over all of them.</p>
+<p><strong>The rule the original encoded</strong>, and the one the code now implements:</p>
+<blockquote>
+<p>A rate that something claimed — executor branch or balancer — is <strong>always</strong> written.
+A rate nobody claimed is reset to maximum <strong>only</strong> where the executor is driving the windows.</p>
+</blockquote>
+<p><code>reset_rates</code> in the intent carries that second condition; it is what
+<code>resetCharge</code> / <code>resetDischarge</code> used to hold, initialised from
+<code>set_charge_window or set_export_window</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>charge_window</th>
+<th>export_window</th>
+<th>soc_enable</th>
+<th>unclaimed rates</th>
+<th>covered by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Monitor</td>
+<td>off</td>
+<td>off</td>
+<td>off</td>
+<td><strong>not written</strong></td>
+<td><code>test_monitor_mode_writes_no_rates</code></td>
+</tr>
+<tr>
+<td>Control SoC only</td>
+<td>off</td>
+<td>off</td>
+<td>on</td>
+<td><strong>not written</strong>, target still set</td>
+<td><code>test_control_soc_only_sets_targets_without_writing_rates</code></td>
+</tr>
+<tr>
+<td>Control charge</td>
+<td>on</td>
+<td>off</td>
+<td>on</td>
+<td>reset to max</td>
+<td>existing scenarios</td>
+</tr>
+<tr>
+<td>Control charge &amp; discharge</td>
+<td>on</td>
+<td>on</td>
+<td>on</td>
+<td>reset to max</td>
+<td>existing scenarios</td>
+</tr>
+<tr>
+<td>Read-only (incl. Axle)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>loop <code>continue</code>s, nothing written</td>
+<td><code>test_read_only_mode_writes_no_rates</code></td>
+</tr>
+<tr>
+<td>Calibration</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>fleet set to max, intent discarded</td>
+<td><code>test_calibration_discards_intent_collected_so_far</code></td>
+</tr>
+<tr>
+<td>Calibration, seen by the poll</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>stored intent discarded</td>
+<td><code>test_poll_does_not_apply_stale_intent_during_calibration</code></td>
+</tr>
+<tr>
+<td>Template</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td><code>execute_plan</code> is not reached</td>
+<td>pre-existing</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Branches that can claim a rate while <code>reset_rates</code> is false.</strong> Everything inside the loop is
+gated on a window except two: the <code>else</code> after the charge-window checks, which only logs, and
+<code>set_freeze_export_during_demand</code>, which claims <code>charge_rate = 0</code>. The original wrote that claim
+regardless of the reset flags, so it must still be written — that is the first half of the rule
+above, covered by <code>test_a_claimed_rate_is_written_even_when_rates_are_not_reset</code>.</p>
+<p><strong>Unchanged by the refactor:</strong> <code>resetPause</code> and <code>resetReserve</code> keep their original semantics and
+application sites exactly (7 and 4 assignments respectively, same as before).</p>
+<p><strong>Balancing is not gated on mode</strong>, only on <code>balance_inverters_enable</code> and <code>set_read_only</code>. That
+matches the deleted timer, which also ran in Monitor mode. Preserved deliberately rather than
+tightened, since changing it is a behaviour decision rather than a refactor.</p>
+<p><strong>Known behaviour change, accepted:</strong> entering an export window, force export is now enabled
+before the rate is written, where it used to be the other way round. In steady state neither call
+rewrites, so this only bites on the transition cycle. It cannot be observed in the test harness,
+which applies both within one synchronous pass - noted rather than pinned.</p>
+<h2 id="architecture">Architecture</h2>
+<h3 id="today">Today</h3>
+<pre><code>update_pred (5 min)     ──► execute_plan() ──────────────────────► writes rates
+update_time_loop (15 s) ──► quick_inverter_data_update() (120 s)   read-only
+run_time_loop_balance   ──► balance_inverters() (60 s) ───────────► writes rates
+                              └── constructs its own Inverter objects
+</code></pre>
+<h3 id="after">After</h3>
+<pre><code>update_pred (5 min)     ──► execute_plan() ──► build intent ──┐
+                                                              ├──► apply_inverter_rates()
+update_time_loop (15 s) ──► quick_inverter_data_update() ─────┘        (only writer)
+                             (60 s)  └──► balance_inverters(intent)
+
+run_time_loop_balance   ──► deleted
+</code></pre>
+<p><code>quick_inverter_data_update()</code> already reuses <code>self.inverters</code> via <code>fetch_inverter_data(create=False)</code>
+and already opens its own control-ledger cycle, so it is the natural second caller.</p>
+<h3 id="the-intent">The intent</h3>
+<p>Per inverter id, rebuilt by <code>execute_plan()</code> each cycle:</p>
+<pre><code class="language-python">{charge_rate, discharge_rate, pause_charge, pause_discharge, owner}
+</code></pre>
+<p><code>charge_rate = None</code> means "max" — it is exactly today's <code>resetCharge = True</code>. <code>owner</code> records
+which branch claimed the rate (<code>charge</code> / <code>export</code> / <code>freeze</code> / <code>demand</code> / <code>car</code> / <code>iboost</code>),
+which is the information today's balancer has no way to see.</p>
+<p>This <strong>replaces</strong> the <code>resetCharge</code> / <code>resetDischarge</code> flags rather than adding a parallel
+mechanism. <code>apply_inverter_rates()</code> resolves <code>None → max</code>, so "restore to max" exists in one
+place instead of three (the end-of-loop reset, and the balancer's own reset loop).</p>
+<h3 id="structure-of-execute_plan">Structure of <code>execute_plan()</code></h3>
+<pre><code class="language-python">intent = {}
+for inverter in self.inverters:
+    charge_rate    = None
+    discharge_rate = None
+    owner          = &quot;demand&quot;
+
+    # 15 existing branches assign instead of writing
+    # non-rate writes (adjust_force_export / adjust_reserve /
+    #                  adjust_battery_target / adjust_pause_mode) stay inline, in today's order
+
+    intent[inverter.id] = {...}
+
+balance_inverters(intent, snapshot, ...)      # single mutation point, free to raise or lower
+
+for inverter in self.inverters:
+    apply_inverter_rates(inverter, intent[inverter.id])   # single write point
+</code></pre>
+<h3 id="call-sites-to-convert">Call sites to convert</h3>
+<p>All 15 are inside the per-inverter loop, and every one is already paired with a <code>reset*</code> flag
+clear. Net effect: 15 rate call sites + 2 reset call sites + 2 reset flags become 2 locals and
+one apply pass. The diff is mostly deletion.</p>
+<p><code>execute.py</code> lines 288, 292, 315, 354, 373, 489, 493, 509, 515, 552, 558, 584, 617, 634, 636.</p>
+<p>Three need care rather than mechanical translation:</p>
+<table>
+<thead>
+<tr>
+<th>Site</th>
+<th>Today</th>
+<th>Becomes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>288</td>
+<td>writes only if &gt;10% from current</td>
+<td>conditional <strong>deleted</strong> — see "Deadband" below</td>
+</tr>
+<tr>
+<td>584, 617</td>
+<td><code>if resetDischarge: adjust_discharge_rate(0)</code> — car / iBoost hold only if unclaimed</td>
+<td><code>if discharge_rate is None: discharge_rate = 0</code>, making the precedence explicit rather than implied by flag order</td>
+</tr>
+<tr>
+<td>pause</td>
+<td><code>adjust_pause_mode</code> is the alternative to rate 0 on inverters with timed pause</td>
+<td>stays inline and unchanged, but is <strong>recorded</strong> in the intent as read-only context so balance can see a hold it must not fight</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ordering-change-accepted">Ordering change (accepted)</h3>
+<p>Rate writes move from interleaved to after every non-rate write for that inverter. The only
+observable case is entering an export window: today the rate is set (line 489) then force export
+is enabled (line 491); afterwards force export enables first, so with low-power export the
+inverter may run at the previous cycle's rate for the duration of the remaining loop I/O.</p>
+<p>In steady state neither call rewrites — both have deadbands — so this bites only on the cycle
+that <em>enters</em> a window. Accepted in exchange for a single unconditional write point.</p>
+<h2 id="deadband-reconciliation">Deadband reconciliation</h2>
+<p>Both existing deadbands came from the same PR, GH#1676 ("Reduce register writes during low power
+mode"), whose purpose was cutting register writes in low-power charging, where <code>find_charge_rate</code>
+returns a slightly different value each cycle as SoC creeps toward target.</p>
+<p>Both halves shipped broken and were fixed separately:</p>
+<ul>
+<li>Inverter side: GH#1676 wrote <code>abs(current - new) &lt; (max * MINUTE_WATT / 24)</code> — inverted, so it
+  wrote small differences and skipped large ones. Fixed by GH#1680 to <code>&gt; /20</code> (5%).</li>
+<li>Execute side: the 10% shipped as <code>0.1 * battery_rate_max_charge</code> with no <code>MINUTE_WATT</code>,
+  comparing watts against kW-per-minute (≈0.0043 for a 2.6 kW inverter), so it never fired.
+  Fixed by GH#1677.</li>
+</ul>
+<p>GH#1677 also had to move <code>resetCharge = False</code> out of the <code>if</code>: until then, skipping a small
+adjustment left <code>resetCharge</code> True and the end-of-loop reset slammed the rate to <strong>max</strong> — a
+deadband that caused full-rate charging. That is structurally the same failure as F5, and the
+intent refactor makes it unrepresentable.</p>
+<p><strong>Decision: 5% for both</strong>, aligning with GE power steps. The execute-side conditional is deleted;
+<code>charge_rate = new_charge_rate</code> unconditionally. <code>adjust_charge_rate</code> (<code>inverter.py:1870</code>) and
+<code>adjust_discharge_rate</code> (<code>inverter.py:1911</code>) already carry an identical <code>/20</code>, so one deadband
+remains, symmetric across charge and discharge, inside the only writer. Intent then always
+carries the desired rate rather than a deadband-mangled one, which matters once balance mutates it.</p>
+<h2 id="the-balance-function">The balance function</h2>
+<p>Module-level in <code>utils.py</code>, alongside <code>find_charge_rate</code>, taking plain values and returning plain
+values — no <code>self</code>, no <code>Inverter</code> objects, no writes:</p>
+<pre><code class="language-python">def balance_inverters(
+    intent,              # mutated in place
+    snapshot,            # list of per-inverter plain dicts
+    balance_charge, balance_discharge, balance_crosscharge,
+    threshold_charge, threshold_discharge,
+    log_to=None,
+)
+</code></pre>
+<p>Snapshot carries exactly what the algorithm reads today, as scalars:</p>
+<pre><code>soc_percent, reserve_percent, battery_power, pv_power,
+charge_rate_now, discharge_rate_now,
+battery_rate_max_charge, battery_rate_max_discharge, in_calibration
+</code></pre>
+<p><code>execute.py</code> keeps three mechanical jobs: build the snapshot, call the function, apply the intent.
+Every derived quantity currently computed inline in <code>balance_inverters</code> — <code>out_of_balance</code>,
+<code>soc_low</code> / <code>soc_high</code>, <code>above_reserve</code>, <code>below_full</code>, <code>can_power_house</code>, <code>can_store_pv</code>,
+<code>power_enough_charge</code> / <code>power_enough_discharge</code> — moves inside the pure function, which is what
+makes them individually assertable for the first time.</p>
+<p>The function mutates intent values freely in both directions. Raising a rate is not used by this
+version, but the shape admits it so that future proportional balancing does not need another
+refactor.</p>
+<p>Behaviour preserved from today:</p>
+<ul>
+<li>The cross-charge rule moves verbatim, including the <code>(i + 1) % n</code> ring and the branch that skews
+  a <em>different</em> inverter than the one being examined.</li>
+<li>Any inverter in calibration yields an empty mutation, matching today's <code>return False</code>.
+  <code>execute_plan()</code> already handles calibration separately at <code>execute.py:183-194</code>.</li>
+</ul>
+<h3 id="coexistence-with-set_freeze_export_during_demand">Coexistence with <code>set_freeze_export_during_demand</code></h3>
+<p>That switch (expert mode, default off) already prevents cross-charging during demand, but bluntly
+— it disables charging on every inverter, which also stops PV self-charging. Under the intent
+model it sets <code>charge_rate = 0, owner = "demand"</code> on every inverter, so the cross-charge branch
+finds nothing charging and does nothing. The two compose instead of fighting, which is not true
+today, where the balancer's reset loop would raise those same rates back to max.</p>
+<h2 id="export-allocator">Export allocator</h2>
+<p>A fleet-level pre-pass before the per-inverter loop, since it needs every inverter's state.
+Free function in <code>utils.py</code>:</p>
+<pre><code class="language-python">def allocate_export_rates(needs, max_rates, p_fleet) -&gt; list   # W per inverter
+</code></pre>
+<p>Each inverter's export target comes from <code>adjust_battery_target_multi(..., check=True)</code> — the
+existing non-writing probe already used at <code>execute.py:248</code> — so the pre-pass computes targets
+without touching the inverter.</p>
+<pre><code>P_fleet  = Σ(battery_rate_max_export_i) × export_rate_adjust      # unchanged from today
+need_i   = max(0, soc_kw_i − target_kwh_i)                        # kWh still to shed
+share_i  = need_i / Σ need
+alloc_i  = clamp(P_fleet × share_i, 0, battery_rate_max_export_i)
+           then spill clamped-off surplus to unclamped inverters, iterate to fixpoint
+</code></pre>
+<p><code>battery_rate_max_export</code> is the correct field, matching <code>execute.py:489</code> — not
+<code>battery_rate_max_discharge</code>.</p>
+<h3 id="degenerate-cases">Degenerate cases</h3>
+<ul>
+<li><code>export_rate_adjust == 1.0</code> (low power off): <code>P_fleet</code> equals fleet max, every inverter clamps
+  at its own maximum, and the allocation collapses to today's behaviour <strong>exactly</strong>. A provable
+  no-op outside low-power mode, which is what lets this land without a switch.</li>
+<li>Matched fleet with equal needs: <code>share_i</code> uniform, identical to today.</li>
+<li><code>Σ need == 0</code>: fall back to uniform.</li>
+</ul>
+<h3 id="what-it-actually-buys">What it actually buys</h3>
+<p>Not SoC convergence — with F1 out of scope the targets still come from the rate-share split.</p>
+<p>The win is that today the fleet's export power <strong>sags below plan</strong> as inverters reach target one
+by one: an at-target inverter holds its 1/n slice of the budget while delivering nothing.
+Allocation spills that slice to inverters that can still export, so the fleet holds the power the
+planner costed for the whole window. This is the export analogue of F2 and it is a revenue
+effect, not a cosmetic one.</p>
+<h2 id="faults-closed">Faults closed</h2>
+<ul>
+<li><strong>F5</strong> (<code>GH#829</code>) — the balancer's unconditional reset overwriting a deliberate hold. Closed by
+  construction: "max" is no longer a value balance can produce, and convergence returns to the
+  executor's intent rather than the register ceiling. The mixed-fleet mechanism is the sharp case:
+  inverters with timed pause express a hold via pause mode while the rest express it as rate 0, so
+  the balancer sees "some at zero, some not" and resets the latter to max, repeatedly, until the
+  next plan cycle.</li>
+<li><strong>Unguarded inverter re-creation</strong> — <code>Inverter(self, id, quiet=True)</code> at <code>execute.py:1260</code> with
+  no try/except, which turns an apps.yaml fault (GH#5033 class) into a <code>timer_tick</code> traceback every
+  60 seconds. Gone; the poll reuses <code>self.inverters</code>.</li>
+<li><strong>Two writers disagreeing</strong> — the structural cause behind the balancer-vs-executor seam in GH#4842.</li>
+</ul>
+<h2 id="config">Config</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Now</th>
+<th>After</th>
+<th>Reaches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>balance_inverters_enable</code></td>
+<td>off, "(Beta)"</td>
+<td>unchanged</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>balance_inverters_crosscharge</code></td>
+<td>on</td>
+<td>unchanged</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>balance_inverters_charge</code></td>
+<td>on</td>
+<td><strong>off</strong></td>
+<td>new installs only</td>
+</tr>
+<tr>
+<td><code>balance_inverters_discharge</code></td>
+<td>on</td>
+<td><strong>off</strong></td>
+<td>new installs only</td>
+</tr>
+<tr>
+<td><code>balance_inverters_threshold_charge</code> / <code>_discharge</code></td>
+<td>1%</td>
+<td>unchanged</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>balance_inverters_seconds</code></td>
+<td>apps.yaml, 60</td>
+<td><strong>removed</strong></td>
+<td>ignored if left behind</td>
+</tr>
+<tr>
+<td><code>INVERTER_QUICK_UPDATE_SECONDS</code></td>
+<td>120</td>
+<td><strong>60</strong></td>
+<td>everyone</td>
+</tr>
+</tbody>
+</table>
+<p>Balance charge and balance export remain fully functional when enabled; only their defaults change.</p>
+<p><code>load_current_config()</code> restores saved values from <code>predbat_config.json</code> (or the DB) and those take
+priority over <code>default</code> (<code>userinterface.py:1047</code>), so changing a default reaches <strong>new installs
+only</strong>. Existing users keep whatever they set. The population with the master switch on is small
+and self-selected, so leaving their settings alone is correct, but the release notes should say so.</p>
+<p><code>validate_config()</code> iterates <code>for name in APPS_SCHEMA</code> (<code>predbat.py:1440</code>) — it validates known keys
+only, so dropping <code>balance_inverters_seconds</code> leaves a stale apps.yaml entry silently ignored
+rather than erroring.</p>
+<h3 id="poll-rate-cost">Poll rate cost</h3>
+<p>Moving <code>INVERTER_QUICK_UPDATE_SECONDS</code> from 120 to 60 doubles reads, not writes:
+<code>write_and_poll_switch</code> is explicitly "re-written to minimise writes" (<code>inverter.py:2019</code>) and only
+writes on a difference. The cost is read volume plus doubled drift-correction opportunities.</p>
+<h2 id="testing">Testing</h2>
+<h3 id="pure-functions-no-predbat-instance-no-mock-ha">Pure functions — no <code>PredBat</code> instance, no mock HA</h3>
+<p><code>balance_inverters</code>: heterogeneous fleet (differing <code>soc_max</code>, rate maxima, <code>inv_has_timed_pause</code>),
+3+ inverters, threshold boundaries, calibration bail-out, and the <strong>F5 regression directly</strong> — an
+intent of <code>charge_rate = 0</code> with <code>owner = "freeze"</code> must survive untouched. That is a one-line
+assertion where today it would need a full integration test.</p>
+<p><code>allocate_export_rates</code>: sums to <code>P_fleet</code>; provable no-op at <code>export_rate_adjust == 1.0</code>; matched
+fleet identical to uniform; at-target inverter spills its share; clamp fixpoint terminates;
+single-inverter degenerate case; uses <code>battery_rate_max_export</code>.</p>
+<h3 id="test_balance_inverterspy-844-lines-updated"><code>test_balance_inverters.py</code> (844 lines) updated</h3>
+<p>Currently drives <code>balance_inverters(test_mode=True)</code>. Reworked onto the pure function plus the
+execute path. The <code>test_mode</code> parameter disappears with the <code>Inverter()</code> re-creation it existed to
+bypass.</p>
+<h3 id="test_executepy-extended"><code>test_execute.py</code> extended</h3>
+<p><code>run_execute_test</code> already runs 2-inverter scenarios (<code>num_inverters = 2</code>, <code>soc_kw_array</code>), but
+takes <code>soc_max</code>, <code>battery_max_rate</code> and <code>has_timed_pause</code> as scalars — so the execute path is only
+ever tested with <em>identical</em> inverters. This is the accurate, narrower form of F10:
+<code>test_multi_inverter.py</code> does already cover <code>adjust_battery_target_multi</code> with unequal capacities.</p>
+<p>Add per-inverter arrays to the shared harness:</p>
+<table>
+<thead>
+<tr>
+<th>Add</th>
+<th>For</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>soc_max_array</code></td>
+<td>heterogeneous capacity</td>
+</tr>
+<tr>
+<td><code>battery_max_rate_array</code>, <code>battery_max_export_rate_array</code></td>
+<td>heterogeneous rate ceilings, export allocator</td>
+</tr>
+<tr>
+<td><code>has_timed_pause_array</code></td>
+<td>the mixed-fleet F5 case — pause on one, rate 0 on the other</td>
+</tr>
+<tr>
+<td><code>assert_charge_rate_array</code>, <code>assert_discharge_rate_array</code></td>
+<td>per-inverter rate assertions</td>
+</tr>
+</tbody>
+</table>
+<p>Doing this in the harness rather than per-test is the F10 fix done once.</p>
+<h3 id="parity-guard-no-new-work">Parity guard — no new work</h3>
+<p>With balance disabled and matched inverters, every existing scenario in <code>run_execute_tests</code> must
+pass unchanged. 3247 lines of assertions become the regression net for the refactor for free. This
+is the first thing to run and the main safety argument for a HIGH-risk change to <code>execute_plan</code>.</p>
+<p><code>debug_cases</code> is <strong>not</strong> applicable — it replays to a recalculated plan and does not exercise
+<code>execute_plan</code>.</p>
+<p>Full <code>./run_all</code> before the PR, and <code>detect_changes()</code> before committing.</p>
+<h2 id="risk">Risk</h2>
+<p><code>impact({target: "execute_plan", direction: "upstream"})</code> reports <strong>HIGH</strong>: 4 execution flows
+affected (<code>update_pred</code>, <code>run_time_loop</code>, <code>update_time_loop</code>, <code>initialize</code>), all with
+<code>earliest_broken_step: 1</code>. It is the single write path for every inverter.</p>
+<p>The mitigation is that risk concentrates in the <em>refactor</em> being behaviour-preserving rather than
+in new behaviour switching itself on: the only change reaching existing installs is the poll rate.
+Everything else is new-install-only or opt-in, and the existing execute suite is the parity net.</p>
+<p>A second risk is that the quick poll becomes a write path, so it starts conferring control-ledger
+ownership on a cadence that today only observes. <code>quick_inverter_data_update()</code> already calls
+<code>begin_cycle()</code> (<code>execute.py:1078</code>), so the mechanism exists, but writes from this path will now
+compete with the plan run's confirmations. This needs its own test rather than being assumed benign.</p>
+<h2 id="docs">Docs</h2>
+<ul>
+<li><code>docs/customisation.md:517-525</code> — removed setting, new defaults.</li>
+<li><code>docs/apps-yaml.md:2271</code> — <code>balance_inverters_seconds</code> removed.</li>
+<li><code>docs/caution.md:31</code> — currently warns users off the feature because it "can make register
+  changes once or twice a minute". The reset-loop churn that caused that is what the intent model
+  removes, so the warning should be revisited.</li>
+</ul>
+<h2 id="staging">Staging</h2>
+<ol>
+<li><strong>This PR</strong> — the merge, the export allocator, the deadband reconciliation, the defaults.
+   Master switch stays off.</li>
+<li><strong>Follow-up, after hardware testing</strong> — flip <code>balance_inverters_enable</code> on by default.</li>
+<li><strong>Then, in order of value</strong>: F7 ring (now a four-line change inside a tested pure function —
+   the increment mgazza offered in GH#5141), AC limits in the allocator, pause into the intent, F1.</li>
+</ol>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

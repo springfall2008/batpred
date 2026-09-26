@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Discovery inverter record: controls, capabilities and ratings - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Discovery inverter record: controls, capabilities and ratings";
+        var mkdocs_page_input_path = "superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Discovery inverter record: controls, capabilities and ratings</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="discovery-inverter-record-controls-capabilities-and-ratings">Discovery inverter record: controls, capabilities and ratings</h1>
+<p><strong>Status:</strong> design, awaiting review. <strong>Builds on:</strong> the discovery catalogue design
+(<code>2026-09-10-discovery-catalogue-design.md</code>), the reporter rollout (<code>2026-09-20-discovery-reporter-rollout.md</code>,
+PR #5184) and PR #5206 (AlphaESS, Solis, Deye, Sunsynk reporters). Implementation waits for #5206 to merge.</p>
+<h2 id="why">Why</h2>
+<p>The long-term aim is to move automatic configuration out of the individual components and into the
+coordinator, and then to retire the <code>INVERTER_DEF</code> rows for component-driven inverter types. Today each
+component carries its own <code>automatic_config()</code> that binds 24-50 Predbat settings with <code>set_arg()</code>, and the
+behaviour of each inverter type is hard-wired in <code>INVERTER_DEF</code> (<code>config.py</code>).</p>
+<p>For that to work, each inverter's discovery record has to hold everything those two places hold. The
+record's current vocabulary cannot: <code>capabilities</code> mixes control tokens (<code>schedule</code>, <code>target_soc</code>), a
+measurement (<code>soh</code>), a protocol version (<code>rest_v3</code>) and a setting (<code>export_limit</code>); reporters disagree on
+whether a token means "probed" or "assumed"; and only GivTCP carries an entity map. The table below is
+the vocabulary as it stood when this was written.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Token</th>
+<th>GivTCP</th>
+<th>GE Cloud</th>
+<th>Fox</th>
+<th>AlphaESS</th>
+<th>Solis</th>
+<th>Deye</th>
+<th>Sunsynk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>functions</td>
+<td><code>solar</code></td>
+<td>assumed</td>
+<td>assumed (probed for PV-only devices)</td>
+<td>probed</td>
+<td>probed</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+</tr>
+<tr>
+<td>functions</td>
+<td><code>battery</code></td>
+<td>assumed</td>
+<td>assumed</td>
+<td>probed</td>
+<td>probed</td>
+<td>probed</td>
+<td>assumed</td>
+<td>assumed</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>schedule</code></td>
+<td>-</td>
+<td>-</td>
+<td>probed</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>target_soc</code></td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>discharge_target</code></td>
+<td>probed</td>
+<td>probed</td>
+<td>-</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>charge_rate_power</code></td>
+<td>-</td>
+<td>probed</td>
+<td>-</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+<td>assumed</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>charge_rate_percent</code></td>
+<td>-</td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>pause_mode</code>, <code>pause_slots</code></td>
+<td>probed</td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>charge_enable</code></td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>soh</code></td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>rest_v3</code></td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>capabilities</td>
+<td><code>export_limit</code></td>
+<td>-</td>
+<td>-</td>
+<td>probed</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>always, once the rating is known</td>
+</tr>
+</tbody>
+</table>
+<p>Sunsynk's <code>export_limit</code> token is set from <code>export_limit()</code>, which returns the lower of the configured
+export cap and the inverter rating, so it conflates two different limits.</p>
+<h2 id="scope">Scope</h2>
+<p>This work is split into three pieces, each with its own spec and plan:</p>
+<ol>
+<li><strong>This spec - the record's vocabulary</strong>, the validator, a pure function that turns a record into an
+   inverter definition, and the conversion of the seven existing reporters (GivTCP, GE Cloud, Fox,
+   AlphaESS, Solis, Deye, Sunsynk). Observe-only: nothing Predbat does changes.</li>
+<li><strong>The remaining inverter reporters</strong> (SolaX, Sigenergy, Enphase, Teslemetry, Gateway) in the new
+   vocabulary - plans 6 and 7 of the rollout.</li>
+<li><strong>The coordinator performs automatic configuration</strong> from the reports, each component's
+   <code>automatic_config()</code> is removed, and the <code>INVERTER_DEF</code> rows for component-driven types are retired.</li>
+</ol>
+<p>This ends the rollout's "observe-only, entity maps deferred" rule (decision of 21 Sep 2026): entity maps
+are now the core of the work rather than a later project. Pieces 1 and 2 are still observe-only; piece 3
+is the first to change behaviour.</p>
+<h2 id="decisions-24-sep-2026">Decisions (24 Sep 2026)</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Decision</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D1</td>
+<td><code>export_limit</code> is the configured maximum grid export power; <code>inverter_limit</code> is the maximum power the inverter can invert; <code>import_limit</code> is the configured maximum grid import power. All three are distinct ratings.</td>
+</tr>
+<tr>
+<td>D2</td>
+<td>Controls and sensors share one map, <code>entities</code>, keyed by Predbat setting name. Every entry is marked <code>access: rw</code> (Predbat writes it) or <code>access: r</code> (Predbat only reads it).</td>
+</tr>
+<tr>
+<td>D3</td>
+<td><code>capabilities</code> holds per-device behaviour that overrides the device's <code>INVERTER_DEF</code> row. The goal is to retire <code>INVERTER_DEF</code> for component-driven types.</td>
+</tr>
+<tr>
+<td>D4</td>
+<td>Protocol detail (time formats, units, option-vs-string time entities) is derived from the entity map, not stated separately.</td>
+</tr>
+<tr>
+<td>D5</td>
+<td><code>capabilities</code> is a dictionary of <code>INVERTER_DEF</code> keys to <code>True</code>/<code>False</code>, shaped like an <code>INVERTER_DEF</code> row. It holds only the seven keys that describe behaviour; the <code>has_*</code> keys that describe whether an entity exists are derived (section 2).</td>
+</tr>
+<tr>
+<td>D6</td>
+<td><code>ratings</code> are keyed by Predbat setting name, in Predbat's units. A sensor binding for a rating lives in <code>entities</code> under the same key.</td>
+</tr>
+<tr>
+<td>D7</td>
+<td>A site-wide export limit is reported as each inverter's share of it. Predbat sums <code>export_limit</code> across inverters, so the shares add back up to the site figure.</td>
+</tr>
+<tr>
+<td>D8</td>
+<td><code>functions</code> reports what the component believes the device is, whether probed or assumed. There is no marker for an assumed value.</td>
+</tr>
+<tr>
+<td>D9</td>
+<td>SolisCloud does not write the reserve (it often won't change); it presents the battery minimum SoC instead. Its record reports <code>battery_min_soc</code> and no <code>reserve</code> (section 3).</td>
+</tr>
+<tr>
+<td>D10</td>
+<td>A record describes its own device, not the fleet. <code>automatic_config()</code> today binds some settings only when every inverter has them (GE Cloud: when any has them); the record states what this device has, and piece 3's coordinator applies whatever fleet rule it keeps.</td>
+</tr>
+<tr>
+<td>D11</td>
+<td>A record describes the device, not the user's opt-outs. Settings that stop a binding (<code>automatic_ignore_pv</code>, <code>givtcp_rest_power_ignore</code>) do not remove entities from the record; piece 3's coordinator applies them.</td>
+</tr>
+<tr>
+<td>D12</td>
+<td>A PV-only device's record carries its <code>pv_power</code> and <code>pv_today</code> as <code>access: r</code> entities - still with no <code>inverter_type</code> and no <code>capabilities</code> - so its generation is not lost when the coordinator configures from records (the GH#4922 regression).</td>
+</tr>
+<tr>
+<td>D13</td>
+<td>GEC and GEE <code>soc_units</code> become <code>"%"</code>: GE Cloud binds <code>soc_percent</code>, and <code>inv_soc_units</code> is never read, so this changes no behaviour. <code>clock_time_format</code> stays as it is on GE, GEC and GEE, because those rows also serve installs that do not use the components (the GivTCP add-on and GE Cloud templates) and the row's format is their last-resort parse; GivTCP and GE Cloud records describe the ISO format their sensors really publish, and their completeness tests carry that one named exception.</td>
+</tr>
+<tr>
+<td>D14</td>
+<td>A rating is a figure the device reports. A value Predbat derives or the user overrides (AlphaESS's and Solis's <code>battery_rate_max</code>) is bound as an entity but not given as a rating. The same applies to <code>soc_max</code> on the vendors that report amp-hours (Sunsynk, Deye, Solis): their kWh is the Ah times a pack voltage Predbat infers or the user sets, so they report <code>battery_capacity_ah</code> as the rating and bind <code>soc_max</code> as an entity only.</td>
+</tr>
+<tr>
+<td>D15</td>
+<td>A site-wide setting bound once from the first driven inverter (<code>battery_temperature_history</code>) goes on that inverter's record only.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="1-the-inverter-record">1. The inverter record</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Shape</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>functions</code></td>
+<td>list of tokens (unchanged)</td>
+<td>What the box physically is: <code>solar</code>, <code>battery</code>.</td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td>dict of <code>INVERTER_DEF</code> key -&gt; bool</td>
+<td>Behaviour this device has. A key left out keeps its <code>INVERTER_DEF</code> row value.</td>
+</tr>
+<tr>
+<td><code>ratings</code></td>
+<td>dict of name -&gt; number</td>
+<td>Fixed figures, keyed by Predbat setting name where one exists.</td>
+</tr>
+<tr>
+<td><code>entities</code></td>
+<td>dict of Predbat setting name -&gt; descriptor</td>
+<td>Every setting automatic configuration binds for this device.</td>
+</tr>
+<tr>
+<td><code>flags</code></td>
+<td>list of tokens</td>
+<td>Other held facts: topology and protocol variants.</td>
+</tr>
+</tbody>
+</table>
+<p><code>inverter_type</code>, <code>control</code>, <code>composition</code>, <code>serials</code>, <code>hardware_ids</code>, <code>account_ids</code>, <code>info</code> and
+<code>coverage</code> are unchanged.</p>
+<h3 id="11-capabilities">1.1 <code>capabilities</code></h3>
+<p>Allowed keys are the seven <code>INVERTER_DEF</code> fields that describe behaviour rather than the presence of an
+entity:</p>
+<p><code>support_charge_freeze</code>, <code>support_discharge_freeze</code>, <code>support_feedin_first</code>, <code>can_span_midnight</code>,
+<code>charge_discharge_with_rate</code>, <code>charge_control_immediate</code>, <code>target_soc_used_for_discharge</code>.</p>
+<p>Values are <code>True</code> or <code>False</code>. An unknown key, or a non-bool value, is dropped by the validator. While
+reporters migrate, a key left out keeps the row's value; a converted reporter states all seven (section 2's
+completeness test enforces it).</p>
+<p>The other <code>has_*</code> fields are not capabilities: each says whether the inverter has a particular entity, and
+is derived from <code>entities</code> (section 2).</p>
+<p>The previous capability tokens are removed. Their meaning moves as follows:</p>
+<table>
+<thead>
+<tr>
+<th>Old token</th>
+<th>Now</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schedule</code></td>
+<td>the <code>scheduled_charge_enable</code> / <code>scheduled_discharge_enable</code> and <code>*_start_time</code> / <code>*_end_time</code> entities</td>
+</tr>
+<tr>
+<td><code>target_soc</code></td>
+<td>a <code>charge_limit</code> entity</td>
+</tr>
+<tr>
+<td><code>discharge_target</code></td>
+<td><code>target_soc_used_for_discharge</code> plus a <code>discharge_target_soc</code> entity</td>
+</tr>
+<tr>
+<td><code>pause_mode</code>, <code>pause_slots</code></td>
+<td>the <code>pause_*</code> entities</td>
+</tr>
+<tr>
+<td><code>charge_rate_power</code>, <code>charge_rate_percent</code></td>
+<td>derived from the <code>charge_rate</code> entity (section 2)</td>
+</tr>
+<tr>
+<td><code>charge_enable</code></td>
+<td>a <code>charge_limit_enable</code> entity</td>
+</tr>
+<tr>
+<td><code>export_limit</code></td>
+<td>the <code>export_limit</code> rating (D1)</td>
+</tr>
+<tr>
+<td><code>soh</code></td>
+<td>flag <code>reports_soh</code></td>
+</tr>
+<tr>
+<td><code>rest_v3</code></td>
+<td>flag <code>rest_v3</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="12-ratings">1.2 <code>ratings</code></h3>
+<p>Keyed by Predbat setting name, in the units that setting takes:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Unit</th>
+<th>Was</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inverter_limit</code></td>
+<td>W</td>
+<td><code>inverter_w</code></td>
+</tr>
+<tr>
+<td><code>export_limit</code></td>
+<td>W</td>
+<td>capability token <code>export_limit</code></td>
+</tr>
+<tr>
+<td><code>import_limit</code></td>
+<td>W</td>
+<td>(new)</td>
+</tr>
+<tr>
+<td><code>battery_rate_max</code></td>
+<td>W</td>
+<td><code>max_charge_w</code></td>
+</tr>
+<tr>
+<td><code>soc_max</code></td>
+<td>kWh</td>
+<td><code>battery_kwh</code></td>
+</tr>
+<tr>
+<td><code>battery_min_soc</code></td>
+<td>%</td>
+<td>(new)</td>
+</tr>
+</tbody>
+</table>
+<p>Each value is the configured or rated figure as the device reports it. In particular Sunsynk reports
+the raw <code>pvMaxLimit</code> as <code>export_limit</code> and <code>importPower</code> as <code>import_limit</code>, not the lower of either and the
+inverter rating. The one exception is a limit that applies to the whole site: GE Cloud reports each
+inverter's equal share of the site figure (D7), the same value <code>publish_site_export_limit()</code> already
+publishes.</p>
+<p>Descriptive vendor figures that are not a Predbat setting (<code>battery_capacity_ah</code>, <code>battery_pack_count</code>,
+<code>battery_capacity_entries</code>, <code>battery_capacity_serials</code>, <code>pv_w</code>) stay in <code>ratings</code> under their current
+names. The coordinator never binds them to a setting.</p>
+<h3 id="13-entities">1.3 <code>entities</code></h3>
+<p>One descriptor per Predbat setting that automatic configuration binds for this device. The fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Required</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>access</code></td>
+<td>yes</td>
+<td><code>rw</code> or <code>r</code>. A descriptor without it is dropped.</td>
+</tr>
+<tr>
+<td><code>entity_id</code></td>
+<td>one of these two</td>
+<td>The HA entity bound to the setting.</td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td>one of these two</td>
+<td>A fixed stand-in where no entity exists (Fox's <code>pv_power: 0</code> for a device with no PV; SolaX's constant <code>battery_min_soc</code>). Number, bool or short string.</td>
+</tr>
+<tr>
+<td><code>domain</code>, <code>unit</code>, <code>device_class</code>, <code>min</code>, <code>max</code>, <code>step</code>, <code>precision</code>, <code>options</code>, <code>format</code></td>
+<td>no</td>
+<td>As today.</td>
+</tr>
+<tr>
+<td><code>invert</code></td>
+<td>no</td>
+<td><code>true</code> when the entity's sign is the opposite of Predbat's convention. Replaces the <code>grid_power_invert</code>, <code>battery_power_invert</code> and <code>load_power_invert</code> settings.</td>
+</tr>
+</tbody>
+</table>
+<p>A descriptor with both <code>entity_id</code> and <code>value</code>, or neither, is dropped.</p>
+<p>An inverter record's <code>entities</code> are not filtered to entities Home Assistant has already seen (the
+<code>discovery_entities()</code> filter Octopus, Ohme and Solcast use): they describe what automatic configuration
+binds, which does not wait for HA either. GivTCP is the one reporter that lists only entities it has
+published, because its component publishes them itself before <code>build_discovery()</code> runs.</p>
+<p>A setting that <code>inverter.py</code> replaces with a dummy entity for this inverter type is left out of <code>entities</code>,
+because Predbat never reads or writes the component's binding for it. Today that means any setting whose
+presence flag is False in the type's row (section 2), and <code>inverter_mode</code> when both <code>has_ge_inverter_mode</code>
+and <code>has_ge_eco_toggle</code> are False. Solis's <code>reserve</code> is one such case (D9).</p>
+<p>A rating with a sensor appears twice: the number in <code>ratings</code>, the binding in <code>entities</code> with
+<code>access: r</code>. The coordinator binds the entity where one exists and the rating's number otherwise.</p>
+<p>Where a component resolves one of several candidate entities at configuration time - GE Cloud's
+<code>build_entities()</code> tries several register names per setting - the descriptor records the entity that
+was actually chosen.</p>
+<h3 id="14-flags">1.4 <code>flags</code></h3>
+<p>Unchanged in shape. New tokens: <code>reports_soh</code> (the device reports battery state of health; Solis drives
+only inverters that do) and <code>rest_v3</code> (moved from <code>capabilities</code>). Existing: <code>third_party_gen</code>,
+<code>ev_charger</code>, <code>tou_v2</code>.</p>
+<h3 id="15-values-that-stay-out-of-the-record">1.5 Values that stay out of the record</h3>
+<ul>
+<li><code>num_inverters</code> - the coordinator counts driven records.</li>
+<li>Settings that reset another integration's leftovers (<code>givtcp_rest</code>, <code>ge_cloud_data</code>, <code>ge_cloud_direct</code>,
+  and GE Cloud and the gateway setting <code>pause_mode</code>/<code>discharge_target_soc</code>/<code>charge_rate_percent</code> to
+  <code>None</code>). In piece 3 the coordinator owns the whole inverter configuration and clears whatever no
+  report binds.</li>
+<li><code>num_cars</code> and <code>car_charging_*</code> - these belong to the <code>chargers</code> and <code>cars</code> sections.</li>
+</ul>
+<h2 id="2-from-record-to-inverter-definition">2. From record to inverter definition</h2>
+<p>A pure function in <code>coordinator.py</code>, <code>inverter_definition(record, write_and_poll_sleep, base=None)</code>,
+returns <code>(definition, gaps, not_applicable)</code>: a new dict shaped like an <code>INVERTER_DEF</code> row, the fields it
+could not work out, and the fields that do not apply to this device (below). It never writes to <code>INVERTER_DEF</code>.</p>
+<p>The definition is built from four sources:</p>
+<ol>
+<li><strong>Behaviour</strong> - the seven <code>capabilities</code> keys (section 1.1).</li>
+<li><strong>Entity presence</strong> - each flag is true when <code>entities</code> binds the setting to a real entity with
+   <code>access: rw</code>. All six are settings Predbat writes, so an <code>access: r</code> entry does not count. A <code>value</code>
+   stand-in counts as absent, because Predbat treats that setting as having no entity.</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>True when <code>entities</code> has an <code>rw</code> entity for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>has_charge_enable_time</code></td>
+<td><code>scheduled_charge_enable</code></td>
+</tr>
+<tr>
+<td><code>has_discharge_enable_time</code></td>
+<td><code>scheduled_discharge_enable</code></td>
+</tr>
+<tr>
+<td><code>has_reserve_soc</code></td>
+<td><code>reserve</code></td>
+</tr>
+<tr>
+<td><code>has_target_soc</code></td>
+<td><code>charge_limit</code></td>
+</tr>
+<tr>
+<td><code>has_idle_time</code></td>
+<td><code>idle_start_time</code> and <code>idle_end_time</code></td>
+</tr>
+<tr>
+<td><code>has_timed_pause</code></td>
+<td><code>pause_mode</code></td>
+</tr>
+<tr>
+<td><code>has_ge_inverter_mode</code></td>
+<td><code>inverter_mode</code>, when its <code>domain</code> is <code>select</code> (GivTCP's mode select)</td>
+</tr>
+<tr>
+<td><code>has_ge_eco_toggle</code></td>
+<td><code>inverter_mode</code>, when its <code>domain</code> is <code>switch</code> (GE Cloud's eco switch)</td>
+</tr>
+</tbody>
+</table>
+<p>This matches what <code>inverter.py</code> already does: lines 612-655 create a dummy entity for exactly these
+   settings when the flag is False, and lines 438-449 turn <code>has_timed_pause</code> off at runtime when no
+   <code>pause_mode</code> entity exists.
+3. <strong>Protocol detail</strong> - read from the entity descriptors:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Derived from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>charge_time_entity_is_option</code></td>
+<td><code>charge_start_time</code>'s <code>domain</code> is <code>select</code></td>
+</tr>
+<tr>
+<td><code>charge_time_format</code></td>
+<td><code>charge_start_time</code>'s <code>format</code></td>
+</tr>
+<tr>
+<td><code>clock_time_format</code></td>
+<td><code>inverter_time</code>'s <code>format</code></td>
+</tr>
+<tr>
+<td><code>soc_units</code></td>
+<td>which state-of-charge setting is bound: <code>soc_percent</code> -&gt; <code>%</code>, <code>soc_kw</code> -&gt; <code>kWh</code></td>
+</tr>
+<tr>
+<td><code>output_charge_control</code></td>
+<td><code>charge_rate</code>'s <code>unit</code>: W -&gt; <code>power</code>, A -&gt; <code>current</code>; no <code>charge_rate</code> but a bound <code>charge_rate_percent</code> (GE Cloud's percentage-rate models) -&gt; <code>power</code>; neither -&gt; <code>none</code></td>
+</tr>
+<tr>
+<td><code>current_dp</code></td>
+<td>the decimal places of <code>charge_rate</code>'s <code>step</code>, when its unit is A</td>
+</tr>
+<tr>
+<td><code>time_button_press</code></td>
+<td>whether a <code>schedule_write_button</code> entity is present</td>
+</tr>
+<tr>
+<td><code>num_load_entities</code></td>
+<td>1 plus the number of consecutive <code>load_power_1</code>, <code>load_power_2</code>, ... entities bound (<code>inverter.py:1523</code> adds them into the load reading)</td>
+</tr>
+</tbody>
+</table>
+<ol start="4">
+<li><strong>The component</strong> - <code>write_and_poll_sleep</code>, a constant on the component class (<code>ComponentBase.WRITE_AND_POLL_SLEEP</code>).
+   It is 2 for the cloud types and 10 for the GivEnergy types (GE, GEC, GEE), which GivTCP and GE Cloud override.</li>
+</ol>
+<p><code>has_mqtt_api</code> (Sofar's MQTT path) defaults to <code>False</code>, its value for every component-driven type.</p>
+<p>A protocol field whose source setting is not bound at all is <strong>not applicable</strong>, not a gap: for example
+<code>clock_time_format</code> only matters when <code>inverter_time</code> is bound, and of the seven reporters only GE Cloud
+binds it. A not-applicable field takes a fixed default, is not listed in <code>gaps</code>, and is skipped by the
+completeness test.</p>
+<p>A field the function cannot work out - a missing capability key, or a bound source entity lacking the
+<code>format</code> or <code>unit</code> it needs - is listed in <code>gaps</code>. With <code>base</code> given (a copy of the <code>INVERTER_DEF</code> row, used while
+reporters migrate) the field takes the base's value; with no <code>base</code> it is left out.</p>
+<p>Two fields are neither derived nor carried: <code>has_time_window</code> and <code>has_rest_api</code>. Nothing reads either
+(<code>inverter.py</code> sets no attribute from <code>has_time_window</code>, and nothing reads the <code>inv_has_rest_api</code> it no longer sets),
+so piece 3 deletes them. <code>name</code> is carried from <code>base</code> when given, and otherwise set to the
+record's <code>inverter_type</code>.</p>
+<p>Building a new dict per inverter matters: <code>inverter.py:381-389</code> applies apps.yaml's <code>inverter:</code> override
+by writing into the shared <code>INVERTER_DEF[type]</code> row, so with two inverters of one type the last
+inverter's override applies to both. The coordinator must not repeat that.</p>
+<p><strong>Proof of completeness.</strong> For every converted reporter, a test builds a record from that component's
+fixture and calls <code>inverter_definition(record, ...)</code> with <strong>no</strong> <code>base</code>. It asserts that <code>gaps</code> is empty and
+that the definition equals <code>INVERTER_DEF[type]</code> on every applicable field except <code>name</code>, <code>has_time_window</code> and <code>has_rest_api</code>. Building without
+the row matters: with the row as a base, any field the record left out would silently inherit the right
+answer and the test would pass without proving anything. Passing is what shows the record holds enough to
+retire the row in piece 3.</p>
+<h2 id="3-validation-and-migration">3. Validation and migration</h2>
+<p><strong>Schema.</strong> <code>SCHEMA_VERSION</code> goes from 1 to 2: <code>capabilities</code> becomes a dict, ratings are renamed, and
+descriptors require <code>access</code>. Reports are held in memory only (the pseudonymisation salt is the only
+thing the coordinator persists), so the bump affects debug dumps and their readers, nothing stored.</p>
+<p><strong>Validator</strong> (<code>coordinator.py</code>):</p>
+<ul>
+<li><code>capabilities</code> leaves <code>VOCAB_CONTAINERS</code> and becomes a <code>CONTAINER_SPEC</code> entry: a clear container whose
+  cleaner keeps only <code>True</code>/<code>False</code> values for the seven keys of section 1.1. Only inverter reporters set
+  <code>capabilities</code>, so no other section is affected.</li>
+<li><code>_clean_descriptor</code> requires <code>access</code> in <code>{"rw", "r"}</code> and exactly one of <code>entity_id</code>/<code>value</code>. Every
+  component that emits <code>entities</code> today (GivTCP, Octopus, Ohme, Solcast) already sets <code>access</code>.</li>
+<li><code>value</code> must be a number, a bool, or a string passing the same guard as <code>info</code> strings. <code>entities</code> is
+  published unredacted in dumps users post to public issues, so it must not admit free text.</li>
+<li><code>invert</code> must be a bool.</li>
+<li><code>inverter_record()</code> accepts the dict-shaped <code>capabilities</code>.</li>
+</ul>
+<p><strong>Reporters.</strong> Each component's <code>automatic_config()</code> is left untouched in this piece. Piece 3 deletes it,
+so extracting its setting lists into shared constants now would change a control path for code about to
+be removed. Agreement between the two is proven by a test instead (below).</p>
+<p>The seven existing reporters convert in one PR, because the old capability tokens and rating names are
+removed. The plan's tasks are the validator and <code>inverter_definition()</code> first, then one reporter per task,
+simplest first: Sunsynk, Deye, AlphaESS, Fox, Solis, GE Cloud, GivTCP. Between those tasks an unconverted
+reporter's list-shaped <code>capabilities</code> is dropped by the validator; that state exists only inside the
+branch.</p>
+<p><strong>Solis's <code>reserve</code>.</strong> SolisCloud deliberately does not write the reserve - it often won't change - and
+presents the battery minimum SoC instead, which is why its row has <code>has_reserve_soc: False</code>.
+<code>solis.py:1715-1716</code> binds both <code>reserve</code> and <code>battery_min_soc</code> to the same <code>over_discharge_soc</code> entity,
+and <code>inverter.py:622-624</code> replaces the <code>reserve</code> binding with a dummy. So the Solis record reports
+<code>battery_min_soc</code> (an <code>access: r</code> entity plus a rating) and no <code>reserve</code>; derived <code>has_reserve_soc</code> is
+then False, matching the row. Piece 3 removes the unused <code>reserve</code> binding.</p>
+<p><strong>Consumers.</strong> No code reads <code>ratings</code> or <code>capabilities</code> by name today: the web discovery page renders
+records generically. Its test fixtures (<code>test_web_discovery.py</code>) use the old tokens and rating names and
+are updated, and a dict-valued <code>capabilities</code> must render. <code>docs/discovery-catalogue.md</code> and the catalogue
+design spec are amended to match.</p>
+<p><strong>Found while prototyping, for piece 3</strong> (none changes piece 1):</p>
+<ul>
+<li><code>automatic_config()</code> can bind entities its component never publishes: GivTCP claims <code>discharge_target_soc</code> for every v3 inverter but publishes it only for supported models, and <code>charge_limit</code>/<code>soc_kw</code> only when non-None; GE Cloud's "any device has the register" rule binds pause and percentage-rate entities on devices without them.</li>
+<li>A GivTCP v2 user who pointed <code>pause_mode</code> at their own entity keeps timed pause today because the GE row says True; deriving <code>has_timed_pause</code> from the record would lose it.</li>
+<li>GE Cloud writes <code>inverter_hybrid</code> with <code>set_state_external</code>, outside <code>set_arg</code>, so a coordinator that only replays records would miss it.</li>
+<li>Fox's <code>automatic_config()</code> builds the PV lists over PV devices rather than driven ones, so in a mixed fleet a battery inverter with no PV can be given a PV-only inverter's <code>pvpower</code> as its <code>pv_power</code>, and a second third-party meter lands beyond the driven indexes.</li>
+<li>Site totals (<code>load_today</code>, <code>import_today</code>, <code>export_today</code>) behind a shared CT or an EMS shrink to one entry on index 0.</li>
+</ul>
+<p><strong>Testing.</strong></p>
+<ul>
+<li><strong>Validator</strong> - one test per new rule: an unknown capability key, a non-bool capability value, a
+  descriptor without <code>access</code>, one with both <code>entity_id</code> and <code>value</code>, a free-text <code>value</code>, a non-bool
+  <code>invert</code>.</li>
+<li><strong>Completeness</strong> (section 2) - per reporter, <code>inverter_definition()</code> with no <code>base</code> gives no gaps and
+  matches the <code>INVERTER_DEF</code> row on every applicable field.</li>
+<li><strong>Agreement</strong> - per reporter, run <code>automatic_config()</code> against a single-device fixture, capture every
+  setting it sets, and check each appears in the record: an entity id matching the descriptor, a literal
+  matching a <code>value</code> entry or a rating, and each <code>*_invert</code> setting matching the descriptor's <code>invert</code>.
+  Two kinds of setting are skipped: the section 1.5 exclusions, and any setting whose presence flag is
+  False in the type's row, since <code>inverter.py</code> replaces those bindings with a dummy (Solis's <code>reserve</code> is
+  the only case today).</li>
+<li><strong>Round trip</strong> - each reporter's report survives <code>validate_report()</code> unchanged.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Fold Balance Into Execute — Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Fold Balance Into Execute \u2014 Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-09-18-balance-into-execute.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Fold Balance Into Execute — Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="fold-balance-into-execute-implementation-plan">Fold Balance Into Execute — Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Make <code>execute_plan()</code> the only writer of inverter charge and discharge rates, with balancing expressed as a mutation of the executor's intent rather than a second subsystem overwriting it.</p>
+<p><strong>Architecture:</strong> <code>execute_plan()</code> builds a per-inverter intent dict instead of writing rates inline; a pure <code>balance_inverters()</code> in <code>utils.py</code> mutates that intent; a single <code>apply_inverter_rates()</code> pass writes it. The 60-second balance timer is deleted and the existing 120-second inverter poll becomes the second caller at 60 seconds. Per-inverter export rate allocation and a deadband reconciliation ride along.</p>
+<p><strong>Tech Stack:</strong> Python 3, no new dependencies. Tests via <code>coverage/run_all</code>, mock HA through <code>tests/test_infra.py</code>.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-18-balance-into-execute-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length: 256 chars (Black), 250 chars (Flake8).</li>
+<li>Docstrings required on every function and class — <code>interrogate</code> enforces 100% coverage.</li>
+<li>British English spelling (<code>en-gb</code>) via CSpell. New words go in <code>.cspell/custom-dictionary-workspace.txt</code>, which is auto-sorted on commit — re-stage after running pre-commit.</li>
+<li>Variable naming: <code>lower_case_with_underscores</code>.</li>
+<li>Run <code>./run_pre_commit</code> from <code>coverage/</code> before every commit. <strong><code>git add</code> new files first</strong> — pre-commit's <code>--all-files</code> covers git-tracked files only, so an unstaged new file is silently skipped.</li>
+<li>Tests are run from the <code>coverage/</code> directory. Always redirect test output to a file and grep the file afterwards; never pipe directly to grep.</li>
+<li>All work happens on branch <code>feat/balance-into-execute</code>, which already exists and contains the spec commit.</li>
+<li>Run <code>detect_changes()</code> before the final commit, per <code>CLAUDE.md</code>.</li>
+</ul>
+<h2 id="risk-note">Risk Note</h2>
+<p><code>impact({target: "execute_plan", direction: "upstream"})</code> reports <strong>HIGH</strong> — 4 execution flows (<code>update_pred</code>, <code>run_time_loop</code>, <code>update_time_loop</code>, <code>initialize</code>), all <code>earliest_broken_step: 1</code>. Task 2 is the dangerous one. Its acceptance test is that the <strong>entire existing execute suite passes with zero assertion edits</strong>. Do not proceed past Task 2 until that holds.</p>
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/utils.py</code></td>
+<td>Pure helpers — already holds <code>find_charge_rate</code></td>
+<td>Add <code>balance_inverters()</code>, <code>allocate_export_rates()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/execute.py</code></td>
+<td>The executor</td>
+<td>Build intent, apply once, call balance; delete old <code>balance_inverters()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/predbat.py</code></td>
+<td>Orchestration and timers</td>
+<td>Delete <code>run_time_loop_balance</code> and its registration</td>
+</tr>
+<tr>
+<td><code>apps/predbat/const.py</code></td>
+<td>Constants</td>
+<td><code>INVERTER_QUICK_UPDATE_SECONDS</code> 120 → 60</td>
+</tr>
+<tr>
+<td><code>apps/predbat/config.py</code></td>
+<td><code>CONFIG_ITEMS</code>, <code>APPS_SCHEMA</code></td>
+<td>Defaults; remove <code>balance_inverters_seconds</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_execute.py</code></td>
+<td>Execute harness and scenarios</td>
+<td>Per-inverter arrays; new scenarios</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_balance_inverters.py</code></td>
+<td>Balance tests</td>
+<td>Rework onto the pure function</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_utils_allocate.py</code></td>
+<td>New — allocator unit tests</td>
+<td>Create</td>
+</tr>
+<tr>
+<td><code>apps/predbat/unit_test.py</code></td>
+<td>Test registry</td>
+<td>Register the new test module</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="task-1-per-inverter-arrays-in-the-execute-test-harness">Task 1: Per-inverter arrays in the execute test harness</h3>
+<p>Pure test-infrastructure work. No production code changes, so every existing test must still pass untouched. This is the F10 gap — <code>run_execute_test</code> already runs two inverters but takes capacity, rate ceiling and pause capability as scalars, so the execute path has never been tested on a mixed fleet.</p>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/tests/test_execute.py:158-230</code> (signature), <code>:266-305</code> (setup), <code>:396-401</code> (assertions)</li>
+<li>Test: <code>apps/predbat/tests/test_execute.py</code> (new scenario at the end of <code>run_execute_tests</code>)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>run_execute_test(...)</code> gains keyword arguments <code>soc_max_array</code>, <code>battery_max_rate_array</code>, <code>battery_max_export_rate_array</code>, <code>has_timed_pause_array</code>, <code>assert_charge_rate_array</code>, <code>assert_discharge_rate_array</code>, each defaulting to <code>None</code> and each a list indexed by <code>inverter.id</code>. All later tasks use these.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Add the six parameters to the signature</strong></p>
+</li>
+</ul>
+<p>In the <code>run_execute_test(</code> parameter list, after <code>assert_discharge_rate=None,</code> (line 198):</p>
+<pre><code class="language-python">    assert_charge_rate_array=None,
+    assert_discharge_rate_array=None,
+</code></pre>
+<p>After <code>has_timed_pause=True,</code> (line 209):</p>
+<pre><code class="language-python">    has_timed_pause_array=None,
+</code></pre>
+<p>After <code>battery_max_export_rate=None,</code> (line 183):</p>
+<pre><code class="language-python">    battery_max_rate_array=None,
+    battery_max_export_rate_array=None,
+</code></pre>
+<p>After <code>soc_max=10,</code> (line 167):</p>
+<pre><code class="language-python">    soc_max_array=None,
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Honour the arrays in the per-inverter setup loop</strong></li>
+</ul>
+<p>Replace the body of the <code>for inverter in my_predbat.inverters:</code> loop (around line 278) so each scalar consults its array first. The fleet totals must be recomputed from the per-inverter values rather than assumed uniform, otherwise <code>my_predbat.soc_max</code> disagrees with the sum and the existing sanity checks at lines 320-328 fail.</p>
+<p>Before the loop, replace the fleet-total block (lines 272-277):</p>
+<pre><code class="language-python">    total_inverters = len(my_predbat.inverters)
+    if battery_max_rate_array:
+        fleet_rate_w = sum(battery_max_rate_array)
+    else:
+        fleet_rate_w = battery_max_rate * total_inverters
+    if battery_max_export_rate_array:
+        fleet_export_w = sum(battery_max_export_rate_array)
+    else:
+        fleet_export_w = battery_max_export_rate * total_inverters
+    my_predbat.battery_rate_max_charge = fleet_rate_w / 1000.0 / 60.0
+    my_predbat.battery_rate_max_charge_dc = fleet_rate_w / 1000.0 / 60.0
+    my_predbat.battery_rate_max_discharge = fleet_rate_w / 1000.0 / 60.0
+    my_predbat.battery_rate_max_export = fleet_export_w / 1000.0 / 60.0
+    my_predbat.set_reserve_enable = set_reserve_enable
+</code></pre>
+<p>Inside the loop, replace the five per-inverter assignments:</p>
+<pre><code class="language-python">        inverter.soc_max = soc_max_array[inverter.id] if soc_max_array else soc_max / total_inverters
+        inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
+        inverter.in_calibration = in_calibration_array[inverter.id] if in_calibration_array else in_calibration
+        inv_rate_w = battery_max_rate_array[inverter.id] if battery_max_rate_array else battery_max_rate
+        inv_export_w = battery_max_export_rate_array[inverter.id] if battery_max_export_rate_array else battery_max_export_rate
+        inverter.battery_rate_max_charge = inv_rate_w / 1000.0 / 60.0
+        inverter.battery_rate_max_charge_dc = inv_rate_w / 1000.0 / 60.0
+        inverter.battery_rate_max_discharge = inv_rate_w / 1000.0 / 60.0
+        inverter.battery_rate_max_export = inv_export_w / 1000.0 / 60.0
+        inverter.inv_has_timed_pause = has_timed_pause_array[inverter.id] if has_timed_pause_array else has_timed_pause
+</code></pre>
+<p>The <code>reserve_kwh = reserve / total_inverters</code> line below is unchanged.</p>
+<ul>
+<li>[ ] <strong>Step 3: Honour the assertion arrays</strong></li>
+</ul>
+<p>Replace lines 396-401:</p>
+<pre><code class="language-python">        expect_charge_rate = assert_charge_rate_array[inverter.id] if assert_charge_rate_array else assert_charge_rate
+        expect_discharge_rate = assert_discharge_rate_array[inverter.id] if assert_discharge_rate_array else assert_discharge_rate
+        if expect_charge_rate != inverter.charge_rate:
+            print(&quot;ERROR: Inverter {} Charge rate should be {} got {}&quot;.format(inverter.id, expect_charge_rate, inverter.charge_rate))
+            failed = True
+        if expect_discharge_rate != inverter.discharge_rate:
+            print(&quot;ERROR: Inverter {} Discharge rate should be {} got {}&quot;.format(inverter.id, expect_discharge_rate, inverter.discharge_rate))
+            failed = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the whole execute suite to confirm zero regressions</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/t1.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t1.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, and <code>grep -c ERROR</code> prints <code>0</code>. The arrays all default to <code>None</code>, so behaviour is identical.</p>
+<ul>
+<li>[ ] <strong>Step 5: Add a heterogeneous scenario proving the arrays work</strong></li>
+</ul>
+<p>At the end of <code>run_execute_tests</code>, before its <code>return failed</code>:</p>
+<pre><code class="language-python">    # Mixed fleet: 9.5kWh/2600W and 5.2kWh/2600W, one with timed pause and one without.
+    # Nothing planned, so both reset to max - this asserts the arrays are wired, not any new behaviour.
+    failed |= run_execute_test(
+        my_predbat,
+        &quot;mixed_fleet_idle&quot;,
+        soc_kw=7.35,
+        soc_kw_array=[4.75, 2.6],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        battery_max_rate_array=[2600, 2600],
+        has_timed_pause_array=[True, False],
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status=&quot;Demand&quot;,
+        assert_charge_rate_array=[2600, 2600],
+        assert_discharge_rate_array=[2600, 2600],
+    )
+    if failed:
+        return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run it</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/t1b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -n &quot;mixed_fleet_idle&quot; /tmp/t1b.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, the scenario name appears, no <code>ERROR</code> lines follow it.</p>
+<ul>
+<li>[ ] <strong>Step 7: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc1.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/tests/test_execute.py
+git commit -m &quot;test(execute): per-inverter arrays in run_execute_test harness
+
+Adds soc_max_array, battery_max_rate_array, battery_max_export_rate_array,
+has_timed_pause_array and the two rate assertion arrays, so the execute path
+can be tested on a heterogeneous fleet. The harness already ran two inverters
+but took capacity, rate ceiling and pause capability as scalars, so every
+multi-inverter execute scenario used identical units.
+
+Refs #5141&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-intent-and-a-single-apply-pass">Task 2: Intent and a single apply pass</h3>
+<p>The dangerous task. Strictly behaviour-preserving: <strong>no assertion in the existing execute suite may change.</strong></p>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/execute.py:125-640</code> (the <code>execute_plan</code> loop)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>Execute.apply_inverter_rates(self, inverter, intent)</code> — writes one inverter's rates. <code>intent</code> is a dict with keys <code>charge_rate</code>, <code>discharge_rate</code>, <code>pause_charge</code>, <code>pause_discharge</code>, <code>owner</code>. A <code>charge_rate</code> or <code>discharge_rate</code> of <code>None</code> means "reset to that inverter's maximum". Later tasks consume the intent dict built in <code>execute_plan</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<p>Add to the end of <code>run_execute_tests</code> in <code>apps/predbat/tests/test_execute.py</code>:</p>
+<pre><code class="language-python">    # A freeze-charge hold on the inverter without timed pause must survive as rate 0 while the
+    # inverter with timed pause holds via pause mode. This is the F5 / #829 shape: with two
+    # writers the second one used to reset the zero back to max. Regression guard for the intent
+    # refactor - it must hold before and after.
+    charge_window_best = [{&quot;start&quot;: my_predbat.minutes_now, &quot;end&quot;: my_predbat.minutes_now + 60, &quot;average&quot;: 5.0}]
+    charge_limit_best = [my_predbat.reserve]
+    failed |= run_execute_test(
+        my_predbat,
+        &quot;mixed_fleet_freeze_hold&quot;,
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        soc_kw=7.35,
+        soc_kw_array=[4.75, 2.6],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        has_timed_pause_array=[True, False],
+        set_charge_window=True,
+        set_export_window=True,
+        set_discharge_during_charge=False,
+        assert_status=&quot;Freeze charging&quot;,
+        assert_pause_discharge_array=[True, False],
+        assert_discharge_rate_array=[2600, 0],
+        assert_charge_rate_array=[2600, 2600],
+    )
+    if failed:
+        return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it against unmodified production code</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/t2a.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -A4 &quot;mixed_fleet_freeze_hold&quot; /tmp/t2a.log
+</code></pre>
+<p>Expected: PASS. This test characterises existing behaviour, so it must pass <em>before</em> the refactor — that is what makes it a regression guard. If it fails, the expected values above are wrong for this codebase: read the actual values from the log, correct the assertions, and re-run until it passes. Do not change production code to make it pass.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add <code>apply_inverter_rates</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/execute.py</code>, as a new method on the same class as <code>execute_plan</code>, placed immediately before <code>def execute_plan(self):</code>:</p>
+<pre><code class="language-python">    def apply_inverter_rates(self, inverter, intent):
+        &quot;&quot;&quot;
+        Write one inverter's charge and discharge rates from its intent.
+
+        The single point at which rates reach the hardware. A rate of None means the executor
+        claimed nothing, so the inverter returns to its maximum - which is what the
+        resetCharge / resetDischarge flags used to express at the end of the per-inverter loop.
+
+        Args:
+            inverter: the Inverter to write to
+            intent (dict): keys charge_rate, discharge_rate (W or None), and owner (str)
+        &quot;&quot;&quot;
+        charge_rate = intent.get(&quot;charge_rate&quot;, None)
+        discharge_rate = intent.get(&quot;discharge_rate&quot;, None)
+        if charge_rate is None:
+            charge_rate = inverter.battery_rate_max_charge * MINUTE_WATT
+        if discharge_rate is None:
+            discharge_rate = inverter.battery_rate_max_discharge * MINUTE_WATT
+        inverter.adjust_charge_rate(int(charge_rate))
+        inverter.adjust_discharge_rate(int(discharge_rate))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Convert the loop to build intent</strong></li>
+</ul>
+<p>In <code>execute_plan</code>, immediately before <code>for inverter in self.inverters:</code> (line 168), add:</p>
+<pre><code class="language-python">        intent = {}
+</code></pre>
+<p>Replace the four reset flags (lines 196-199) with:</p>
+<pre><code class="language-python">            charge_rate = None
+            discharge_rate = None
+            rate_owner = &quot;demand&quot;
+            resetPause = self.set_charge_window or self.set_export_window
+            resetReserve = self.set_charge_window or self.set_export_window
+</code></pre>
+<p><code>resetPause</code> and <code>resetReserve</code> stay exactly as they are — only the two rate flags go.</p>
+<p>Now convert each of the 15 rate call sites. Each is a two-line edit: replace the <code>inverter.adjust_*_rate(x)</code> call with an assignment, and delete the <code>resetCharge = False</code> / <code>resetDischarge = False</code> line that follows it.</p>
+<table>
+<thead>
+<tr>
+<th>Line</th>
+<th>Replace</th>
+<th>With</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>288</td>
+<td><code>inverter.adjust_charge_rate(new_charge_rate)</code> inside the 10% conditional</td>
+<td>keep the conditional; in the <code>if</code> branch <code>charge_rate = new_charge_rate</code>, and add an <code>else: charge_rate = current_charge_rate</code>. Set <code>rate_owner = "charge"</code> in both.</td>
+</tr>
+<tr>
+<td>292</td>
+<td><code>inverter.adjust_discharge_rate(0)</code></td>
+<td><code>discharge_rate = 0</code></td>
+</tr>
+<tr>
+<td>315</td>
+<td><code>inverter.adjust_discharge_rate(0)</code></td>
+<td><code>discharge_rate = 0</code></td>
+</tr>
+<tr>
+<td>354</td>
+<td><code>inverter.adjust_discharge_rate(0)</code></td>
+<td><code>discharge_rate = 0</code></td>
+</tr>
+<tr>
+<td>373</td>
+<td><code>inverter.adjust_discharge_rate(0)</code></td>
+<td><code>discharge_rate = 0</code></td>
+</tr>
+<tr>
+<td>489</td>
+<td><code>inverter.adjust_discharge_rate(inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)</code></td>
+<td><code>discharge_rate = inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT</code>; <code>rate_owner = "export"</code></td>
+</tr>
+<tr>
+<td>493</td>
+<td><code>inverter.adjust_charge_rate(0)</code></td>
+<td><code>charge_rate = 0</code></td>
+</tr>
+<tr>
+<td>509</td>
+<td><code>inverter.adjust_charge_rate(0)</code></td>
+<td><code>charge_rate = 0</code></td>
+</tr>
+<tr>
+<td>515</td>
+<td><code>inverter.adjust_charge_rate(0)</code></td>
+<td><code>charge_rate = 0</code></td>
+</tr>
+<tr>
+<td>552</td>
+<td><code>inverter.adjust_charge_rate(0)</code></td>
+<td><code>charge_rate = 0</code>; <code>rate_owner = "demand_freeze_export"</code></td>
+</tr>
+<tr>
+<td>558</td>
+<td><code>inverter.adjust_charge_rate(0)</code></td>
+<td><code>charge_rate = 0</code>; <code>rate_owner = "demand_freeze_export"</code></td>
+</tr>
+<tr>
+<td>584</td>
+<td><code>if resetDischarge: inverter.adjust_discharge_rate(0)</code></td>
+<td><code>if discharge_rate is None: discharge_rate = 0</code>; <code>rate_owner = "car"</code></td>
+</tr>
+<tr>
+<td>617</td>
+<td><code>if resetDischarge: inverter.adjust_discharge_rate(0)</code></td>
+<td><code>if discharge_rate is None: discharge_rate = 0</code>; <code>rate_owner = "iboost"</code></td>
+</tr>
+</tbody>
+</table>
+<p>The specific shape for line 286-292:</p>
+<pre><code class="language-python">                        max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
+                        if abs(new_charge_rate - current_charge_rate) &gt; (0.1 * max_rate) or (new_charge_rate == max_rate):
+                            charge_rate = new_charge_rate
+                        else:
+                            # Inside the low-power deadband: intend the rate already set, so the
+                            # apply pass is a no-op rather than a reset to max. Reconciled to the
+                            # global 5% deadband in a later task.
+                            charge_rate = current_charge_rate
+                        rate_owner = &quot;charge&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Replace the end-of-loop reset with intent capture</strong></li>
+</ul>
+<p>Replace lines 630-636 (<code># Reset charge/discharge rate</code> through the <code>resetCharge</code> block) with:</p>
+<pre><code class="language-python">            # Reset pause mode; rates are resolved by the apply pass below
+            if resetPause:
+                inverter.adjust_pause_mode()
+
+            intent[inverter.id] = {
+                &quot;charge_rate&quot;: charge_rate,
+                &quot;discharge_rate&quot;: discharge_rate,
+                &quot;pause_charge&quot;: not resetPause and pause_charge_requested,
+                &quot;pause_discharge&quot;: not resetPause and pause_discharge_requested,
+                &quot;owner&quot;: rate_owner,
+            }
+</code></pre>
+<p><code>pause_charge_requested</code> and <code>pause_discharge_requested</code> do not exist yet. Add both as <code>False</code> beside the other locals in Step 4, and set the matching one to <code>True</code> at each <code>adjust_pause_mode(pause_charge=True)</code> / <code>adjust_pause_mode(pause_discharge=True)</code> call site, leaving those calls themselves in place. They are read-only context for balance and are not acted on by <code>apply_inverter_rates</code>.</p>
+<ul>
+<li>[ ] <strong>Step 6: Add the apply pass</strong></li>
+</ul>
+<p>After the <code>for inverter in self.inverters:</code> loop closes and before the status resolution at line 762, add:</p>
+<pre><code class="language-python">        # Single point at which rates reach the hardware
+        for inverter in self.inverters:
+            if inverter.id in intent:
+                self.apply_inverter_rates(inverter, intent[inverter.id])
+</code></pre>
+<p>The <code>id in intent</code> guard matters: the read-only branch <code>continue</code>s and the calibration branch <code>break</code>s, so those inverters never record intent and must not be written here.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the full execute suite — the acceptance gate</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/t2b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t2b.log
+</code></pre>
+<p>Expected: <code>exit=0</code> and <code>0</code> ERROR lines, <strong>with no assertion edited</strong>. If any scenario fails, the refactor changed behaviour — fix the production code, never the assertion. Common cause: a branch that used to write a rate now falls through to <code>None</code> because its <code>resetCharge = False</code> was deleted without the corresponding assignment being added.</p>
+<ul>
+<li>[ ] <strong>Step 8: Run the neighbouring suites</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test balance_inverters --test multi_inverter_status --test inverter &gt; /tmp/t2c.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t2c.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 9: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc2.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/execute.py apps/predbat/tests/test_execute.py
+git commit -m &quot;refactor(execute): build per-inverter rate intent, apply once
+
+The 15 rate call sites in execute_plan's loop become assignments to two
+locals, and the resetCharge/resetDischarge flags become a None in the
+intent. apply_inverter_rates() is now the only place a rate is written,
+so 'restore to max' exists once instead of at the end of the loop and
+again in the balancer's reset loop.
+
+Behaviour-preserving: the whole execute suite passes unedited.
+
+Refs #5141&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-pure-balance_inverters-in-utils-wired-into-execute">Task 3: Pure <code>balance_inverters()</code> in utils, wired into execute</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/utils.py</code> (add function at end), <code>apps/predbat/execute.py</code> (delete old method, call new one)</li>
+<li>Test: <code>apps/predbat/tests/test_balance_inverters.py</code> (rework)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: the <code>intent</code> dict from Task 2.</li>
+<li>
+<p>Produces: <code>balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None)</code> in <code>utils.py</code>. Mutates <code>intent</code> in place, returns <code>None</code>. <code>snapshot</code> is a list of dicts indexed by inverter id with keys <code>soc_percent</code>, <code>reserve_percent</code>, <code>battery_power</code>, <code>pv_power</code>, <code>charge_rate_now</code>, <code>discharge_rate_now</code>, <code>battery_rate_max_charge</code>, <code>battery_rate_max_discharge</code>, <code>in_calibration</code> — all plain floats except the bool.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_balance_pure.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+from utils import balance_inverters
+
+
+def make_snapshot(soc_percent, battery_power, charge_rate_now=2600.0, discharge_rate_now=2600.0, reserve_percent=4.0, pv_power=0.0, rate_max=2600.0, in_calibration=False):
+    &quot;&quot;&quot;
+    Build one inverter's snapshot entry with sensible defaults.
+    &quot;&quot;&quot;
+    return {
+        &quot;soc_percent&quot;: soc_percent,
+        &quot;reserve_percent&quot;: reserve_percent,
+        &quot;battery_power&quot;: battery_power,
+        &quot;pv_power&quot;: pv_power,
+        &quot;charge_rate_now&quot;: charge_rate_now,
+        &quot;discharge_rate_now&quot;: discharge_rate_now,
+        &quot;battery_rate_max_charge&quot;: rate_max,
+        &quot;battery_rate_max_discharge&quot;: rate_max,
+        &quot;in_calibration&quot;: in_calibration,
+    }
+
+
+def test_freeze_hold_is_not_raised():
+    &quot;&quot;&quot;
+    F5 / #829 regression: a deliberate rate 0 hold must survive balancing.
+
+    The old reset loop raised any zero rate to max whenever another inverter was non-zero.
+    Balance must leave an intent claimed by the executor alone.
+    &quot;&quot;&quot;
+    intent = {
+        0: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: 0, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;freeze&quot;},
+        1: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+    }
+    snapshot = [make_snapshot(50.0, 1000.0, discharge_rate_now=0.0), make_snapshot(50.0, 1000.0)]
+    balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert intent[0][&quot;discharge_rate&quot;] == 0, &quot;a deliberate hold must not be raised to max&quot;
+
+
+def test_calibration_blocks_all_balancing():
+    &quot;&quot;&quot;
+    Any inverter in calibration disables balancing entirely, matching the old return False.
+    &quot;&quot;&quot;
+    intent = {
+        0: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+        1: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+    }
+    before = {k: dict(v) for k, v in intent.items()}
+    snapshot = [make_snapshot(80.0, 1000.0), make_snapshot(20.0, -1000.0, in_calibration=True)]
+    balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
+    assert intent == before, &quot;calibration must leave intent untouched&quot;
+
+
+def test_crosscharge_during_discharge_stops_the_charging_inverter():
+    &quot;&quot;&quot;
+    Inverter 1 is charging while the fleet is net discharging - stop it charging.
+    &quot;&quot;&quot;
+    intent = {
+        0: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+        1: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+    }
+    snapshot = [make_snapshot(80.0, 2000.0), make_snapshot(20.0, -500.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1][&quot;charge_rate&quot;] == 0, &quot;the cross-charging inverter must be stopped&quot;
+
+
+def test_balanced_fleet_is_left_alone():
+    &quot;&quot;&quot;
+    Equal SoC means nothing to do, whatever the switches say.
+    &quot;&quot;&quot;
+    intent = {
+        0: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+        1: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;},
+    }
+    before = {k: dict(v) for k, v in intent.items()}
+    snapshot = [make_snapshot(50.0, 1000.0), make_snapshot(50.0, 1000.0)]
+    balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
+    assert intent == before, &quot;a balanced fleet must not be touched&quot;
+
+
+def test_three_inverters_do_not_crash():
+    &quot;&quot;&quot;
+    The (i + 1) % n partner ring is retained from the original, so 3+ must at least be safe.
+    &quot;&quot;&quot;
+    intent = {i: {&quot;charge_rate&quot;: None, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;demand&quot;} for i in range(3)}
+    snapshot = [make_snapshot(90.0, 1000.0), make_snapshot(50.0, 1000.0), make_snapshot(10.0, 1000.0)]
+    balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
+    assert len(intent) == 3
+
+
+def run_balance_pure_tests(my_predbat):
+    &quot;&quot;&quot;
+    Run the pure balance function tests. my_predbat is unused - these need no PredBat instance.
+    &quot;&quot;&quot;
+    print(&quot;**** Running pure balance_inverters tests ****\n&quot;)
+    failed = False
+    for name, fn in sorted(globals().items()):
+        if name.startswith(&quot;test_&quot;) and callable(fn):
+            try:
+                fn()
+                print(&quot;Test {}: PASSED&quot;.format(name))
+            except AssertionError as e:
+                print(&quot;ERROR: Test {} FAILED: {}&quot;.format(name, e))
+                failed = True
+    return failed
+</code></pre>
+<p>Register it in <code>apps/predbat/unit_test.py</code> — import beside the other test imports:</p>
+<pre><code class="language-python">from tests.test_balance_pure import run_balance_pure_tests
+</code></pre>
+<p>and add to the registry beside the <code>balance_inverters</code> entry at line 631:</p>
+<pre><code class="language-python">        (&quot;balance_pure&quot;, run_balance_pure_tests, &quot;Pure balance_inverters function tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test balance_pure &gt; /tmp/t3a.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -E &quot;ImportError|cannot import&quot; /tmp/t3a.log
+</code></pre>
+<p>Expected: FAIL with <code>cannot import name 'balance_inverters' from 'utils'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Port the algorithm into <code>utils.py</code></strong></li>
+</ul>
+<p>Append to <code>apps/predbat/utils.py</code>. This is the body of <code>Execute.balance_inverters</code> (currently <code>execute.py:1234-1398</code>) with <code>self.</code> removed, <code>inverters[i].&lt;attr&gt;</code> replaced by <code>snapshot[i]["&lt;attr&gt;"]</code>, and the two <code>adjust_*_rate</code> calls plus the reset loop replaced by intent mutation:</p>
+<pre><code class="language-python">def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
+    &quot;&quot;&quot;
+    Mutate the executor's per-inverter rate intent to correct fleet imbalance.
+
+    Ported from the old Execute.balance_inverters() timer loop, with the actuator changed: instead
+    of writing rate 0 and later resetting to max, this adjusts the intent that execute_plan built,
+    which is then applied once. Convergence therefore returns to the executor's value rather than
+    the register ceiling, so a deliberate hold can no longer be overwritten.
+
+    Args:
+        intent (dict): inverter id -&gt; rate intent, mutated in place
+        snapshot (list): per-inverter plain readings, indexed by inverter id
+        balance_charge (bool): balance while charging
+        balance_discharge (bool): balance while discharging
+        balance_crosscharge (bool): correct cross charging
+        threshold_charge (float): minimum SoC% divergence during charge
+        threshold_discharge (float): minimum SoC% divergence during discharge
+        log_to (callable): optional logger
+    &quot;&quot;&quot;
+    num_inverters = len(snapshot)
+    if num_inverters &lt; 2:
+        return
+    for entry in snapshot:
+        if entry[&quot;in_calibration&quot;]:
+            if log_to:
+                log_to(&quot;BALANCE: an inverter is in calibration, not balancing&quot;)
+            return
+
+    socs = [entry[&quot;soc_percent&quot;] for entry in snapshot]
+    reserves = [entry[&quot;reserve_percent&quot;] for entry in snapshot]
+    battery_powers = [entry[&quot;battery_power&quot;] for entry in snapshot]
+    pv_powers = [entry[&quot;pv_power&quot;] for entry in snapshot]
+    charge_rates = [entry[&quot;charge_rate_now&quot;] for entry in snapshot]
+    discharge_rates = [entry[&quot;discharge_rate_now&quot;] for entry in snapshot]
+
+    total_battery_power = sum(battery_powers)
+    total_pv_power = sum(pv_powers)
+    total_charge_rates = sum(charge_rates)
+    total_discharge_rates = sum(discharge_rates)
+
+    out_of_balance = any(soc != socs[0] for soc in socs)
+    during_discharge = total_battery_power &gt;= 0.0
+    during_charge = total_battery_power &lt; 0.0
+    soc_min = min(socs)
+    soc_max = max(socs)
+
+    soc_low = [(soc &lt; soc_max) and (abs(soc - soc_max) &gt;= threshold_discharge) for soc in socs]
+    soc_high = [(soc &gt; soc_min) and (abs(soc - soc_min) &gt;= threshold_charge) for soc in socs]
+
+    above_reserve = [(socs[i] - reserves[i]) &gt;= 4.0 for i in range(num_inverters)]
+    below_full = [socs[i] &lt; 100.0 for i in range(num_inverters)]
+    can_power_house = [(total_discharge_rates - discharge_rates[i] - 200) &gt;= total_battery_power for i in range(num_inverters)]
+    can_store_pv = [total_pv_power &lt;= (total_charge_rates - charge_rates[i]) for i in range(num_inverters)]
+    power_enough_discharge = [battery_powers[i] &gt;= 50.0 for i in range(num_inverters)]
+    power_enough_charge = [battery_powers[i] &lt;= -50.0 for i in range(num_inverters)]
+
+    if log_to:
+        log_to(&quot;BALANCE: socs {} out_of_balance {} soc_low {} soc_high {}&quot;.format(socs, out_of_balance, soc_low, soc_high))
+
+    for this_inverter in range(num_inverters):
+        other_inverter = (this_inverter + 1) % num_inverters
+        if this_inverter not in intent:
+            continue
+        if balance_discharge and total_discharge_rates &gt; 0 and out_of_balance and during_discharge and soc_low[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter] and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0):
+            intent[this_inverter][&quot;discharge_rate&quot;] = 0
+        elif balance_charge and total_charge_rates &gt; 0 and out_of_balance and during_charge and soc_high[this_inverter] and below_full[other_inverter] and can_store_pv[this_inverter] and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0):
+            intent[this_inverter][&quot;charge_rate&quot;] = 0
+        elif balance_crosscharge and during_discharge and total_discharge_rates &gt; 0 and power_enough_charge[this_inverter]:
+            if soc_low[this_inverter] and can_power_house[other_inverter]:
+                intent[this_inverter][&quot;charge_rate&quot;] = 0
+            elif can_power_house[this_inverter] and other_inverter in intent:
+                intent[other_inverter][&quot;discharge_rate&quot;] = 0
+        elif balance_crosscharge and during_charge and total_charge_rates &gt; 0 and power_enough_discharge[this_inverter]:
+            intent[this_inverter][&quot;discharge_rate&quot;] = 0
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run to verify it passes</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test balance_pure &gt; /tmp/t3b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -E &quot;PASSED|ERROR&quot; /tmp/t3b.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, five <code>PASSED</code> lines, no <code>ERROR</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Wire it into <code>execute_plan</code></strong></li>
+</ul>
+<p>In <code>apps/predbat/execute.py</code>, extend the import on line 20 with <code>balance_inverters</code>:</p>
+<pre><code class="language-python">from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, export_mode_of, export_power_of, export_target_of
+</code></pre>
+<p>Add a snapshot builder as a new method beside <code>apply_inverter_rates</code>:</p>
+<pre><code class="language-python">    def build_inverter_snapshot(self):
+        &quot;&quot;&quot;
+        Build the plain per-inverter readings that balance_inverters() consumes.
+
+        Returns:
+        - list: one dict per inverter, indexed by inverter id
+        &quot;&quot;&quot;
+        snapshot = []
+        for inverter in self.inverters:
+            snapshot.append(
+                {
+                    &quot;soc_percent&quot;: inverter.soc_percent,
+                    &quot;reserve_percent&quot;: inverter.reserve_current,
+                    &quot;battery_power&quot;: inverter.battery_power,
+                    &quot;pv_power&quot;: inverter.pv_power,
+                    &quot;charge_rate_now&quot;: inverter.charge_rate_now * MINUTE_WATT,
+                    &quot;discharge_rate_now&quot;: inverter.discharge_rate_now * MINUTE_WATT,
+                    &quot;battery_rate_max_charge&quot;: inverter.battery_rate_max_charge * MINUTE_WATT,
+                    &quot;battery_rate_max_discharge&quot;: inverter.battery_rate_max_discharge * MINUTE_WATT,
+                    &quot;in_calibration&quot;: inverter.in_calibration,
+                }
+            )
+        return snapshot
+</code></pre>
+<p>In <code>execute_plan</code>, between the per-inverter loop and the apply pass added in Task 2 Step 6:</p>
+<pre><code class="language-python">        if self.balance_inverters_enable and not self.set_read_only:
+            balance_inverters(
+                intent,
+                self.build_inverter_snapshot(),
+                self.balance_inverters_charge,
+                self.balance_inverters_discharge,
+                self.balance_inverters_crosscharge,
+                self.balance_inverters_threshold_charge,
+                self.balance_inverters_threshold_discharge,
+                log_to=self.log,
+            )
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Delete the old method and its timer</strong></li>
+</ul>
+<p>Delete <code>Execute.balance_inverters</code> entirely — <code>apps/predbat/execute.py:1234</code> through the closing <code>self.log("BALANCE: Completed this run")</code>.</p>
+<p>In <code>apps/predbat/predbat.py</code>, delete <code>run_time_loop_balance</code> (lines 2122-2136) and its registration block (lines 1983-1989).</p>
+<ul>
+<li>[ ] <strong>Step 7: Rework <code>test_balance_inverters.py</code></strong></li>
+</ul>
+<p>Its scenarios currently call <code>my_predbat.balance_inverters(test_mode=True)</code>, which no longer exists. Convert each to build an <code>intent</code> and <code>snapshot</code> and call the <code>utils</code> function directly, asserting on <code>intent</code> rather than on <code>inverter.charge_rate</code>. The <code>test_mode</code> parameter and the <code>dummy_sleep</code> helper both disappear. Keep the scenario names so the log stays comparable.</p>
+<ul>
+<li>[ ] <strong>Step 8: Run everything touched</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute --test balance_inverters --test balance_pure --test multi_inverter_status &gt; /tmp/t3c.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t3c.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 9: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc3.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/utils.py apps/predbat/execute.py apps/predbat/predbat.py apps/predbat/unit_test.py apps/predbat/tests/test_balance_pure.py apps/predbat/tests/test_balance_inverters.py
+git commit -m &quot;refactor(balance): move balancing into execute as a pure function
+
+balance_inverters() becomes a pure function in utils.py that mutates the
+executor's rate intent, called from execute_plan before the single apply
+pass. The 60-second timer, its own Inverter() construction and its reset
+loop are all deleted.
+
+Closes the F5 / #829 clobber by construction: max is no longer a value
+balance can produce, so convergence returns to the executor's intent.
+Also removes the unguarded Inverter(self, id) re-creation that turned an
+apps.yaml fault into a timer_tick traceback every 60 seconds.
+
+Refs #5141&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-quick-poll-becomes-the-second-caller">Task 4: Quick poll becomes the second caller</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/execute.py:1067-1083</code> (<code>quick_inverter_data_update</code>), <code>apps/predbat/const.py:64</code>, <code>apps/predbat/config.py:2573</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>build_inverter_snapshot()</code>, <code>apply_inverter_rates()</code> and the <code>balance_inverters()</code> import from Task 3.</li>
+<li>
+<p>Produces: <code>self.inverter_rate_intent</code> — the intent dict from the last <code>execute_plan</code>, stored on the instance so the poll can re-apply it.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Store the intent on the instance</strong></p>
+</li>
+</ul>
+<p>At the end of <code>execute_plan</code>'s apply pass (Task 2 Step 6), add:</p>
+<pre><code class="language-python">        self.inverter_rate_intent = intent
+</code></pre>
+<p>Initialise it beside the other instance attributes in <code>apps/predbat/predbat.py</code> near line 342:</p>
+<pre><code class="language-python">        self.inverter_rate_intent = {}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Write the failing test</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_balance_pure.py</code>:</p>
+<pre><code class="language-python">def test_rebalance_returns_to_intent_not_max():
+    &quot;&quot;&quot;
+    Once balanced, re-running balance against a fresh snapshot must leave the executor's
+    intent in place - the old code restored to max here, which is what broke freeze charge.
+    &quot;&quot;&quot;
+    intent = {
+        0: {&quot;charge_rate&quot;: 1200, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;charge&quot;},
+        1: {&quot;charge_rate&quot;: 1200, &quot;discharge_rate&quot;: None, &quot;pause_charge&quot;: False, &quot;pause_discharge&quot;: False, &quot;owner&quot;: &quot;charge&quot;},
+    }
+    snapshot = [make_snapshot(50.0, -1000.0, charge_rate_now=1200.0), make_snapshot(50.0, -1000.0, charge_rate_now=1200.0)]
+    balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
+    assert intent[0][&quot;charge_rate&quot;] == 1200, &quot;a balanced fleet must keep the planned rate, not jump to max&quot;
+    assert intent[1][&quot;charge_rate&quot;] == 1200
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run it</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test balance_pure &gt; /tmp/t4a.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -E &quot;rebalance_returns|ERROR&quot; /tmp/t4a.log
+</code></pre>
+<p>Expected: PASS — the Task 3 implementation already has this property. If it fails, balance is writing max somewhere and must be fixed.</p>
+<ul>
+<li>[ ] <strong>Step 4: Make the poll re-balance and re-apply</strong></li>
+</ul>
+<p>Replace the body of <code>quick_inverter_data_update</code> (<code>execute.py:1080-1083</code>):</p>
+<pre><code class="language-python">        if self.fetch_inverter_data(create=False):
+            self.publish_inverter_data()
+            # Second caller of the single write path. execute_plan owns the intent; this only
+            # re-derives the balance skew against fresh SoC and re-applies, so the poll can never
+            # invent a rate the executor did not ask for.
+            if self.inverter_rate_intent and self.balance_inverters_enable and not self.set_read_only:
+                intent = {inverter_id: dict(value) for inverter_id, value in self.inverter_rate_intent.items()}
+                balance_inverters(
+                    intent,
+                    self.build_inverter_snapshot(),
+                    self.balance_inverters_charge,
+                    self.balance_inverters_discharge,
+                    self.balance_inverters_crosscharge,
+                    self.balance_inverters_threshold_charge,
+                    self.balance_inverters_threshold_discharge,
+                    log_to=self.log,
+                )
+                for inverter in self.inverters:
+                    if inverter.id in intent:
+                        self.apply_inverter_rates(inverter, intent[inverter.id])
+            return True
+        return False
+</code></pre>
+<p>The copy matters: the poll must not mutate the stored intent, or successive polls would compound their own skew.</p>
+<ul>
+<li>[ ] <strong>Step 5: Change the poll cadence</strong></li>
+</ul>
+<p>In <code>apps/predbat/const.py:64</code>:</p>
+<pre><code class="language-python">INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Remove the dead config item</strong></li>
+</ul>
+<p>Delete the <code>"balance_inverters_seconds": {"type": "integer", "zero": True},</code> line from <code>APPS_SCHEMA</code> in <code>apps/predbat/config.py:2573</code>. <code>validate_config()</code> iterates <code>for name in APPS_SCHEMA</code>, so a stale entry left in a user's apps.yaml is silently ignored rather than erroring.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the suites</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute --test balance_pure --test balance_inverters --test inverter &gt; /tmp/t4b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t4b.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc4.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/execute.py apps/predbat/const.py apps/predbat/config.py apps/predbat/predbat.py apps/predbat/tests/test_balance_pure.py
+git commit -m &quot;feat(balance): re-balance on the inverter poll, drop the balance timer
+
+The 120s quick inverter poll becomes the second caller of the single write
+path at 60s, re-deriving the balance skew against fresh SoC and re-applying
+the executor's intent. It works on a copy so successive polls cannot compound
+their own skew. balance_inverters_seconds is removed - the poll interval now
+governs.
+
+Refs #5141&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-per-inverter-export-rate-allocation">Task 5: Per-inverter export rate allocation</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/utils.py</code> (add <code>allocate_export_rates</code>), <code>apps/predbat/execute.py</code> (pre-pass + use at line 489)</li>
+<li>Test: <code>apps/predbat/tests/test_utils_allocate.py</code> (create)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>allocate_export_rates(needs, max_rates, p_fleet)</code> in <code>utils.py</code> — <code>needs</code> is a list of kWh still to shed per inverter, <code>max_rates</code> a list of per-inverter export ceilings in W, <code>p_fleet</code> the planned fleet export power in W. Returns a list of W per inverter summing to <code>min(p_fleet, sum(max_rates))</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_utils_allocate.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+from utils import allocate_export_rates
+
+
+def test_full_rate_is_a_no_op():
+    &quot;&quot;&quot;
+    With low power off, p_fleet equals the sum of the ceilings, so every inverter runs at its
+    own maximum and the allocation is identical to today's uniform scaling.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([3.0, 1.0], [2600.0, 2600.0], 5200.0)
+    assert alloc == [2600.0, 2600.0]
+
+
+def test_matched_fleet_equal_needs_is_uniform():
+    &quot;&quot;&quot;
+    Equal needs and equal ceilings give the uniform split, matching today.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([2.0, 2.0], [2600.0, 2600.0], 3640.0)
+    assert alloc == [1820.0, 1820.0]
+
+
+def test_sum_is_preserved():
+    &quot;&quot;&quot;
+    The planner costed p_fleet, so the allocation must deliver exactly that.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([3.0, 1.0], [2600.0, 2600.0], 3640.0)
+    assert abs(sum(alloc) - 3640.0) &lt; 0.01
+
+
+def test_clamped_surplus_spills_to_the_other_inverter():
+    &quot;&quot;&quot;
+    A 3:1 need split of 3640W would give 2730W to the first inverter, above its 2600W ceiling.
+    The 130W surplus must spill rather than be lost.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([3.0, 1.0], [2600.0, 2600.0], 3640.0)
+    assert alloc[0] == 2600.0
+    assert abs(alloc[1] - 1040.0) &lt; 0.01
+
+
+def test_at_target_inverter_gets_nothing_and_spills_its_share():
+    &quot;&quot;&quot;
+    An inverter already at its export target holds no budget; the fleet keeps the planned power.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([0.0, 2.0], [2600.0, 2600.0], 2000.0)
+    assert alloc[0] == 0.0
+    assert abs(alloc[1] - 2000.0) &lt; 0.01
+
+
+def test_no_need_falls_back_to_uniform():
+    &quot;&quot;&quot;
+    Nothing to shed anywhere - fall back to the uniform split rather than dividing by zero.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([0.0, 0.0], [2600.0, 2600.0], 2600.0)
+    assert abs(sum(alloc) - 2600.0) &lt; 0.01
+    assert abs(alloc[0] - alloc[1]) &lt; 0.01
+
+
+def test_single_inverter():
+    &quot;&quot;&quot;
+    Degenerate fleet of one.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([1.0], [2600.0], 1300.0)
+    assert alloc == [1300.0]
+
+
+def test_demand_above_fleet_capacity_is_capped():
+    &quot;&quot;&quot;
+    p_fleet can never exceed the sum of the ceilings.
+    &quot;&quot;&quot;
+    alloc = allocate_export_rates([3.0, 1.0], [2600.0, 2600.0], 99999.0)
+    assert alloc == [2600.0, 2600.0]
+
+
+def run_allocate_export_tests(my_predbat):
+    &quot;&quot;&quot;
+    Run the export allocator tests. my_predbat is unused - these need no PredBat instance.
+    &quot;&quot;&quot;
+    print(&quot;**** Running allocate_export_rates tests ****\n&quot;)
+    failed = False
+    for name, fn in sorted(globals().items()):
+        if name.startswith(&quot;test_&quot;) and callable(fn):
+            try:
+                fn()
+                print(&quot;Test {}: PASSED&quot;.format(name))
+            except AssertionError as e:
+                print(&quot;ERROR: Test {} FAILED: {}&quot;.format(name, e))
+                failed = True
+    return failed
+</code></pre>
+<p>Register in <code>apps/predbat/unit_test.py</code>:</p>
+<pre><code class="language-python">from tests.test_utils_allocate import run_allocate_export_tests
+</code></pre>
+<pre><code class="language-python">        (&quot;allocate_export&quot;, run_allocate_export_tests, &quot;Export rate allocator tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test allocate_export &gt; /tmp/t5a.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -E &quot;ImportError|cannot import&quot; /tmp/t5a.log
+</code></pre>
+<p>Expected: FAIL with <code>cannot import name 'allocate_export_rates'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement it</strong></li>
+</ul>
+<p>Append to <code>apps/predbat/utils.py</code>:</p>
+<pre><code class="language-python">def allocate_export_rates(needs, max_rates, p_fleet):
+    &quot;&quot;&quot;
+    Split the planned fleet export power across inverters by how much each still has to shed.
+
+    The planner costs a specific fleet export power (the low-power ladder), so the sum of the
+    allocation is pinned to it and only the split varies. An inverter already at its target takes
+    none of the budget and its share spills to inverters that can still deliver, which is what
+    stops fleet export power sagging below plan as inverters finish one by one.
+
+    At full rate p_fleet equals the sum of the ceilings, so every inverter clamps at its own
+    maximum and this is exactly today's uniform scaling.
+
+    Args:
+        needs (list): kWh each inverter still has to shed before its own target
+        max_rates (list): per-inverter export ceiling in W
+        p_fleet (float): planned fleet export power in W
+
+    Returns:
+    - list: export rate in W per inverter, summing to min(p_fleet, sum(max_rates))
+    &quot;&quot;&quot;
+    count = len(max_rates)
+    if count == 0:
+        return []
+
+    remaining = min(p_fleet, sum(max_rates))
+    total_need = sum(need for need in needs if need &gt; 0)
+    if total_need &lt;= 0:
+        # Nothing to shed anywhere - fall back to the uniform split
+        needs = [1.0] * count
+        total_need = float(count)
+
+    alloc = [0.0] * count
+    open_set = [i for i in range(count) if needs[i] &gt; 0]
+
+    while remaining &gt; 0.01 and open_set:
+        share_total = sum(needs[i] for i in open_set)
+        if share_total &lt;= 0:
+            break
+        clamped_any = False
+        budget = remaining
+        for i in list(open_set):
+            want = alloc[i] + budget * (needs[i] / share_total)
+            if want &gt;= max_rates[i]:
+                remaining -= max_rates[i] - alloc[i]
+                alloc[i] = max_rates[i]
+                open_set.remove(i)
+                clamped_any = True
+        if not clamped_any:
+            for i in open_set:
+                alloc[i] += remaining * (needs[i] / share_total)
+            remaining = 0.0
+
+    return alloc
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run to verify it passes</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test allocate_export &gt; /tmp/t5b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -E &quot;PASSED|ERROR&quot; /tmp/t5b.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, eight <code>PASSED</code>, no <code>ERROR</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Wire it into <code>execute_plan</code></strong></li>
+</ul>
+<p>Add <code>allocate_export_rates</code> to the <code>utils</code> import on <code>execute.py:20</code>.</p>
+<p>Before the per-inverter loop, after the <code>set_charge_freeze_only</code> clamp block (around line 150), add the fleet pre-pass:</p>
+<pre><code class="language-python">        # Fleet-level export allocation. Needs every inverter's target, so it cannot live inside
+        # the per-inverter loop. adjust_battery_target_multi(check=True) probes without writing.
+        export_rate_alloc = {}
+        if self.export_limits_best and self.set_export_window:
+            export_rate_adjust = 1.0
+            if self.set_export_low_power:
+                export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
+            export_target_percent = self.export_target_soc_percent()
+            needs = []
+            max_rates = []
+            for inverter in self.inverters:
+                inv_target_percent = self.adjust_battery_target_multi(inverter, export_target_percent, False, True, check=True)
+                target_kwh = inv_target_percent * inverter.soc_max / 100.0
+                needs.append(max(0.0, inverter.soc_kw - target_kwh))
+                max_rates.append(inverter.battery_rate_max_export * MINUTE_WATT)
+            p_fleet = sum(max_rates) * export_rate_adjust
+            allocation = allocate_export_rates(needs, max_rates, p_fleet)
+            for index, inverter in enumerate(self.inverters):
+                export_rate_alloc[inverter.id] = allocation[index]
+</code></pre>
+<p>Replace the export rate assignment made in Task 2 at line 489:</p>
+<pre><code class="language-python">                        discharge_rate = export_rate_alloc.get(inverter.id, inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
+                        rate_owner = &quot;export&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Add an execute-level scenario</strong></li>
+</ul>
+<p>At the end of <code>run_execute_tests</code>, using the Task 1 arrays:</p>
+<pre><code class="language-python">    # Mixed fleet exporting at 70% of fleet max. Inverter 0 has 3x the need of inverter 1, so it
+    # takes the larger share and clamps at its ceiling, spilling the surplus rather than both
+    # running at a uniform 70%.
+    export_window_best = [{&quot;start&quot;: my_predbat.minutes_now, &quot;end&quot;: my_predbat.minutes_now + 60, &quot;average&quot;: 20.0}]
+    export_limits_best = [20.3]
+    failed |= run_execute_test(
+        my_predbat,
+        &quot;mixed_fleet_export_allocation&quot;,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        soc_kw=10.0,
+        soc_kw_array=[7.5, 2.5],
+        soc_max=14.7,
+        soc_max_array=[9.5, 5.2],
+        battery_max_rate=2600,
+        set_charge_window=True,
+        set_export_window=True,
+        set_export_low_power=True,
+        assert_status=&quot;Exporting&quot;,
+        assert_force_export=True,
+    )
+    if failed:
+        return failed
+</code></pre>
+<p>Run it once, read the actual allocated rates from the log, then add <code>assert_discharge_rate_array=[...]</code> with those values and confirm they sum to <code>0.7 * 5200 = 3640</code>. If they do not sum to 3640, the wiring is wrong — fix the production code, not the assertion.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the suites</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute --test allocate_export --test balance_pure &gt; /tmp/t5c.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t5c.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 8: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc5.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/utils.py apps/predbat/execute.py apps/predbat/unit_test.py apps/predbat/tests/test_utils_allocate.py apps/predbat/tests/test_execute.py
+git commit -m &quot;feat(execute): allocate export power per inverter instead of scaling uniformly
+
+The planner costs a specific fleet export power, so the sum is pinned and
+only the split varies - by how much each inverter still has to shed, clamped
+at its own ceiling with the surplus spilled. At full rate every inverter
+clamps at its maximum, making this a no-op outside low power mode.
+
+Fixes fleet export power sagging below plan as inverters reach target one by
+one, each still holding its 1/n slice of the budget while delivering nothing.
+
+Refs #5141&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-reconcile-the-charge-rate-deadband-to-5">Task 6: Reconcile the charge rate deadband to 5%</h3>
+<p>The first task that deliberately changes an assertion. Exactly one test asserts the 10% behaviour.</p>
+<p><strong>Files:</strong></p>
+<ul>
+<li>
+<p>Modify: <code>apps/predbat/execute.py:286-292</code>, <code>apps/predbat/tests/test_execute.py:1035</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Delete the execute-side conditional</strong></p>
+</li>
+</ul>
+<p>Replace the block written in Task 2 Step 4 with:</p>
+<pre><code class="language-python">                        # One deadband, in the only writer. adjust_charge_rate and
+                        # adjust_discharge_rate both suppress changes below 5% of max, which
+                        # aligns with the GE power steps.
+                        charge_rate = new_charge_rate
+                        rate_owner = &quot;charge&quot;
+</code></pre>
+<p><code>max_rate</code> and <code>current_charge_rate</code> are still used by the log line above, so leave both in place.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run to see the one expected failure</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/t6a.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -B2 -A2 &quot;Charge rate should be&quot; /tmp/t6a.log
+</code></pre>
+<p>Expected: exactly one failure, in <code>charge_low_power2b</code>: <code>Charge rate should be 600 got 480</code>. The scenario computes 480 W against a 2000 W per-inverter ceiling with a current rate of 600 W. At 10% (200 W) the 120 W delta was suppressed; at 5% (100 W) it is written.</p>
+<p>If any <em>other</em> scenario fails, stop — something beyond the deadband changed.</p>
+<ul>
+<li>[ ] <strong>Step 3: Update the one assertion</strong></li>
+</ul>
+<p>In <code>apps/predbat/tests/test_execute.py</code>, scenario <code>charge_low_power2b</code> at line 1035:</p>
+<pre><code class="language-python">        assert_charge_rate=480,  # 120W delta clears the 5% (100W) deadband
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run to verify it passes</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute &gt; /tmp/t6b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t6b.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc6.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/execute.py apps/predbat/tests/test_execute.py
+git commit -m &quot;refactor(execute): one charge rate deadband at 5%, aligned to GE power steps
+
+The 10% check in execute.py and the 5% in adjust_charge_rate both came from
+#1676 and were never reconciled; since 10% &gt; 5% the execute-side check was
+the only one that ever fired. Deleting it leaves one deadband, symmetric
+across charge and discharge, inside the only writer - and intent now carries
+the desired rate rather than a deadband-mangled one.
+
+charge_low_power2b changes 600 -&gt; 480: a 120W delta against a 2000W ceiling
+clears 5% where it did not clear 10%.
+
+Refs #5141&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-defaults-and-documentation">Task 7: Defaults and documentation</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>
+<p>Modify: <code>apps/predbat/config.py:1174-1186</code>, <code>docs/customisation.md:517-525</code>, <code>docs/apps-yaml.md:2271</code>, <code>docs/caution.md:31</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Flip the two defaults</strong></p>
+</li>
+</ul>
+<p>In <code>apps/predbat/config.py</code>, change <code>"default": True</code> to <code>"default": False</code> for <code>balance_inverters_charge</code> (line 1171) and <code>balance_inverters_discharge</code> (line 1178). Leave <code>balance_inverters_crosscharge</code> at <code>True</code> and <code>balance_inverters_enable</code> at <code>False</code>.</p>
+<p>Both switches remain fully functional when enabled — only the defaults change. <code>load_current_config()</code> restores saved values ahead of defaults, so this reaches new installs only.</p>
+<ul>
+<li>[ ] <strong>Step 2: Verify no test depends on the old defaults</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test execute --test balance_inverters --test balance_pure --test allocate_export &gt; /tmp/t7a.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -c ERROR /tmp/t7a.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Update the docs</strong></li>
+</ul>
+<p><code>docs/customisation.md</code> — delete the <code>balance_inverters_seconds</code> paragraph at line 517 and replace the bullet list at 519-525 so it states the new defaults: cross-charge on, charge and discharge off, and that balancing now runs as part of the normal execute cycle rather than on its own timer.</p>
+<p><code>docs/apps-yaml.md:2271</code> — delete the <code>balance_inverters_seconds: seconds</code> entry.</p>
+<p><code>docs/caution.md:31</code> — the warning says the feature "can make register changes once or twice a minute". Rewrite to explain that the reset-loop churn behind that warning is gone, that balancing now shares the executor's single write path with a 5% deadband, and that cross-charge prevention is the part worth enabling.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the full suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all &gt; /tmp/t7b.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+grep -cE &quot;^ERROR|FAILED&quot; /tmp/t7b.log
+tail -5 /tmp/t7b.log
+</code></pre>
+<p>Expected: <code>exit=0</code>, <code>0</code>, and a final line reporting all tests passed.</p>
+<ul>
+<li>[ ] <strong>Step 5: Check the change scope</strong></li>
+</ul>
+<p>Run <code>detect_changes({scope: "compare", base_ref: "main"})</code> and confirm the affected symbols are confined to <code>execute.py</code>, <code>utils.py</code>, <code>predbat.py</code>, <code>config.py</code>, <code>const.py</code> and the test modules. Anything outside that set needs explaining before the PR leaves draft.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit and push</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pc7.log 2&gt;&amp;1; echo &quot;exit=$?&quot;
+cd .. &amp;&amp; git add apps/predbat/config.py docs/customisation.md docs/apps-yaml.md docs/caution.md
+git commit -m &quot;feat(balance): default SoC balancing off, keep cross-charge prevention on
+
+Balanced SoC is not important in itself; stopping one inverter charging from
+another during eco/idle is. Both SoC balancing switches stay fully functional
+when enabled. Saved config takes priority over defaults, so this reaches new
+installs only.
+
+Docs updated for the removed balance_inverters_seconds setting and the
+caution.md warning about register churn, which the single write path and the
+5% deadband address.
+
+Refs #5141&quot;
+git push
+</code></pre>
+<hr />
+<h2 id="self-review">Self-Review</h2>
+<p><strong>Spec coverage</strong> — every section maps to a task: architecture and intent → Task 2; the balance function → Task 3; cadence, poll wiring and <code>balance_inverters_seconds</code> → Task 4; export allocator → Task 5; deadband → Task 6; config and docs → Task 7; the testing section's harness arrays → Task 1.</p>
+<p><strong>Deliberately not covered, matching the spec's non-goals:</strong> F1, F2, AC limits in the allocator, pause as mutable intent, and a <em>per-inverter</em> PV-aware cross-charge rule.</p>
+<p><strong>Amended while executing.</strong> Two items this section originally listed as deferred were fixed instead, because moving the algorithm into a pure function made faults visible that could not responsibly be left. The spec's "Amended during implementation" section is the record; in short:</p>
+<ul>
+<li><strong>F7 was fixed</strong>, along with two coupled faults it travelled with — a pass could hold a charger and a discharger at once, and the capacity guards were each evaluated as though its own hold were the only change.</li>
+<li><strong>Direction detection was changed</strong> from the battery-sign proxy to the site energy balance, after it was shown holding every inverter that was correctly absorbing a PV surplus. The per-inverter PV case remains unsolved and stays a non-goal.</li>
+</ul>
+<p><strong>The known gap is closed.</strong> The spec called out that the quick poll becoming a write path starts conferring control-ledger ownership on a cadence that today only observes, and said it "needs its own test rather than being assumed benign". Reading <code>control_ledger.py</code> showed the rate writes were not the exposure — those controls were already tracked — but the 120s → 60s cadence change was: the tamper ladder counted cycles with no wall-clock floor, so a faster poll convicted a cached read sooner. Fixed by <code>MIN_DIVERGENCE_S</code>, measured from the confirming write so the threshold no longer moves with cadence, and covered by <code>test_divergence_needs_elapsed_time_not_just_cycles</code> and <code>test_divergence_floor_matches_the_previous_cadence_behaviour</code>. The poll's own write path is covered by <code>test_quick_poll_rebalance_guards</code>.</p>
+<p><strong>Sequencing note.</strong> Task 2 is the only task whose acceptance test is "nothing changes". Do not fold Task 6 into it — the deadband change moves a real assertion, and mixing the two would destroy the parity signal that makes the HIGH-risk refactor safe to review.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
