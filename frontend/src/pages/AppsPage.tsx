@@ -109,6 +109,55 @@ const FRAME_STYLES = `
     width: auto;
     white-space: nowrap;
   }
+  .apps-comparison-row > .apps-description,
+  .apps-comparison-row > td:last-child { display: none; }
+  .apps-comparison-row > td:nth-child(2) { padding: .8rem; }
+  .apps-comparison-row > td:nth-child(2) > table > tbody {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: .75rem;
+    counter-reset: comparison;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    padding: .7rem;
+    border: 1px solid color-mix(in srgb, var(--group-colour) 45%, var(--apps-border));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--group-colour) 4%, var(--apps-surface));
+    counter-increment: comparison;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:first-child { display: none; }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:nth-child(2) { min-width: 0; }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:nth-child(2)::before {
+    content: 'Comparison ' counter(comparison);
+    display: block;
+    margin-bottom: .45rem;
+    color: var(--apps-muted);
+    font-size: .65rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:last-child {
+    grid-column: 2;
+    grid-row: 1;
+    padding-left: .5rem;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] table tr:not([id^="add_anchor_"]) > td {
+    border-bottom: 1px solid color-mix(in srgb, var(--apps-border) 75%, transparent);
+    vertical-align: top;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] table tr:not([id^="add_anchor_"]) > td:first-child {
+    font-weight: 700;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[id^="add_anchor_"] {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[id^="add_anchor_"] > td:not(:last-child) { display: none; }
   tr[data-apps-group] { --group-colour: #64748b; }
   tr[data-apps-group="system"] { --group-colour: #3b82f6; }
   tr[data-apps-group="solar"] { --group-colour: #d99a00; }
@@ -199,6 +248,11 @@ export default function AppsPage() {
     table.classList.add('apps-settings-table')
 
     const rows = Array.from(body.rows).filter((row) => row.dataset.argName)
+    const comparisonRow = rows.find((row) => row.dataset.argName === 'compare_list')
+    if (comparisonRow) {
+      comparisonRow.classList.add('apps-comparison-row')
+      comparisonRow.cells[1].colSpan = 3
+    }
     const header = Array.from(body.rows).find((row) => !row.dataset.argName)
     if (header && !table.tHead) table.createTHead().append(header)
     const headerRow = table.tHead?.rows[0]
