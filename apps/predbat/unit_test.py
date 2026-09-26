@@ -291,6 +291,7 @@ from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
 from tests.test_rate_text_scan import test_rate_text_scan
 from tests.test_kraken import run_kraken_tests
+from tests.test_eon_optimise import run_eon_optimise_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
@@ -722,6 +723,7 @@ def main():
         ("fox_oauth", run_fox_oauth_tests, "Fox API OAuth tests (dual auth headers, 401 retry, initialize params)", False),
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
+        ("eon_optimise", run_eon_optimise_tests, "E.ON Optimise Amber price API, freshness, secrets and cache", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),

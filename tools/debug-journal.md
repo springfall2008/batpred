@@ -222,6 +222,8 @@ Grep for the named symbol rather than trusting a line number.
 
 ## Adding to this file
 
+- **A healthy rate sensor does not prove the planner selected it.** `Fetch.fetch_sensor_data()` gives `rates_import_octopus_url` and `rates_export_octopus_url` precedence over `metric_octopus_*`, based on key presence even when the URL is empty. PR #5148 adds E.ON-specific configuration and consumer checks before that selection. Kraken and E.ON share `rate_replicate()` for future gaps (previous-day or last-known prices); those estimates are distinct from fresh supplier coverage. Verified by source inspection and native E.ON regression tests.
+
 When an investigation turns up something a future triage run would have wanted to know — a config item that explains a class of report, an API quirk, a symptom that maps to a module — add a row. Keep it short, name the symbol rather than the line number, and cite the issue number so the next reader can check the original.
 
 If you are running under the triage bot you cannot edit this file directly — the clone is `reset --hard` before every flow, so the edit would not survive. Write the finding as a single markdown file in the queue directory named in your system prompt instead; the `/journal-update` flow folds the queue in once a day, re-checking each candidate against current `main` first, and opens a PR for a maintainer to merge.

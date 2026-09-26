@@ -16,6 +16,7 @@ There are a number of different ways of configuring your Energy rates in `apps.y
 - [Octopus Energy Integration](#octopus-energy-home-assistant-integration), Predbat getting Octopus rates from the Octopus Energy integration
 - [Octopus Rates URL's](#octopus-rates-url), configuring Predbat to directly use the correct URL's for your Octopus tariff (not recommended as can stop working when you change tariff)
 - [Kraken component](#kraken-integration-for-edf-or-eonnext), Predbat getting rates directly from Kraken for EDF or Eon.Next customers
+- [E.ON Next Optimise](#eon-next-optimise), published UK Optimise app prices
 - [Energidataservice Integration](#energidataservice-integration), Predbat getting rates from the Energidataservice integration
 - [Strømligning Integration](#strømligning-integration), Predbat getting rates from the Strømligning integration
 - [Spot rates](#other-energy-spot-rate-sensor-integrations), Predbat retrieves spot rates from correctly formatted import and export rate sensors
@@ -281,6 +282,66 @@ The following entries are required for the Kraken component in `apps.yaml`:
 ```
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
+
+## E.ON Next Optimise
+
+The optional `eon_optimise` component reads import and export prices from the UK
+Optimise app's Amber backend, using the same planner inputs as Kraken. It does
+not enable SmartShift or control supplier devices. This is not the Australian
+Amber API.
+
+Add to your Predbat configuration in `apps.yaml`, with the corresponding login
+values in `secrets.yaml`:
+
+```yaml
+  eon_optimise_enable: true
+  eon_optimise_email: !secret eon_optimise_email
+  eon_optimise_password: !secret eon_optimise_password
+  eon_optimise_observe_only: true
+```
+
+The runtime must include `pycognito==2024.5.1`; a source-only update does not
+install it. Start with `eon_optimise_observe_only: true` to poll and publish
+E.ON prices alongside your existing tariff source without changing Predbat's
+planner inputs. Compare both import and export rates for several days,
+including any in-day revisions. The status sensor reports `mode: observe_only`.
+
+To use E.ON prices for planning, set `eon_optimise_observe_only: false` and
+restart Predbat. Disable competing Kraken/Octopus components and remove both
+`rates_import_octopus_url` and `rates_export_octopus_url` keys, including empty
+entries. E.ON owns both price inputs.
+
+The Optimise component publishes half-hourly unit prices only; it does not
+fetch or set the daily standing charge. To include the standing charge in
+Predbat's cost figures, set `metric_standing_charge` yourself to your current
+import tariff's charge in **pounds per day** (for example, `0.50` means 50p/day),
+or point it at a current Home Assistant sensor that reports £/day. Check the
+amount against your tariff or bill, and replace any standing-charge sensor left
+over from an old supplier. Without this setting, Predbat uses zero for this
+component. Kraken can fetch standing charges for some tariffs, but the Optimise
+planner mode does not use Kraken or require its credentials.
+
+Before allowing Predbat to control the battery, set Next Optimise/Amber battery
+automation to manual mode. If both services automate the battery, they can issue
+conflicting inverter commands.
+
+With the default prefix, prices appear in the `rates` attributes of
+`sensor.predbat_eon_optimise_import_rates` and
+`sensor.predbat_eon_optimise_export_rates`, with health reported by
+`sensor.predbat_eon_optimise_status`. Prices are p/kWh; negative values are
+preserved and export represents earnings. Included boosters are not added again.
+
+Prices refresh every five minutes and expire after 15 minutes. Missing or stale
+current prices block new calculations, but do not cancel existing inverter
+commands. Future gaps use Predbat's normal previous-day/last-price estimates,
+as with Kraken; published future prices are also forecasts, not final settlement.
+Past Optimise periods are supplier history, not confirmed billed or settled
+prices. Predbat's cost figures remain estimates; this component does not
+reconcile them against Kraken billing history or an invoice.
+
+**Experimental: live testing is limited to the contributor's own account and UK
+supply region.** Other accounts/regions, multi-site selection and interactive MFA
+are not validated or supported. The app backend is not a guaranteed public API.
 
 ## Energidataservice Integration
 

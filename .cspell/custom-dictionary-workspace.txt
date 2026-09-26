@@ -513,6 +513,7 @@ PVONLY
 pvpower
 pvwatts
 pwindow
+pycognito
 pyjwt
 pylint
 pymyenergi
