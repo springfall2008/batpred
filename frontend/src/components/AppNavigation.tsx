@@ -1,41 +1,40 @@
-import {
-    useEffect,
-    useState
-} from 'react'
+import { useEffect, useState } from 'react'
+
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 
 import {
-    FontAwesomeIcon
-} from '@fortawesome/react-fontawesome'
-
-import {
-    faBars,
-    faCircleCheck,
-    faCircleNotch,
-    faBatteryEmpty,
-    faBatteryQuarter,
-    faBatteryHalf,
-    faBatteryThreeQuarters,
-    faBatteryFull,
-    faCalendarDays,
-    faChartLine,
-    faChevronLeft,
-    faChevronRight,
-    faCode,
-    faComments,
-    faFileCode,
-    faGaugeHigh,
-    faGear,
-    faHouse,
-    faList,
-    faMicrochip,
-    faRightLeft,
-    faScroll,
-    faServer,
-    faSliders,
-    faXmark,
-    faMoon,
-    faSun
+  faBars,
+  faCircleCheck,
+  faCircleNotch,
+  faBatteryEmpty,
+  faBatteryQuarter,
+  faBatteryHalf,
+  faBatteryThreeQuarters,
+  faBatteryFull,
+  faBookOpen,
+  faCalendarDays,
+  faChartLine,
+  faChevronLeft,
+  faChevronRight,
+  faCode,
+  faComments,
+  faFileCode,
+  faGear,
+  faHouse,
+  faList,
+  faMicrochip,
+  faRightLeft,
+  faScroll,
+  faServer,
+  faSliders,
+  faXmark,
+  faMoon,
+  faSun,
 } from '@fortawesome/free-solid-svg-icons'
+
+import {
+  faGithub
+} from '@fortawesome/free-brands-svg-icons'
 
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 
@@ -45,25 +44,26 @@ import batLogoDark from '../assets/bat_logo_dark.png'
 import './AppNavigation.css'
 
 type AppNavigationProps = {
-    collapsed: boolean
-    onCollapsedChange: (collapsed: boolean) => void
+  collapsed: boolean
+  onCollapsedChange: (collapsed: boolean) => void
 
-    calculating: boolean
-    batterySoc: number | null
+  calculating: boolean
+  batterySoc: number | null
+  chatEnabled: boolean
 
-    version: string
+  version: string
 }
 
 type NavigationItem = {
-    label: string
-    href: string
-    icon: IconDefinition
+  label: string
+  href: string
+  icon: IconDefinition
+  external?: boolean
 }
 
-
 type NavigationGroup = {
-    label: string
-    items: NavigationItem[]
+  label: string
+  items: NavigationItem[]
 }
 
 /*
@@ -74,565 +74,387 @@ type NavigationGroup = {
  * the correct browser URL while "./plan" is.
  */
 const navigationGroups: NavigationGroup[] = [
-    {
-        label: 'Predbat',
-        items: [
-            {
-                label: 'Dashboard',
-                href: './dash',
-                icon: faHouse
-            },
-            {
-                label: 'Plan',
-                href: './plan',
-                icon: faCalendarDays
-            },
-            {
-                label: 'Charts',
-                href: './charts',
-                icon: faChartLine
-            },
-            {
-                label: 'Entities',
-                href: './entity',
-                icon: faList
-            },
-            {
-                label: 'Compare',
-                href: './compare',
-                icon: faRightLeft
-            },
-            {
-                label: 'Annual',
-                href: './annual',
-                icon: faBatteryHalf
-            },
-            {
-                label: 'Chat',
-                href: './chat',
-                icon: faComments
-            }
-        ]
-    },
+  {
+    label: 'Predbat',
+    items: [
+      {
+        label: 'Dashboard',
+        href: './dash',
+        icon: faHouse
+      },
+      {
+        label: 'Plan',
+        href: './plan',
+        icon: faCalendarDays
+      },
+      {
+        label: 'Charts',
+        href: './charts',
+        icon: faChartLine
+      },
+      {
+        label: 'Entities',
+        href: './dash?page=entity',
+        icon: faList
+      },
+      {
+        label: 'Compare',
+        href: './compare',
+        icon: faRightLeft
+      },
+      {
+        label: 'What If',
+        href: './annual',
+        icon: faBatteryHalf
+      },
+      {
+        label: 'Chat',
+        href: './chat',
+        icon: faComments
+      }
+    ]
+  },
 
-    {
-        label: 'Configuration',
-        items: [
-            {
-                label: 'Config',
-                href: './config',
-                icon: faSliders
-            },
-            {
-                label: 'Apps',
-                href: './apps',
-                icon: faGear
-            },
-            {
-                label: 'Editor',
-                href: './apps_editor',
-                icon: faCode
-            },
-            {
-                label: 'Components',
-                href: './components',
-                icon: faMicrochip
-            }
-        ]
-    },
+  {
+    label: 'Configuration',
+    items: [
+      {
+        label: 'Config',
+        href: './config',
+        icon: faSliders
+      },
+      {
+        label: 'Apps',
+        href: './apps',
+        icon: faGear
+      },
+      {
+        label: 'Editor',
+        href: './apps_editor',
+        icon: faCode
+      },
+      {
+        label: 'Components',
+        href: './components',
+        icon: faMicrochip
+      }
+    ]
+  },
 
-    {
-        label: 'System',
-        items: [
-            {
-                label: 'Log',
-                href: './log',
-                icon: faScroll
-            },
-            {
-                label: 'Metrics',
-                href: './metrics_dashboard',
-                icon: faGaugeHigh
-            },
-            {
-                label: 'Browse',
-                href: './browse',
-                icon: faFileCode
-            },
-            {
-                label: 'Internals',
-                href: './internals',
-                icon: faServer
-            }
-        ]
-    }
+  {
+    label: 'System',
+    items: [
+      {
+        label: 'Log',
+        href: './log',
+        icon: faScroll
+      },
+      {
+        label: 'Browse',
+        href: './browse',
+        icon: faFileCode
+      },
+      {
+        label: 'Internals',
+        href: './internals',
+        icon: faServer
+      },
+      {
+        label: 'Docs',
+        href: './docs',
+        icon: faBookOpen
+      }
+    ]
+  },
+
+  {
+    label: 'Support',
+    items: [
+      {
+        label: 'GitHub',
+        href: 'https://github.com/springfall2008/batpred',
+        icon: faGithub,
+        external: true,
+      }
+    ]
+  }
 ]
 
 function getBatteryIcon(soc: number) {
-    if (soc >= 88) {
-        return faBatteryFull
-    }
+  if (soc >= 88) {
+    return faBatteryFull
+  }
 
-    if (soc >= 63) {
-        return faBatteryThreeQuarters
-    }
+  if (soc >= 63) {
+    return faBatteryThreeQuarters
+  }
 
-    if (soc >= 38) {
-        return faBatteryHalf
-    }
+  if (soc >= 38) {
+    return faBatteryHalf
+  }
 
-    if (soc >= 13) {
-        return faBatteryQuarter
-    }
+  if (soc >= 13) {
+    return faBatteryQuarter
+  }
 
-    return faBatteryEmpty
+  return faBatteryEmpty
 }
 
 export default function AppNavigation({
-    collapsed,
-    onCollapsedChange,
-    calculating,
-    batterySoc,
-    version
+  collapsed,
+  onCollapsedChange,
+  calculating,
+  batterySoc,
+  chatEnabled,
+  version
 }: AppNavigationProps) {
+  /*
+   * Mobile menu always starts closed.
+   *
+   * Unlike desktop collapse, we deliberately don't persist
+   * this because opening the site on mobile should never
+   * immediately cover the dashboard.
+   */
+  const [mobileOpen, setMobileOpen] = useState(false)
 
+  const [batFlying, setBatFlying] = useState(false)
+
+  function flyBat() {
     /*
-     * Mobile menu always starts closed.
-     *
-     * Unlike desktop collapse, we deliberately don't persist
-     * this because opening the site on mobile should never
-     * immediately cover the dashboard.
+     * Ignore additional clicks while the bat is already flying.
      */
-    const [mobileOpen, setMobileOpen] =
-        useState(false)
-
-    const [batFlying, setBatFlying] =
-        useState(false)
-
-    function flyBat() {
-        /*
-         * Ignore additional clicks while the bat is already flying.
-         */
-        if (batFlying) {
-            return
-        }
-
-        setBatFlying(true)
-
-        /*
-         * This duration should match the CSS animation duration.
-         */
-        window.setTimeout(() => {
-            setBatFlying(false)
-        }, 4500)
+    if (batFlying) {
+      return
     }
 
+    setBatFlying(true)
+
     /*
-     * Prevent the page underneath scrolling while the
-     * mobile navigation drawer is open.
+     * This duration should match the CSS animation duration.
      */
-    useEffect(() => {
+    window.setTimeout(() => {
+      setBatFlying(false)
+    }, 4500)
+  }
 
-        if (!mobileOpen) {
-            return
-        }
+  /*
+   * Prevent the page underneath scrolling while the
+   * mobile navigation drawer is open.
+   */
+  useEffect(() => {
+    if (!mobileOpen) {
+      return
+    }
 
+    const originalOverflow = document.body.style.overflow
 
-        const originalOverflow =
-            document.body.style.overflow
+    document.body.style.overflow = 'hidden'
 
+    return () => {
+      document.body.style.overflow = originalOverflow
+    }
+  }, [mobileOpen])
 
-        document.body.style.overflow =
-            'hidden'
+  type Theme = 'light' | 'dark'
 
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const stored = localStorage.getItem('predbat-theme')
 
-        return () => {
+      if (stored === 'light' || stored === 'dark') {
+        return stored
+      }
+    } catch {
+      // Theme preference is non-critical.
+    }
 
-            document.body.style.overflow =
-                originalOverflow
-        }
+    // Use the system theme only when no valid user preference was saved.
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
 
-    }, [mobileOpen])
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
 
+    try {
+      localStorage.setItem('predbat-theme', theme)
+    } catch {
+      // Theme preference is non-critical.
+    }
+  }, [theme])
 
-    type Theme = 'light' | 'dark'
+  const pathPage = window.location.pathname.replace(/\/+$/, '').split('/').pop() ?? 'dash'
+  const currentPage = new URLSearchParams(window.location.search).get('page') ?? pathPage
 
-    const [theme, setTheme] =
-        useState<Theme>(() => {
-
-            try {
-                const stored =
-                    localStorage.getItem('predbat-theme')
-
-                if (
-                    stored === 'light' ||
-                    stored === 'dark'
-                ) {
-                    return stored
-                }
-            } catch {
-                // Theme preference is non-critical.
-            }
-
-            return window.matchMedia(
-                '(prefers-color-scheme: dark)'
-            ).matches
-                ? 'dark'
-                : 'light'
-        })
-
-    useEffect(() => {
-
-        document.documentElement.dataset.theme =
-            theme
-
-        try {
-            localStorage.setItem(
-                'predbat-theme',
-                theme
-            )
-        } catch {
-            // Theme preference is non-critical.
-        }
-
-    }, [theme])
-
-    const currentPage =
-        window.location.pathname
-            .replace(/\/+$/, '')
-            .split('/')
-            .pop() ?? 'dash'
-
-
-    return (
-        <>
-
-            {/*
+  return (
+    <>
+      {/*
        * Mobile top bar.
        */}
-            <header className="mobile-app-header">
+      <header className="mobile-app-header">
+        <button
+          type="button"
+          className="mobile-menu-button"
+          aria-label="Open navigation"
+          aria-expanded={mobileOpen}
+          onClick={() => setMobileOpen(true)}
+        >
+          <FontAwesomeIcon icon={faBars} />
+        </button>
 
-                <button
-                    type="button"
-                    className="mobile-menu-button"
-                    aria-label="Open navigation"
-                    aria-expanded={mobileOpen}
-                    onClick={() =>
-                        setMobileOpen(true)
-                    }
-                >
-                    <FontAwesomeIcon
-                        icon={faBars}
-                    />
-                </button>
+        <strong>Predbat</strong>
+      </header>
 
-                <strong>
-                    Predbat
-                </strong>
-
-            </header>
-
-
-            {/*
+      {/*
        * Semi-transparent background behind the drawer.
        */}
-            {mobileOpen && (
-                <button
-                    type="button"
-                    className="navigation-backdrop"
-                    aria-label="Close navigation"
-                    onClick={() =>
-                        setMobileOpen(false)
-                    }
+      {mobileOpen && (
+        <button
+          type="button"
+          className="navigation-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      <aside
+        className={[
+          'app-navigation',
+          collapsed ? 'is-collapsed' : '',
+          mobileOpen ? 'is-mobile-open' : ''
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        <div className="navigation-header">
+          <div className="navigation-brand">
+            <div className="navigation-brand-main">
+              <button
+                type="button"
+                className="navigation-logo-button"
+                aria-label="Predbat"
+                title="Predbat"
+                onClick={flyBat}
+              >
+                <picture>
+                  <source media="(prefers-color-scheme: dark)" srcSet={batLogoDark} />
+
+                  <img src={batLogoLight} alt="Predbat Logo" className="navigation-logo-image" />
+                </picture>
+              </button>
+
+              <span className="navigation-brand-name">Predbat</span>
+            </div>
+
+            <div className="navigation-live-status">
+              <span
+                className={['navigation-plan-status', calculating ? 'is-calculating' : 'is-ready']
+                  .filter(Boolean)
+                  .join(' ')}
+                title={calculating ? 'Predbat is calculating' : 'Plan generated'}
+              >
+                <FontAwesomeIcon
+                  icon={calculating ? faCircleNotch : faCircleCheck}
+                  spin={calculating}
                 />
-            )}
+              </span>
 
+              {batterySoc !== null && (
+                <span
+                  className="navigation-battery-status"
+                  title={`Battery state of charge: ${Math.round(batterySoc)}%`}
+                >
+                  <FontAwesomeIcon icon={getBatteryIcon(batterySoc)} />
 
-            <aside
-                className={[
-                    'app-navigation',
-                    collapsed
-                        ? 'is-collapsed'
-                        : '',
-                    mobileOpen
-                        ? 'is-mobile-open'
-                        : ''
-                ]
-                    .filter(Boolean)
-                    .join(' ')}
-            >
+                  <span className="navigation-battery-soc">{Math.round(batterySoc)}%</span>
+                </span>
+              )}
+            </div>
+          </div>
 
-                <div className="navigation-header">
-
-                    <div className="navigation-brand">
-
-                        <div className="navigation-brand-main">
-
-                            <button
-                                type="button"
-                                className="navigation-logo-button"
-                                aria-label="Predbat"
-                                title="Predbat"
-                                onClick={flyBat}
-                            >
-                                <picture>
-                                    <source
-                                        media="(prefers-color-scheme: dark)"
-                                        srcSet={batLogoDark}
-                                    />
-
-                                    <img
-                                        src={batLogoLight}
-                                        alt="Predbat Logo"
-                                        className="navigation-logo-image"
-                                    />
-                                </picture>
-                            </button>
-
-                            <span className="navigation-brand-name">
-                                Predbat
-                            </span>
-
-                        </div>
-
-
-                        <div className="navigation-live-status">
-
-                            <span
-                                className={[
-                                    'navigation-plan-status',
-                                    calculating
-                                        ? 'is-calculating'
-                                        : 'is-ready'
-                                ]
-                                    .filter(Boolean)
-                                    .join(' ')}
-                                title={
-                                    calculating
-                                        ? 'Predbat is calculating'
-                                        : 'Plan generated'
-                                }
-                            >
-                                <FontAwesomeIcon
-                                    icon={
-                                        calculating
-                                            ? faCircleNotch
-                                            : faCircleCheck
-                                    }
-                                    spin={calculating}
-                                />
-                            </span>
-
-
-                            {batterySoc !== null && (
-                                <span
-                                    className="navigation-battery-status"
-                                    title={
-                                        `Battery state of charge: ${Math.round(batterySoc)}%`
-                                    }
-                                >
-                                    <FontAwesomeIcon
-                                        icon={
-                                            getBatteryIcon(
-                                                batterySoc
-                                            )
-                                        }
-                                    />
-
-                                    <span className="navigation-battery-soc">
-                                        {Math.round(batterySoc)}%
-                                    </span>
-                                </span>
-                            )}
-
-                        </div>
-
-                    </div>
-
-
-                    {/*
+          {/*
            * Desktop collapse button.
            */}
-                    <button
-                        type="button"
-                        className="navigation-collapse-button"
-                        aria-label={
-                            collapsed
-                                ? 'Expand navigation'
-                                : 'Collapse navigation'
-                        }
-                        onClick={() =>
-                            onCollapsedChange(!collapsed)
-                        }
-                    >
-                        <FontAwesomeIcon
-                            icon={
-                                collapsed
-                                    ? faChevronRight
-                                    : faChevronLeft
-                            }
-                        />
-                    </button>
+          <button
+            type="button"
+            className="navigation-collapse-button"
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            onClick={() => onCollapsedChange(!collapsed)}
+          >
+            <FontAwesomeIcon icon={collapsed ? faChevronRight : faChevronLeft} />
+          </button>
 
-
-                    {/*
+          {/*
            * Mobile close button.
            */}
-                    <button
-                        type="button"
-                        className="navigation-mobile-close"
-                        aria-label="Close navigation"
-                        onClick={() =>
-                            setMobileOpen(false)
-                        }
-                    >
-                        <FontAwesomeIcon
-                            icon={faXmark}
-                        />
-                    </button>
+          <button
+            type="button"
+            className="navigation-mobile-close"
+            aria-label="Close navigation"
+            onClick={() => setMobileOpen(false)}
+          >
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
+        </div>
 
-                </div>
+        <nav className="navigation-menu">
+          {navigationGroups.map((group) => (
+            <div className="navigation-group" key={group.label}>
+              <span className="navigation-group-label">{group.label}</span>
 
+              {group.items.filter((item) => item.label !== 'Chat' || chatEnabled).map((item) => {
+                const active = item.href === `./${currentPage}` || (currentPage === 'entity' && item.href.endsWith('?page=entity'))
 
-                <nav className="navigation-menu">
-
-                    {navigationGroups.map(
-                        group => (
-
-                            <div
-                                className="navigation-group"
-                                key={group.label}
-                            >
-
-                                <span className="navigation-group-label">
-                                    {group.label}
-                                </span>
-
-
-                                {group.items.map(
-                                    item => {
-
-                                        const active =
-                                            item.href === `./${currentPage}`
-
-
-                                        return (
-                                            <a
-                                                key={item.href}
-                                                href={item.href}
-                                                className={[
-                                                    'navigation-item',
-                                                    active
-                                                        ? 'is-active'
-                                                        : ''
-                                                ]
-                                                    .filter(Boolean)
-                                                    .join(' ')}
-                                                title={
-                                                    collapsed
-                                                        ? item.label
-                                                        : undefined
-                                                }
-                                                onClick={() =>
-                                                    setMobileOpen(false)
-                                                }
-                                            >
-
-                                                <span className="navigation-item-icon">
-                                                    <FontAwesomeIcon
-                                                        icon={item.icon}
-                                                    />
-                                                </span>
-
-                                                <span className="navigation-item-label">
-                                                    {item.label}
-                                                </span>
-
-                                            </a>
-                                        )
-                                    }
-                                )}
-
-                            </div>
-                        )
-                    )}
-
-                </nav>
-
-                <nav className="navigation-menu">
-                    {/* existing navigation groups */}
-                </nav>
-
-
-                <footer className="navigation-footer">
-
-                    <span
-                        className="navigation-version"
-                        title={`Predbat ${version}`}
-                    >
-                        {version}
+                return (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    target={item.external ? '_blank' : undefined}
+                    className={['navigation-item', active ? 'is-active' : '']
+                      .filter(Boolean)
+                      .join(' ')}
+                    title={collapsed ? item.label : undefined}
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    <span className="navigation-item-icon">
+                      <FontAwesomeIcon icon={item.icon} />
                     </span>
 
+                    <span className="navigation-item-label">{item.label}</span>
+                  </a>
+                )
+              })}
+            </div>
+          ))}
+        </nav>
 
-                    <button
-                        type="button"
-                        className="navigation-theme-button"
-                        aria-label={
-                            theme === 'dark'
-                                ? 'Switch to light mode'
-                                : 'Switch to dark mode'
-                        }
-                        title={
-                            theme === 'dark'
-                                ? 'Light mode'
-                                : 'Dark mode'
-                        }
-                        onClick={() =>
-                            setTheme(current =>
-                                current === 'dark'
-                                    ? 'light'
-                                    : 'dark'
-                            )
-                        }
-                    >
-                        <FontAwesomeIcon
-                            icon={
-                                theme === 'dark'
-                                    ? faSun
-                                    : faMoon
-                            }
-                        />
+        <footer className="navigation-footer">
+          <span className="navigation-version" title={`Predbat ${version}`}>
+            {version}
+          </span>
 
-                        <span className="navigation-theme-label">
-                            {theme === 'dark'
-                                ? 'Light'
-                                : 'Dark'}
-                        </span>
-                    </button>
+          <button
+            type="button"
+            className="navigation-theme-button"
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+          >
+            <FontAwesomeIcon icon={theme === 'dark' ? faSun : faMoon} />
 
-                </footer>
+            <span className="navigation-theme-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+          </button>
+        </footer>
+      </aside>
 
-            </aside>
+      {batFlying && (
+        <div className="predbat-flying-bat" aria-hidden="true">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcSet={batLogoDark} />
 
-            {batFlying && (
-                <div
-                    className="predbat-flying-bat"
-                    aria-hidden="true"
-                >
-                    <picture>
-                        <source
-                            media="(prefers-color-scheme: dark)"
-                            srcSet={batLogoDark}
-                        />
-
-                        <img
-                            src={batLogoLight}
-                            alt=""
-                        />
-                    </picture>
-                </div>
-            )}
-
-        </>
-    )
+            <img src={batLogoLight} alt="" />
+          </picture>
+        </div>
+      )}
+    </>
+  )
 }

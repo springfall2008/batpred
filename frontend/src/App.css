@@ -1,378 +1,148 @@
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
-
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-}
-
-.hero {
-  position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
-}
-
-#center {
-  display: flex;
-  flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
-}
-
-#next-steps {
-  display: flex;
-  border-top: 1px solid var(--border);
-  text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
-}
-
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-}
-
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
-}
-
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
-}
-
-.ticks {
-  position: relative;
-  width: 100%;
-
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
-
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
-  }
-}
-
+/* Global notices and application layout. Component overrides retain their cascade order. */
 .api-error-notice {
-    position: fixed;
-
-    left: 50%;
-    bottom: 1rem;
-
-    z-index: 1000;
-
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-
-    width: min(540px, calc(100% - 2rem));
-
-    padding: 0.8rem 0.9rem;
-
-    transform: translateX(-50%);
-
-    border: 1px solid var(--color-warning);
-    border-radius: 10px;
-
-    background: var(--color-surface);
-    color: var(--color-text);
-
-    box-shadow: var(--shadow-tooltip);
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: min(540px, calc(100% - 2rem));
+  padding: 0.8rem 0.9rem;
+  transform: translateX(-50%);
+  border: 1px solid var(--color-warning);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-tooltip);
 }
 
 .api-error-content {
-    flex: 1;
-
-    display: flex;
-    flex-direction: column;
-
-    min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .api-error-content strong {
-    font-size: 0.8rem;
+  font-size: 0.8rem;
 }
 
 .api-error-content span {
-    margin-top: 0.15rem;
-
-    font-size: 0.72rem;
-    line-height: 1.35;
-
-    color: var(--color-text-secondary);
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-secondary);
 }
 
 .api-error-content small {
-    margin-top: 0.15rem;
-
-    font-size: 0.65rem;
-    line-height: 1.35;
-
-    color: var(--color-text-muted);
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
 }
 
 .api-error-notice button,
 .dashboard-load-error button {
-    flex: 0 0 auto;
-
-    padding: 0.4rem 0.65rem;
-
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-
-    background: var(--color-surface);
-    color: var(--color-text);
-
-    font: inherit;
-    font-size: 0.7rem;
-    font-weight: 600;
-
-    cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .api-error-notice button:hover,
 .dashboard-load-error button:hover {
-    border-color: var(--color-text-muted);
+  border-color: var(--color-text-muted);
 }
 
 .dashboard-load-error {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-
-    max-width: 480px;
-
-    margin: 4rem auto;
-    padding: 1rem;
-
-    border: 1px solid var(--color-danger);
-    border-radius: 10px;
-
-    background: var(--color-surface);
-
-    box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: 480px;
+  margin: 4rem auto;
+  padding: 1rem;
+  border: 1px solid var(--color-danger);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
 }
 
 .dashboard-load-error span {
-    font-size: 0.8rem;
-    color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
 }
 
 .app-content {
-    min-height: 100vh;
-
-    margin-left: var(--navigation-width);
-
-    transition: margin-left 0.2s ease;
+  min-height: 100vh;
+  margin-left: var(--navigation-width);
+  transition: margin-left 0.2s ease;
 }
 
 /* ============================================================
  * Predbat application navigation
  * ============================================================ */
 
-
 /* ------------------------------------------------------------
  * Desktop sidebar
  * ------------------------------------------------------------ */
 
 .app-navigation {
-    position: fixed;
-
-    top: 0;
-    left: 0;
-    bottom: 0;
-
-    z-index: 900;
-
-    display: flex;
-    flex-direction: column;
-
-    width: 240px;
-
-    border-right: 1px solid var(--color-border);
-
-    background: var(--color-surface);
-    color: var(--color-text);
-
-    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
-
-    transition:
-        width 0.2s ease,
-        transform 0.25s ease;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
+  transition:
+    width 0.2s ease,
+    transform 0.25s ease;
 }
-
 
 /*
  * Collapsed desktop sidebar.
  */
 .app-navigation.is-collapsed {
-    width: 72px;
+  width: 72px;
 }
-
-
 
 /* ------------------------------------------------------------
  * Navigation header
  * ------------------------------------------------------------ */
 
 .navigation-header {
-    position: relative;
-
-    display: flex;
-    align-items: flex-start;
-
-    min-height: 78px;
-
-    padding: 0.8rem;
-
-    border-bottom: 1px solid var(--color-border);
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  min-height: 78px;
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--color-border);
 }
-
 
 /*
  * Branding is deliberately vertical because the live Predbat
  * status sits underneath the logo/name.
  */
 .navigation-brand {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    align-items: flex-start;
-
-    min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
 }
-
 
 /*
  * First branding row:
@@ -380,69 +150,49 @@
  * [bat logo] Predbat
  */
 .navigation-brand-main {
-    display: flex;
-    align-items: center;
-
-    gap: 0.55rem;
-
-    min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
 }
-
-
 
 /* ------------------------------------------------------------
  * Predbat logo
  * ------------------------------------------------------------ */
 
 .navigation-logo-button {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: center;
-
-    width: 2.5rem;
-    height: 2.5rem;
-
-    padding: 0;
-
-    border: 0;
-
-    background: transparent;
-
-    cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
-
 
 .navigation-logo-button picture {
-    display: block;
-
-    width: 100%;
-    height: 100%;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
-
 
 .navigation-logo-image {
-    display: block;
-
-    width: 100%;
-    height: 100%;
-
-    object-fit: contain;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
-
 
 .navigation-brand-name {
-    min-width: 0;
-
-    font-size: 1rem;
-    font-weight: 700;
-
-    color: var(--color-text);
-
-    white-space: nowrap;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
 }
-
-
 
 /* ------------------------------------------------------------
  * Live status under the Predbat logo
@@ -453,252 +203,183 @@
  * ------------------------------------------------------------ */
 
 .navigation-live-status {
-    display: flex;
-    align-items: center;
-
-    gap: 0.65rem;
-
-    margin-top: 0.3rem;
-    padding-left: 0.15rem;
-
-    min-height: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.3rem;
+  padding-left: 0.15rem;
+  min-height: 1.2rem;
 }
-
 
 .navigation-plan-status {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    width: 1rem;
-    height: 1rem;
-
-    flex: 0 0 auto;
-
-    font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  font-size: 0.85rem;
 }
-
 
 .navigation-plan-status.is-ready {
-    color: var(--color-success, #22c55e);
+  color: var(--color-success, #22c55e);
 }
-
 
 .navigation-plan-status.is-calculating {
-    color: var(--color-text-muted);
+  color: var(--color-text-muted);
 }
-
 
 .navigation-battery-status {
-    display: flex;
-    align-items: center;
-
-    gap: 0.3rem;
-
-    min-width: 0;
-
-    color: var(--color-text-secondary);
-
-    font-size: 0.7rem;
-    font-weight: 600;
-
-    white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
-
 
 .navigation-battery-status > svg {
-    flex: 0 0 auto;
-
-    font-size: 0.9rem;
-
-    color: var(--color-flow-battery);
+  flex: 0 0 auto;
+  font-size: 0.9rem;
+  color: var(--color-flow-battery);
 }
-
 
 .navigation-battery-soc {
-    min-width: 2.1rem;
+  min-width: 2.1rem;
 }
-
-
 
 /* ------------------------------------------------------------
  * Desktop collapse button
  * ------------------------------------------------------------ */
 
 .navigation-collapse-button {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: center;
-
-    width: 2rem;
-    height: 2rem;
-
-    margin-left: 0.35rem;
-    padding: 0;
-
-    border: 0;
-    border-radius: 6px;
-
-    background: transparent;
-    color: var(--color-text-muted);
-
-    cursor: pointer;
-
-    transition:
-        background 0.2s ease,
-        color 0.2s ease;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-left: 0.35rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
 }
-
 
 .navigation-collapse-button:hover {
-    background: var(--color-bg);
-    color: var(--color-text);
+  background: var(--color-bg);
+  color: var(--color-text);
 }
-
-
 
 /* ------------------------------------------------------------
  * Navigation menu
  * ------------------------------------------------------------ */
 
 .navigation-menu {
-    flex: 1;
-
-    overflow-x: hidden;
-    overflow-y: auto;
-
-    padding: 0.65rem;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.65rem;
 }
-
 
 .navigation-group {
-    display: flex;
-    flex-direction: column;
-
-    gap: 0.15rem;
-
-    margin-bottom: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.9rem;
 }
-
 
 .navigation-group:last-child {
-    margin-bottom: 0;
+  margin-bottom: 0;
 }
-
 
 .navigation-group-label {
-    display: block;
-
-    padding: 0.35rem 0.6rem;
-
-    font-size: 0.58rem;
-    font-weight: 700;
-
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-
-    color: var(--color-text-muted);
-
-    white-space: nowrap;
+  display: block;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
-
-
 
 /* ------------------------------------------------------------
  * Individual navigation links
  * ------------------------------------------------------------ */
 
 .navigation-item {
-    display: flex;
-    align-items: center;
-
-    gap: 0.7rem;
-
-    min-height: 2.45rem;
-
-    padding: 0.5rem 0.65rem;
-
-    border-radius: 7px;
-
-    color: var(--color-text-secondary);
-
-    text-decoration: none;
-
-    font-size: 0.78rem;
-    font-weight: 600;
-
-    white-space: nowrap;
-
-    transition:
-        background 0.15s ease,
-        color 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 2.45rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 7px;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
-
 
 .navigation-item:hover {
-    background: var(--color-bg);
-    color: var(--color-text);
+  background: var(--color-bg);
+  color: var(--color-text);
 }
-
 
 .navigation-item.is-active {
-    background: var(--color-charge);
-    color: white;
+  background: var(--color-charge);
+  color: white;
 }
-
 
 .navigation-item-icon {
-    display: flex;
-    flex: 0 0 1.2rem;
-    align-items: center;
-    justify-content: center;
-
-    width: 1.2rem;
-
-    font-size: 0.9rem;
+  display: flex;
+  flex: 0 0 1.2rem;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  font-size: 0.9rem;
 }
-
 
 .navigation-item-label {
-    min-width: 0;
-
-    overflow: hidden;
-
-    text-overflow: ellipsis;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-
 
 /* ------------------------------------------------------------
  * Collapsed desktop navigation
  * ------------------------------------------------------------ */
 
 .app-navigation.is-collapsed .navigation-header {
-    flex-direction: column;
-    align-items: center;
-
-    padding-left: 0.55rem;
-    padding-right: 0.55rem;
+  flex-direction: column;
+  align-items: center;
+  padding-left: 0.55rem;
+  padding-right: 0.55rem;
 }
-
 
 .app-navigation.is-collapsed .navigation-brand {
-    align-items: center;
-
-    width: 100%;
+  align-items: center;
+  width: 100%;
 }
-
 
 .app-navigation.is-collapsed .navigation-brand-main {
-    justify-content: center;
+  justify-content: center;
 }
-
 
 .app-navigation.is-collapsed .navigation-brand-name {
-    display: none;
+  display: none;
 }
-
 
 /*
  * Keep plan status and battery icon visible when collapsed.
@@ -707,80 +388,58 @@
  * have enough room for it cleanly.
  */
 .app-navigation.is-collapsed .navigation-live-status {
-    flex-direction: column;
-
-    gap: 0.3rem;
-
-    margin-top: 0.4rem;
-    padding-left: 0;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding-left: 0;
 }
-
 
 .app-navigation.is-collapsed .navigation-battery-soc {
-    display: none;
+  display: none;
 }
-
 
 .app-navigation.is-collapsed .navigation-collapse-button {
-    position: absolute;
-
-    top: 0.7rem;
-    right: -0.85rem;
-
-    width: 1.7rem;
-    height: 1.7rem;
-
-    border: 1px solid var(--color-border);
-    border-radius: 50%;
-
-    background: var(--color-surface);
-
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  position: absolute;
+  top: 0.7rem;
+  right: -1rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
-
 
 .app-navigation.is-collapsed .navigation-menu {
-    width: 100%;
-
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
+  width: 100%;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
 }
-
 
 .app-navigation.is-collapsed .navigation-group {
-    align-items: center;
+  align-items: center;
 }
-
 
 .app-navigation.is-collapsed .navigation-group-label {
-    display: none;
+  display: none;
 }
-
 
 .app-navigation.is-collapsed .navigation-item {
-    justify-content: center;
-
-    width: 100%;
-
-    padding-left: 0;
-    padding-right: 0;
+  justify-content: center;
+  width: 100%;
+  padding-left: 0;
+  padding-right: 0;
 }
-
 
 .app-navigation.is-collapsed .navigation-item-icon {
-    flex-basis: auto;
-
-    width: auto;
-
-    font-size: 1rem;
+  flex-basis: auto;
+  width: auto;
+  font-size: 1rem;
 }
-
 
 .app-navigation.is-collapsed .navigation-item-label {
-    display: none;
+  display: none;
 }
-
-
 
 /* ------------------------------------------------------------
  * Mobile header
@@ -789,32 +448,23 @@
  * ------------------------------------------------------------ */
 
 .mobile-app-header {
-    display: none;
+  display: none;
 }
-
 
 .mobile-menu-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    width: 2.25rem;
-    height: 2.25rem;
-
-    padding: 0;
-
-    border: 0;
-    border-radius: 6px;
-
-    background: transparent;
-    color: var(--color-text);
-
-    font-size: 1rem;
-
-    cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 1rem;
+  cursor: pointer;
 }
-
-
 
 /* ------------------------------------------------------------
  * Mobile drawer close button
@@ -823,393 +473,291 @@
  * ------------------------------------------------------------ */
 
 .navigation-mobile-close {
-    display: none;
-
-    align-items: center;
-    justify-content: center;
-
-    width: 2rem;
-    height: 2rem;
-
-    margin-left: auto;
-    padding: 0;
-
-    border: 0;
-    border-radius: 6px;
-
-    background: transparent;
-    color: var(--color-text-muted);
-
-    cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
 }
-
-
 
 /* ------------------------------------------------------------
  * Mobile backdrop
  * ------------------------------------------------------------ */
 
 .navigation-backdrop {
-    display: none;
+  display: none;
 }
-
-
 
 /* ============================================================
  * Flying bat Easter egg
  * ============================================================ */
 
 .predbat-flying-bat {
-    position: fixed;
-
-    top: 0;
-    left: 0;
-
-    z-index: 10000;
-
-    width: 72px;
-    height: 72px;
-
-    pointer-events: none;
-
-    animation:
-        predbat-bat-flight
-        4.5s
-        ease-in-out
-        forwards;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  width: 72px;
+  height: 72px;
+  pointer-events: none;
+  animation: predbat-bat-flight 4.5s ease-in-out forwards;
 }
-
 
 .predbat-flying-bat picture,
 .predbat-flying-bat img {
-    display: block;
-
-    width: 100%;
-    height: 100%;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
-
 
 .predbat-flying-bat img {
-    object-fit: contain;
-
-    animation:
-        predbat-bat-flap
-        0.35s
-        ease-in-out
-        infinite alternate;
+  object-fit: contain;
+  animation: predbat-bat-flap 0.35s ease-in-out infinite alternate;
 }
-
 
 @keyframes predbat-bat-flight {
+  0% {
+    transform: translate(30px, 60px) rotate(-5deg) scale(0.8);
+    opacity: 0;
+  }
 
-    0% {
-        transform:
-            translate(
-                30px,
-                60px
-            )
-            rotate(-5deg)
-            scale(0.8);
+  8% {
+    opacity: 1;
+  }
 
-        opacity: 0;
-    }
+  22% {
+    transform: translate(24vw, 18vh) rotate(12deg) scale(1);
+  }
 
-    8% {
-        opacity: 1;
-    }
+  42% {
+    transform: translate(72vw, 8vh) rotate(-10deg) scale(1.1);
+  }
 
-    22% {
-        transform:
-            translate(
-                24vw,
-                18vh
-            )
-            rotate(12deg)
-            scale(1);
-    }
+  62% {
+    transform: translate(78vw, 68vh) rotate(16deg) scale(0.95);
+  }
 
-    42% {
-        transform:
-            translate(
-                72vw,
-                8vh
-            )
-            rotate(-10deg)
-            scale(1.1);
-    }
+  82% {
+    transform: translate(30vw, 76vh) rotate(-14deg) scale(1.05);
+  }
 
-    62% {
-        transform:
-            translate(
-                78vw,
-                68vh
-            )
-            rotate(16deg)
-            scale(0.95);
-    }
-
-    82% {
-        transform:
-            translate(
-                30vw,
-                76vh
-            )
-            rotate(-14deg)
-            scale(1.05);
-    }
-
-    100% {
-        transform:
-            translate(
-                30px,
-                60px
-            )
-            rotate(0deg)
-            scale(0.8);
-
-        opacity: 0;
-    }
+  100% {
+    transform: translate(30px, 60px) rotate(0deg) scale(0.8);
+    opacity: 0;
+  }
 }
-
 
 @keyframes predbat-bat-flap {
+  from {
+    transform: rotate(-6deg) scaleY(0.94);
+  }
 
-    from {
-        transform:
-            rotate(-6deg)
-            scaleY(0.94);
-    }
-
-    to {
-        transform:
-            rotate(6deg)
-            scaleY(1.04);
-    }
+  to {
+    transform: rotate(6deg) scaleY(1.04);
+  }
 }
-
-
 
 /* ============================================================
  * Mobile navigation
  * ============================================================ */
 
 @media (max-width: 700px) {
-
-    /*
+  /*
      * Fixed header at the top of the mobile dashboard.
      */
-    .mobile-app-header {
-        position: sticky;
+  .mobile-app-header {
+    position: sticky;
+    top: 0;
+    z-index: 850;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-height: 52px;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.05);
+  }
 
-        top: 0;
+  .mobile-app-header strong {
+    font-size: 0.9rem;
+    color: var(--color-text);
+  }
 
-        z-index: 850;
-
-        display: flex;
-        align-items: center;
-
-        gap: 0.65rem;
-
-        min-height: 52px;
-
-        padding: 0.45rem 0.75rem;
-
-        border-bottom: 1px solid var(--color-border);
-
-        background: var(--color-surface);
-
-        box-shadow: 0 1px 5px rgba(0, 0, 0, 0.05);
-    }
-
-
-    .mobile-app-header strong {
-        font-size: 0.9rem;
-
-        color: var(--color-text);
-    }
-
-
-    /*
+  /*
      * Sidebar becomes an off-canvas drawer.
      */
-    .app-navigation,
-    .app-navigation.is-collapsed {
-        top: 0;
+  .app-navigation,
+  .app-navigation.is-collapsed {
+    top: 0;
+    width: min(280px, 85vw);
+    transform: translateX(-100%);
+    box-shadow: 4px 0 18px rgba(0, 0, 0, 0.18);
+  }
 
-        width: min(280px, 85vw);
+  .app-navigation.is-mobile-open,
+  .app-navigation.is-collapsed.is-mobile-open {
+    transform: translateX(0);
+  }
 
-        transform: translateX(-100%);
-
-        box-shadow: 4px 0 18px rgba(0, 0, 0, 0.18);
-    }
-
-
-    .app-navigation.is-mobile-open,
-    .app-navigation.is-collapsed.is-mobile-open {
-        transform: translateX(0);
-    }
-
-
-    /*
+  /*
      * Desktop collapsed rules should not apply while the menu
      * is being used as a mobile drawer.
      */
-    .app-navigation .navigation-header,
-    .app-navigation.is-collapsed .navigation-header {
-        flex-direction: row;
-        align-items: flex-start;
+  .app-navigation .navigation-header,
+  .app-navigation.is-collapsed .navigation-header {
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 0.8rem;
+  }
 
-        padding: 0.8rem;
-    }
+  .app-navigation .navigation-brand,
+  .app-navigation.is-collapsed .navigation-brand {
+    align-items: flex-start;
+    width: auto;
+  }
 
+  .app-navigation .navigation-brand-main,
+  .app-navigation.is-collapsed .navigation-brand-main {
+    justify-content: flex-start;
+  }
 
-    .app-navigation .navigation-brand,
-    .app-navigation.is-collapsed .navigation-brand {
-        align-items: flex-start;
+  .app-navigation.is-collapsed .navigation-brand-name {
+    display: inline;
+  }
 
-        width: auto;
-    }
+  .app-navigation .navigation-live-status,
+  .app-navigation.is-collapsed .navigation-live-status {
+    flex-direction: row;
+    gap: 0.65rem;
+    margin-top: 0.3rem;
+    padding-left: 0.15rem;
+  }
 
+  .app-navigation.is-collapsed .navigation-battery-soc {
+    display: inline;
+  }
 
-    .app-navigation .navigation-brand-main,
-    .app-navigation.is-collapsed .navigation-brand-main {
-        justify-content: flex-start;
-    }
-
-
-    .app-navigation.is-collapsed .navigation-brand-name {
-        display: inline;
-    }
-
-
-    .app-navigation .navigation-live-status,
-    .app-navigation.is-collapsed .navigation-live-status {
-        flex-direction: row;
-
-        gap: 0.65rem;
-
-        margin-top: 0.3rem;
-        padding-left: 0.15rem;
-    }
-
-
-    .app-navigation.is-collapsed .navigation-battery-soc {
-        display: inline;
-    }
-
-
-    /*
+  /*
      * No desktop collapse button inside the mobile drawer.
      */
-    .navigation-collapse-button {
-        display: none;
-    }
+  .navigation-collapse-button {
+    display: none;
+  }
 
-
-    /*
+  /*
      * Mobile gets its own close button.
      */
-    .navigation-mobile-close {
-        display: flex;
-    }
+  .navigation-mobile-close {
+    display: flex;
+  }
 
-
-    /*
+  /*
      * Always show labels inside the mobile drawer, regardless of
      * the desktop collapsed preference.
      */
-    .app-navigation.is-collapsed .navigation-group {
-        align-items: stretch;
-    }
+  .app-navigation.is-collapsed .navigation-group {
+    align-items: stretch;
+  }
 
+  .app-navigation.is-collapsed .navigation-group-label {
+    display: block;
+  }
 
-    .app-navigation.is-collapsed .navigation-group-label {
-        display: block;
-    }
+  .app-navigation.is-collapsed .navigation-item {
+    justify-content: flex-start;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
 
+  .app-navigation.is-collapsed .navigation-item-icon {
+    flex: 0 0 1.2rem;
+    width: 1.2rem;
+    font-size: 0.9rem;
+  }
 
-    .app-navigation.is-collapsed .navigation-item {
-        justify-content: flex-start;
+  .app-navigation.is-collapsed .navigation-item-label {
+    display: inline;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-        padding-left: 0.65rem;
-        padding-right: 0.65rem;
-    }
-
-
-    .app-navigation.is-collapsed .navigation-item-icon {
-        flex: 0 0 1.2rem;
-
-        width: 1.2rem;
-
-        font-size: 0.9rem;
-    }
-
-
-    .app-navigation.is-collapsed .navigation-item-label {
-        display: inline;
-
-        overflow: hidden;
-
-        text-overflow: ellipsis;
-    }
-
-
-    /*
+  /*
      * Background overlay while the drawer is open.
      */
-    .navigation-backdrop {
-        position: fixed;
-
-        inset: 0;
-
-        z-index: 875;
-
-        display: block;
-
-        width: 100%;
-        height: 100%;
-
-        padding: 0;
-
-        border: 0;
-
-        background: rgba(0, 0, 0, 0.35);
-
-        cursor: default;
-    }
-
+  .navigation-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 875;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.35);
+    cursor: default;
+  }
 }
 
 .app-shell {
-    min-height: 100vh;
+  min-height: 100vh;
 }
 
 .app-content {
-    margin-left: 240px;
-    width: calc(100% - 240px);
-    min-width: 0;
-
-    transition:
-        margin-left 0.2s ease,
-        width 0.2s ease;
+  margin-left: 240px;
+  width: calc(100% - 240px);
+  min-width: 0;
+  transition:
+    margin-left 0.2s ease,
+    width 0.2s ease;
 }
 
 .app-shell.navigation-collapsed .app-content {
-    margin-left: 72px;
-    width: calc(100% - 72px);
+  margin-left: 72px;
+  width: calc(100% - 72px);
 }
 
 .app-content > main {
-    width: 100%;
-    box-sizing: border-box;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-main {
+  padding-inline: 1.5rem;
+}
+
+.dashboard-main > section {
+  min-width: 0;
+  margin-inline: 0;
 }
 
 @media (max-width: 700px) {
-    .app-content,
-    .app-shell.navigation-collapsed .app-content {
-        margin-left: 0;
-        width: 100%;
-    }
+  .app-content,
+  .app-shell.navigation-collapsed .app-content {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .dashboard-main {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0.75rem;
+    overflow-x: clip;
+  }
+
+  .dashboard-main > section {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+  }
 }
 
 /*
@@ -1217,9 +765,8 @@
  * temporarily stale.
  */
 .app-shell.is-calculating {
-    user-select: none;
+  user-select: none;
 }
-
 
 /*
  * Full-screen interaction blocker.
@@ -1228,151 +775,80 @@
  * visible enough that the user can still see what is changing.
  */
 .plan-calculating-overlay {
-    position: fixed;
-
-    inset: 0;
-
-    z-index: 10000;
-
-    display: grid;
-
-    place-items: center;
-
-    background:
-        color-mix(
-            in srgb,
-            var(--color-bg) 45%,
-            transparent
-        );
-
-    backdrop-filter:
-        grayscale(0.8)
-        blur(1px);
-
-    -webkit-backdrop-filter:
-        grayscale(0.8)
-        blur(1px);
-
-    cursor: wait;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-bg) 45%, transparent);
+  backdrop-filter: grayscale(0.8) blur(1px);
+  -webkit-backdrop-filter: grayscale(0.8) blur(1px);
+  cursor: wait;
 }
-
 
 /*
  * Small status card in the centre of the page.
  */
 .plan-calculating-message {
-    display: flex;
-
-    align-items: center;
-
-    gap: 0.8rem;
-
-    padding:
-        0.85rem
-        1rem;
-
-    border:
-        1px solid
-        var(--color-border);
-
-    border-radius: 10px;
-
-    background:
-        var(--color-surface);
-
-    box-shadow:
-        0 10px 32px
-        color-mix(
-            in srgb,
-            var(--color-text) 20%,
-            transparent
-        );
-
-    color:
-        var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 32px color-mix(in srgb, var(--color-text) 20%, transparent);
+  color: var(--color-text);
 }
-
 
 .plan-calculating-message > div {
-    display: flex;
-
-    flex-direction: column;
-
-    gap: 0.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
-
 
 .plan-calculating-message strong {
-    font-size: 0.8rem;
+  font-size: 0.8rem;
 }
-
 
 .plan-calculating-message span {
-    font-size: 0.68rem;
-
-    color:
-        var(--color-text-muted);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
 }
-
 
 /*
  * Simple CSS spinner means App.tsx doesn't need another icon
  * dependency merely for the loading state.
  */
 .plan-calculating-spinner {
-    width: 1rem;
-    height: 1rem;
-
-    border:
-        2px solid
-        color-mix(
-            in srgb,
-            var(--color-text-muted) 25%,
-            transparent
-        );
-
-    border-top-color:
-        var(--color-text);
-
-    border-radius: 50%;
-
-    animation:
-        plan-calculating-spin
-        0.8s
-        linear
-        infinite;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid color-mix(in srgb, var(--color-text-muted) 25%, transparent);
+  border-top-color: var(--color-text);
+  border-radius: 50%;
+  animation: plan-calculating-spin 0.8s linear infinite;
 }
-
 
 @keyframes plan-calculating-spin {
-
-    to {
-        transform:
-            rotate(360deg);
-    }
-
+  to {
+    transform: rotate(360deg);
+  }
 }
-
-
 
 /* ============================================================
  * Reduced motion
  * ============================================================ */
 
 @media (prefers-reduced-motion: reduce) {
+  .app-navigation {
+    transition: none;
+  }
 
-    .app-navigation {
-        transition: none;
-    }
+  .predbat-flying-bat {
+    animation-duration: 1s;
+  }
 
-
-    .predbat-flying-bat {
-        animation-duration: 1s;
-    }
-
-
-    .predbat-flying-bat img {
-        animation: none;
-    }
-
+  .predbat-flying-bat img {
+    animation: none;
+  }
 }

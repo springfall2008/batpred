@@ -1,8 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  useState
-} from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 
 import AppNavigation from './components/AppNavigation'
 import PlanSummary from './components/PlanSummary'
@@ -10,7 +6,22 @@ import { PlanDescription } from './components/PlanDescription'
 import StatusCard from './components/StatusCard'
 import PowerFlow from './components/PowerFlow'
 import DebugPanel from './components/DebugPanel'
+import MetricsPanel from './components/MetricsPanel'
 import PlanPage from './pages/PlanPage'
+import ChartsPage from './pages/ChartsPage'
+
+const AppsEditorPage = lazy(() => import('./pages/AppsEditorPage'))
+const DocsPage = lazy(() => import('./pages/DocsPage'))
+const LogPage = lazy(() => import('./pages/LogPage'))
+const ComponentsPage = lazy(() => import('./pages/ComponentsPage'))
+const BrowsePage = lazy(() => import('./pages/BrowsePage'))
+const InternalsPage = lazy(() => import('./pages/InternalsPage'))
+const ConfigPage = lazy(() => import('./pages/ConfigPage'))
+const ComparePage = lazy(() => import('./pages/ComparePage'))
+const AnnualPage = lazy(() => import('./pages/AnnualPage'))
+const ChatPage = lazy(() => import('./pages/ChatPage'))
+const AppsPage = lazy(() => import('./pages/AppsPage'))
+const EntitiesPage = lazy(() => import('./pages/EntitiesPage'))
 
 import type { PlanData } from './types/plan'
 import type { PredbatStatus } from './types/status'
@@ -18,25 +29,14 @@ import type { PowerFlowData } from './types/powerFlow'
 
 import './App.css'
 
+type ApiSource = 'plan' | 'status' | 'powerFlow'
 
-type ApiSource =
-  | 'plan'
-  | 'status'
-  | 'powerFlow'
-
-/*
- * NO useState/useRef/useEffect calls above this point.
- */
+/** Coordinates dashboard polling and refreshes the plan after a calculation completes. */
 function App() {
-
-  const currentPage =
-    window.location.pathname
-      .replace(/\/+$/, '')
-      .split('/')
-      .pop() ?? 'dash'
+  const pathPage = window.location.pathname.replace(/\/+$/, '').split('/').pop() ?? 'dash'
+  const currentPage = new URLSearchParams(window.location.search).get('page') ?? pathPage
 
   const API_FAILURE_THRESHOLD = 2
-
 
   const API_SOURCE_NAMES: Record<ApiSource, string> = {
     plan: 'Plan data',
@@ -48,44 +48,29 @@ function App() {
    * Dashboard data.
    */
 
-  const previousCalculatingRef =
-    useRef<boolean | null>(null)
+  const previousCalculatingRef = useRef<boolean | null>(null)
 
+  const [planData, setPlanData] = useState<PlanData | null>(null)
 
-  const [planData, setPlanData] =
-    useState<PlanData | null>(null)
+  const [statusData, setStatusData] = useState<PredbatStatus | null>(null)
 
-  const [statusData, setStatusData] =
-    useState<PredbatStatus | null>(null)
+  const [powerFlowData, setPowerFlowData] = useState<PowerFlowData | null>(null)
 
-  const [powerFlowData, setPowerFlowData] =
-    useState<PowerFlowData | null>(null)
-
-  const [navigationCollapsed, setNavigationCollapsed] =
-    useState<boolean>(() => {
-      try {
-        return (
-          localStorage.getItem(
-            'predbat-navigation-collapsed'
-          ) === 'true'
-        )
-      } catch {
-        return false
-      }
-    })
+  const [navigationCollapsed, setNavigationCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('predbat-navigation-collapsed') === 'true'
+    } catch {
+      return false
+    }
+  })
 
   useEffect(() => {
     try {
-      localStorage.setItem(
-        'predbat-navigation-collapsed',
-        String(navigationCollapsed)
-      )
+      localStorage.setItem('predbat-navigation-collapsed', String(navigationCollapsed))
     } catch {
       // Navigation preference is non-critical.
     }
   }, [navigationCollapsed])
-
-
 
   /*
    * Errors from the three polling APIs.
@@ -94,9 +79,7 @@ function App() {
    * endpoint doesn't accidentally clear another endpoint's
    * warning.
    */
-  const [apiErrors, setApiErrors] =
-    useState<Partial<Record<ApiSource, string>>>({})
-
+  const [apiErrors, setApiErrors] = useState<Partial<Record<ApiSource, string>>>({})
 
   /*
    * Used when the dashboard cannot complete its initial load.
@@ -104,9 +87,7 @@ function App() {
    * This is different from the non-blocking warning shown when
    * already-loaded dashboard data becomes temporarily stale.
    */
-  const [initialError, setInitialError] =
-    useState<string | null>(null)
-
+  const [initialError, setInitialError] = useState<string | null>(null)
 
   /*
    * Control errors are shown immediately.
@@ -114,9 +95,7 @@ function App() {
    * Unlike polling, a failed user action should not require two
    * consecutive failures before the user is told about it.
    */
-  const [controlError, setControlError] =
-    useState<string | null>(null)
-
+  const [controlError, setControlError] = useState<string | null>(null)
 
   /*
    * Consecutive failure count for each endpoint.
@@ -130,18 +109,15 @@ function App() {
     powerFlow: 0
   })
 
-
   /*
    * Record a successful request.
    *
    * Only clear the error belonging to this API source.
    */
   function recordFetchSuccess(source: ApiSource) {
-
     failedFetchesRef.current[source] = 0
 
-    setApiErrors(current => {
-
+    setApiErrors((current) => {
       if (!current[source]) {
         return current
       }
@@ -156,7 +132,6 @@ function App() {
     })
   }
 
-
   /*
    * Record a failed request.
    *
@@ -165,42 +140,25 @@ function App() {
    *
    * After two consecutive failures we show the user a warning.
    */
-  function recordFetchFailure(
-    source: ApiSource,
-    error: unknown
-  ) {
-
+  function recordFetchFailure(source: ApiSource, error: unknown) {
     failedFetchesRef.current[source] += 1
 
-    const failureCount =
-      failedFetchesRef.current[source]
+    const failureCount = failedFetchesRef.current[source]
 
-
-    console.error(
-      `Unable to fetch Predbat ${API_SOURCE_NAMES[source]}:`,
-      error
-    )
-
+    console.error(`Unable to fetch Predbat ${API_SOURCE_NAMES[source]}:`, error)
 
     if (failureCount < API_FAILURE_THRESHOLD) {
       return
     }
 
+    const detail = error instanceof Error ? error.message : 'Unknown error'
 
-    const detail =
-      error instanceof Error
-        ? error.message
-        : 'Unknown error'
-
-
-    setApiErrors(current => ({
+    setApiErrors((current) => ({
       ...current,
 
-      [source]:
-        `${API_SOURCE_NAMES[source]} could not be refreshed. ${detail}`
+      [source]: `${API_SOURCE_NAMES[source]} could not be refreshed. ${detail}`
     }))
   }
-
 
   /*
    * Shared GET request helper.
@@ -210,44 +168,23 @@ function App() {
    *
    * JSON parsing errors are also caught here.
    */
-  async function fetchJson<T>(
-    source: ApiSource,
-    url: string
-  ): Promise<T> {
-
+  async function fetchJson<T>(source: ApiSource, url: string): Promise<T> {
     try {
-
-      const response = await fetch(
-        url,
-        {
-          cache: 'no-store'
-        }
-      )
-
+      const response = await fetch(url, {
+        cache: 'no-store'
+      })
 
       if (!response.ok) {
-
-        throw new Error(
-          `HTTP ${response.status}`
-        )
+        throw new Error(`HTTP ${response.status}`)
       }
 
-
-      const data =
-        await response.json() as T
-
+      const data = (await response.json()) as T
 
       recordFetchSuccess(source)
 
-
       return data
-
     } catch (error) {
-
-      recordFetchFailure(
-        source,
-        error
-      )
+      recordFetchFailure(source, error)
 
       throw error
     }
@@ -257,45 +194,28 @@ function App() {
    * Fetch the Predbat plan.
    */
   async function fetchPlan() {
-
-    const data =
-      await fetchJson<PlanData>(
-        'plan',
-        '/api/plan_data'
-      )
+    const data = await fetchJson<PlanData>('plan', './api/plan_data')
 
     setPlanData(data)
 
     return data
   }
 
-
   async function fetchStatus() {
-
-    const data =
-      await fetchJson<PredbatStatus>(
-        'status',
-        '/api/status'
-      )
-
+    const data = await fetchJson<PredbatStatus>('status', './api/status')
 
     /*
      * Remember whether Predbat was calculating on the
      * previous status poll.
      */
-    const previousCalculating =
-      previousCalculatingRef.current
-
+    const previousCalculating = previousCalculatingRef.current
 
     /*
      * Store the latest state ready for the next poll.
      */
-    previousCalculatingRef.current =
-      data.calculating
-
+    previousCalculatingRef.current = data.calculating
 
     setStatusData(data)
-
 
     /*
      * Predbat has just completed a calculation.
@@ -303,37 +223,24 @@ function App() {
      * Re-fetch the plan once so the UI immediately gets
      * the newly calculated rows.
      */
-    if (
-      previousCalculating === true &&
-      data.calculating === false
-    ) {
-
-      fetchPlan()
-        .catch(() => {
-          /*
-           * fetchPlan() already handles/logs its own
-           * API failure.
-           */
-        })
-
+    if (previousCalculating === true && data.calculating === false) {
+      fetchPlan().catch(() => {
+        /*
+         * fetchPlan() already handles/logs its own
+         * API failure.
+         */
+      })
     }
   }
-
 
   /*
    * Fetch live Power Flow data.
    */
   async function fetchPowerFlow() {
-
-    const data =
-      await fetchJson<PowerFlowData>(
-        'powerFlow',
-        '/api/power_flow'
-      )
+    const data = await fetchJson<PowerFlowData>('powerFlow', './api/power_flow')
 
     setPowerFlowData(data)
   }
-
 
   /*
    * Update a Predbat control.
@@ -341,65 +248,38 @@ function App() {
    * Control failures are reported immediately because the user
    * has deliberately requested an action.
    */
-  async function updateControl(
-    control: string,
-    value: string | boolean
-  ) {
-
+  async function updateControl(control: string, value: string | boolean) {
     try {
+      const response = await fetch('./api/dashboard_control', {
+        method: 'POST',
 
-      const response =
-        await fetch(
-          '/api/dashboard_control',
-          {
-            method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
 
-            headers: {
-              'Content-Type': 'application/json'
-            },
-
-            body: JSON.stringify({
-              control,
-              value
-            })
-          }
-        )
-
+        body: JSON.stringify({
+          control,
+          value
+        })
+      })
 
       if (!response.ok) {
-
-        throw new Error(
-          `HTTP ${response.status}`
-        )
+        throw new Error(`HTTP ${response.status}`)
       }
-
 
       /*
        * The actual control request succeeded.
        */
       setControlError(null)
-
     } catch (error) {
+      console.error('Unable to update Predbat control:', error)
 
-      console.error(
-        'Unable to update Predbat control:',
-        error
-      )
+      const detail = error instanceof Error ? error.message : 'Unknown error'
 
-
-      const detail =
-        error instanceof Error
-          ? error.message
-          : 'Unknown error'
-
-
-      setControlError(
-        `Predbat could not update the requested setting. ${detail}`
-      )
+      setControlError(`Predbat could not update the requested setting. ${detail}`)
 
       return
     }
-
 
     /*
      * Re-read Predbat's real state after a successful change.
@@ -415,46 +295,29 @@ function App() {
     })
   }
 
-
   /*
    * Manual retry used by the error notice.
    */
   async function retryAll() {
-
     setControlError(null)
 
-    const results =
-      await Promise.allSettled([
-        fetchPlan(),
-        fetchStatus(),
-        fetchPowerFlow()
-      ])
-
+    const results = await Promise.allSettled([fetchPlan(), fetchStatus(), fetchPowerFlow()])
 
     /*
      * Plan and Status are the two essential APIs needed to draw
      * the main dashboard.
      */
-    const planSucceeded =
-      results[0].status === 'fulfilled'
+    const planSucceeded = results[0].status === 'fulfilled'
 
-    const statusSucceeded =
-      results[1].status === 'fulfilled'
+    const statusSucceeded = results[1].status === 'fulfilled'
 
-
-    if (
-      planSucceeded &&
-      statusSucceeded
-    ) {
+    if (planSucceeded && statusSucceeded) {
       setInitialError(null)
     }
   }
 
-
   useEffect(() => {
-
     let cancelled = false
-
 
     /*
      * Initial load is slightly different from polling.
@@ -464,26 +327,15 @@ function App() {
      * Plan or Status from loading.
      */
     async function initialLoad() {
-
-      const results =
-        await Promise.allSettled([
-          fetchPlan(),
-          fetchStatus(),
-          fetchPowerFlow()
-        ])
-
+      const results = await Promise.allSettled([fetchPlan(), fetchStatus(), fetchPowerFlow()])
 
       if (cancelled) {
         return
       }
 
+      const planFailed = results[0].status === 'rejected'
 
-      const planFailed =
-        results[0].status === 'rejected'
-
-      const statusFailed =
-        results[1].status === 'rejected'
-
+      const statusFailed = results[1].status === 'rejected'
 
       /*
        * Plan and Status are essential.
@@ -491,90 +343,58 @@ function App() {
        * Power Flow is optional, so a failure there should not
        * prevent the rest of the dashboard appearing.
        */
-      if (
-        planFailed ||
-        statusFailed
-      ) {
-
+      if (planFailed || statusFailed) {
         setInitialError(
           'Predbat dashboard data could not be loaded. Predbat may still be starting.'
         )
-
       } else {
-
         setInitialError(null)
       }
     }
 
-
     initialLoad()
-
 
     /*
      * Status is live operational data.
      */
-    const statusTimer =
-      window.setInterval(
-        () => {
-
-          fetchStatus().catch(() => {
-            /*
-             * Error handling is performed by fetchJson().
-             */
-          })
-
-        },
-        5000
-      )
-
+    const statusTimer = window.setInterval(() => {
+      fetchStatus().catch(() => {
+        /*
+         * Error handling is performed by fetchJson().
+         */
+      })
+    }, 5000)
 
     /*
      * The plan changes less frequently.
      */
-    const planTimer =
-      window.setInterval(
-        () => {
-
-          fetchPlan().catch(() => {
-            /*
-             * Error handling is performed by fetchJson().
-             */
-          })
-
-        },
-        30000
-      )
-
+    const planTimer = window.setInterval(() => {
+      fetchPlan().catch(() => {
+        /*
+         * Error handling is performed by fetchJson().
+         */
+      })
+    }, 30000)
 
     /*
      * Power Flow is live data.
      */
-    const powerFlowTimer =
-      window.setInterval(
-        () => {
-
-          fetchPowerFlow().catch(() => {
-            /*
-             * Error handling is performed by fetchJson().
-             */
-          })
-
-        },
-        5000
-      )
-
+    const powerFlowTimer = window.setInterval(() => {
+      fetchPowerFlow().catch(() => {
+        /*
+         * Error handling is performed by fetchJson().
+         */
+      })
+    }, 5000)
 
     return () => {
-
       cancelled = true
 
       window.clearInterval(statusTimer)
       window.clearInterval(planTimer)
       window.clearInterval(powerFlowTimer)
     }
-
   }, [])
-
 
   /*
    * Select the highest-priority warning to display.
@@ -583,12 +403,29 @@ function App() {
    * directly by the user.
    */
   const apiWarning =
-    controlError ??
-    apiErrors.plan ??
-    apiErrors.status ??
-    apiErrors.powerFlow ??
-    null
+    controlError ?? apiErrors.plan ?? apiErrors.status ?? apiErrors.powerFlow ?? null
 
+  if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
+    return (
+      <div className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''}`}>
+        <AppNavigation
+          collapsed={navigationCollapsed}
+          onCollapsedChange={setNavigationCollapsed}
+          calculating={statusData?.calculating ?? false}
+          batterySoc={powerFlowData?.soc_percent ?? null}
+          chatEnabled={statusData?.chat_enabled ?? false}
+          version={statusData?.version ?? ''}
+        />
+        <div className="app-content">
+          <main>
+            <Suspense fallback={<div>Loading…</div>}>
+              {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
+            </Suspense>
+          </main>
+        </div>
+      </div>
+    )
+  }
 
   /*
    * If the initial load couldn't obtain the essential data,
@@ -597,26 +434,15 @@ function App() {
    * Polling continues in the background, so the dashboard can
    * recover automatically once Predbat becomes available.
    */
-  if (
-    initialError &&
-    (!planData || !statusData)
-  ) {
-
+  if (initialError && (!planData || !statusData)) {
     return (
       <main className="dashboard-loading">
         <div className="dashboard-load-error">
-          <strong>
-            Unable to load Predbat
-          </strong>
+          <strong>Unable to load Predbat</strong>
 
-          <span>
-            {initialError}
-          </span>
+          <span>{initialError}</span>
 
-          <button
-            type="button"
-            onClick={retryAll}
-          >
+          <button type="button" onClick={retryAll}>
             Retry
           </button>
         </div>
@@ -624,87 +450,55 @@ function App() {
     )
   }
 
-
   /*
    * Normal first-load state.
    */
-  if (
-    !planData ||
-    !statusData
-  ) {
-
-    return (
-      <main>
-        Loading Predbat dashboard...
-      </main>
-    )
+  if (!planData || !statusData) {
+    return <main>Loading Predbat dashboard...</main>
   }
 
   return (
     <>
       <div
-        className={`
-        app-shell
-        ${navigationCollapsed
-            ? 'navigation-collapsed'
-            : ''}
-        ${statusData.calculating
-            ? 'is-calculating'
-            : ''}
-      `}
-        inert={
-          statusData.calculating
-        }
-        aria-busy={
-          statusData.calculating
-        }
+        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${statusData.calculating ? 'is-calculating' : ''}`}
+        inert={statusData.calculating}
+        aria-busy={statusData.calculating}
       >
-
         <AppNavigation
           collapsed={navigationCollapsed}
-          onCollapsedChange={
-            setNavigationCollapsed
-          }
-          calculating={
-            statusData.calculating
-          }
+          onCollapsedChange={setNavigationCollapsed}
+          calculating={statusData.calculating}
           batterySoc={powerFlowData?.soc_percent ?? null}
+          chatEnabled={statusData.chat_enabled}
           version={statusData.version}
         />
 
         <div className="app-content">
-
-          <main>
-
+          <main className={currentPage === 'plan' || currentPage === 'charts' ? undefined : 'dashboard-main'}>
             {currentPage === 'plan' ? (
-
               <PlanPage
                 plan={planData.plan}
+                yesterday={planData.yesterday}
+                baseline={planData.baseline}
                 overrides={planData.overrides}
+                debugEnabled={statusData.debug_enable}
                 onOverrideSubmitted={() => {
-
-                  fetchStatus()
-                    .catch(() => {
-                      /*
-                       * fetchStatus() already handles its API error.
-                       */
-                    })
-
+                  fetchStatus().catch(() => {
+                    /*
+                     * fetchStatus() already handles its API error.
+                     */
+                  })
                 }}
               />
-
+            ) : currentPage === 'charts' ? (
+              <ChartsPage plan={planData.plan} loadMlEnabled={statusData.load_ml_enabled} />
             ) : (
-
               <>
                 {apiWarning && (
-                  <div
-                    className="api-error-notice"
-                    role="alert"
-                  >
+                  <div className="api-error-notice" role="alert">
                     {apiWarning}
                   </div>
                 )}
-
 
                 <StatusCard
                   status={statusData.status}
@@ -718,107 +512,53 @@ function App() {
                   readOnly={statusData.read_only}
                   debugEnabled={statusData.debug_enable}
 
-                  onModeChange={(value) =>
-                    updateControl(
-                      'mode',
-                      value
-                    )
-                  }
+                  onModeChange={(value) => updateControl('mode', value)}
 
-                  onActiveChange={(value) =>
-                    updateControl(
-                      'active',
-                      value
-                    )
-                  }
+                  onActiveChange={(value) => updateControl('active', value)}
 
-                  onReadOnlyChange={(value) =>
-                    updateControl(
-                      'set_read_only',
-                      value
-                    )
-                  }
+                  onReadOnlyChange={(value) => updateControl('set_read_only', value)}
 
-                  onDebugChange={(value) =>
-                    updateControl(
-                      'debug_enable',
-                      value
-                    )
-                  }
+                  onDebugChange={(value) => updateControl('debug_enable', value)}
                 />
 
+                <PlanSummary plan={planData.plan} />
 
-                <PlanSummary
-                  plan={planData.plan}
-                />
-
-
-                <PlanDescription
-                  description={
-                    planData.plan?.description
-                  }
-                />
-
+                <PlanDescription description={planData.plan?.description} />
 
                 {powerFlowData && (
-                  <PowerFlow
-                    data={powerFlowData}
-                  />
+                  <PowerFlow data={powerFlowData} numCars={planData.plan.num_cars} />
                 )}
 
+                <MetricsPanel />
 
                 {statusData.debug_enable && (
                   <DebugPanel
                     planData={planData}
                     statusData={statusData}
-                    powerFlowData={
-                      powerFlowData
-                    }
+                    powerFlowData={powerFlowData}
                   />
                 )}
               </>
-
             )}
-
           </main>
-
         </div>
-
       </div>
 
-
       {statusData.calculating && (
-        <div
-          className="plan-calculating-overlay"
-          role="status"
-          aria-live="polite"
-        >
-
+        <div className="plan-calculating-overlay" role="status" aria-live="polite">
           <div className="plan-calculating-message">
-
-            <span
-              className="plan-calculating-spinner"
-              aria-hidden="true"
-            />
+            <span className="plan-calculating-spinner" aria-hidden="true" />
 
             <div>
-              <strong>
-                Recalculating plan
-              </strong>
+              <strong>Recalculating plan</strong>
 
-              <span>
-                Predbat is updating the plan…
-              </span>
+              <span>Predbat is updating the plan…</span>
             </div>
-
           </div>
-
         </div>
       )}
-
     </>
   )
 }
-
 
 export default App

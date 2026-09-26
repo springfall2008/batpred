@@ -1,0 +1,97 @@
+.app-content > main:has(> .charts-page) {
+  display: flex;
+  max-width: none;
+  min-height: 100dvh;
+  margin-block: 0;
+  padding-block: 1.5rem;
+  padding-inline: clamp(0.75rem, 2vw, 2rem);
+}
+
+.charts-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 0;
+  width: 100%;
+}
+
+.charts-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.charts-page-header h1,
+.charts-page-header p {
+  margin: 0;
+}
+
+.charts-page-header h1 {
+  color: var(--color-text);
+  font-size: 1.5rem;
+}
+
+.charts-page-header p {
+  margin-top: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.charts-page-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.charts-page-tabs button {
+  padding: 0.35rem 0.65rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.charts-page-tabs button.is-active {
+  background: var(--color-surface);
+  color: var(--color-current);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.charts-page-loading,
+.charts-page-error {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.charts-page-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-color: var(--color-danger);
+}
+
+.charts-page-error button {
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}

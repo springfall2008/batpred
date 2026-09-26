@@ -36,6 +36,9 @@ import io
 from io import StringIO
 import hashlib
 import copy
+import mimetypes
+import zipfile
+from pathlib import PurePosixPath
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
@@ -75,13 +78,120 @@ from utils import is_data_numerical, ROOT_YAML_KEY, YAML_DUMP_WIDTH, update_nest
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
-from config import APPS_SCHEMA
+from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from web_annual import AnnualPage
 from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
+
+
+def _apps_schema_value(spec):
+    """Convert one Predbat validation spec to JSON Schema."""
+    scalar_types = {
+        "none": {"type": "null"},
+        "integer": {"type": "integer"},
+        "float": {"type": "number"},
+        "string": {"type": "string"},
+        "boolean": {"type": "boolean"},
+        "dict": {"type": "object"},
+        "sensor": {"type": "string", "x-ha-entity": True},
+        "integer_list": {"type": "array", "items": {"type": "integer"}},
+        "float_list": {"type": "array", "items": {"type": "number"}},
+        "string_list": {"type": "array", "items": {"type": "string"}},
+        "boolean_list": {"type": "array", "items": {"type": "boolean"}},
+        "dict_list": {"type": "array", "items": {"type": "object"}},
+        "sensor_list": {"type": "array", "items": {"type": ["string", "number", "boolean"], "x-ha-entity": True}},
+        "int_float_dict": {"type": "object", "additionalProperties": {"type": "number"}},
+    }
+    choices = [copy.deepcopy(scalar_types[item]) for item in spec.get("type", "string").split("|") if item in scalar_types]
+    if spec.get("or_auto"):
+        choices.append({"const": "auto"})
+    schema = choices[0] if len(choices) == 1 else {"oneOf": choices}
+    if spec.get("allowed"):
+        schema = {"enum": spec["allowed"]}
+    return schema
+
+
+def build_apps_json_schema():
+    """Build the Monaco JSON Schema for a Predbat apps.yaml file."""
+    properties = {
+        "module": {"type": "string", "const": "predbat", "description": "Predbat Python module name."},
+        "class": {"type": "string", "const": "PredBat", "description": "Predbat application class."},
+        "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Other AppDaemon apps that must start first."},
+        "prefix": {"type": "string", "default": "predbat", "description": "Prefix used for Predbat Home Assistant entities."},
+        "timezone": {"type": "string", "default": "Europe/London", "description": "IANA timezone used by Predbat."},
+        "template": {"type": "boolean", "description": "Remove this setting once configuration is complete."},
+        "grid_power": {
+            **_apps_schema_value({"type": "sensor|sensor_list"}),
+            "description": "Home Assistant entity or entities reporting instantaneous grid power.",
+        },
+    }
+    config_by_name = {item.get("name"): item for item in CONFIG_ITEMS if item.get("name")}
+    for name, spec in APPS_SCHEMA.items():
+        value_schema = _apps_schema_value(spec)
+        label = name.replace("_", " ")
+        if "sensor" in spec.get("type", ""):
+            value_schema["description"] = f"Home Assistant entity or entities used for {label}."
+        elif "boolean" in spec.get("type", ""):
+            value_schema["description"] = f"Enable or disable {label}."
+        else:
+            value_schema["description"] = f"Predbat setting for {label}."
+        properties[name] = value_schema
+
+        for name, item in config_by_name.items():
+            value_schema = properties.get(name)
+
+            if value_schema is None:
+                item_type = item.get("type")
+                if item_type == "switch":
+                    value_schema = {"type": "boolean"}
+                elif item_type == "input_number":
+                    value_schema = {"type": "number"}
+                elif item_type == "select":
+                    value_schema = {"type": "string"}
+                else:
+                    continue
+
+                properties[name] = value_schema
+
+            # Prefer the proper CONFIG_ITEMS description
+            if item.get("description"):
+                value_schema["description"] = item["description"]
+            elif not value_schema.get("description"):
+                value_schema["description"] = item.get(
+                    "friendly_name",
+                    name.replace("_", " ").capitalize(),
+                )
+
+            if "min" in item:
+                value_schema["minimum"] = item["min"]
+            if "max" in item:
+                value_schema["maximum"] = item["max"]
+            if isinstance(item.get("options"), list):
+                value_schema["enum"] = item["options"]
+            if isinstance(item.get("default"), (str, int, float, bool, list, dict)):
+                value_schema["default"] = item["default"]
+
+    required = ["module", "class"] + [name for name, spec in APPS_SCHEMA.items() if spec.get("required")]
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://predbat.local/apps.schema.json",
+        "title": "Predbat apps.yaml",
+        "type": "object",
+        "properties": {"pred_bat": {"$ref": "#/$defs/predbatApp"}},
+        "required": ["pred_bat"],
+        "additionalProperties": True,
+        "$defs": {
+            "predbatApp": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": True,
+            }
+        },
+    }
 
 
 def state_as_of_slots(records, slots):
@@ -430,7 +540,8 @@ class WebInterface(ComponentBase):
         Application and assert they exist, without booting a real TCP listener -
         the constructor for that Application performs no network I/O of its own.
         """
-        app.router.add_get("/annual", self.annual_page.html_annual)
+        app.router.add_get("/annual", self.html_modern_ui if self.get_web_ui() == "modern" else self.annual_page.html_annual)
+        app.router.add_get("/legacy_annual", self.annual_page.html_annual)
         app.router.add_post("/annual", self.annual_page.html_annual_post)
         app.router.add_post("/annual_reset", self.annual_page.html_annual_reset)
         app.router.add_post("/annual_array", self.annual_page.html_annual_array)
@@ -462,7 +573,8 @@ class WebInterface(ComponentBase):
         configured" when the component is not up yet - that per-request check is what stands in
         for a boot-time gate.
         """
-        app.router.add_get("/chat", self.chat_page.html_chat)
+        app.router.add_get("/chat", self.html_modern_ui if self.get_web_ui() == "modern" else self.chat_page.html_chat)
+        app.router.add_get("/legacy_chat", self.chat_page.html_chat)
         app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
         app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)
         app.router.add_post("/chat/rename", self.chat_page.html_chat_rename)
@@ -484,22 +596,25 @@ class WebInterface(ComponentBase):
     async def start(self):
         # Start the web server
         app = web.Application()
-        app.router.add_get("/", self.html_default)
-        app.router.add_get("/plan", self.html_plan)
-        app.router.add_get("/log", self.html_log)
-        app.router.add_get("/apps", self.html_apps)
+        modern_ui = self.get_web_ui() == "modern"
+        app.router.add_get("/", self.html_modern_ui if modern_ui else self.html_default)
+        app.router.add_get("/plan", self.html_modern_ui if modern_ui else self.html_plan_legacy)
+        app.router.add_get("/log", self.html_modern_ui if modern_ui else self.html_log)
+        app.router.add_get("/apps", self.html_modern_ui if modern_ui else self.html_apps)
+        app.router.add_get("/legacy_apps", self.html_apps)
         app.router.add_post("/apps", self.html_apps_post)
-        app.router.add_get("/charts", self.html_charts)
-        app.router.add_get("/config", self.html_config)
+        app.router.add_get("/charts", self.html_modern_ui if modern_ui else self.html_charts_legacy)
+        app.router.add_get("/legacy_charts", self.html_charts_legacy)
+        app.router.add_get("/config", self.html_modern_ui if modern_ui else self.html_config)
         app.router.add_get("/entity", self.html_entity)
         app.router.add_post("/entity", self.html_entity_post)
         app.router.add_post("/config", self.html_config_post)
-        app.router.add_get("/dash", self.html_dash)
+        app.router.add_get("/dash", self.html_modern_ui if modern_ui else self.html_dash_legacy)
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/legacy_dash", self.html_dash_legacy)
-        app.router.add_get( "/legacy_plan",self.html_plan_legacy)
-        app.router.add_get("/components", self.html_components)
+        app.router.add_get("/legacy_plan", self.html_plan_legacy)
+        app.router.add_get("/components", self.html_modern_ui if modern_ui else self.html_components)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -512,30 +627,41 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_history_list", self.html_debug_history_list)
         app.router.add_get("/debug_history_download", self.html_debug_history_download)
         app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
-        app.router.add_get("/compare", self.html_compare)
+        app.router.add_get("/compare", self.html_modern_ui if modern_ui else self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
         self._register_chat_routes(app)
-        app.router.add_get("/apps_editor", self.html_apps_editor)
+        app.router.add_get("/apps_editor", self.html_modern_ui if modern_ui else self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
+        app.router.add_post("/api/restart", self.html_restart)
         app.router.add_post("/inverter_refresh", self.html_inverter_refresh)
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_get("/api/plan_data", self.html_api_plan_data)
+        app.router.add_get("/api/chart_data", self.html_api_chart_data)
+        app.router.add_get("/api/compare", self.html_api_compare)
+        app.router.add_get("/api/apps_schema", self.html_api_apps_schema)
+        app.router.add_get("/api/apps_yaml", self.html_api_apps_yaml)
+        app.router.add_post("/api/apps_yaml", self.html_api_apps_yaml_post)
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
+        app.router.add_get("/api/config", self.html_api_config)
+        app.router.add_post("/api/config", self.html_config_post)
+        app.router.add_get("/api/components", self.html_api_components)
+        app.router.add_get("/api/browse", self.html_api_browse)
         app.router.add_post("/api/login", self.html_api_login)
-        app.router.add_get("/browse", self.html_browse)
+        app.router.add_get("/browse", self.html_modern_ui if modern_ui else self.html_browse)
         app.router.add_get("/download", self.html_download_file)
         app.router.add_get("/images/{filename}", self.html_logo_image)
-        app.router.add_get("/internals", self.html_internals)
+        app.router.add_get("/internals", self.html_modern_ui if modern_ui else self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
+        app.router.add_get("/api/internals/threads", self.html_api_internals_threads)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_post("/api/dashboard_control", self.html_api_dashboard_control)
@@ -543,6 +669,11 @@ class WebInterface(ComponentBase):
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
         app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
+        if modern_ui:
+            app.router.add_get("/docs", self.html_modern_ui)
+            app.router.add_get("/assets/{filename:.*}", self.html_modern_ui_asset)
+            app.router.add_get("/favicon.svg", self.html_modern_ui_asset)
+            app.router.add_get("/icons.svg", self.html_modern_ui_asset)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -580,22 +711,6 @@ class WebInterface(ComponentBase):
 
         self.api_started = False
         print("Web interface stopped")
-
-    def use_modern_ui(self):
-        """
-        Return True when the React-based web interface is enabled.
-
-        The legacy interface remains the default so existing Predbat
-        installations are unaffected unless the user opts in.
-        """
-        web_ui = str(
-            self.get_arg(
-                "web_ui",
-                "legacy",
-            )
-        ).strip().lower()
-
-        return web_ui == "modern"
 
     def get_attributes_html(self, entity, from_db=False):
         """
@@ -2493,47 +2608,24 @@ chart.render();
             # Predbat status entity
             status_entity = self.prefix + ".status"
 
-            status = self.get_state_wrapper(
-                status_entity,
-                default="Unknown"
-            )
+            status = self.get_state_wrapper(status_entity, default="Unknown")
 
-            detail = self.get_state_wrapper(
-                status_entity,
-                attribute="detail",
-                default=""
-            )
+            detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
 
-            last_updated = self.get_state_wrapper(
-                status_entity,
-                attribute="last_updated",
-                default=None
-            )
+            last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
 
             # Time Predbat was last started
-            last_started = self.get_state_wrapper(
-                self.prefix + ".last_started",
-                default=None
-            )
+            last_started = self.get_state_wrapper(self.prefix + ".last_started", default=None)
 
             # Current operating mode
             mode = self.get_arg("mode", "")
 
             # Dashboard controls
-            debug_enable = self.get_arg(
-                "debug_enable",
-                False
-            )
+            debug_enable = self.get_arg("debug_enable", False)
 
-            read_only = self.get_arg(
-                "set_read_only",
-                False
-            )
+            read_only = self.get_arg("set_read_only", False)
 
-            predbat_active, _ = self.get_ha_config(
-                "active",
-                None
-            )
+            predbat_active, _ = self.get_ha_config("active", None)
 
             # Configuration health
             config_errors = len(self.arg_errors)
@@ -2542,43 +2634,30 @@ chart.render();
                 # Existing API fields
                 "calculating": calculating,
                 "battery_html": battery_icon,
-
                 # Dashboard status
                 "status": status,
                 "detail": detail,
                 "last_updated": last_updated,
                 "last_started": last_started,
-
                 "version": THIS_VERSION_DISPLAY,
-
                 # Predbat configuration
                 "mode": mode,
                 "debug_enable": debug_enable,
                 "read_only": read_only,
                 "active": predbat_active,
-
+                "chat_enabled": self.chat_enabled(),
+                "load_ml_enabled": bool(self.base.get_arg("load_ml_enable", False)),
                 # Configuration health
                 "config_ok": config_errors == 0,
                 "config_errors": config_errors,
             }
 
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps(status_data)
-            )
+            return web.Response(content_type="application/json", text=json.dumps(status_data))
 
         except Exception as e:
-            self.log(
-                "Error getting status: {}".format(e)
-            )
+            self.log("Error getting status: {}".format(e))
 
-            return web.Response(
-                status=500,
-                content_type="application/json",
-                text=json.dumps({
-                    "error": str(e)
-                })
-            )
+            return web.Response(status=500, content_type="application/json", text=json.dumps({"error": str(e)}))
 
     async def html_api_dashboard_control(self, request):
         """
@@ -2602,68 +2681,32 @@ chart.render();
             # Mode is represented by a Home Assistant select entity.
             if control == "mode":
                 if not isinstance(value, str):
-                    return web.json_response(
-                        {"result": "error", "error": "Mode must be a string"},
-                        status=400
-                    )
+                    return web.json_response({"result": "error", "error": "Mode must be a string"}, status=400)
 
                 entity_id = f"select.{self.prefix}_mode"
 
-                await self.set_state_external(
-                    entity_id,
-                    value
-                )
+                await self.set_state_external(entity_id, value)
 
             # The remaining dashboard controls are Home Assistant switches.
-            elif control in [
-                "debug_enable",
-                "set_read_only",
-                "active"
-            ]:
+            elif control in ["debug_enable", "set_read_only", "active"]:
                 if not isinstance(value, bool):
-                    return web.json_response(
-                        {"result": "error", "error": "Switch value must be boolean"},
-                        status=400
-                    )
+                    return web.json_response({"result": "error", "error": "Switch value must be boolean"}, status=400)
 
                 entity_id = f"switch.{self.prefix}_{control}"
 
-                await self.set_state_external(
-                    entity_id,
-                    value
-                )
+                await self.set_state_external(entity_id, value)
 
             else:
-                return web.json_response(
-                    {
-                        "result": "error",
-                        "error": f"Unsupported control: {control}"
-                    },
-                    status=400
-                )
+                return web.json_response({"result": "error", "error": f"Unsupported control: {control}"}, status=400)
 
-            self.log(
-                f"Dashboard control updated: {control} = {value}"
-            )
+            self.log(f"Dashboard control updated: {control} = {value}")
 
-            return web.json_response({
-                "result": "ok",
-                "control": control,
-                "value": value
-            })
+            return web.json_response({"result": "ok", "control": control, "value": value})
 
         except Exception as e:
-            self.log(
-                f"ERROR: Failed to update dashboard control: {str(e)}"
-            )
+            self.log(f"ERROR: Failed to update dashboard control: {str(e)}")
 
-            return web.json_response(
-                {
-                    "result": "error",
-                    "error": str(e)
-                },
-                status=500
-            )
+            return web.json_response({"result": "error", "error": str(e)}, status=500)
 
     async def html_api_power_flow(self, request):
         """
@@ -2683,16 +2726,9 @@ chart.render();
             car_power = self.base.car_charging_power
             car_inside_clamp = self.base.car_energy_reported_load
 
-            house_power = (
-                max(0, load_power - car_power)
-                if car_configured and car_inside_clamp
-                else load_power
-            )
+            house_power = max(0, load_power - car_power) if car_configured and car_inside_clamp else load_power
 
-            sun_state = self.get_state_wrapper(
-                entity_id="sun.sun",
-                default=None
-            )
+            sun_state = self.get_state_wrapper(entity_id="sun.sun", default=None)
 
             # Match the existing diagram's direction thresholds/sign conventions.
             grid_importing = grid_power <= -10
@@ -2700,44 +2736,34 @@ chart.render();
             battery_charging = battery_power <= -10
             pv_generating = pv_power > 0
 
-            return web.json_response({
-                "grid_power": grid_power,
-                "battery_power": battery_power,
-                "pv_power": pv_power,
-                "load_power": load_power,
-                "house_power": house_power,
-
-                "soc_percent": self.base.soc_percent,
-
-                "grid_importing": grid_importing,
-                "battery_charging": battery_charging,
-                "battery_discharging": battery_discharging,
-                "pv_generating": pv_generating,
-
-                # Home Assistant Sun integration.
-                # Usually "above_horizon" or "below_horizon".
-                "sun_state": sun_state,
-
-                "car": {
-                    "configured": car_configured,
-                    "power": car_power,
-                    "inside_clamp": car_inside_clamp,
-                    "charging": car_configured and car_power >= 10,
-                },
-
-            })
-
-        except Exception as e:
-            self.log(
-                f"ERROR: Failed to get power-flow data: {str(e)}"
-            )
-
             return web.json_response(
                 {
-                    "error": str(e)
-                },
-                status=500
+                    "grid_power": grid_power,
+                    "battery_power": battery_power,
+                    "pv_power": pv_power,
+                    "load_power": load_power,
+                    "house_power": house_power,
+                    "soc_percent": self.base.soc_percent,
+                    "grid_importing": grid_importing,
+                    "battery_charging": battery_charging,
+                    "battery_discharging": battery_discharging,
+                    "pv_generating": pv_generating,
+                    # Home Assistant Sun integration.
+                    # Usually "above_horizon" or "below_horizon".
+                    "sun_state": sun_state,
+                    "car": {
+                        "configured": car_configured,
+                        "power": car_power,
+                        "inside_clamp": car_inside_clamp,
+                        "charging": car_configured and car_power >= 10,
+                    },
+                }
             )
+
+        except Exception as e:
+            self.log(f"ERROR: Failed to get power-flow data: {str(e)}")
+
+            return web.json_response({"error": str(e)}, status=500)
 
     async def html_api_ping(self, request):
         """
@@ -2802,21 +2828,9 @@ chart.render();
             # object returned from Home Assistant state.
             plan_json = dict(plan_json)
 
-            plan_json["car_charging_from_battery"] = bool(
-                getattr(
-                    self.base,
-                    "car_charging_from_battery",
-                    True
-                )
-            )
+            plan_json["car_charging_from_battery"] = bool(getattr(self.base, "car_charging_from_battery", True))
 
-            plan_json["car_energy_reported_load"] = bool(
-                getattr(
-                    self.base,
-                    "car_energy_reported_load",
-                    False
-                )
-            )
+            plan_json["car_energy_reported_load"] = bool(getattr(self.base, "car_energy_reported_load", False))
         plan_timestamp = plan_json.get("timestamp", None) if plan_json else None
 
         yesterday_json = self.get_state_wrapper(entity_id=yesterday_entity, attribute="json", default=None)
@@ -2888,20 +2902,14 @@ chart.render();
 
         return web.json_response(response_data)
 
-
     async def html_plan(self, request):
         """
         Serve the selected plan interface.
         """
         if self.get_web_ui() == "modern":
-            raise web.HTTPFound(
-                self.get_modern_ui_url()
-                + "/plan"
-            )
+            return await self.html_modern_ui(request)
 
-        return await self.html_plan_legacy(
-            request
-        )
+        return await self.html_plan_legacy(request)
 
     async def html_plan_legacy(self, request):
         """
@@ -3003,18 +3011,13 @@ chart.render();
         """
         Emergency/direct access to the legacy dashboard.
         """
-        return await self.html_dash_legacy(
-            request
-        )
-
+        return await self.html_dash_legacy(request)
 
     async def html_plan_legacy_direct(self, request):
         """
         Emergency/direct access to the legacy plan.
         """
-        return await self.html_plan_legacy(
-            request
-        )
+        return await self.html_plan_legacy(request)
 
     async def html_log(self, request):
         """
@@ -3428,27 +3431,47 @@ chart.render();
         Legacy remains the default so existing installations are
         unchanged unless the modern UI is explicitly enabled.
         """
-        return str(
-            self.get_arg(
-                "web_ui",
-                "legacy",
+        return (
+            str(
+                self.get_arg(
+                    "web_ui",
+                    "legacy",
+                )
             )
-        ).strip().lower()
+            .strip()
+            .lower()
+        )
 
+    async def html_modern_ui(self, request):
+        """Serve the bundled React entry point for a modern UI page."""
+        return await self.html_modern_ui_asset(request, "index.html")
 
-    def get_modern_ui_url(self):
-        """
-        Development URL for the Vite frontend.
+    async def html_modern_ui_asset(self, request, filename=None):
+        """Serve one file from the bundled React archive."""
+        if filename is None:
+            filename = request.match_info.get("filename")
+            if filename:
+                filename = "assets/" + filename
+            else:
+                filename = request.path.rsplit("/", 1)[-1]
 
-        This is temporary while the modern frontend is running as
-        a separate development server.
-        """
-        return str(
-            self.get_arg(
-                "modern_ui_url",
-                "http://localhost:5174",
-            )
-        ).rstrip("/")
+        path = PurePosixPath(filename)
+        if path.is_absolute() or ".." in path.parts:
+            raise web.HTTPNotFound()
+
+        archive_path = os.path.join(os.path.dirname(__file__), "frontend.zip")
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                body = archive.read("dist/" + str(path))
+        except KeyError:
+            raise web.HTTPNotFound() from None
+        except (OSError, zipfile.BadZipFile) as error:
+            self.log("Warn: Modern web interface bundle is unavailable: {}".format(error))
+            return web.Response(status=503, text="Modern web interface bundle is unavailable")
+
+        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        cache_control = "no-store" if str(path) == "index.html" else "public, max-age=31536000, immutable"
+        return web.Response(body=body, content_type=content_type, headers={"Cache-Control": cache_control})
 
     async def html_dash_content(self, request):
         """
@@ -3462,14 +3485,9 @@ chart.render();
         Serve the selected dashboard interface.
         """
         if self.get_web_ui() == "modern":
-            raise web.HTTPFound(
-                self.get_modern_ui_url()
-                + "/dash"
-            )
+            return await self.html_modern_ui(request)
 
-        return await self.html_dash_legacy(
-            request
-        )
+        return await self.html_dash_legacy(request)
 
     async def html_dash_legacy(self, request):
         """
@@ -3551,31 +3569,371 @@ chart.render();
         # Redirect back to dashboard
         raise web.HTTPFound("./dash")
 
+    def get_battery_chart_data(self, soc_kw_best=None):
+        """
+        Return the battery chart data shared by the legacy and modern interfaces.
+
+        Series stay keyed by their ISO timestamps so no precision is lost while
+        moving them through JSON. The React chart converts the keys to epoch
+        milliseconds at its rendering boundary.
+        """
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        actual = {}
+        if self.base.soc_kwh_history:
+            history = self.base.soc_kwh_history
+            for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                actual[minute_timestamp.strftime(TIME_FORMAT)] = history.get(self.minutes_now - minute, 0)
+        actual[now_str] = self.base.soc_kw
+
+        if soc_kw_best is None:
+            soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+
+        # Earlier plans' one- and eight-hour forecasts are shifted onto the
+        # instant they predicted, allowing a direct comparison with Actual.
+        soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
+        predicted_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
+        predicted_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
+
+        return {
+            "chart": "battery",
+            "ready": bool(soc_kw_best),
+            "generated_at": now_str,
+            "soc_max": self.base.soc_max,
+            "series": {
+                "actual": actual,
+                "optimized": soc_kw_best,
+                "base": self.get_entity_results(self.prefix + ".soc_kw"),
+                "base10": self.get_entity_results(self.prefix + ".soc_kw_base10"),
+                "optimized10": self.get_entity_results(self.prefix + ".soc_kw_best10"),
+                "predicted_h1": predicted_h1,
+                "predicted_h8": predicted_h8,
+                "charge_limit_base": self.get_entity_results(self.prefix + ".charge_limit_kw"),
+                "charge_limit_optimized": self.get_entity_results(self.prefix + ".best_charge_limit_kw"),
+                "export_limit_optimized": self.get_entity_results(self.prefix + ".best_export_limit_kw"),
+                "record": self.get_entity_results(self.prefix + ".record"),
+            },
+        }
+
+    def get_power_chart_data(self):
+        """Return Predbat's optimised power forecast for the modern chart."""
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        predicted_grid = self.get_entity_results(self.prefix + ".grid_power_best")
+        series = {
+            "battery": self.get_entity_results(self.prefix + ".battery_power_best"),
+            "solar": self.get_entity_results(self.prefix + ".pv_power_best"),
+            # Prediction stores import as positive, while Predbat's live power
+            # convention uses negative import and positive export. Normalise the
+            # chart API so forecast and live power use the same direction.
+            "grid": {timestamp: -value for timestamp, value in predicted_grid.items()},
+            "load": self.get_entity_results(self.prefix + ".load_power_best"),
+            # iBoost is published as cumulative energy. The frontend converts
+            # each interval's change to kW before drawing it on the power axis.
+            "iboost_energy": self.get_entity_results(self.prefix + ".iboost_best"),
+        }
+
+        return {
+            "chart": "power",
+            "ready": any(series[key] for key in ("battery", "solar", "grid", "load")),
+            "generated_at": now_str,
+            "series": series,
+        }
+
+    def get_cost_chart_data(self):
+        """Return actual and forecast cumulative costs for the modern chart."""
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        optimized = self.get_entity_results(self.prefix + ".best_metric")
+
+        return {
+            "chart": "cost",
+            "ready": bool(optimized),
+            "generated_at": now_str,
+            "currency_symbol": self.currency_symbols[0],
+            "currency_unit": self.currency_symbols[1],
+            "series": {
+                "actual": self.get_entity_results(self.prefix + ".cost_today"),
+                "actual_import": self.get_entity_results(self.prefix + ".cost_today_import"),
+                "actual_export": self.get_entity_results(self.prefix + ".cost_today_export"),
+                "base": self.get_entity_results(self.prefix + ".metric"),
+                "optimized": optimized,
+                "base10": self.get_entity_results(self.prefix + ".base10_metric"),
+                "optimized10": self.get_entity_results(self.prefix + ".best10_metric"),
+            },
+        }
+
+    def get_rates_chart_data(self):
+        """Return forecast tariffs and measured average rates for the modern chart."""
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        hourly_history = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_hour", 2, required=False))
+        today_history = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_today", 2, required=False))
+        series = {
+            "import": self.get_entity_results(self.prefix + ".rates"),
+            "export": self.get_entity_results(self.prefix + ".rates_export"),
+            "gas": self.get_entity_results(self.prefix + ".rates_gas"),
+            "actual_hourly": prune_today(hourly_history, self.now_utc, self.midnight_utc, prune=False, prune_future=False),
+            "actual_today": prune_today(today_history, self.now_utc, self.midnight_utc, prune=False, prune_future=False),
+        }
+
+        return {
+            "chart": "rates",
+            "ready": bool(series["import"] or series["export"]),
+            "generated_at": now_str,
+            "currency_symbol": self.currency_symbols[0],
+            "currency_unit": self.currency_symbols[1],
+            "series": series,
+        }
+
+    def get_inday_chart_data(self):
+        """Return today's actual, original and adjusted cumulative load forecasts."""
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        adjustment_history = history_attribute(self.get_history_wrapper(self.prefix + ".load_inday_adjustment", 2, required=False))
+        series = {
+            "actual": self.get_entity_results(self.prefix + ".load_energy_actual"),
+            "predicted": self.get_entity_results(self.prefix + ".load_energy_predicted"),
+            "adjusted": self.get_entity_results(self.prefix + ".load_energy_adjusted"),
+            "adjustment_factor": prune_today(adjustment_history, self.now_utc, self.midnight_utc, prune=True),
+        }
+
+        return {
+            "chart": "inday",
+            "ready": bool(series["actual"] or series["predicted"] or series["adjusted"]),
+            "generated_at": now_str,
+            "series": series,
+        }
+
+    def get_solar_chart_data(self):
+        """Return seven days of measured solar power and the current two-day forecast."""
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        actual_history = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
+        forecast_history = self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False)
+        energy_actual_history = history_attribute(self.get_history_wrapper(self.prefix + ".pv_energy_h0", 7, required=False))
+        today_history = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
+        energy_total = history_attribute(today_history, attributes=True, state_key="totalCL")
+        energy_remaining = history_attribute(today_history, attributes=True, state_key="remainingCL")
+        energy_forecast = {timestamp: max(total - energy_remaining.get(timestamp, 0), 0) for timestamp, total in energy_total.items()}
+
+        forecast = {}
+        forecast_low = {}
+        forecast_high = {}
+        forecast_calibrated = {}
+        for day_name in ("today", "tomorrow"):
+            entity = "sensor.{}_pv_{}".format(self.prefix, day_name)
+            forecast.update(self.get_entity_detailedForecast(entity, "pv_estimate"))
+            forecast_low.update(self.get_entity_detailedForecast(entity, "pv_estimate10"))
+            forecast_high.update(self.get_entity_detailedForecast(entity, "pv_estimate90"))
+            forecast_calibrated.update(self.get_entity_detailedForecast(entity, "pv_estimateCL"))
+
+        series = {
+            "actual": prune_today(actual_history, self.now_utc, self.midnight_utc, prune=False),
+            "forecast_history": prune_today(history_attribute(forecast_history), self.now_utc, self.midnight_utc, prune=False, intermediate=True),
+            "forecast_history_calibrated": prune_today(history_attribute(forecast_history, attributes=True, state_key="nowCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True),
+            "forecast": prune_today(forecast, self.now_utc, self.midnight_utc, prune=False, intermediate=True),
+            "forecast_low": prune_today(forecast_low, self.now_utc, self.midnight_utc, prune=False, intermediate=True),
+            "forecast_high": prune_today(forecast_high, self.now_utc, self.midnight_utc, prune=False, intermediate=True),
+            "forecast_calibrated": prune_today(forecast_calibrated, self.now_utc, self.midnight_utc, prune=False, intermediate=True),
+            "energy_actual": prune_today(energy_actual_history, self.now_utc, self.midnight_utc, prune=False),
+            "energy_forecast": prune_today(energy_forecast, self.now_utc, self.midnight_utc, prune=False),
+        }
+
+        return {
+            "chart": "solar",
+            "ready": bool(series["actual"] or series["forecast_calibrated"] or series["forecast"]),
+            "generated_at": now_str,
+            "series": series,
+        }
+
+    def get_savings_chart_data(self):
+        """Return daily and cumulative savings history for the modern chart."""
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        series = {
+            "daily_predbat": history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False),
+            "daily_pv_battery": history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False),
+            "daily_cost": history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False),
+            "total_predbat": history_attribute(self.get_history_with_now_attrs(self.prefix + ".savings_total_predbat", 28), daily=True, pounds=True, first=False),
+            "total_pv_battery": history_attribute(self.get_history_with_now_attrs(self.prefix + ".savings_total_pvbat", 28), daily=True, pounds=True, first=False),
+        }
+
+        return {
+            "chart": "savings",
+            "ready": any(series.values()),
+            "generated_at": now_str,
+            "currency_symbol": self.currency_symbols[0],
+            "series": series,
+        }
+
+    def get_battery_degradation_chart_data(self):
+        """Return recent calculated battery capacity and degradation history."""
+        inverters = []
+        for inverter_id in range(int(self.base.get_arg("num_inverters", 1))):
+            suffix = "" if inverter_id == 0 else "_{}".format(inverter_id)
+            sensor_id = "sensor." + self.prefix + "_soc_max_calculated" + suffix
+            history = self.get_history_wrapper(sensor_id, 28, required=False)
+            calculated = history_attribute(history, daily=True, first=False)
+            nominal = history_attribute(history, attributes=True, state_key="nominal_capacity", daily=True, first=False)
+            degradation = history_attribute(history, attributes=True, state_key="degradation_percent", daily=True, first=False)
+            current = self.base.dashboard_values.get(sensor_id, {})
+            today = self.now_utc.strftime("%Y-%m-%d")
+
+            for target, value in (
+                (calculated, current.get("state")),
+                (nominal, current.get("attributes", {}).get("nominal_capacity")),
+                (degradation, current.get("attributes", {}).get("degradation_percent")),
+            ):
+                try:
+                    target[today] = float(value)
+                except (ValueError, TypeError):
+                    pass
+
+            inverters.append(
+                {
+                    "id": inverter_id,
+                    "nominal": nominal,
+                    "calculated": calculated,
+                    "degradation": degradation,
+                }
+            )
+
+        return {
+            "chart": "degradation",
+            "ready": any(item["calculated"] or item["nominal"] or item["degradation"] for item in inverters),
+            "generated_at": self.now_utc.strftime(TIME_FORMAT),
+            "automatic_scaling": bool(self.base.battery_scaling_auto),
+            "inverters": inverters,
+        }
+
+    def get_marginal_costs_chart_data(self):
+        """Return historical and forecast marginal energy costs."""
+        sensor_id = "sensor." + self.prefix + "_marginal_energy_costs"
+        sensor_attrs = self.base.dashboard_values.get(sensor_id, {}).get("attributes", {})
+        matrix = sensor_attrs.get("matrix", {})
+        history = self.get_history_with_now_attrs(sensor_id, 7)
+        time_labels = list(next(iter(matrix.values()), {}).keys())
+
+        def combined_series(history_key, forecast):
+            series = prune_today(history_attribute(history, attributes=True, state_key=history_key), self.now_utc, self.midnight_utc, prune=False, prune_past_days=7, prune_future=True)
+            for offset, time_label in zip(MARGINAL_TIME_OFFSETS, time_labels):
+                series[(self.now_utc + timedelta(minutes=offset)).isoformat()] = forecast.get(time_label, 0)
+            return series
+
+        levels = []
+        labels = {"low": "Low", "med": "Medium", "high": "High", "ev": "EV"}
+        for state_name, kwh in zip(MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS):
+            forecast = matrix.get(kwh, matrix.get(str(kwh), {}))
+            levels.append(
+                {
+                    "id": state_name,
+                    "label": labels[state_name],
+                    "kwh": kwh,
+                    "current_cost": sensor_attrs.get("rate_now_{}_consumption".format(state_name)),
+                    "cheap": self.base.dashboard_values.get("binary_sensor.{}_marginal_rate_now_{}_is_cheap".format(self.prefix, state_name), {}).get("state") == "on",
+                    "moderate": self.base.dashboard_values.get("binary_sensor.{}_marginal_rate_now_{}_is_moderate".format(self.prefix, state_name), {}).get("state") == "on",
+                    "series": combined_series("rate_now_{}_consumption".format(state_name), forecast),
+                }
+            )
+
+        return {
+            "chart": "marginal",
+            "ready": bool(matrix),
+            "generated_at": self.now_utc.strftime(TIME_FORMAT),
+            "currency_unit": self.currency_symbols[1],
+            "levels": levels,
+            "grid_import": combined_series("grid_import_now", sensor_attrs.get("grid_import", {})),
+            "grid_export": combined_series("grid_export_now", sensor_attrs.get("grid_export", {})),
+        }
+
+    def get_carbon_chart_data(self):
+        """Return actual and forecast household carbon emissions."""
+        intensity_start = self.midnight_utc + timedelta(minutes=self.minutes_now)
+        series = {
+            "actual": self.get_entity_results(self.prefix + ".carbon_today"),
+            "base": self.get_entity_results(self.prefix + ".carbon"),
+            "optimized": self.get_entity_results(self.prefix + ".carbon_best"),
+            "intensity": {(intensity_start + timedelta(minutes=minute)).strftime(TIME_FORMAT): value for minute, value in self.base.carbon_intensity.items() if minute >= 0},
+        }
+
+        return {
+            "chart": "carbon",
+            "ready": bool(series["actual"] or series["base"] or series["optimized"]),
+            "generated_at": self.now_utc.strftime(TIME_FORMAT),
+            "series": series,
+        }
+
+    def get_load_ml_chart_data(self):
+        """Return learned load energy and power history with the current forecast."""
+        stats_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
+        forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
+        forecast_power = {}
+        previous_timestamp = None
+        previous_energy = 0
+        for timestamp in sorted(forecast_energy):
+            energy = forecast_energy[timestamp]
+            if previous_timestamp:
+                hours = (datetime.strptime(timestamp, TIME_FORMAT) - datetime.strptime(previous_timestamp, TIME_FORMAT)).total_seconds() / 3600
+                if hours > 0:
+                    forecast_power[timestamp] = dp4(max(energy - previous_energy, 0) / hours)
+            previous_timestamp = timestamp
+            previous_energy = energy
+
+        load_power = prune_today(history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False)), self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+        car_power = prune_today(history_attribute(self.get_history_wrapper(self.prefix + ".car_charging_power", 7, required=False)), self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+        series = {
+            "energy_actual": prune_today(history_attribute(stats_history, attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False),
+            "energy_predicted_h1": prune_today(history_attribute(stats_history, attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60),
+            "energy_predicted_h8": prune_today(history_attribute(stats_history, attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=480),
+            "energy_forecast": forecast_energy,
+            "power_actual": load_power,
+            "power_actual_less_car": subtract_series(load_power, car_power),
+            "car_power": car_power,
+            "power_forecast": forecast_power,
+            "power_history": prune_today(history_attribute(stats_history, attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False),
+            "power_history_h1": prune_today(history_attribute(stats_history, attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60),
+            "power_history_h8": prune_today(history_attribute(stats_history, attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=480),
+            "pv_actual": prune_today(history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False)), self.now_utc, self.midnight_utc, prune=True, prune_past_days=7),
+            "pv_forecast": self.get_entity_results(self.prefix + ".pv_power_best"),
+            "temperature": prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune_future=True, prune_future_days=2, prune=True, prune_past_days=7),
+        }
+
+        return {
+            "chart": "loadml",
+            "ready": bool(series["energy_actual"] or series["energy_forecast"] or series["power_actual"]),
+            "generated_at": self.now_utc.strftime(TIME_FORMAT),
+            "car_configured": bool(self.base.car_charging_power_configured),
+            "series": series,
+        }
+
+    async def html_api_chart_data(self, request):
+        """Return chart data for the modern interface as JSON."""
+        chart = request.query.get("chart", "battery").strip().lower()
+        if chart == "battery":
+            return web.json_response(self.get_battery_chart_data())
+        if chart == "power":
+            return web.json_response(self.get_power_chart_data())
+        if chart == "cost":
+            return web.json_response(self.get_cost_chart_data())
+        if chart == "rates":
+            return web.json_response(self.get_rates_chart_data())
+        if chart == "inday":
+            return web.json_response(self.get_inday_chart_data())
+        if chart == "solar":
+            return web.json_response(self.get_solar_chart_data())
+        if chart == "savings":
+            return web.json_response(self.get_savings_chart_data())
+        if chart == "degradation":
+            return web.json_response(self.get_battery_degradation_chart_data())
+        if chart == "marginal":
+            return web.json_response(self.get_marginal_costs_chart_data())
+        if chart == "carbon":
+            return web.json_response(self.get_carbon_chart_data())
+        if chart == "loadml":
+            return web.json_response(self.get_load_ml_chart_data())
+        return web.json_response({"error": "Unknown chart type"}, status=400)
+
     def get_chart(self, chart):
         """
         Return the HTML for a chart
         """
         now_str = self.now_utc.strftime(TIME_FORMAT)
-        soc_kw_h0 = {}
-        if self.base.soc_kwh_history:
-            hist = self.base.soc_kwh_history
-            for minute in range(0, self.minutes_now, self.plan_interval_minutes):
-                minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
-                stamp = minute_timestamp.strftime(TIME_FORMAT)
-                soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
-        soc_kw_h0[now_str] = self.base.soc_kw
-        soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
-        # What earlier plans predicted for now, shifted forward by the horizon they were made at, so
-        # each lands on the moment it was forecasting and can be read straight against Actual.
-        soc_best_history = self.get_history_with_now_attrs(self.prefix + ".soc_kw_best", 7)
-        soc_kw_best_h1 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60)
-        soc_kw_best_h8 = prune_today(history_attribute(soc_best_history, attributes=True, state_key="soc_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
-        soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
-        soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
-        charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
-        best_charge_limit_kw = self.get_entity_results(self.prefix + ".best_charge_limit_kw")
-        best_export_limit_kw = self.get_entity_results(self.prefix + ".best_export_limit_kw")
         battery_power_best = self.get_entity_results(self.prefix + ".battery_power_best")
         pv_power_best = self.get_entity_results(self.prefix + ".pv_power_best")
         grid_power_best = self.get_entity_results(self.prefix + ".grid_power_best")
@@ -3591,33 +3949,34 @@ chart.render();
         rates = self.get_entity_results(self.prefix + ".rates")
         rates_export = self.get_entity_results(self.prefix + ".rates_export")
         rates_gas = self.get_entity_results(self.prefix + ".rates_gas")
-        record = self.get_entity_results(self.prefix + ".record")
 
         text = ""
 
         if not soc_kw_best:
             text += "<br><h2>Loading...</h2>"
         elif chart == "Battery":
+            battery_data = self.get_battery_chart_data(soc_kw_best=soc_kw_best)
+            battery_series = battery_data["series"]
             series_data = [
-                {"name": "Base", "data": soc_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
-                {"name": "Base10", "data": soc_kw_base10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#e8972c"},
-                {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
-                {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
-                {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
-                {"name": "Predicted (+1h)", "data": soc_kw_best_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
-                {"name": "Predicted (+8h)", "data": soc_kw_best_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
-                {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
+                {"name": "Base", "data": battery_series["base"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Base10", "data": battery_series["base10"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#e8972c"},
+                {"name": "Best", "data": battery_series["optimized"], "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
+                {"name": "Best10", "data": battery_series["optimized10"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
+                {"name": "Actual", "data": battery_series["actual"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Predicted (+1h)", "data": battery_series["predicted_h1"], "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Predicted (+8h)", "data": battery_series["predicted_h8"], "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
+                {"name": "Charge Limit Base", "data": battery_series["charge_limit_base"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
                 {
                     "name": "Charge Limit Best",
-                    "data": best_charge_limit_kw,
+                    "data": battery_series["charge_limit_optimized"],
                     "opacity": "0.2",
                     "stroke_width": "4",
                     "stroke_curve": "stepline",
                     "chart_type": "area",
                     "color": "#e3e019",
                 },
-                {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
-                {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
+                {"name": "Best Export Limit", "data": battery_series["export_limit_optimized"], "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
+                {"name": "Record", "data": battery_series["record"], "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str)
         elif chart == "Power":
@@ -3641,31 +4000,24 @@ chart.render();
             ]
             text += self.render_chart(series_data, self.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_today_hist = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_today", 2, required=False))
-            cost_hour_hist = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_hour", 2, required=False))
-
-            cost_pkwh_today = prune_today(cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
-            cost_pkwh_hour = prune_today(cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
+            rates_data = self.get_rates_chart_data()
+            rates_series = rates_data["series"]
             series_data = [
-                {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
-                {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Hourly {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Today {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Import", "data": rates_series["import"], "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
+                {"name": "Export", "data": rates_series["export"], "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
+                {"name": "Gas", "data": rates_series["gas"], "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
+                {"name": "Hourly {}/kWh".format(self.currency_symbols[1]), "data": rates_series["actual_hourly"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Today {}/kWh".format(self.currency_symbols[1]), "data": rates_series["actual_today"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
-            load_energy_actual = self.get_entity_results(self.prefix + ".load_energy_actual")
-            load_energy_predicted = self.get_entity_results(self.prefix + ".load_energy_predicted")
-            load_energy_adjusted = self.get_entity_results(self.prefix + ".load_energy_adjusted")
-            inday_adjust_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_inday_adjustment", 2, required=False))
-            adjustment_factor = prune_today(inday_adjust_hist, self.now_utc, self.midnight_utc, prune=True)
+            inday_series = self.get_inday_chart_data()["series"]
 
             series_data = [
-                {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
-                {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
-                {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
-                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "%"},
+                {"name": "Actual", "data": inday_series["actual"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
+                {"name": "Predicted", "data": inday_series["predicted"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
+                {"name": "Adjusted", "data": inday_series["adjusted"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
+                {"name": "Adjustment Factor", "data": inday_series["adjustment_factor"], "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "%"},
             ]
             secondary_axis = [
                 {
@@ -3678,30 +4030,33 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str, extra_yaxis=secondary_axis)
         elif chart == "PV" or chart == "PV7":
-            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
-            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
-            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False))
-            pv_forecast_histCL = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
-
-            pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
-            pv_forecastCL = prune_today(pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
-            pv_today_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecast10 = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecast90 = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecastCL = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            pv_today_forecast10.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            solar_series = self.get_solar_chart_data()["series"]
+            prune_to_today = chart == "PV"
 
             series_data = [
-                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
-                {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
-                {"name": "Forecast History CL", "data": pv_forecastCL, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#e90a0a", "chart_type": "area"},
-                {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
-                {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
-                {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
-                {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
+                {"name": "PV Power", "data": prune_today(solar_series["actual"], self.now_utc, self.midnight_utc, prune=prune_to_today), "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
+                {
+                    "name": "Forecast History",
+                    "data": prune_today(solar_series["forecast_history"], self.now_utc, self.midnight_utc, prune=prune_to_today, intermediate=True),
+                    "opacity": "0.3",
+                    "stroke_width": "3",
+                    "stroke_curve": "smooth",
+                    "color": "#a8a8a7",
+                    "chart_type": "area",
+                },
+                {
+                    "name": "Forecast History CL",
+                    "data": prune_today(solar_series["forecast_history_calibrated"], self.now_utc, self.midnight_utc, prune=prune_to_today, intermediate=True),
+                    "opacity": "0.3",
+                    "stroke_width": "3",
+                    "stroke_curve": "smooth",
+                    "color": "#e90a0a",
+                    "chart_type": "area",
+                },
+                {"name": "Forecast", "data": solar_series["forecast"], "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
+                {"name": "Forecast 10%", "data": solar_series["forecast_low"], "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
+                {"name": "Forecast 90%", "data": solar_series["forecast_high"], "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
+                {"name": "Forecast CL", "data": solar_series["forecast_calibrated"], "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         elif chart == "PVAccuracy":
@@ -4019,32 +4374,40 @@ chart.render();
 
     async def html_charts(self, request):
         """
-        Render apps.yaml as an HTML page
+        Serve the selected charts interface.
         """
+        if self.get_web_ui() == "modern":
+            return await self.html_modern_ui(request)
+
+        return await self.html_charts_legacy(request)
+
+    async def html_charts_legacy(self, request):
+        """Render the legacy charts interface."""
         args = request.query
         chart = args.get("chart", "Battery")
-        self.default_page = "./charts?chart={}".format(chart)
+        chart_path = "./legacy_charts" if self.get_web_ui() == "modern" else "./charts"
+        self.default_page = "{}?chart={}".format(chart_path, chart)
         text = self.get_header("Predbat Charts", refresh=60 * 5)
         text += "<body>\n"
         text += get_charts_css()
 
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
-        text += f'<a href="./charts?chart=Battery" class="{"active" if chart == "Battery" else ""}">Battery</a>'
-        text += f'<a href="./charts?chart=Power" class="{"active" if chart == "Power" else ""}">Power</a>'
-        text += f'<a href="./charts?chart=Cost" class="{"active" if chart == "Cost" else ""}">Cost</a>'
-        text += f'<a href="./charts?chart=Rates" class="{"active" if chart == "Rates" else ""}">Rates</a>'
-        text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
-        text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
-        text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
-        text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
-        text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
-        text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
-        text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
+        text += f'<a href="{chart_path}?chart=Battery" class="{"active" if chart == "Battery" else ""}">Battery</a>'
+        text += f'<a href="{chart_path}?chart=Power" class="{"active" if chart == "Power" else ""}">Power</a>'
+        text += f'<a href="{chart_path}?chart=Cost" class="{"active" if chart == "Cost" else ""}">Cost</a>'
+        text += f'<a href="{chart_path}?chart=Rates" class="{"active" if chart == "Rates" else ""}">Rates</a>'
+        text += f'<a href="{chart_path}?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
+        text += f'<a href="{chart_path}?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
+        text += f'<a href="{chart_path}?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
+        text += f'<a href="{chart_path}?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="{chart_path}?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
+        text += f'<a href="{chart_path}?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
+        text += f'<a href="{chart_path}?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
-            text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
-            text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
+            text += f'<a href="{chart_path}?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
+            text += f'<a href="{chart_path}?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
         if chart != "MarginalCosts":
@@ -4628,6 +4991,76 @@ chart.render();
 
         return res
 
+    def get_compare_data(self):
+        """Return tariff comparison results and history for the modern interface."""
+        actual = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        if self.base.num_cars > 0:
+            car = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            actual_no_car = self.subtract_daily(actual, car)
+        else:
+            actual_no_car = {}
+
+        tariffs = []
+        for configured in self.get_arg("compare_list", []):
+            tariff_id = configured.get("id", "")
+            result = self.base.comparison.get_comparison(tariff_id) if self.base.comparison else {}
+            metric_history = {}
+            cost_at_1am = {}
+            entity_id = result.get("entity_id")
+            if entity_id:
+                entity_history = self.get_history_wrapper(entity_id, 28, required=False)
+                metric_history = history_attribute(entity_history, state_key="metric", attributes=True, daily=True, pounds=True)
+                cost_at_1am = self.history_daily_at_hour(entity_history)
+
+            date = result.get("date", "")
+            try:
+                stamp = datetime.strptime(date, "%Y-%m-%d %H:%M:%S").strftime(TIME_FORMAT_DAILY)
+                metric_history[stamp] = dp2(result.get("metric", 0) / 100)
+            except (ValueError, TypeError):
+                pass
+
+            average, average_days = self.average_cost_window(cost_at_1am, 7)
+            rolling = {key: dp2(value / 100) for key, value in self.rolling_7d_average(cost_at_1am).items()}
+            tariffs.append(
+                {
+                    "id": tariff_id,
+                    "name": configured.get("name", ""),
+                    "date": date,
+                    "true_cost": dp2(result.get("metric", 0) / 100) if result else None,
+                    "cost": dp2(result.get("cost", 0) / 100) if result else None,
+                    "cost10": dp2(result.get("cost10", 0) / 100) if result else None,
+                    "average7": dp2(average / 100) if average is not None else None,
+                    "average_days": average_days,
+                    "export_kwh": result.get("export_kwh"),
+                    "import_kwh": result.get("import_kwh"),
+                    "soc": result.get("soc"),
+                    "final_iboost": result.get("final_iboost"),
+                    "final_carbon_g": result.get("final_carbon_g"),
+                    "best": result.get("best", False),
+                    "existing": result.get("existing_tariff", False),
+                    "history": metric_history,
+                    "rolling7": rolling,
+                    "plan": result.get("raw"),
+                }
+            )
+
+        return {
+            "active": self.get_arg("compare_active", False),
+            "configured": bool(tariffs),
+            "ready": any(tariff["date"] for tariff in tariffs),
+            "generated_at": self.now_utc.strftime(TIME_FORMAT),
+            "currency_symbol": self.currency_symbols[0],
+            "show_iboost": self.base.iboost_enable,
+            "show_carbon": self.base.carbon_enable,
+            "actual": actual,
+            "actual_no_car": actual_no_car,
+            "tariffs": tariffs,
+        }
+
+    async def html_api_compare(self, request):
+        """Return tariff comparison data as JSON."""
+        return web.json_response(self.get_compare_data())
+
     async def html_compare(self, request):
         """
         Return the Predbat compare page as an HTML page
@@ -4897,6 +5330,45 @@ chart.render();
             return web.json_response({"checksum": checksum, "content": content})
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
+
+    async def html_api_apps_schema(self, request):
+        """Return JSON Schema used by the modern apps.yaml editor."""
+        return web.json_response(build_apps_json_schema())
+
+    async def html_api_apps_yaml(self, request):
+        """Return the unmasked apps.yaml content for editing."""
+        try:
+            with open("apps.yaml", "r") as handle:
+                content = handle.read()
+            checksum = hashlib.md5(content.encode("utf-8")).hexdigest()
+            return web.json_response({"content": content, "checksum": checksum})
+        except OSError as error:
+            return web.json_response({"error": str(error)}, status=500)
+
+    async def html_api_apps_yaml_post(self, request):
+        """Save apps.yaml after checking it has not changed on disk."""
+        try:
+            payload = await request.json()
+            content = payload.get("content")
+            if not isinstance(content, str):
+                return web.json_response({"error": "No content provided to save"}, status=400)
+
+            with open("apps.yaml", "r") as handle:
+                current = handle.read()
+            checksum = hashlib.md5(current.encode("utf-8")).hexdigest()
+            if payload.get("checksum") != checksum:
+                return web.json_response({"error": "apps.yaml changed on disk; reload before saving"}, status=409)
+
+            content = content.replace("\r\n", "\n").replace("\r", "\n")
+            shutil.copy2("apps.yaml", "apps.yaml.backup")
+            with open("apps.yaml", "w") as handle:
+                handle.write(content)
+            saved_checksum = hashlib.md5(content.encode("utf-8")).hexdigest()
+            self.log("Apps.yaml successfully saved to apps.yaml; backup created at apps.yaml.backup")
+            return web.json_response({"saved": True, "checksum": saved_checksum})
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            self.log("ERROR: Failed to save apps.yaml: {}".format(error))
+            return web.json_response({"error": str(error)}, status=500)
 
     async def html_apps_editor_post(self, request):
         """
@@ -5210,8 +5682,8 @@ chart.render();
                     return web.json_response({"success": False, "message": "Unknown action"}, status=400)
 
             # Refresh plan
-            #self.base.update_pending = True
-            #self.base.plan_valid = False
+            # self.base.update_pending = True
+            # self.base.plan_valid = False
 
             # Return html plan again
             return web.json_response({"success": True}, status=200)
@@ -5281,6 +5753,98 @@ chart.render();
         except Exception as e:
             self.log(f"Error in html_component_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
+
+    async def html_api_components(self, request):
+        """Return component status and display-safe configuration as JSON."""
+        from components import COMPONENT_LIST
+
+        active_components = set(self.base.components.get_active())
+        result = []
+
+        for component_name in self.base.components.get_all():
+            component_info = COMPONENT_LIST.get(component_name, {})
+            is_active = component_name in active_components
+            is_alive = self.base.components.is_alive(component_name)
+            load_error = self.base.components.load_error(component_name)
+            status = "error" if load_error or (is_active and not is_alive) else "active" if is_active else "disabled"
+            event_filter = component_info.get("event_filter", "")
+            settings = []
+
+            for arg_info in component_info.get("args", {}).values():
+                config_key = arg_info.get("config", "")
+                if not config_key:
+                    continue
+                value = self.get_arg(config_key, arg_info.get("default", ""), indirect=False)
+                if arg_info.get("secret"):
+                    value = "Configured" if value else "Not set"
+                elif isinstance(value, (dict, list)):
+                    value = "Configured" if value else "Not set"
+                elif value is None or value == "":
+                    value = "Not set"
+                else:
+                    value = str(value)
+                settings.append({"name": config_key, "required": bool(arg_info.get("required")), "value": value})
+
+            result.append(
+                {
+                    "id": component_name,
+                    "name": component_info.get("name", component_name),
+                    "status": status,
+                    "can_restart": bool(component_info.get("can_restart", True)) and (is_active or bool(load_error)),
+                    "last_updated": format_time_ago(self.base.components.last_updated_time(component_name)),
+                    "error": load_error,
+                    "error_count": self.base.components.get_error_count(component_name),
+                    "entity_count": self.count_entities_matching_filter(event_filter) if event_filter else None,
+                    "event_filter": event_filter or None,
+                    "settings": settings,
+                }
+            )
+
+        order = {"error": 0, "active": 1, "disabled": 2}
+        result.sort(key=lambda component: (order[component["status"]], component["name"].lower()))
+        return web.json_response({"components": result})
+
+    async def html_api_config(self, request):
+        """Return enabled Home Assistant configuration controls as JSON."""
+        items = []
+        schema = build_apps_json_schema()["$defs"]["predbatApp"]["properties"]
+        for item in self.base.CONFIG_ITEMS:
+            if not self.base.user_config_item_enabled(item) or not item.get("entity"):
+                continue
+            value = item.get("value")
+            if value is None:
+                value = item.get("default", "")
+            options = list(item.get("options", []))
+            if item.get("type") == "select" and value not in options:
+                options.append(value)
+            friendly_name = item.get("friendly_name", "")
+            description = schema.get(item.get("name", ""), {}).get("description", "")
+            if not description or description == friendly_name:
+                if item.get("type") == "switch":
+                    description = f"Turns {friendly_name.lower()} on or off."
+                elif item.get("type") in ["input_number", "number"]:
+                    description = f"Sets {friendly_name.lower()} between {item.get('min', 0)} and {item.get('max', 100)}."
+                elif item.get("type") == "select":
+                    description = f"Selects the value used for {friendly_name.lower()}."
+                else:
+                    description = f"Shows the current value of {friendly_name.lower()}."
+            items.append(
+                {
+                    "name": item.get("name", ""),
+                    "friendly_name": friendly_name,
+                    "description": description,
+                    "entity": item["entity"],
+                    "type": item.get("type", ""),
+                    "value": value,
+                    "default": item.get("default", ""),
+                    "unit": self.base.convert_currency_unit(item.get("unit", "")),
+                    "min": item.get("min"),
+                    "max": item.get("max"),
+                    "step": item.get("step"),
+                    "options": options,
+                }
+            )
+        return web.json_response({"items": items})
 
     async def html_components(self, request):
         """
@@ -5794,6 +6358,45 @@ document.addEventListener('DOMContentLoaded', function() {
             self.log(f"ERROR: Failed to save component config: {str(e)}")
             traceback.print_exc()
             return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def html_api_browse(self, request):
+        """List one directory for the modern read-only file browser."""
+        requested_path = request.query.get("path", "").strip("/")
+        base_dir = os.path.realpath(os.getcwd())
+        safe_path = os.path.realpath(os.path.join(base_dir, requested_path))
+
+        if os.path.commonpath([base_dir, safe_path]) != base_dir:
+            return web.json_response({"error": "Access denied"}, status=403)
+        if not os.path.isdir(safe_path):
+            return web.json_response({"error": "Directory not found"}, status=404)
+
+        files = []
+        try:
+            for name in os.listdir(safe_path):
+                if name.startswith("."):
+                    continue
+                item_path = os.path.join(safe_path, name)
+                item_real_path = os.path.realpath(item_path)
+                if os.path.commonpath([base_dir, item_real_path]) != base_dir:
+                    continue
+                try:
+                    stat_info = os.stat(item_real_path)
+                except (OSError, PermissionError):
+                    continue
+                relative_path = os.path.relpath(item_real_path, base_dir).replace("\\", "/")
+                files.append(
+                    {
+                        "name": name,
+                        "isDirectory": os.path.isdir(item_real_path),
+                        "path": "/" + relative_path,
+                        "updatedAt": datetime.fromtimestamp(stat_info.st_mtime).astimezone().isoformat(),
+                        "size": None if os.path.isdir(item_real_path) else stat_info.st_size,
+                    }
+                )
+        except PermissionError:
+            return web.json_response({"error": "Permission denied"}, status=403)
+
+        return web.json_response({"files": files})
 
     async def html_browse(self, request):
         """
@@ -6377,6 +6980,33 @@ document.addEventListener('DOMContentLoaded', function() {
         except Exception as e:
             self.log(f"Error in internals API: {str(e)}")
             return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": str(e)}))
+
+    async def html_api_internals_threads(self, request):
+        """Return thread stacks and asyncio tasks as JSON."""
+        try:
+            frames = sys._current_frames()
+            known_threads = {thread.ident: thread for thread in threading.enumerate()}
+            threads = []
+
+            for thread_id, frame in frames.items():
+                thread = known_threads.get(thread_id)
+                stack = [{"file": item.filename, "line": item.lineno, "name": item.name, "code": item.line or ""} for item in traceback.extract_stack(frame)]
+                threads.append(
+                    {
+                        "name": thread.name if thread else f"Thread-{thread_id}",
+                        "id": thread_id,
+                        "alive": thread.is_alive() if thread else None,
+                        "daemon": thread.daemon if thread else None,
+                        "stack": stack,
+                        "tasks": self._get_thread_asyncio_tasks(frame),
+                    }
+                )
+
+            threads.sort(key=lambda item: item["name"].lower())
+            return web.json_response({"success": True, "threads": threads})
+        except Exception as e:
+            self.log(f"Error getting thread stacks: {e}")
+            return web.json_response({"success": False, "error": str(e)}, status=500)
 
     async def html_api_internals_download(self, request):
         """

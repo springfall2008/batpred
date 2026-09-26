@@ -1,287 +1,232 @@
 import './StatusCard.css'
 
 type StatusCardProps = {
-    status: string
-    mode: string
-    version: string
+  status: string
+  mode: string
+  version: string
 
-    lastUpdated: string | null
-    lastStarted: string | null
+  lastUpdated: string | null
+  lastStarted: string | null
 
-    configOk: boolean
+  configOk: boolean
 
-    active: boolean
-    readOnly: boolean
-    debugEnabled: boolean
+  active: boolean
+  readOnly: boolean
+  debugEnabled: boolean
 
-    onModeChange: (value: string) => void
-    onActiveChange: (value: boolean) => void
-    onReadOnlyChange: (value: boolean) => void
-    onDebugChange: (value: boolean) => void
+  onModeChange: (value: string) => void
+  onActiveChange: (value: boolean) => void
+  onReadOnlyChange: (value: boolean) => void
+  onDebugChange: (value: boolean) => void
 }
 
+// Relative labels refresh when the parent supplies the next status poll.
 function formatTimeAgo(value: string | null) {
-    if (!value) return 'Unknown'
+  if (!value) return 'Unknown'
 
-    const date = new Date(value)
-    const now = new Date()
+  const date = new Date(value)
+  const now = new Date()
 
-    const seconds = Math.floor(
-        (now.getTime() - date.getTime()) / 1000
-    )
+  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
 
-    if (seconds < 60) {
-        return 'Just now'
-    }
+  if (seconds < 60) {
+    return 'Just now'
+  }
 
-    const minutes = Math.floor(seconds / 60)
+  const minutes = Math.floor(seconds / 60)
 
-    if (minutes < 60) {
-        return `${minutes} min ago`
-    }
+  if (minutes < 60) {
+    return `${minutes} min ago`
+  }
 
-    const hours = Math.floor(minutes / 60)
+  const hours = Math.floor(minutes / 60)
 
-    if (hours < 24) {
-        return `${hours}h ago`
-    }
+  if (hours < 24) {
+    return `${hours}h ago`
+  }
 
-    const days = Math.floor(hours / 24)
+  const days = Math.floor(hours / 24)
 
-    return `${days}d ago`
+  return `${days}d ago`
 }
 
 function formatUptime(value: string | null) {
-    if (!value) return 'Unknown'
+  if (!value) return 'Unknown'
 
-    const started = new Date(value)
-    const now = new Date()
+  const started = new Date(value)
+  const now = new Date()
 
-    const minutes = Math.floor(
-        (now.getTime() - started.getTime()) / 60000
-    )
+  const minutes = Math.floor((now.getTime() - started.getTime()) / 60000)
 
-    const days = Math.floor(minutes / 1440)
-    const hours = Math.floor((minutes % 1440) / 60)
-    const mins = minutes % 60
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const mins = minutes % 60
 
-    if (days > 0) {
-        return `${days}d ${hours}h`
-    }
+  if (days > 0) {
+    return `${days}d ${hours}h`
+  }
 
-    if (hours > 0) {
-        return `${hours}h ${mins}m`
-    }
+  if (hours > 0) {
+    return `${hours}h ${mins}m`
+  }
 
-    return `${mins}m`
+  return `${mins}m`
 }
 
 function getStatusHealth(status: string) {
-    const normalized = status.toLowerCase()
+  const normalized = status.toLowerCase()
 
-    if (
-        normalized.includes('error') ||
-        normalized.includes('unhealthy')
-    ) {
-        return 'error'
-    }
+  if (normalized.includes('error') || normalized.includes('unhealthy')) {
+    return 'error'
+  }
 
-    if (normalized.includes('warn')) {
-        return 'warning'
-    }
+  if (normalized.includes('warn')) {
+    return 'warning'
+  }
 
-    return 'ok'
+  return 'ok'
 }
 
 function StatusCard({
-    status,
-    mode,
-    version,
-    lastUpdated,
-    lastStarted,
-    configOk,
-    active,
-    readOnly,
-    debugEnabled,
-    onModeChange,
-    onActiveChange,
-    onReadOnlyChange,
-    onDebugChange
+  status,
+  mode,
+  version,
+  lastUpdated,
+  lastStarted,
+  configOk,
+  active,
+  readOnly,
+  debugEnabled,
+  onModeChange,
+  onActiveChange,
+  onReadOnlyChange,
+  onDebugChange
 }: StatusCardProps) {
+  const statusHealth = getStatusHealth(status)
 
-    const statusHealth = getStatusHealth(status)
+  return (
+    <section className="status-card">
+      {/* Card heading */}
+      <div className="status-card-header">
+        <h2>Predbat Status</h2>
 
-    return (
-        <section className="status-card">
+        <span className="status-card-version">{version}</span>
+      </div>
 
-            {/* Card heading */}
-            <div className="status-card-header">
-                <h2>Predbat Status</h2>
+      {/* Current status */}
+      <div className="status-card-status-section">
+        <span className="status-card-label">Status</span>
 
-                <span className="status-card-version">
-                    {version}
-                </span>
-            </div>
+        <div className="status-card-status-row">
+          <span className={`status-dot status-${statusHealth}`} />
 
-            {/* Current status */}
-            <div className="status-card-status-section">
-                <span className="status-card-label">
-                    Status
-                </span>
+          <strong className="status-card-status">{status}</strong>
+        </div>
+      </div>
 
-                <div className="status-card-status-row">
-                    <span
-                        className={`status-dot status-${statusHealth}`}
-                    />
+      {/* Runtime/status information */}
+      <div className="status-card-details">
+        {/* Mode */}
+        <div className="status-card-detail">
+          <span>Mode</span>
 
-                    <strong className="status-card-status">
-                        {status}
-                    </strong>
-                </div>
-            </div>
+          <select
+            className="status-card-select"
+            value={mode}
+            onChange={(event) => onModeChange(event.target.value)}
+          >
+            <option value="Monitor">Monitor</option>
 
-            {/* Runtime/status information */}
-            <div className="status-card-details">
+            <option value="Control charge">Control charge</option>
 
-                {/* Mode */}
-                <div className="status-card-detail">
-                    <span>Mode</span>
+            <option value="Control charge & discharge">Control charge & discharge</option>
+          </select>
+        </div>
 
-                    <select
-                        className="status-card-select"
-                        value={mode}
-                        onChange={(event) =>
-                            onModeChange(event.target.value)
-                        }
-                    >
-                        <option value="Monitor">
-                            Monitor
-                        </option>
+        {/* Config health */}
+        <div className="status-card-detail">
+          <span>Config</span>
 
-                        <option value="Control charge">
-                            Control charge
-                        </option>
+          <strong className={configOk ? 'config-ok' : 'config-error'}>
+            {configOk ? 'OK' : 'Error'}
+          </strong>
+        </div>
 
-                        <option value="Control charge & discharge">
-                            Control charge & discharge
-                        </option>
-                    </select>
-                </div>
+        {/* Last update */}
+        <div className="status-card-detail">
+          <span>Plan Updated</span>
 
-                {/* Config health */}
-                <div className="status-card-detail">
-                    <span>Config</span>
+          <strong>{formatTimeAgo(lastUpdated)}</strong>
+        </div>
 
-                    <strong
-                        className={
-                            configOk
-                                ? 'config-ok'
-                                : 'config-error'
-                        }
-                    >
-                        {configOk ? 'OK' : 'Error'}
-                    </strong>
-                </div>
+        {/* Uptime */}
+        <div className="status-card-detail">
+          <span>Uptime</span>
 
-                {/* Last update */}
-                <div className="status-card-detail">
-                    <span>Plan Updated</span>
+          <strong>{formatUptime(lastStarted)}</strong>
+        </div>
+      </div>
 
-                    <strong>
-                        {formatTimeAgo(lastUpdated)}
-                    </strong>
-                </div>
+      {/* Interactive controls */}
+      <div className="status-card-controls">
+        {/* Predbat calculation/activity state */}
+        <div className="status-control-row">
+          <div className="status-control-text">
+            <span className="status-control-label">Predbat Active</span>
 
-                {/* Uptime */}
-                <div className="status-card-detail">
-                    <span>Uptime</span>
+            <span className="status-control-description">{active ? 'Calculating' : 'Idle'}</span>
+          </div>
 
-                    <strong>
-                        {formatUptime(lastStarted)}
-                    </strong>
-                </div>
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={active}
+              onChange={(event) => onActiveChange(event.target.checked)}
+            />
+            <span className="toggle-slider" />
+          </label>
+        </div>
 
-            </div>
+        {/* Read-only mode */}
+        <div className="status-control-row">
+          <div className="status-control-text">
+            <span className="status-control-label">Read Only</span>
 
-            {/* Interactive controls */}
-            <div className="status-card-controls">
+            <span className="status-control-description">{readOnly ? 'Enabled' : 'Disabled'}</span>
+          </div>
 
-                {/* Predbat calculation/activity state */}
-                <div className="status-control-row">
-                    <div className="status-control-text">
-                        <span className="status-control-label">
-                            Predbat Active
-                        </span>
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={readOnly}
+              onChange={(event) => onReadOnlyChange(event.target.checked)}
+            />
+            <span className="toggle-slider" />
+          </label>
+        </div>
 
-                        <span className="status-control-description">
-                            {active ? 'Calculating' : 'Idle'}
-                        </span>
-                    </div>
+        {/* Debug output */}
+        <div className="status-control-row">
+          <div className="status-control-text">
+            <span className="status-control-label">Debug</span>
 
-                    <label className="toggle-switch">
-                        <input
-                            type="checkbox"
-                            checked={active}
-                            onChange={(event) =>
-                                onActiveChange(event.target.checked)
-                            }
-                        />
-                        <span className="toggle-slider" />
-                    </label>
-                </div>
+            <span className="status-control-description">
+              {debugEnabled ? 'Enabled' : 'Disabled'}
+            </span>
+          </div>
 
-                {/* Read-only mode */}
-                <div className="status-control-row">
-                    <div className="status-control-text">
-                        <span className="status-control-label">
-                            Read Only
-                        </span>
-
-                        <span className="status-control-description">
-                            {readOnly ? 'Enabled' : 'Disabled'}
-                        </span>
-                    </div>
-
-                    <label className="toggle-switch">
-                        <input
-                            type="checkbox"
-                            checked={readOnly}
-                            onChange={(event) =>
-                                onReadOnlyChange(event.target.checked)
-                            }
-                        />
-                        <span className="toggle-slider" />
-                    </label>
-                </div>
-
-                {/* Debug output */}
-                <div className="status-control-row">
-                    <div className="status-control-text">
-                        <span className="status-control-label">
-                            Debug
-                        </span>
-
-                        <span className="status-control-description">
-                            {debugEnabled ? 'Enabled' : 'Disabled'}
-                        </span>
-                    </div>
-
-                    <label className="toggle-switch">
-                        <input
-                            type="checkbox"
-                            checked={debugEnabled}
-                            onChange={(event) =>
-                                onDebugChange(event.target.checked)
-                            }
-                        />
-                        <span className="toggle-slider" />
-                    </label>
-                </div>
-
-            </div>
-
-        </section>
-    )
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={debugEnabled}
+              onChange={(event) => onDebugChange(event.target.checked)}
+            />
+            <span className="toggle-slider" />
+          </label>
+        </div>
+      </div>
+    </section>
+  )
 }
 
 export default StatusCard

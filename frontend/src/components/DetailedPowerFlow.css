@@ -1,29 +1,21 @@
+/* Anchor positions are calibrated to the 16:9 artwork used by DetailedPowerFlow. */
 .detailed-power-flow {
-    position: relative;
-
-    width: 100%;
-    aspect-ratio: 16 / 9;
-
-    overflow: hidden;
-
-    border-radius: 12px;
-
-    background: var(--color-bg);
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--color-bg);
 }
 
-
 .detailed-power-flow-background {
-    position: absolute;
-    inset: 0;
-
-    display: block;
-
-    width: 100%;
-    height: 100%;
-
-    object-fit: fill;
-
-    z-index: 0;
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  z-index: 0;
 }
 
 /*
@@ -31,94 +23,64 @@
  */
 
 .detailed-flow-label {
-    position: absolute;
-    z-index: 4;
-
-    display: flex;
-    flex-direction: row;
-    align-items: stretch;
-
-    gap: 0.6rem;
-
-    min-width: 0;
-
-    padding: 0.5rem 0.65rem;
-
-    background:
-        color-mix(
-            in srgb,
-            var(--color-surface) 68%,
-            transparent
-        );
-
-    border:
-        1px solid
-        color-mix(
-            in srgb,
-            var(--color-border) 75%,
-            transparent
-        );
-
-    border-radius: 8px;
-
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10);
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  background: color-mix(in srgb, var(--color-surface) 68%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .detailed-flow-icon-panel {
-    flex: 0 0 2.4rem;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    min-height: 2.7rem;
+  flex: 0 0 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.7rem;
 }
 
 .detailed-flow-icon-large {
-    display: block;
-
-    width: 100%;
-    height: 100%;
-
-    max-width: 2.4rem;
-    max-height: 2.7rem;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 2.4rem;
+  max-height: 2.7rem;
 }
 
 .detailed-flow-content {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-
-    min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
 }
 
 .detailed-flow-name {
-    font-size: 0.62rem;
-    font-weight: 700;
-
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-
-    color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
 }
 
 .detailed-flow-label strong {
-    font-size: 0.95rem;
-    line-height: 1.1;
-
-    color: var(--color-text);
+  font-size: 0.95rem;
+  line-height: 1.1;
+  color: var(--color-text);
 }
 
 .detailed-flow-label small {
-    margin-top: 1px;
-
-    font-size: 0.62rem;
-    line-height: 1.2;
-
-    color: var(--color-text-muted);
+  margin-top: 1px;
+  font-size: 0.62rem;
+  line-height: 1.2;
+  color: var(--color-text-muted);
 }
 
 /*
@@ -128,16 +90,12 @@
  * background to make positioning much easier.
  */
 .detailed-anchor {
-    position: absolute;
-
-    width: 8px;
-    height: 8px;
-
-    transform: translate(-50%, -50%);
-
-    z-index: 3;
-
-    pointer-events: none;
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  pointer-events: none;
 }
 
 /*
@@ -151,36 +109,34 @@
 
 /* Grid — alongside electricity pylon */
 .detailed-flow-grid {
-    left: 6%;
-    top: 38%;
+  left: 11%;
+  top: 38%;
 }
 
 /* Solar — above panels */
 .detailed-flow-solar {
-    left: 43%;
-    top: 11%;
-
-    transform: translateX(-50%);
+  left: 48%;
+  top: 20%;
+  transform: translateX(-50%);
 }
 
 /* Battery — alongside battery */
 .detailed-flow-battery {
-    left: 12%;
-    top: 66%;
+  left: 18%;
+  top: 62%;
 }
 
 /* Home */
 .detailed-flow-home {
-    left: 55%;
-    top: 50%;
-
-    transform: translateX(-50%);
+  left: 57%;
+  top: 40%;
+  transform: translateX(-50%);
 }
 
 /* Car */
 .detailed-flow-car {
-    left: 55%;
-    top: 76%;
+  left: 76%;
+  top: 66%;
 }
 
 /*
@@ -189,88 +145,98 @@
  */
 
 .detailed-anchor-grid {
-    left: 10%;
-    top: 43%;
+  left: 19%;
+  top: 43%;
 }
 
 .detailed-anchor-solar {
-    left: 43%;
-    top: 19%;
+  left: 48%;
+  top: 25%;
 }
 
 .detailed-anchor-inverter {
-    left: 35%;
-    top: 55%;
+  left: 39%;
+  top: 51%;
 }
 
 .detailed-anchor-battery {
-    left: 17%;
-    top: 73%;
+  left: 25%;
+  top: 66%;
 }
 
 .detailed-anchor-home {
-    left: 55%;
-    top: 50%;
+  left: 56%;
+  top: 49%;
 }
 
 .detailed-anchor-car {
-    left: 56%;
-    top: 80%;
+  left: 77%;
+  top: 71%;
 }
 
 /*
- * Battery state colours.
+ * Live flow state colours.
  *
  * Match Predbat's existing action colours:
- * charging = blue
- * discharging/exporting = purple
+ * solar generation = yellow
+ * battery charging = blue
+ * grid exporting = purple
  */
 
+.detailed-flow-solar {
+  /* Keep the artwork from washing out the small solar readings in either theme. */
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+}
+
+.detailed-flow-solar.is-generating strong,
+.detailed-flow-solar.is-generating small {
+  color: var(--color-solar-text);
+}
+
 .detailed-flow-battery.is-charging strong,
-.detailed-flow-battery.is-charging small {
-    color: var(--color-charge);
+.detailed-flow-battery.is-charging small,
+.detailed-flow-car.is-charging strong,
+.detailed-flow-car.is-charging small {
+  color: var(--color-charge);
 }
 
 .detailed-flow-battery.is-discharging strong {
-    color: var(--color-text);
+  color: var(--color-text);
 }
 
 .detailed-flow-battery.is-discharging small,
 .detailed-flow-battery.is-idle small {
-    color: var(--color-text-muted);
+  color: var(--color-text-muted);
 }
 
 .detailed-flow-grid.is-exporting strong,
 .detailed-flow-grid.is-exporting small {
-    color: var(--color-export);
+  color: var(--color-export);
 }
 
 .detailed-flow-grid.is-importing strong {
-    color: var(--color-text);
+  color: var(--color-text);
 }
 
 .detailed-flow-grid.is-importing small,
 .detailed-flow-grid.is-idle small {
-    color: var(--color-text-muted);
+  color: var(--color-text-muted);
 }
 
-
 @media (max-width: 700px) {
+  .detailed-flow-label {
+    min-width: 90px;
+    padding: 0.4rem 0.5rem;
+  }
 
-    .detailed-flow-label {
-        min-width: 90px;
+  .detailed-flow-label strong {
+    font-size: 0.85rem;
+  }
 
-        padding: 0.4rem 0.5rem;
-    }
-
-    .detailed-flow-label strong {
-        font-size: 0.85rem;
-    }
-
-    .detailed-flow-name,
-    .detailed-flow-label small {
-        font-size: 0.6rem;
-    }
+  .detailed-flow-name,
+  .detailed-flow-label small {
+    font-size: 0.6rem;
+  }
 }
 
 /*
@@ -278,99 +244,81 @@
  */
 
 .detailed-power-flow-lines {
-    position: absolute;
-    inset: 0;
-
-    width: 100%;
-    height: 100%;
-
-    z-index: 2;
-
-    overflow: visible;
-
-    pointer-events: none;
-}/*
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  overflow: visible;
+  pointer-events: none;
+} /*
  * Static cable/path underneath the moving particles.
  */
 
 .detailed-flow-base {
-    fill: none;
-
-    stroke: currentColor;
-    stroke-width: 3;
-
-    stroke-linecap: round;
-    stroke-linejoin: round;
-
-    vector-effect: non-scaling-stroke;
-
-    transition:
-        opacity 0.2s ease,
-        stroke-width 0.2s ease;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  transition:
+    opacity 0.2s ease,
+    stroke-width 0.2s ease;
 }
-
 
 .detailed-flow-base.is-idle {
-    opacity: 0.25;
+  opacity: 0.25;
 }
-
 
 .detailed-flow-base.is-active {
-    opacity: 0.65;
+  opacity: 0.65;
 }
-
 
 /*
  * Moving live-energy particles
  */
 
 .detailed-flow-dot {
-    fill: currentColor;
-
-    pointer-events: none;
-
-    filter:
-        drop-shadow(
-            0 0 3px currentColor
-        );
+  fill: currentColor;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px currentColor);
 }
 
-
 .detailed-flow-dot-primary {
-    opacity: 1;
+  opacity: 1;
 }
 
 .detailed-flow-dot-secondary {
-    opacity: 0.65;
+  opacity: 0.65;
 }
 
 .detailed-flow-dot-tertiary {
-    opacity: 0.35;
+  opacity: 0.35;
 }
-
 
 /*
  * Flow colours
  */
 
 .flow-solar {
-    color: var(--color-flow-solar);
+  color: var(--color-flow-solar);
 }
 
 .flow-battery {
-    color: var(--color-flow-battery);
+  color: var(--color-flow-battery);
 }
 
 .flow-grid {
-    color: var(--color-flow-grid);
+  color: var(--color-flow-grid);
 }
 
 .flow-home {
-    color: var(--color-flow-home);
+  color: var(--color-flow-home);
 }
 
 .flow-car {
-    color: var(--color-flow-car);
+  color: var(--color-flow-car);
 }
 
 /*
@@ -381,122 +329,86 @@
  */
 
 .detailed-inverter-hub {
-    width: 16px;
-    height: 16px;
-
-    border: 2px solid rgba(255, 255, 255, 0.9);
-    border-radius: 50%;
-
-    background: rgba(255, 255, 255, 0.28);
-
-    box-shadow:
-        0 0 0 4px rgba(255, 255, 255, 0.08),
-        0 2px 6px rgba(0, 0, 0, 0.3);
-
-    z-index: 3;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 0 0 4px rgba(255, 255, 255, 0.08),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  z-index: 3;
 }
-
 
 /*
  * Solid centre point.
  */
 
 .detailed-inverter-hub-core {
-    position: absolute;
-
-    left: 50%;
-    top: 50%;
-
-    width: 8px;
-    height: 8px;
-
-    transform: translate(-50%, -50%);
-
-    border-radius: 50%;
-
-    background: rgba(255, 255, 255, 0.95);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
 }
-
 
 /*
  * Very faint continuous activity pulse.
  */
 
 .detailed-inverter-hub::after {
-    content: "";
-
-    position: absolute;
-
-    left: 50%;
-    top: 50%;
-
-    width: 100%;
-    height: 100%;
-
-    transform:
-        translate(-50%, -50%)
-        scale(1);
-
-    border: 2px solid rgba(255, 255, 255, 0.85);
-    border-radius: 50%;
-
-    box-shadow:
-        0 0 8px rgba(255, 255, 255, 0.45);
-
-    opacity: 0;
-
-    animation:
-        detailed-inverter-pulse
-        3s
-        ease-out
-        infinite;
-
-    pointer-events: none;
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%) scale(1);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.45);
+  opacity: 0;
+  animation: detailed-inverter-pulse 3s ease-out infinite;
+  pointer-events: none;
 }
 
-
 @keyframes detailed-inverter-pulse {
-    0% {
-        transform:
-            translate(-50%, -50%)
-            scale(1);
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.75;
+  }
 
-        opacity: 0.75;
-    }
+  60% {
+    opacity: 0.3;
+  }
 
-    60% {
-        opacity: 0.3;
-    }
-
-    100% {
-        transform:
-            translate(-50%, -50%)
-            scale(2);
-
-        opacity: 0;
-    }
+  100% {
+    transform: translate(-50%, -50%) scale(2);
+    opacity: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .detailed-inverter-hub::after {
-        animation: none;
-    }
+  .detailed-inverter-hub::after {
+    animation: none;
+  }
 }
-
 
 /*
  * Live labels must sit above the energy paths.
  */
 
 .detailed-flow-label {
-    z-index: 4;
+  z-index: 4;
 }
 
-
 @media (prefers-reduced-motion: reduce) {
-    .detailed-flow-dot {
-        display: none;
-    }
+  .detailed-flow-dot {
+    display: none;
+  }
 }
 
 /*
@@ -508,108 +420,68 @@
  */
 
 .detailed-flow-debug {
-    position: absolute;
-
-    top: 0.75rem;
-    right: 0.75rem;
-
-    z-index: 20;
-
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-
-    padding: 0.4rem;
-
-    border: 1px solid var(--color-border);
-    border-radius: 9px;
-
-    background:
-        color-mix(
-            in srgb,
-            var(--color-surface) 90%,
-            transparent
-        );
-
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-
-    box-shadow: var(--shadow-card);
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-surface) 90%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-card);
 }
-
 
 .detailed-flow-debug-title {
-    margin: 0 0.25rem;
-
-    font-size: 0.6rem;
-    font-weight: 700;
-
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-
-    color: var(--color-text-muted);
+  margin: 0 0.25rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
 }
-
 
 .detailed-flow-debug-modes {
-    display: flex;
-    gap: 0.2rem;
+  display: flex;
+  gap: 0.2rem;
 }
-
 
 .detailed-flow-debug-button {
-    appearance: none;
-
-    padding: 0.3rem 0.5rem;
-
-    border:
-        1px solid
-        var(--color-border);
-
-    border-radius: 6px;
-
-    background:
-        var(--color-surface);
-
-    color:
-        var(--color-text-secondary);
-
-    font-family: inherit;
-    font-size: 0.65rem;
-    font-weight: 600;
-    line-height: 1.2;
-
-    cursor: pointer;
-
-    transition:
-        background-color 0.15s ease,
-        border-color 0.15s ease,
-        color 0.15s ease,
-        box-shadow 0.15s ease;
+  appearance: none;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
 }
-
 
 .detailed-flow-debug-button:hover {
-    border-color:
-        var(--color-text-subtle);
+  border-color: var(--color-text-subtle);
 }
-
 
 /*
  * Live mode.
  */
 
 .detailed-flow-debug-button.is-active {
-    border-color:
-        var(--color-text-secondary);
-
-    background:
-        var(--color-text-secondary);
-
-    color:
-        var(--color-surface);
+  border-color: var(--color-text-secondary);
+  background: var(--color-text-secondary);
+  color: var(--color-surface);
 }
-
 
 /*
  * Charge test mode.
@@ -618,63 +490,45 @@
  */
 
 .detailed-flow-debug-charge.is-active {
-    border-color:
-        var(--color-charge);
-
-    background:
-        var(--color-charge);
-
-    color: #ffffff;
+  border-color: var(--color-charge);
+  background: var(--color-charge);
+  color: #ffffff;
 }
-
 
 /*
  * Export test mode.
  */
 
 .detailed-flow-debug-export.is-active {
-    border-color:
-        var(--color-export);
-
-    background:
-        var(--color-export);
-
-    color: #ffffff;
+  border-color: var(--color-export);
+  background: var(--color-export);
+  color: #ffffff;
 }
-
 
 /*
  * Forced EV.
  */
 
 .detailed-flow-debug-car.is-active {
-    border-color:
-        var(--color-hold-car);
-
-    background:
-        var(--color-hold-car);
-
-    color: #ffffff;
+  border-color: var(--color-hold-car);
+  background: var(--color-hold-car);
+  color: #ffffff;
 }
 
-
 @media (max-width: 700px) {
-    .detailed-flow-debug {
-        top: 0.4rem;
-        right: 0.4rem;
+  .detailed-flow-debug {
+    top: 0.4rem;
+    right: 0.4rem;
+    gap: 0.25rem;
+    padding: 0.3rem;
+  }
 
-        gap: 0.25rem;
+  .detailed-flow-debug-title {
+    display: none;
+  }
 
-        padding: 0.3rem;
-    }
-
-    .detailed-flow-debug-title {
-        display: none;
-    }
-
-    .detailed-flow-debug-button {
-        padding: 0.25rem 0.4rem;
-
-        font-size: 0.6rem;
-    }
+  .detailed-flow-debug-button {
+    padding: 0.25rem 0.4rem;
+    font-size: 0.6rem;
+  }
 }

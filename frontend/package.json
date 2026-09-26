@@ -6,12 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "bundle": "npm run build && python3 -m zipfile -c ../apps/predbat/frontend.zip dist",
     "lint": "oxlint",
+    "test": "node --test tests/*.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@cubone/react-file-manager": "^1.35.0",
+    "@fortawesome/fontawesome-svg-core": "^7.3.1",
+    "@fortawesome/free-brands-svg-icons": "^7.3.1",
     "@fortawesome/free-solid-svg-icons": "^7.3.1",
     "@fortawesome/react-fontawesome": "^3.5.0",
+    "chart.js": "^4.5.1",
+    "monaco-editor": "^0.54.0",
+    "monaco-yaml": "^5.5.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

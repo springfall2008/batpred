@@ -1141,14 +1141,12 @@ class Output:
 
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
-        raw_plan["reason_templates"] = REASON_TEMPLATES
+        # Reason templates are shared by the legacy and modern plan views. Replace the
+        # historical pence label once here so every client receives the configured minor unit.
+        raw_plan["reason_templates"] = {code: template.replace("p/kWh", "{}/kWh".format(self.currency_symbols[1])) for code, template in REASON_TEMPLATES.items()}
 
-        raw_plan["description"] = [
-            line.strip()[2:] if line.strip().startswith("- ") else line.strip()
-            for line in self.text_plan_raw.splitlines()
-            if line.strip()
-        ]
-        
+        raw_plan["description"] = [line.strip()[2:] if line.strip().startswith("- ") else line.strip() for line in self.text_plan_raw.splitlines() if line.strip()]
+
         raw_plan["currency_symbols"] = self.currency_symbols
         raw_plan["soc"] = prediction.soc_kw if prediction is not None else self.soc_kw
         raw_plan["soc_max"] = prediction.soc_max if prediction is not None else self.soc_max

@@ -1,75 +1,105 @@
 export type PlanReason = {
-    code: string
-    params: Record<string, unknown>
+  code: string
+  params: Record<string, unknown>
 }
 
 export type PlanRow = {
-    time: string
-    slot_minute: number
+  time: string
+  slot_minute: number
 
-    import_rate: number
-    export_rate: number
+  import_rate: number
+  export_rate: number
 
-    import_rate_adjusted: number
-    export_rate_adjusted: number
+  import_rate_adjusted: number
+  export_rate_adjusted: number
+  rate_color_import?: string
 
-    state: string
-    state_target: string
-    state_override: string
+  state: string
+  state_target: string
+  state_override: string
 
-    reasons: PlanReason[]
+  reasons: PlanReason[]
 
-    pv_forecast: number
-    load_forecast: number
+  pv_forecast: number
+  pv_forecast10?: number
+  load_forecast: number
+  load_forecast10?: number
+  load_color?: string
+  clipped?: number
+  extra_load?: string
 
-    car_charging_from_battery: boolean
-    car_energy_reported_load: boolean
-    car_charging?: number
+  car_charging?: number
 
-    soc_percent: number
-    soc_change: number
+  soc_percent: number
+  soc_change: number
 
-    cost_change: number
-    total_cost: number
+  cost_change: number
+  total_cost: number
+  cost_color?: string
 
-    description: string
+  carbon_intensity?: number
+  carbon_change?: number
+  total_carbon?: number
+  carbon_intensity_color?: string
+  carbon_color?: string
+
+  description: string
 }
 
 export type Plan = {
-    rows: PlanRow[]
-    reason_templates: Record<string, string>
+  rows: PlanRow[]
+  reason_templates: Record<string, string>
+  currency_symbols?: string | string[]
 
-    soc: number
-    soc_max: number
-    mode: string
+  soc: number
+  soc_max: number
+  mode: string
+  num_cars: number
+  carbon_enable?: boolean
+  car_charging_from_battery: boolean
+  car_energy_reported_load: boolean
+  description?: string[]
+  totals?: {
+    total_cost: number
+    pv_forecast: number
+    load_forecast: number
+    soc_percent: number
+    clipped?: number
+    extra_load?: number
+    car_charging?: number
+    carbon_intensity?: number
+    total_carbon?: number
+  }
 }
 
 export type PlanData = {
-    unchanged: boolean
-    plan: Plan
-    overrides: PlanOverrides
-    overrides_hash: string
+  unchanged: boolean
+  plan: Plan
+  yesterday: Plan | null
+  baseline: Plan | null
+  overrides: PlanOverrides
+  overrides_hash: string
 }
 
 export type ManualRateOverride = {
-    minutes: number
-    rate: number
+  minutes: number
+  rate: number
 }
 
 export type ManualSocOverride = {
-    minutes: number
-    target: number
+  minutes: number
+  target: number
 }
 
 export type PlanOverrides = {
-    manual_charge_times: number[]
-    manual_export_times: number[]
-    manual_freeze_charge_times: number[]
-    manual_freeze_export_times: number[]
-    manual_demand_times: number[]
+  manual_charge_times: number[]
+  manual_export_times: number[]
+  manual_freeze_charge_times: number[]
+  manual_freeze_export_times: number[]
+  manual_demand_times: number[]
 
-    manual_import_rates: ManualRateOverride[]
-    manual_export_rates: ManualRateOverride[]
+  manual_import_rates: ManualRateOverride[]
+  manual_export_rates: ManualRateOverride[]
 
-    manual_soc: ManualSocOverride[]
+  manual_soc: ManualSocOverride[]
 }
