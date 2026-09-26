@@ -24,6 +24,7 @@ from ocpp_charger import (
     MSG_CALLRESULT,
     OCPPCallError,
     OCPPCharger,
+    basic_auth_header,
     format_service_data,
     parse_ocpp_time,
     schedule_limit_amps,
@@ -599,6 +600,22 @@ def test_simple_handlers():
     assert len(websocket.frames) == len(expected), "malformed frames are ignored"
 
 
+def test_basic_auth_and_frame_trace():
+    """The auth header is Basic id:password, and frame tracing logs both directions when on."""
+    assert basic_auth_header("CP1", "secret") == "Basic Q1AxOnNlY3JldA=="
+    assert basic_auth_header("CP1", None) == "Basic Q1AxOg=="
+    base, charger = make_charger()
+    logged = []
+    charger.log = logged.append
+    connect(charger)
+    run_async(charger.handle_frame(json.dumps([MSG_CALL, "u1", "ClearCache", {}])))
+    assert not [line for line in logged if "OCPP >>>" in line or "OCPP <<<" in line], "off by default"
+    charger.trace_frames = True
+    run_async(charger.handle_frame(json.dumps([MSG_CALL, "u2", "ClearCache", {}])))
+    assert any(line.startswith("OCPP <<< ") and '"u2"' in line for line in logged)
+    assert any(line.startswith("OCPP >>> ") and '"u2"' in line for line in logged)
+
+
 def test_run_requires_configuration():
     """run() refuses to start without an id, password and power sensor."""
     _, charger = make_charger()
@@ -647,6 +664,7 @@ def test_ocpp_charger(my_predbat=None):
     test_connection_against_local_server()
     test_publish_throttled()
     test_simple_handlers()
+    test_basic_auth_and_frame_trace()
     test_run_requires_configuration()
 
     print("=" * 70)

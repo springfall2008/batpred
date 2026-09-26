@@ -523,6 +523,25 @@ Each service setting takes a service name on its own, a service with its data (a
 
 Turning the virtual charger off (removing `ocpp_charger_id`) leaves the supplier with no charger connected; turn your real charger's own OCPP connection back on if you want the supplier to manage it directly again.
 
+### Testing the OCPP connection from the command line
+
+`ocpp_charger.py` can be run on its own to check your supplier accepts the connection, before you configure it in Predbat.
+It connects as the charger, prints every OCPP message in both directions, and prints (without calling) the service calls a real setup would make.
+Nothing real is attached, so it reports 0 W and no energy.
+
+```sh
+cd apps/predbat
+export OCPP_CHARGER_PASSWORD='your OCPP password'
+python3 ocpp_charger.py --id YOUR_CHARGE_POINT_ID
+```
+
+Add `--plugged` to report a car plugged in and see how the supplier responds, and `--duration` to change how long it stays connected (240 seconds by default); Ctrl-C ends it early.
+At the end the session is closed and the car reported unplugged.
+Turn your real charger's own OCPP connection off first, as only one charger can be connected under the Id.
+
+With Octopus, `--plugged` makes Octopus plan and start a real smart-charging session, which Predbat will see and may plan battery charging around.
+Octopus does not record a session that delivered no energy as a completed smart charge, so do not rely on those slots being billed at the off-peak rate.
+
 ## Car Charging Planning
 
 There are two ways that Predbat can plan the slots for charging your car:

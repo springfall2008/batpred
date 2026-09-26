@@ -31,6 +31,10 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import argparse
+import base64
+import os
+
 import aiohttp
 
 from component_base import ComponentBase
@@ -157,6 +161,12 @@ def schedule_limit_amps(profile, now, tx_started, voltage):
     return limit
 
 
+def basic_auth_header(user, password):
+    """HTTP Basic auth header value, built by hand as aiohttp's auth= and BasicAuth are deprecated."""
+    token = base64.b64encode("{}:{}".format(user, password or "").encode("utf-8")).decode("ascii")
+    return "Basic " + token
+
+
 def format_service_data(template, data):
     """Fill a service template's {placeholders} from `data`, leaving values without one untouched."""
     result = {}
@@ -218,6 +228,8 @@ class OCPPCharger(ComponentBase):
 
         self._ws = None
         self._task = None
+        # Log every OCPP frame in both directions - the command line test turns this on
+        self.trace_frames = False
         self._pending = {}
         self._call_lock = None
 
@@ -588,7 +600,10 @@ class OCPPCharger(ComponentBase):
         """Send one OCPP-J frame on the open websocket."""
         if self._ws is None or self._ws.closed:
             raise ConnectionError("OCPP websocket is not open")
-        await self._ws.send_str(json.dumps(frame))
+        text = json.dumps(frame)
+        if self.trace_frames:
+            self.log("OCPP >>> {}".format(text))
+        await self._ws.send_str(text)
         self._last_sent = self.clock()
 
     async def call(self, action, payload):
@@ -610,6 +625,8 @@ class OCPPCharger(ComponentBase):
 
     async def handle_frame(self, text):
         """Dispatch one received frame: answer a CALL, or resolve the pending CALL it replies to."""
+        if self.trace_frames:
+            self.log("OCPP <<< {}".format(text))
         try:
             frame = json.loads(text)
         except ValueError:
@@ -836,7 +853,7 @@ class OCPPCharger(ComponentBase):
         while not self.api_stop:
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(url, protocols=(OCPP_SUBPROTOCOL,), auth=aiohttp.BasicAuth(self.charge_point_id, self.password or "")) as websocket:
+                    async with session.ws_connect(url, protocols=(OCPP_SUBPROTOCOL,), headers={"Authorization": basic_auth_header(self.charge_point_id, self.password)}) as websocket:
                         self.log("Info: OCPP: Connected to {} as {}".format(self.url, self.charge_point_id))
                         if websocket.protocol != OCPP_SUBPROTOCOL:
                             self.log("Warn: OCPP: {} did not agree the {} subprotocol (got {})".format(self.url, OCPP_SUBPROTOCOL, websocket.protocol))
@@ -880,3 +897,80 @@ class OCPPCharger(ComponentBase):
             except (asyncio.CancelledError, Exception):
                 pass
         await self.save_state()
+
+
+# Stand-in entities for the command line test: no real charger is attached, so power is 0 W
+CLI_POWER_SENSOR = "sensor.ocpp_test_power"
+CLI_PLUGGED_SENSOR = "sensor.ocpp_test_plugged"
+
+
+async def cli_test_central_system(charge_point_id, password, url, duration, plugged):  # pragma: no cover
+    """Connect to a central system as the charger and log every OCPP message both ways.
+
+    Nothing real is attached, so the charger reports 0 W and no energy - which is the truth - and
+    its status follows from that (SuspendedEV once a session starts, never Charging). With
+    `plugged` it reports a car plugged in, which makes a supplier such as Octopus plan and start
+    a real smart-charging session; at the end (or on Ctrl-C) the session is closed and the car
+    reported unplugged. Service calls that would control a real charger are only printed.
+    """
+    from mock_base import MockBase
+
+    class QuietMockBase(MockBase):
+        """MockBase that stores the status sensor without printing it every minute."""
+
+        def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+            """Store the entity silently."""
+            self.set_state_wrapper(entity_id, state, attributes)
+
+    # Stand-in services, so the log shows when a real charger would be started and stopped
+    base = QuietMockBase(ocpp_charger_plugged_response=["on"], ocpp_charger_start_service={"service": "script.ocpp_test_start", "current": "{current}"}, ocpp_charger_stop_service="script.ocpp_test_stop")
+    base.entities[CLI_POWER_SENSOR] = {"state": 0}
+    base.entities[CLI_PLUGGED_SENSOR] = {"state": "on" if plugged else "off"}
+
+    def call_service_wrapper(service, **kwargs):
+        """Print the service call a real setup would make, and report it accepted."""
+        print("SERVICE (not called): {} {}".format(service, kwargs))
+        return True
+
+    base.call_service_wrapper = call_service_wrapper
+    charger = OCPPCharger(base, charge_point_id=charge_point_id, password=password, url=url, power_sensor=CLI_POWER_SENSOR, plugged_sensor=CLI_PLUGGED_SENSOR)
+    charger.trace_frames = True
+    print("Connecting to {}/{} as a charger with {} for {}s - Ctrl-C to end early".format(charger.url, charge_point_id, "a car plugged in" if plugged else "no car", duration))
+    task = asyncio.ensure_future(charger.connection_loop())
+    try:
+        await asyncio.sleep(duration)
+    except asyncio.CancelledError:
+        print("Interrupted - closing down")
+    finally:
+        if charger.connected and plugged:
+            print("Reporting the car unplugged")
+            base.entities[CLI_PLUGGED_SENSOR]["state"] = "off"
+            for _ in range(30):
+                if charger.transaction_id is None and charger.status_sent == STATUS_AVAILABLE:
+                    break
+                await asyncio.sleep(1)
+        charger.api_stop = True
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    print("Done: last status {}, transaction {}".format(charger.status_sent, charger.transaction_id))
+
+
+def main():  # pragma: no cover
+    """Command line test: connect to an OCPP central system as a charger and log the exchange."""
+    parser = argparse.ArgumentParser(description="Test an OCPP central system by connecting to it as a charger (reports 0 W - nothing real is attached)")
+    parser.add_argument("--id", required=True, help="Charge point id, e.g. the Id shown in your supplier's charger settings")
+    parser.add_argument("--password", default=os.environ.get("OCPP_CHARGER_PASSWORD"), help="OCPP password (or set OCPP_CHARGER_PASSWORD to keep it out of your shell history)")
+    parser.add_argument("--url", default=OCPP_DEFAULT_URL, help="Central system URL, without the charge point id (default {})".format(OCPP_DEFAULT_URL))
+    parser.add_argument("--plugged", action="store_true", help="Report a car plugged in. With Octopus this plans and starts a real smart-charging session, which Predbat may then plan battery charging around")
+    parser.add_argument("--duration", type=int, default=240, help="Seconds to stay connected (default 240)")
+    args = parser.parse_args()
+    if not args.password:
+        parser.error("--password or OCPP_CHARGER_PASSWORD is required")
+    try:
+        asyncio.run(cli_test_central_system(args.id, args.password, args.url, args.duration, args.plugged))
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
