@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { CONFIG_GROUPS, configGroup } from '../utils/configGroups'
 
@@ -52,17 +52,7 @@ const FRAME_STYLES = `
     line-height: 1.45;
   }
   .apps-guide strong { display: block; margin-bottom: .15rem; }
-  .save-controls {
-    position: sticky;
-    top: 0;
-    z-index: 30;
-    margin: 0 0 .75rem !important;
-    padding: .7rem .85rem !important;
-    border-color: var(--apps-border) !important;
-    background: color-mix(in srgb, var(--apps-surface) 94%, transparent) !important;
-    box-shadow: 0 4px 16px rgb(15 23 42 / 8%);
-    backdrop-filter: blur(8px);
-  }
+  .save-controls { display: none !important; }
   table.apps-settings-table {
     width: 100%;
     min-width: 760px;
@@ -77,7 +67,7 @@ const FRAME_STYLES = `
   }
   table.apps-settings-table > thead > tr > th {
     position: sticky;
-    top: 58px;
+    top: 0;
     z-index: 20;
     padding: .7rem .75rem;
     border-bottom: 1px solid var(--apps-border);
@@ -109,55 +99,70 @@ const FRAME_STYLES = `
     width: auto;
     white-space: nowrap;
   }
-  .apps-comparison-row > .apps-description,
-  .apps-comparison-row > td:last-child { display: none; }
-  .apps-comparison-row > td:nth-child(2) { padding: .8rem; }
-  .apps-comparison-row > td:nth-child(2) > table > tbody {
+
+  /* Nested collections use the same columns at every depth, never a shrinking table. */
+  table.apps-settings-table td table { table-layout: fixed; }
+  table.apps-settings-table td table > tbody { display: grid; gap: .4rem; }
+  table.apps-settings-table td table > tbody > tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: .75rem;
-    counter-reset: comparison;
-  }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr) 8.5rem;
     align-items: start;
-    padding: .7rem;
-    border: 1px solid color-mix(in srgb, var(--group-colour) 45%, var(--apps-border));
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--group-colour) 4%, var(--apps-surface));
-    counter-increment: comparison;
+    border-bottom: 1px solid var(--apps-border);
   }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:first-child { display: none; }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:nth-child(2) { min-width: 0; }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:nth-child(2)::before {
-    content: 'Comparison ' counter(comparison);
-    display: block;
-    margin-bottom: .45rem;
-    color: var(--apps-muted);
-    font-size: .65rem;
-    font-weight: 700;
-    letter-spacing: .04em;
-    text-transform: uppercase;
+  table.apps-settings-table td table > tbody > tr > td { min-width: 0; padding: .5rem; }
+  table.apps-settings-table td table > tbody > tr > td:last-child {
+    display: flex; justify-content: flex-end; gap: .3rem; flex-wrap: wrap;
   }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] > td:last-child {
-    grid-column: 2;
-    grid-row: 1;
-    padding-left: .5rem;
+  table.apps-settings-table td table button { margin: 0; }
+  table.apps-settings-table tr[data-nested-path$="]"] > td:first-child {
+    font-size: 0;
   }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] table tr:not([id^="add_anchor_"]) > td {
-    border-bottom: 1px solid color-mix(in srgb, var(--apps-border) 75%, transparent);
-    vertical-align: top;
+  table.apps-settings-table tr[data-nested-path$="]"] > td:first-child::after {
+    content: 'Item ' counter(list-item);
+    font-size: .75rem; color: var(--apps-muted); font-weight: 600;
   }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] table tr:not([id^="add_anchor_"]) > td:first-child {
-    font-weight: 700;
+  table.apps-settings-table td table > tbody { counter-reset: list-item; }
+  table.apps-settings-table tr[data-nested-path$="]"] { counter-increment: list-item; }
+  table.apps-settings-table td table > tbody > tr:has(> td:nth-child(2) > table) > td:nth-child(2) {
+    grid-column: 1 / -1; grid-row: 2;
+    padding: .5rem .75rem .75rem;
+    border: 1px solid var(--apps-border); border-radius: 6px;
+    background: color-mix(in srgb, var(--apps-surface) 75%, transparent);
   }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[id^="add_anchor_"] {
-    grid-column: 1 / -1;
-    display: flex;
-    justify-content: flex-end;
+  table.apps-settings-table td table > tbody > tr:has(> td:nth-child(2) > table) > td:last-child {
+    grid-column: 3; grid-row: 1;
   }
-  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[id^="add_anchor_"] > td:not(:last-child) { display: none; }
+  table.apps-settings-table td table > tbody > tr[id^="add_anchor_"] {
+    display: flex; justify-content: flex-end; border: 0;
+  }
+  table.apps-settings-table td table > tbody > tr[id^="add_anchor_"] > td:not(:last-child) { display: none; }
+  table.apps-settings-table > tbody > tr:has(> td:nth-child(2) > table) {
+    display: grid; grid-template-columns: 1fr;
+  }
+  table.apps-settings-table > tbody > tr:has(> td:nth-child(2) > table) > td:nth-child(2) {
+    padding: .75rem;
+  }
+  table.apps-settings-table > tbody > tr:has(> td:nth-child(2) > table) > td:last-child:empty { display: none; }
+  table.apps-settings-table > tbody > tr:has(> td:nth-child(2) > table) > .apps-description {
+    grid-row: 2; padding-top: 0;
+  }
+  /* Keep collection rows spanning the outer four-column table. */
+  table.apps-settings-table > tbody { display: block; }
+  table.apps-settings-table > thead { display: table; width: 100%; table-layout: fixed; }
+  table.apps-settings-table > tbody > tr:not(:has(> td:nth-child(2) > table)) {
+    display: table; width: 100%; table-layout: fixed;
+  }
+  table.apps-settings-table > tbody > tr[data-arg-name]:not(:has(> td:nth-child(2) > table)) > td:nth-child(1) { width: 22%; }
+  table.apps-settings-table > tbody > tr[data-arg-name]:not(:has(> td:nth-child(2) > table)) > td:nth-child(2) { width: 36%; }
+  table.apps-settings-table > tbody > tr[data-arg-name]:not(:has(> td:nth-child(2) > table)) > td:nth-child(3) { width: 30%; }
+  table.apps-settings-table > tbody > tr[data-arg-name]:not(:has(> td:nth-child(2) > table)) > td:nth-child(4) { width: 12%; }
+  .apps-comparison-row > td:nth-child(2) > table > tbody > tr[data-nested-path] {
+    padding: .75rem; border: 1px solid var(--apps-border); border-radius: 8px;
+    background: var(--apps-surface);
+  }
+  table.apps-settings-table .apps-comparison-row > td:nth-child(2) > table > tbody > tr > td:first-child::after {
+    content: 'Comparison ' counter(list-item);
+  }
   tr[data-apps-group] { --group-colour: #64748b; }
   tr[data-apps-group="system"] { --group-colour: #3b82f6; }
   tr[data-apps-group="solar"] { --group-colour: #d99a00; }
@@ -216,6 +221,8 @@ const FRAME_STYLES = `
 /** Host Predbat's structured apps.yaml settings editor inside the modern shell. */
 export default function AppsPage() {
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const [saveState, setSaveState] = useState({ text: 'No unsaved changes', saveDisabled: true, discardDisabled: true })
+  const saveObserverRef = useRef<MutationObserver | null>(null)
   const schemaRef = useRef<Record<string, SchemaProperty>>({})
 
   function styleEmbeddedPage() {
@@ -235,6 +242,18 @@ export default function AppsPage() {
     }
 
     const saveControls = frameDocument.getElementById('saveControls')
+    saveObserverRef.current?.disconnect()
+    if (saveControls) {
+      // Keep the header controls in sync while the legacy editor owns staging and saving.
+      const syncSaveControls = () => setSaveState({
+        text: frameDocument.getElementById('changeCount')?.textContent ?? 'No unsaved changes',
+        saveDisabled: (frameDocument.getElementById('saveAllButton') as HTMLButtonElement | null)?.disabled ?? true,
+        discardDisabled: (frameDocument.getElementById('discardAllButton') as HTMLButtonElement | null)?.disabled ?? true,
+      })
+      syncSaveControls()
+      saveObserverRef.current = new MutationObserver(syncSaveControls)
+      saveObserverRef.current.observe(saveControls, { subtree: true, childList: true, characterData: true, attributes: true })
+    }
     if (saveControls && !frameDocument.querySelector('.apps-guide')) {
       const guide = frameDocument.createElement('aside')
       guide.className = 'apps-guide'
@@ -335,14 +354,21 @@ export default function AppsPage() {
   useEffect(() => {
     const observer = new MutationObserver(styleEmbeddedPage)
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); saveObserverRef.current?.disconnect() }
   }, [])
 
   return (
     <section className="apps-page">
       <header className="apps-page-header">
-        <h1>Apps</h1>
-        <p>Review and update the active values loaded from apps.yaml.</p>
+        <div>
+          <h1>Apps</h1>
+          <p>Review and update the active values loaded from apps.yaml.</p>
+        </div>
+        <div className="apps-page-actions" aria-label="Pending changes">
+          <span role="status">{saveState.text}</span>
+          <button disabled={saveState.saveDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('saveAllButton')?.click()}>Save changes</button>
+          <button disabled={saveState.discardDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('discardAllButton')?.click()}>Discard changes</button>
+        </div>
       </header>
       <iframe ref={frameRef} className="apps-frame" src="./legacy_apps" title="Predbat apps.yaml settings" onLoad={styleEmbeddedPage} />
     </section>
