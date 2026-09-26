@@ -56,6 +56,9 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
 
+# Minimum gap (seconds) between repeats of a warning raised while handling telemetry
+_WARN_REPEAT_INTERVAL = 10 * 60
+
 # How long an identical control command waits for the hub's ack (or, after an ack,
 # for telemetry to catch up) before it may be published again (seconds). Longer than
 # the generic write_and_poll loop (10 x 2 s), so one write sends the command once.
@@ -93,6 +96,24 @@ def _serial_suffix(serial):
         str: The lower-cased suffix used in gateway entity IDs.
     """
     return serial[-6:].lower() if len(serial) > 6 else serial.lower()
+
+
+def _serial_missing(inv):
+    """Whether a GivEnergy unit was reported without its serial.
+
+    A GivEnergy unit's serial is its identity: it names the entities and addresses every
+    control command. GivEnergy discovery always reads it, so a blank serial means the hub
+    listed a unit it has not identified yet, and binding that entry sends every command
+    with an empty serial. The other hub drivers never report a serial, so a blank one is
+    normal for them and is not treated as missing.
+
+    Args:
+        inv: A ``predbat_InverterEntry`` from the gateway status.
+
+    Returns:
+        bool: True for a GivEnergy inverter, EMS or Gateway whose serial is empty or whitespace.
+    """
+    return inv.type in (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY) and not inv.serial.strip()
 
 
 PLAN_MODE_AUTO = 0
@@ -296,6 +317,7 @@ class GatewayMQTT(ComponentBase):
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
+        self._warned_at = {}  # warning key -> time it was last logged, see _warn_rate_limited
         self._last_published_plan = None
         self._pending_plan = None
         self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
@@ -815,6 +837,18 @@ class GatewayMQTT(ComponentBase):
         if len(status.inverters) == 0:
             return
 
+        # GivEnergy units listed without their serial are ignored until the hub identifies them.
+        # A status listing nothing else carries no usable inverter data: keep the last good
+        # status and do not count it as fresh telemetry, but keep the device-level entities
+        # (gateway online, EV chargers, EMS aggregates) and EV charger registration current.
+        missing = sum(1 for inv in status.inverters if _serial_missing(inv))
+        if missing:
+            self._warn_rate_limited("serial_missing", f"Warn: GatewayMQTT: ignoring {missing} GivEnergy unit(s) reported without a serial ({len(status.inverters)} unit(s) listed) until they are identified")
+            if missing == len(status.inverters):
+                self._inject_entities(status)
+                self._register_new_ev_chargers(status)
+                return
+
         self._last_status = status
         self._last_telemetry_time = time.time()
         self.update_success_timestamp()
@@ -855,9 +889,15 @@ class GatewayMQTT(ComponentBase):
 
         Maps GatewayStatus fields to PredBat entity format using HA-style
         entity naming: {type}.{prefix}_gateway_{suffix}_{attribute}
+
+        GivEnergy units reported without their serial get no per-inverter entities: their
+        suffix would be empty, producing ``{prefix}_gateway__*`` entities for a unit that
+        cannot be controlled. EMS aggregates carry no serial in their names and are still
+        published.
         """
         device_id = status.device_id
         firmware = status.firmware
+        inverters = [inv for inv in status.inverters if not _serial_missing(inv)]
 
         # Read-only as the gateway actually enforces it. Absent on firmware predating
         # the field, which is UNKNOWN and not False — publishing False there would claim
@@ -883,10 +923,10 @@ class GatewayMQTT(ComponentBase):
         # Inverter time from gateway timestamp — write it under the suffix PredBat
         # actually reads (the control target), not the primary's, or the bound
         # inverter_time arg is never updated and silently freezes.
-        if status.timestamp > 0 and len(status.inverters) > 0:
-            ts_inv = next((inv for inv in status.inverters if self._is_bound_target(inv)), None)
+        if status.timestamp > 0 and len(inverters) > 0:
+            ts_inv = next((inv for inv in inverters if self._is_bound_target(inv)), None)
             if ts_inv is None:
-                ts_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
+                ts_inv = next((inv for inv in inverters if inv.primary), inverters[0])
             ts_suffix = _serial_suffix(ts_inv.serial)
             dt = datetime.datetime.fromtimestamp(status.timestamp, tz=self.local_tz)
             self.dashboard_item(
@@ -896,7 +936,7 @@ class GatewayMQTT(ComponentBase):
                 app="gateway",
             )
 
-        for inv in status.inverters:
+        for inv in inverters:
             # Inject primary (battery-bearing) units, plus whichever unit automatic_config
             # bound PredBat's args to. On a multi-AIO site the control target is the
             # Gateway/EMS, which firmware never flags primary — skipping it left every
@@ -1159,10 +1199,13 @@ class GatewayMQTT(ComponentBase):
         onboarding/restart path. (NOTE: re-running re-selects the control target and
         rewrites the inverter args; whether PredBat core re-reads ``num_inverters`` at
         runtime vs. needing a component restart is tracked separately.)
+
+        A GivEnergy unit reported without its serial is never "new": it cannot be bound or
+        addressed, so re-running auto-config for it would only replace a working binding.
         """
         if not self._auto_configured:
             return True
-        new_serials = frozenset(inv.serial for inv in status.inverters) - self._configured_inverter_serials
+        new_serials = frozenset(inv.serial for inv in status.inverters if not _serial_missing(inv)) - self._configured_inverter_serials
         if new_serials:
             self.log(f"Info: GatewayMQTT: new inverter(s) discovered {sorted(new_serials)} — re-running auto-config")
             return True
@@ -1221,10 +1264,20 @@ class GatewayMQTT(ComponentBase):
             # Old firmware: no primary flags, use all with battery data
             aios = [inv for inv in candidate_aios if inv.battery.ByteSize() > 0]
 
+        # An unidentified AIO is usually still mid-handshake and reports no battery block yet,
+        # so it is invisible to the `aios` count above even though it will occupy a control slot
+        # once identified. Count it towards the topology decision (by identity, since these are
+        # protobuf messages and `in` would use value equality — two blank units compare equal)
+        # so the control point follows what is actually on site, not which units happened to
+        # report battery data on this particular tick.
+        aio_ids = {id(inv) for inv in aios}
+        unidentified_aios = [inv for inv in candidate_aios if id(inv) not in aio_ids and _serial_missing(inv)]
+        topology_aio_count = len(aios) + len(unidentified_aios)
+
         if ems_units:
             # A Plant EMS is the single control point for the whole system.
             inverters = ems_units[:1]
-        elif gateway_units and len(aios) > 1:
+        elif gateway_units and topology_aio_count > 1:
             # Multiple AIOs behind a Gateway: the Gateway is the single control point.
             # NOTE: control commands are addressed to the Gateway/EMS serial — the firmware
             # must fan these out to the AIOs (tracked separately in command_handler.cpp).
@@ -1233,6 +1286,26 @@ class GatewayMQTT(ComponentBase):
             inverters = aios
         if not inverters:
             inverters = candidate_aios or list(all_inverters)  # last resort
+
+        # Never bind a GivEnergy unit reported without its serial: every control command would
+        # go out with an empty serial. Such units still count in the classification above,
+        # because dropping them first could pick the wrong control point (an unidentified
+        # second AIO would stop the Gateway being chosen). While a GivEnergy EMS or Gateway is
+        # unidentified the control point itself is uncertain, so skip this status, as when
+        # nothing addressable was chosen. The existing binding and _auto_configured are left
+        # as they are, so a first-run config retries on the next telemetry; a serial reported
+        # later is a new serial and re-runs auto-config.
+        missing = [inv for inv in all_inverters if _serial_missing(inv)]
+        if missing:
+            addressable = [inv for inv in inverters if not _serial_missing(inv)]
+            if not addressable or any(inv.type in coordinator_types for inv in missing):
+                self._warn_rate_limited("auto_config_skipped", "Warn: GatewayMQTT: GivEnergy control target not identified yet (reported without a serial); auto-config skipped — will retry on next telemetry")
+                # EV chargers do not depend on the inverter binding, so do not hold them back.
+                self._register_new_ev_chargers(status)
+                return
+            if len(addressable) < len(inverters):
+                self.log(f"Warn: GatewayMQTT: ignoring {len(inverters) - len(addressable)} GivEnergy inverter(s) reported without a serial")
+            inverters = addressable
 
         # Apply serial filter if configured. A no-match is an error — configuring the
         # wrong inverter set is worse than not configuring at all. Leave _auto_configured
@@ -1411,10 +1484,40 @@ class GatewayMQTT(ComponentBase):
         self._register_ev_car(status)
 
         self._auto_configured = True
-        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
+        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters if not _serial_missing(inv))
         self._configured_ev_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters
+
+    def _register_new_ev_chargers(self, status):
+        """Register EV chargers that were not present at the last auto-config.
+
+        Used when a status cannot drive a full auto-config because a GivEnergy unit has no
+        serial yet. Chargers are device-level, so they are registered without touching the
+        inverter binding, and recording them stops the same chargers re-triggering auto-config
+        on every telemetry.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
+        if chargers - self._configured_ev_chargers:
+            self._register_ev_car(status)
+            self._configured_ev_chargers = chargers
+
+    def _warn_rate_limited(self, key, message):
+        """Log a warning unless the same warning was logged within the repeat interval.
+
+        For conditions seen while handling telemetry, which can arrive every few seconds.
+
+        Args:
+            key: Identifies the warning for rate limiting.
+            message: The full log line.
+        """
+        now = time.time()
+        if now - self._warned_at.get(key, 0) >= _WARN_REPEAT_INTERVAL:
+            self._warned_at[key] = now
+            self.log(message)
 
     def _register_ev_car(self, status):
         """Register a connected OCPP EV charger as a PredBat car.
