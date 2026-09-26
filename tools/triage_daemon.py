@@ -153,14 +153,14 @@ OLLAMA_CONTEXT_TOKENS = {
     "glm-5.3-flash:cloud": "1000000",
 }
 
-EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
-SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
+EDIT_SCOPE = f"//{CLONE_DIR.relative_to(CLONE_DIR.anchor).as_posix()}/**"
+SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to(SCRATCH_DIR.anchor).as_posix()}/**"
 # Findings destined for the debug journal are parked here, deliberately OUTSIDE the clone:
 # sync_repo() runs `git reset --hard origin/main` and `git clean -fd` before every flow, so a
 # note written inside the checkout is destroyed before anything can pick it up. That, more
 # than any permission rule, is why the journal never got maintained by the bot.
 QUEUE_DIR = BASE_DIR / "journal-queue"
-QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to('/')}/**"
+QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to(QUEUE_DIR.anchor).as_posix()}/**"
 # The two files the daily flush may touch. Scoped to the exact paths rather than the clone,
 # because this is the only flow that can both edit and push.
 # The journal must NOT live under .claude/: Claude Code refuses the Edit and Write tools
@@ -170,8 +170,10 @@ QUEUE_SCOPE = f"//{QUEUE_DIR.relative_to('/')}/**"
 # test_the_journal_lives_outside_the_dot_claude_directory.
 JOURNAL_RELPATH = "tools/debug-journal.md"
 DICTIONARY_RELPATH = ".cspell/custom-dictionary-workspace.txt"
-JOURNAL_SCOPE = f"//{(CLONE_DIR / JOURNAL_RELPATH).relative_to('/')}"
-DICTIONARY_SCOPE = f"//{(CLONE_DIR / DICTIONARY_RELPATH).relative_to('/')}"
+JOURNAL_PATH = CLONE_DIR / JOURNAL_RELPATH
+DICTIONARY_PATH = CLONE_DIR / DICTIONARY_RELPATH
+JOURNAL_SCOPE = f"//{JOURNAL_PATH.relative_to(JOURNAL_PATH.anchor).as_posix()}"
+DICTIONARY_SCOPE = f"//{DICTIONARY_PATH.relative_to(DICTIONARY_PATH.anchor).as_posix()}"
 JOURNAL_BRANCH_PREFIX = "bot/debug-journal-"
 # How many queued candidates one flush is asked to fold in. Every other flow handles exactly
 # one issue or one pull request; the flush is the only one whose workload is unbounded,
@@ -193,7 +195,7 @@ JOURNAL_MAX_CANDIDATES_PER_FLUSH = 15
 # Write grant is not an option: Write() rules do not match a path, and bare Write would
 # hand the one flow that can push the ability to write anywhere in the clone.
 JOURNAL_BODY_FILE = SCRATCH_DIR / "journal-pr-body.md"
-JOURNAL_BODY_SCOPE = f"//{JOURNAL_BODY_FILE.relative_to('/')}"
+JOURNAL_BODY_SCOPE = f"//{JOURNAL_BODY_FILE.relative_to(JOURNAL_BODY_FILE.anchor).as_posix()}"
 JOURNAL_BODY_PLACEHOLDER = "<!-- Replace this line with the pull request body. -->\n"
 # Branch prefixes the PR flow may create, matching issue-pr/SKILL.md.
 PR_BRANCH_PREFIXES = ("fix/", "feat/")

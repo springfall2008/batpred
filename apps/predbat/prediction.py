@@ -86,6 +86,12 @@ class Prediction(PredictionBatch):
         soc_kw=None,
         soc_max=None,
         kernel_static_cache=None,
+        pv_forecast_peak_step=None,
+        clipping_limit=0,
+        clipping_cost_weight=0,
+        clipping_buffer_kwh=0,
+        clipping_buffer_start=None,
+        clipping_buffer_end=None,
         car_charging_slots=None,
     ):
         """Build a Prediction, optionally copying simulation state from a base PredBat instance.
@@ -196,6 +202,13 @@ class Prediction(PredictionBatch):
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
             self.rate_max = base.rate_max
+            self.clipping_limit = clipping_limit
+            self.clipping_cost_weight = clipping_cost_weight
+            self.clipping_buffer_kwh = clipping_buffer_kwh
+            self.clipping_buffer_start = clipping_buffer_start
+            self.clipping_buffer_end = clipping_buffer_end
+            self.clipping_buffer_enable = getattr(base, "clipping_buffer_enable", False)
+            self.pv_forecast_peak_step = pv_forecast_peak_step
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -627,6 +640,7 @@ class Prediction(PredictionBatch):
         first_charge = end_record
         export_to_first_charge = 0
         clipped_today = 0
+        clipping_penalty_total = 0
         predict_soc = {}
         car_charging_soc_next = self.car_charging_soc_next[:]
         iboost_next = self.iboost_next
@@ -639,6 +653,7 @@ class Prediction(PredictionBatch):
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
         charge_window_optimised = self.find_charge_window_optimised(charge_window, charge_limit)
         export_window_optimised = self.find_charge_window_optimised(export_window, export_limits, is_export=True)
+        has_clipping = getattr(self, "clipping_buffer_enable", False) or any("clipping_target_soc_pct" in w for w in charge_window) or any("clipping_target_soc_pct" in w for w in export_window)
 
         # For the SoC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -767,8 +782,13 @@ class Prediction(PredictionBatch):
                 best_soc_max = min(alert_keep_max / 100.0 * soc_max, soc_max)
 
             # Find charge & discharge windows
-            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
-            export_window_n = export_window_optimised.get(minute_absolute, -1)
+            if has_clipping:
+                minute_absolute_aligned = int(minute_absolute / step) * step
+                charge_window_n = charge_window_optimised.get(minute_absolute_aligned, -1)
+                export_window_n = export_window_optimised.get(minute_absolute_aligned, -1)
+            else:
+                charge_window_n = charge_window_optimised.get(minute_absolute, -1)
+                export_window_n = export_window_optimised.get(minute_absolute, -1)
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
             export_limit_now = export_limits[export_window_n] if export_window_active else IDLE_EXPORT_LIMIT
@@ -835,6 +855,8 @@ class Prediction(PredictionBatch):
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step_flat[minute]
             load_yesterday = load_minutes_step_flat[minute]
+
+            # Clipping penalty removed from simulation hot loop in favour of plan-side ceiling
 
             # Count PV kWh
             pv_kwh += pv_now
@@ -958,13 +980,22 @@ class Prediction(PredictionBatch):
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
             battery_to_min = max(soc - reserve_expected, 0) * battery_loss_discharge
-            battery_to_max = max(soc_max - soc, 0) * battery_loss
 
             discharge_min = reserve
+            is_anti_clipping = False
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_percent / 100.0, reserve, self.best_soc_min)
+                is_anti_clipping = "clipping_target_soc_pct" in export_window[export_window_n]
+            elif charge_window_active:
+                is_anti_clipping = "clipping_target_soc_pct" in charge_window[charge_window_n]
 
-            if not set_export_freeze_only and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
+            limit_max = soc_max
+            if is_anti_clipping and export_mode_now != EXPORT_MODE_IDLE:
+                limit_max = soc_max * export_limit_percent / 100.0
+
+            battery_to_max = max(limit_max - soc, 0) * battery_loss
+
+            if (not set_export_freeze_only or is_anti_clipping) and export_window_active and export_mode_now == EXPORT_MODE_TARGET and (soc > discharge_min):
                 # Discharge enable, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = export_power_of(export_limit_now)
@@ -977,7 +1008,11 @@ class Prediction(PredictionBatch):
                 )
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
-                battery_draw = min(discharge_rate_now_curve_step, battery_to_min)
+                if is_anti_clipping:
+                    battery_to_discharge_min = max(soc - discharge_min, 0) * battery_loss_discharge
+                    battery_draw = min(discharge_rate_now_curve_step, battery_to_discharge_min)
+                else:
+                    battery_draw = min(discharge_rate_now_curve_step, battery_to_min)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
@@ -1110,7 +1145,10 @@ class Prediction(PredictionBatch):
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
-                battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
+                if is_anti_clipping:
+                    battery_draw = max(-min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), -battery_to_max)
+                else:
+                    battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
 
@@ -1140,7 +1178,7 @@ class Prediction(PredictionBatch):
                 # parallel branch that has to re-derive the same AC balance. The old duplicate
                 # branch had drifted and pinned battery_draw at 0, wrongly modelling Freeze Export
                 # as Freeze Charge whenever load exceeded PV - see #4676.
-                freeze_export = set_export_freeze and export_window_active and export_mode_now != EXPORT_MODE_IDLE and (export_mode_now == EXPORT_MODE_FREEZE or set_export_freeze_only)
+                freeze_export = set_export_freeze and export_window_active and not is_anti_clipping and export_mode_now != EXPORT_MODE_IDLE and (export_mode_now == EXPORT_MODE_FREEZE or set_export_freeze_only)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
@@ -1276,6 +1314,7 @@ class Prediction(PredictionBatch):
                     pv_ac = max(pv_ac - over_limit * inverter_loss, 0)
                     pv_ac_no_loss = max(pv_ac_before - over_limit, 0)
                     clipped_today += pv_ac_before - pv_ac_no_loss
+                    # Clipping penalty removed
                     total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
             else:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
@@ -1294,6 +1333,7 @@ class Prediction(PredictionBatch):
                 pv_ac_before = pv_ac
                 pv_ac = max(pv_ac - over_limit, 0)
                 clipped_today += pv_ac_before - pv_ac
+                # Clipping penalty removed
 
             # Adjust battery soc
             if battery_draw > 0:
@@ -1508,6 +1548,7 @@ class Prediction(PredictionBatch):
                 iboost_running_full,
             )
 
+        self.clipping_penalty_total = round(clipping_penalty_total, 4)
         return (
             round(final_metric, 4),
             round(final_import_kwh_battery, 4),

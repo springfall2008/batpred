@@ -1062,6 +1062,35 @@ class Output:
                 export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True, with_value=True)
             )
 
+        # Clipping summary
+        if getattr(self, "clipping_buffer_enable", False):
+            clipping_status = getattr(self, "clipping_status", "No clipping forecast.")
+            sentence += "- Clipping status: {}\n".format(clipping_status)
+
+        predict_clipped_best = getattr(self, "predict_clipped_best", {})
+        if predict_clipped_best:
+            clipping_total = predict_clipped_best.get(max(predict_clipped_best.keys()), 0.0)
+            if clipping_total > 0.01:
+                clipping_mode = getattr(self, "clipping_limit_mode", "Unknown")
+                start_str = ""
+                end_str = ""
+                start_stamp = None
+                end_stamp = None
+
+                prev_val = 0.0
+                for min_key, val in sorted(predict_clipped_best.items()):
+                    if val > prev_val + 0.001:
+                        if start_stamp is None:
+                            start_stamp = self.midnight_utc + timedelta(minutes=min_key)
+                        end_stamp = self.midnight_utc + timedelta(minutes=min_key)
+                    prev_val = val
+
+                if start_stamp and end_stamp:
+                    start_str = start_stamp.strftime("%H:%M")
+                    end_str = end_stamp.strftime("%H:%M")
+
+                sentence += "- Forecast {} kWh clipping, exceeding {} limit from {} to {}. Plan penalized to mitigate.\n".format(dp2(clipping_total), clipping_mode, start_str, end_str)
+
         if publish:
             self.text_plan = self.get_text_plan_html(sentence)
 
@@ -1400,6 +1429,16 @@ class Output:
 
             had_state = False
 
+            # PHYSICS ENGINE PRIORITY FIX:
+            # In prediction.py, a real export window (limit < 99) overrides a charge window.
+            # If both are active, suppress the charge window in the UI so we don't display a fake "Chrg"
+            # or a broken split-cell.
+            if charge_window_n >= 0 and export_window_n >= 0:
+                exp_window = self.export_window_best[export_window_n]
+                exp_limit = self.export_limits_best[export_window_n]
+                if export_mode_of(exp_limit) == EXPORT_MODE_TARGET and "clipping_target_soc_pct" not in exp_window:
+                    charge_window_n = -1
+
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
                 target = limit
@@ -1686,8 +1725,9 @@ class Output:
                     carbon_color = "#FFFFFF"
 
             # Work out clipped
-            clipped_amount = self.predict_clipped_best.get(minute_relative_start, 0)
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            predict_clipped_best = getattr(self, "predict_clipped_best", {})
+            clipped_amount = predict_clipped_best.get(minute_relative_start, 0)
+            clipped_amount_end = predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             clipped_change = clipped_amount_end - clipped_amount
             clipped_change = dp2(clipped_change)
             if clipped_change == 0:
@@ -1861,7 +1901,7 @@ class Output:
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(load_total))
         if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            clipped_amount_end = getattr(self, "predict_clipped_best", {}).get(minute_relative_slot_end, clipped_amount)
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
@@ -1888,7 +1928,7 @@ class Output:
         totals["total_cost"] = dp2(metric_end / 100.0)
         totals["pv_forecast"] = dp2(pv_total)
         totals["load_forecast"] = dp2(load_total)
-        clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+        clipped_amount_end = getattr(self, "predict_clipped_best", {}).get(minute_relative_slot_end, clipped_amount)
         totals["clipped"] = dp2(clipped_amount_end)
         if self.load_forecast:
             totals["extra_load"] = dp2(xload_total)
@@ -2717,6 +2757,9 @@ class Output:
                 "error_count": error_count,
             },
         )
+
+        # Clipping Status and PV Peak Forecast sensors are published in plan.py run_prediction(save="best")
+        # to avoid duplicate dashboard_item writes to the same sensor.
 
         if had_errors:
             self.log("Warn: record_status {}".format(message + extra))

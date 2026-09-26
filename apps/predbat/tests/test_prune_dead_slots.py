@@ -32,6 +32,7 @@ def run_prune_dead_slots_tests(my_predbat):
     failed |= test_prune_drops_neutral_charge_freeze(my_predbat)
     failed |= test_prune_ignores_windows_outside_record(my_predbat)
     failed |= test_prune_drops_neutral_export_freeze(my_predbat)
+    failed |= test_prune_skips_clipping_window(my_predbat)
     return failed
 
 
@@ -382,6 +383,32 @@ def test_prune_drops_neutral_export_freeze(my_predbat):
 
     if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE:
         print("ERROR: Neutral export freeze not pruned, limit is {}".format(my_predbat.export_limits_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_skips_clipping_window(my_predbat):
+    """An anti-clipping window with clipping_target_soc_pct is never trialled or pruned"""
+    print("**** test_prune_skips_clipping_window ****")
+    failed = False
+    setup(my_predbat)
+
+    win = make_window(780, 810)
+    win["clipping_target_soc_pct"] = 74.0
+    my_predbat.export_window_best = [win]
+    my_predbat.export_limits_best = [74.0]
+    install_metric_stub(my_predbat, {}, default=100.0)
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if my_predbat.export_limits_best[0] != 74.0:
+        print("ERROR: Clipping export slot was pruned, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
     if not failed:
