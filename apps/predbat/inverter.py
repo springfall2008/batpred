@@ -2043,6 +2043,15 @@ class Inverter:
 
         return current_rate
 
+    def rate_after_deadband(self, current_rate, new_rate, rate_max):
+        """
+        The rate adjust_charge_rate()/adjust_discharge_rate() leave in place: new_rate, or current_rate
+        when the change is within their deadband (5% of rate_max, the battery's maximum in W/minute)
+        """
+        if abs(current_rate - new_rate) > (rate_max * MINUTE_WATT / 20):
+            return new_rate
+        return current_rate
+
     def get_current_charge_rate(self):
         """
         Get the current charge rate in watts
@@ -2083,7 +2092,7 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 20):
+        if self.rate_after_deadband(current_rate, new_rate, self.battery_rate_max_charge) != current_rate:
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "charge_rate" in self.base.args:
                 self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
@@ -2124,7 +2133,7 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_discharge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
+        if self.rate_after_deadband(current_rate, new_rate, self.battery_rate_max_discharge) != current_rate:
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "discharge_rate" in self.base.args:
                 self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
@@ -3188,14 +3197,20 @@ class Inverter:
         # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
-    def adjust_charge_immediate(self, target_soc, freeze=False):
+    def adjust_charge_immediate(self, target_soc, freeze=False, rate=None):
         """
         Adjust from charging or not charging based on passed target soc
+
+        rate is the charge rate (W) execute_plan() intends for this cycle. Rates are written after its
+        per-inverter loop, so reading the stored rate here would send the previous cycle's to the
+        service as {power} (#5252). None falls back to the stored rate.
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
             current_rate = self.get_current_charge_rate()
+            if rate is not None:
+                current_rate = self.rate_after_deadband(current_rate, int(rate + 0.5), self.battery_rate_max_charge)
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": int(target_soc),
@@ -3227,21 +3242,28 @@ class Inverter:
         else:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
-    def adjust_export_immediate(self, target_soc, freeze=False):
+    def adjust_export_immediate(self, target_soc, freeze=False, rate=None):
         """
         Adjust from exporting or not exporting based on passed target soc
+
+        rate is the discharge rate (W) execute_plan() intends for this cycle - see
+        adjust_charge_immediate(). None falls back to the stored rate.
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
         if target_soc < 100:
             # Mirrors adjust_charge_immediate()'s charge_start_service payload just above - the
-            # actual (possibly low-power-scaled) rate already set via adjust_discharge_rate(), not
-            # always the inverter's maximum, which produced a full-power discharge_start_service
-            # call even during a planned low-power export (batpred#4619).
+            # planned (possibly low-power-scaled) rate, not always the inverter's maximum, which
+            # produced a full-power discharge_start_service call even during a planned low-power
+            # export (batpred#4619). Passed in as rate, since execute_plan() writes the rate itself
+            # later in the cycle (#5252).
+            current_rate = self.get_current_discharge_rate()
+            if rate is not None:
+                current_rate = self.rate_after_deadband(current_rate, int(rate + 0.5), self.battery_rate_max_discharge)
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": int(target_soc),
-                "power": int(self.get_current_discharge_rate()),
+                "power": int(current_rate),
             }
 
             # Stop charge
