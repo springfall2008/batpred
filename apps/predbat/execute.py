@@ -1119,7 +1119,7 @@ class Execute:
         self.battery_full_hysteresis_active = any(getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters)
         # Else: SoC is inside the hysteresis band - leave the existing state alone either way
 
-    def fetch_inverter_data(self, quick=False): upstream/main
+    def fetch_inverter_data(self, quick=False):
         """
         Fetch data about the inverters
 

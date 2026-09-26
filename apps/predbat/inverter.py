@@ -436,7 +436,7 @@ class Inverter:
         detection), so it has to keep running every cycle even though the object no longer does.
         What stays in __init__ is the identity and the accumulated state that must survive - notably
         the committed-schedule guard, which was being wiped by the rebuild (#4712).
-        """upstream/main
+        """
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
