@@ -70,6 +70,8 @@ byok
 cadata
 calcsize
 calib
+CALLERROR
+CALLRESULT
 Cantarell
 cbat
 CDLL
@@ -528,6 +530,7 @@ reactivepower
 readback
 readbacks
 recp
+recurrency
 redownload
 Referer
 refetched

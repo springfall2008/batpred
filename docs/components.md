@@ -18,6 +18,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [myenergi (myenergi)](#myenergi-myenergi)
+    - [OCPP Virtual Charger (ocpp_charger)](#ocpp-virtual-charger-ocpp_charger)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Enphase API (enphase)](#enphase-api-enphase)
@@ -1043,6 +1044,44 @@ Add `--boost zappi` or `--boost eddi` (with `--amount`) to send a test boost, or
 To try the charge control commands against a real Zappi without enabling the feature, `--start-charge` puts it in Fast exactly as a planned window does, `--stop-charge` puts it in Stopped as being outside one does, and `--release` puts it back in Eco+ as handing it back does. Run the command again with no action to see the mode that took effect.
 
 Note `--stop-charge` leaves the Zappi stopped, so remember to `--release` it afterwards or set the mode you want in the myenergi app.
+
+---
+
+### OCPP Virtual Charger (ocpp_charger)
+
+**Can be restarted:** Yes
+
+#### What it does (ocpp_charger)
+
+Connects to an OCPP central system - such as Intelligent Octopus Go's `wss://ocpp.octopus.energy` - as if Predbat were your EV charger.
+The central system's start, stop and current-limit commands are turned into Home Assistant service calls that control your real charger, and your real charger's power and energy are reported back to it.
+
+#### When to enable (ocpp_charger)
+
+- Your supplier smart-charges over OCPP and you want its schedule to drive a charger through Home Assistant rather than over the charger's own OCPP connection
+
+#### Important notes (ocpp_charger)
+
+- Turn off your real charger's own OCPP connection to the supplier first - only one charge point can use the charge point Id at a time
+- The readings sent to the supplier are always your charger's real ones; the power sensor is required
+- In read only mode it keeps reporting to the supplier but does not start or stop the charger
+- Publishes `sensor.predbat_ocpp_charger_status`
+- See [OCPP virtual charger](car-charging.md#ocpp-virtual-charger) for setup and examples
+
+#### Configuration Options (ocpp_charger)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `charge_point_id` | String | Yes | - | `ocpp_charger_id` | The charge point Id the supplier gave you |
+| `password` | String | Yes | - | `ocpp_charger_password` | The OCPP password the supplier gave you |
+| `url` | String | No | `wss://ocpp.octopus.energy` | `ocpp_charger_url` | The supplier's OCPP URL (without the charge point Id) |
+| `power_sensor` | Sensor | Yes | - | `ocpp_charger_power` | The real charger's charging power, in W or kW |
+| `energy_sensor` | Sensor | No | - | `ocpp_charger_energy` | The real charger's energy counter, in kWh or Wh; a per-session counter is fine. Without it energy is integrated from power |
+| `plugged_sensor` | Sensor | No | `car_charging_planned` for the first car | `ocpp_charger_plugged` | Whether a car is plugged in, matched against `ocpp_charger_plugged_response` (default `car_charging_planned_response`) |
+| `soc_sensor` | Sensor | No | - | `ocpp_charger_soc` | The car's battery SoC %, reported with the meter readings |
+| `voltage` | Float | No | `230` | `ocpp_charger_voltage` | Supply voltage, used to convert between amps and watts |
+| - | Service | No | - | `ocpp_charger_start_service` | Service(s) to start the charger; `{current}` and `{power}` give the supplier's limit in A and W |
+| - | Service | No | - | `ocpp_charger_stop_service` | Service(s) to stop the charger |
 
 ---
 
