@@ -557,6 +557,64 @@ def run_web_apps_edit_tests(my_predbat):
             print("  ERROR: expected revealSecretValue to fetch /apps_value and replace the masked original, got:\n{}".format(reveal_src))
             failed += 1
 
+        # A revealed credential is the first value that routinely holds quotes, braces or angle
+        # brackets to reach the editor - the mask "xxx" never did (#5243 review)
+        print("Test: a credential holding quote, brace and angle-bracket characters round-trips through reveal and save")
+        awkward = 'pa"ss{word<x>&{0}'
+        web_interface = _reset_fixture(my_predbat)
+        web_interface.args["chat"]["providers"]["openrouter"]["api_key"] = awkward
+        path = "chat.providers.openrouter.api_key"
+        result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": path}))).text)
+        if not result.get("success") or result.get("value") != awkward:
+            print("  ERROR: expected /apps_value to return the brace-bearing credential verbatim, got: {}".format(result))
+            failed += 1
+        else:
+            result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": awkward, "newValue": awkward + "2", "type": "string", "isNested": True, "path": path}})
+            if not result.get("success") or _load_yaml()["pred_bat"]["chat"]["providers"]["openrouter"]["api_key"] != awkward + "2":
+                print("  ERROR: the edited quote-bearing credential was not written intact, got: {}".format(result))
+                failed += 1
+
+        print("Test: a digit-only credential saved as a revealed row keeps its leading zeros")
+        web_interface = _reset_fixture(my_predbat)
+        path = "forecast_solar[0].api_key"
+        result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": "0042", "newValue": "00430", "type": "string", "isNested": True, "path": path}})
+        if not result.get("success") or str(_load_yaml()["pred_bat"]["forecast_solar"][0]["api_key"]) != "00430":
+            print("  ERROR: expected the credential to be written as the string 00430, got: {} / {}".format(result, _load_yaml()["pred_bat"]["forecast_solar"][0]["api_key"]))
+            failed += 1
+
+        print("Test: /apps_value refuses a negative index into an empty list rather than raising")
+        web_interface = _reset_fixture(my_predbat)
+        web_interface.args["forecast_solar"] = []
+        result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": "forecast_solar[-1].api_key"}))).text)
+        if result.get("success") or "value" in result:
+            print("  ERROR: expected a refusal for an index into an empty list, got: {}".format(result))
+            failed += 1
+
+        print("Test: the editor sets a revealed value as a property and treats it as plain text")
+        for function in ("editValue", "editNestedValue"):
+            edit_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            edit_src = edit_src[: edit_src.index("\n}\n")]
+            if 'value="${currentValue}"' in edit_src or "input.value = currentValue" not in edit_src:
+                print("  ERROR: expected {} to assign input.value rather than interpolate the value into markup, got:\n{}".format(function, edit_src))
+                failed += 1
+            if "row.dataset.revealed !== '1' && currentValue" not in edit_src:
+                print("  ERROR: expected {} to skip the entity dropdown for a revealed credential, got:\n{}".format(function, edit_src))
+                failed += 1
+        for function in ("saveValue", "saveNestedValue"):
+            save_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            save_src = save_src[: save_src.index("\n}\n")]
+            if "row.dataset.revealed === '1' ? 'string'" not in save_src:
+                print("  ERROR: expected {} to save a revealed credential as a string, got:\n{}".format(function, save_src))
+                failed += 1
+        if "row.dataset.revealed = '1'" not in reveal_src:
+            print("  ERROR: expected revealSecretValue to mark the row as revealed")
+            failed += 1
+        display_src = apps_js[apps_js.index("function getDisplayValueEntity(") :]
+        display_src = display_src[: display_src.index("\n}\n")]
+        if display_src.count("escapeHtml(") != 2:
+            print("  ERROR: expected getDisplayValueEntity to escape both of its returns, got:\n{}".format(display_src))
+            failed += 1
+
     finally:
         os.chdir(original_dir)
         shutil.rmtree(temp_dir, ignore_errors=True)

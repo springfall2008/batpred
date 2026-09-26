@@ -3760,8 +3760,10 @@ chart.render();
 
         The page holds SECRET_MASK for a credential rather than the credential itself, so the
         browser's Edit has to fetch the real value (/apps_value) before it can offer it - this flag
-        is how it knows to. Only a scalar leaf is flagged: mask_secret_args() replaces a secret
-        key's whole value, list or not, so this is the row that holds the mask.
+        is how it knows to. mask_secret_args() replaces a secret key's whole value, list or dict
+        included, so a credential container (e.g. redact_strings) is also one masked row and is
+        flagged too; /apps_value refuses to hand a container back, so its Edit ends in that
+        refusal rather than letting the editor overwrite the whole list with a single string.
         """
         if value == SECRET_MASK and is_secret_key(key):
             return " data-secret={}1{}".format(quote, quote)
@@ -3776,18 +3778,22 @@ chart.render();
         the one path asked for is returned, and only when it is a single value, so the page itself
         still never carries credentials and a whole container cannot be pulled in the clear. The
         unmasked /debug_apps download already exposes the same values behind the same access.
+
+        The value is returned as stored, not passed through resolve_value_raw(): a credential is
+        literal text, and one holding a brace ("abc{def", "{0}") makes str.format() in
+        resolve_arg() raise ValueError/IndexError, which would surface as a 500 here.
         """
         path = request.query.get("path", "")
         if not path:
             return web.json_response({"success": False, "message": "No path given"})
         try:
             value = resolve_nested_yaml_value(self.args, path)
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            # IndexError: a negative index into an empty list gets past the lookup's range check
             return web.json_response({"success": False, "message": f"Path {path} not found: {str(e)}"})
         if not self.is_editable_value(value) or isinstance(value, list):
-            return web.json_response({"success": False, "message": f"{path} is not a single value that can be edited here"})
-        leaf = [segment for segment in parse_yaml_path(path) if not segment.startswith("[")][-1]
-        return web.json_response({"success": True, "value": str(self.resolve_value_raw(leaf, value))})
+            return web.json_response({"success": False, "message": f"{path} is not a single value that can be edited here - edit apps.yaml directly"})
+        return web.json_response({"success": True, "value": str(value)})
 
     def resolve_value_raw(self, arg, value):
         if isinstance(value, str) and "{" in value:
