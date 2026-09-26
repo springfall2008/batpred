@@ -547,7 +547,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_last_status = "baseline"
         self.dynamic_load_car_since = {}
         self.dynamic_load_car_cancelled = {}
-        self.dynamic_load_car_decided = set()
         self.dynamic_load_car_warned = []
         self.dynamic_load_car_warned_iog_off = False
         self.dynamic_load_car_sensors = {}

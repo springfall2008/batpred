@@ -365,27 +365,36 @@ class Plan:
                 return True
         return False
 
+    def dynamic_load_car_is_octopus(self, car_n):
+        """
+        Whether car_n's slots were built by Octopus Intelligent charging (load_octopus_slots() marks them).
+
+        Only those are ever cancelled. Predbat-led charging is a different mechanism: Predbat itself
+        decides when the car charges and its car_charging_slot sensor drives the charger, so cancelling
+        a slot would stop the very charge the check is waiting to see.
+        """
+        slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
+        return any(slot.get("octopus", False) for slot in slots)
+
     def dynamic_load_car_trusted_by_default(self, car_n):
         """
         Whether car_n's slots are trusted while there is no evidence about them - outside a slot, or
         before the car has been seen either way inside one.
 
-        Everything is trusted unless octopus_intelligent_trust_slots is Off, which reverses that for a car
-        carrying Octopus Intelligent dispatch slots: they are assumed not to happen until the car is seen
-        charging in one. Slots Predbat plans itself are always trusted by default.
+        Trusted unless octopus_intelligent_trust_slots is Off, which reverses that for an Octopus
+        Intelligent car: its slots are assumed not to happen until the car is seen charging in one.
         """
-        if self.octopus_intelligent_trust_slots:
-            return True
-        slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
-        return not any(slot.get("octopus", False) for slot in slots)
+        return self.octopus_intelligent_trust_slots or not self.dynamic_load_car_is_octopus(car_n)
 
     def dynamic_load_car_active(self, car_n):
         """
-        Whether car-charging detection applies to car_n: dynamic load is on, or the car's Octopus
-        Intelligent slots are untrusted by default - which means nothing without the detection that
+        Whether car-charging detection applies to car_n: only an Octopus Intelligent car, and only with
+        dynamic load on or its slots untrusted by default - which means nothing without the detection that
         trusts them again, so it works whether dynamic load is on or not.
         """
-        return self.metric_dynamic_load_adjust or not self.dynamic_load_car_trusted_by_default(car_n)
+        if not self.dynamic_load_car_is_octopus(car_n):
+            return False
+        return self.metric_dynamic_load_adjust or not self.octopus_intelligent_trust_slots
 
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
@@ -455,16 +464,16 @@ class Plan:
             self.dynamic_load_car_warned = cars
         return cars
 
-    def dynamic_load_car_check(self, save=True, late=False):
+    def dynamic_load_car_check(self, save=True):
         """
-        Cancel the slots of a car that is inside one of its charging slots but not charging - or, with
-        octopus_intelligent_trust_slots Off, of an Octopus Intelligent car until it is seen charging.
+        Cancel the slots of an Octopus Intelligent car that is inside one of its charging slots but not
+        charging - or, with octopus_intelligent_trust_slots Off, until it is seen charging in one. Slots
+        Predbat plans itself are never cancelled (see dynamic_load_car_is_octopus()).
 
-        Runs in fetch_sensor_data() before the rates are built, so that a cancelled Octopus Intelligent
-        dispatch never gets its cheap rate (rate_add_io_slots() and dynamic_load_car_strip_feed_rates()
-        consult dynamic_load_car_cancelled). Cars that Predbat plans itself only get their slots after the
-        rates, from the low-rate scan, so a second call with late=True decides those once they exist -
-        they have no dispatch discount to withhold.
+        Runs in fetch_sensor_data() after the Octopus slots are built and before the rates, so that a
+        cancelled dispatch never gets its cheap rate (rate_add_io_slots() and
+        dynamic_load_car_strip_feed_rates() consult dynamic_load_car_cancelled). Every car is decided,
+        including one whose slots have gone, so a stale cancellation cannot outlive them.
 
         A cancelled car has every slot ending after now set to 0 kWh, which releases "Hold for car" and the
         predicted car load; the kWh it had is kept in the slot's kwh_cancelled so the plan can still show
@@ -477,16 +486,7 @@ class Plan:
         Returns True when a car's cancellation changed, so the plan is recomputed.
         """
         changed = False
-        if not late:
-            self.dynamic_load_car_decided = set()
-
         for car_n in range(self.num_cars):
-            if car_n in self.dynamic_load_car_decided:
-                continue
-            if not late and not (car_n < len(self.car_charging_slots) and self.car_charging_slots[car_n]):
-                continue
-            self.dynamic_load_car_decided.add(car_n)
-
             cancelled = self.dynamic_load_car_target(car_n, self.minutes_now, self.now_utc_real, record=save)
             if save:
                 was_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)

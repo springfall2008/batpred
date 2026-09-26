@@ -1184,8 +1184,8 @@ class Fetch:
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
         self.dispatch_timeline_pending = []
         self.fetch_sensor_data_cars(save=save)
-        # Dynamic load: cancel the slots of a car that is in one but not charging - before the rates are
-        # built, so a cancelled Intelligent dispatch never gets its cheap rate
+        # Dynamic load: cancel the Octopus Intelligent slots of a car that is in one but not charging -
+        # before the rates are built, so a cancelled dispatch never gets its cheap rate
         dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
 
         if "rates_export_octopus_url" in self.args:
@@ -1314,8 +1314,6 @@ class Fetch:
 
         # Work out car plan?
         self.fetch_sensor_data_car_planning()
-        # Dynamic load for the cars Predbat plans itself, whose slots only exist now
-        dynamic_load_car_changed |= self.dynamic_load_car_check(save=save, late=True)
         # Publish the car plan
         self.publish_car_plan()
 

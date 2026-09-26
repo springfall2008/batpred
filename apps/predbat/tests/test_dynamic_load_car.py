@@ -17,7 +17,8 @@ battery is not planned around a slot Octopus may bill at the full rate. The canc
 re-derived every cycle and ends as soon as the car leaves its slots or starts charging again.
 
 Evidence is car_charging_now when it is a real entity (2 minute grace), otherwise the low-load test
-when the car is inside the CT clamp (10 minute grace), otherwise nothing.
+when the car is inside the CT clamp (10 minute grace), otherwise nothing. Only slots Octopus
+Intelligent charging built are affected - Predbat-led charging is never cancelled.
 """
 import copy
 from datetime import timedelta
@@ -43,7 +44,6 @@ STATE_FIELDS = (
     "update_pending",
     "dynamic_load_car_since",
     "dynamic_load_car_cancelled",
-    "dynamic_load_car_decided",
     "dynamic_load_car_sensors",
     "dynamic_load_car_warned",
     "dynamic_load_car_warned_iog_off",
@@ -103,7 +103,6 @@ def _reset(my_predbat):
     my_predbat.load_last_period = 3.0
     my_predbat.dynamic_load_car_since = {}
     my_predbat.dynamic_load_car_cancelled = {}
-    my_predbat.dynamic_load_car_decided = set()
     my_predbat.update_pending = False
     my_predbat.octopus_intelligent_trust_slots = True
 
@@ -218,7 +217,7 @@ def _run(my_predbat):
         _sensor(my_predbat, None)
         my_predbat.car_energy_reported_load = True
         my_predbat.load_last_period = 0.5
-        early_slots = [{"start": 0, "end": 30, "kwh": 3.5}]
+        early_slots = [{"start": 0, "end": 30, "kwh": 3.5, "octopus": True}]
         _cycle(my_predbat, 0, slots=early_slots)
         _cycle(my_predbat, 5, slots=early_slots)
         failed |= _check("t6b no clock before 00:05", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
@@ -269,22 +268,31 @@ def _run(my_predbat):
         failed |= _check("t10 not applied outside the slot", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
         failed |= _check("t10 saved state untouched", my_predbat.dynamic_load_car_cancelled.get(0, False), "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
 
-        # Cars planned by Predbat itself get their slots after the rates are built: the late call
-        # decides the cars the early call could not
-        print("Test 11: the late call decides cars that had no slots at the early call")
+        # Predbat-led charging is a different mechanism: Predbat itself decides when the car charges, and
+        # its slot sensor drives the charger - cancelling it would stop the very charge it is waiting to
+        # see. Only slots Octopus Intelligent charging built are ever cancelled.
+        print("Test 11: a car Predbat plans itself is never cancelled, by the sensor or the load")
         _reset(my_predbat)
         _sensor(my_predbat, "off")
-        _at(my_predbat, 840)
-        my_predbat.car_charging_slots = [[]]
-        my_predbat.dynamic_load_car_check()
-        my_predbat.car_charging_slots = [_slots()]
-        my_predbat.dynamic_load_car_check(late=True)
-        _at(my_predbat, 845)
-        my_predbat.car_charging_slots = [[]]
-        my_predbat.dynamic_load_car_check()
-        my_predbat.car_charging_slots = [_slots()]
-        changed = my_predbat.dynamic_load_car_check(late=True)
-        failed |= _check("t11 late cancel", changed and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        own = [{"start": 840, "end": 870, "kwh": 3.5}, {"start": 900, "end": 930, "kwh": 3.5}]
+        _cycle(my_predbat, 840, slots=own)
+        changed = _cycle(my_predbat, 850, slots=own)
+        failed |= _check("t11 sensor", (not changed) and _kwh(my_predbat) == [3.5, 3.5] and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.load_last_period = 0.5
+        _cycle(my_predbat, 840, slots=own)
+        _cycle(my_predbat, 855, slots=own)
+        failed |= _check("t11 load", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
+
+        # Every car is decided in the one call, including one whose slots have gone this cycle
+        print("Test 11a: a cancelled car with no slots this cycle is cleared")
+        _reset(my_predbat)
+        _sensor(my_predbat, "off")
+        _cycle(my_predbat, 840)
+        _cycle(my_predbat, 845)
+        changed = _cycle(my_predbat, 850, slots=[])
+        failed |= _check("t11a cleared", changed and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {} cancelled {}".format(changed, my_predbat.dynamic_load_car_cancelled))
 
         # car_charging_slots shorter than num_cars must not raise out of the fetch (#5229 review)
         print("Test 11b: fewer car slot lists than cars")
@@ -295,10 +303,9 @@ def _run(my_predbat):
         my_predbat.dynamic_load_car_cancelled = {1: True}
         my_predbat.car_charging_slots = [_slots()]
         try:
-            my_predbat.dynamic_load_car_check(save=False, late=True)
+            my_predbat.dynamic_load_car_check(save=False)
             my_predbat.dynamic_load_car_cancelled = {1: True}
             my_predbat.dynamic_load_car_check()
-            my_predbat.dynamic_load_car_check(late=True)
         except IndexError as exc:
             failed |= _check("t11b no IndexError", False, str(exc))
 
@@ -462,7 +469,7 @@ def _run_poll(my_predbat):
     print("Test 18: the poll agrees with the check about a slot ending between 5 minute steps")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
-    odd_slots = [{"start": 840, "end": 872, "kwh": 3.5}]
+    odd_slots = [{"start": 840, "end": 872, "kwh": 3.5, "octopus": True}]
     _cycle(my_predbat, 840, slots=odd_slots)
     _cycle(my_predbat, 845, slots=odd_slots)
     my_predbat.update_pending = False
@@ -657,7 +664,7 @@ def _run_kwh_cancelled(my_predbat):
     print("Test 26: a cancelled slot records its kWh in kwh_cancelled")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
-    slots = [{"start": 840, "end": 870, "kwh": 3.5}, {"start": 900, "end": 930, "kwh": 0.0}]
+    slots = [{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}, {"start": 900, "end": 930, "kwh": 0.0, "octopus": True}]
     _cycle(my_predbat, 840, slots=slots)
     _cycle(my_predbat, 845, slots=slots)
     failed |= _check("t26 recorded", _kwh(my_predbat) == [0, 0] and _cancelled(my_predbat) == [3.5, None], "kwh {} cancelled {}".format(_kwh(my_predbat), _cancelled(my_predbat)))
