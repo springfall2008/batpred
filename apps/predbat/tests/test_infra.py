@@ -385,7 +385,6 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
-        self.inverter_type = "GE"
 
     def refresh_config(self, quiet=False):
         """

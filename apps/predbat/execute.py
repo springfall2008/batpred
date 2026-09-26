@@ -1101,17 +1101,21 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
-    def fetch_inverter_data(self, quiet=False):
+    def fetch_inverter_data(self, quick=False):
         """
         Fetch data about the inverters
 
-        quiet controls the per-cycle inverter diagnostics (clock skew, soc_max, charge windows and
-        settings). It is deliberately a parameter of its own rather than being derived from whether
-        the Inverter objects were just created: those objects now persist, so tying the two together
-        would silence the diagnostics for the life of the process after the first cycle (#5126
-        review). That log is the primary triage evidence for "the plan is wrong" and inverter-write
-        reports. balance_inverters() passes quiet=True because it runs every 120s rather than once
-        per plan cycle, which is the same split that existed before the objects persisted.
+        quick is the dashboard refresh from quick_inverter_data_update(), every
+        INVERTER_QUICK_UPDATE_SECONDS. It reads live status only: no refresh_config() and no
+        per-cycle inverter diagnostics (clock skew, soc_max, charge windows and settings). That is
+        what the quick path did before the objects persisted, and it keeps check_clock_skew()'s
+        auto-restart, the battery size tracking reads and the set_reserve_min write to once per
+        plan cycle.
+
+        Verbosity is deliberately tied to quick rather than to whether the Inverter objects were
+        just created: those objects now persist, so tying it to creation would silence the
+        diagnostics for the life of the process after the first cycle (#5126 review). That log is
+        the primary triage evidence for "the plan is wrong" and inverter-write reports.
         """
         # Find the inverters
         self.num_inverters = int(self.get_arg("num_inverters", 1))
@@ -1164,7 +1168,7 @@ class Execute:
         for id in range(self.num_inverters):
             if create:
                 try:
-                    inverter = Inverter(self, id)
+                    inverter = Inverter(self, id, quiet=quick)
                 except Exception as e:
                     self.log("Error: Failed to create inverter {}: {}, your configuration may be incorrect".format(id, e))
                     self.inverters = []
@@ -1173,7 +1177,8 @@ class Execute:
             else:
                 inverter = self.inverters[id]
                 try:
-                    inverter.refresh_config(quiet=quiet)
+                    if not quick:
+                        inverter.refresh_config()
                 except Exception as e:
                     # The objects are left intact, unlike the construction path above where the list
                     # is only half built. refresh_config() has transient ways to raise on a live
@@ -1183,7 +1188,7 @@ class Execute:
                     # a non-volatile write (#5126 review).
                     self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
                     return False
-            inverter.update_status(self.minutes_now, quiet=quiet)
+            inverter.update_status(self.minutes_now, quiet=quick)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
@@ -1343,20 +1348,20 @@ class Execute:
         # and write the real device with no plan in place (#4965)
         if self.is_template_mode():
             # fetch_inverter_data() and the plan run never stamp this in template mode, so without
-            # a stamp here the 120s throttle in update_pred() would pass on every tick of
+            # a stamp here the quick-update throttle would pass on every tick of
             # update_time_loop instead of once per INVERTER_QUICK_UPDATE_SECONDS
             self.inverter_data_last_fetch = datetime.now()
             return False
         if self.inverters is None:
             return False
-        # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which
+        # Its own control-ledger cycle. This runs every INVERTER_QUICK_UPDATE_SECONDS and reaches update_status(), which
         # writes scheduled_charge_enable through write_and_poll_switch - so it both observes and
         # confirms. Without advancing the cycle, every observation here was unconditionally STALE
         # (cycle <= confirmed_cycle) and its confirmations collided with the plan run's. Every
         # entry point that can observe or confirm gets its own cycle.
         if self.control_ledger is not None:
             self.control_ledger.begin_cycle()
-        if self.fetch_inverter_data(quiet=True):
+        if self.fetch_inverter_data(quick=True):
             self.publish_inverter_data()
             self.rebalance_inverter_rates()
             return True

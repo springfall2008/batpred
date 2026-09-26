@@ -18,7 +18,6 @@ class ActiveTestInverter:
     def __init__(self, id, soc_kw, soc_max, now_utc):
         self.soc_target = -1
         self.id = id
-        self.inverter_type = "GE"
         self.isCharging = False
         self.isExporting = False
         self.pause_charge = False
