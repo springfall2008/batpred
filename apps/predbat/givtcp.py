@@ -458,6 +458,11 @@ class GivTCPComponent(ComponentBase):
         # published points the arg at a non-existent entity, and get_arg then returns its default
         # instead of the user's own apps.yaml value.
         self.published_discovery = {}
+        # What each key held before automatic_config() first claimed it. A capability-gated claim is
+        # made on the fleet as it stands, which can include gap slots whose endpoint has not answered
+        # yet; if that endpoint turns out to lack the capability, the re-run hands the key back to
+        # this value rather than leaving the stale claim in place until restart.
+        self.claimed_from = {}
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -531,7 +536,14 @@ class GivTCPComponent(ComponentBase):
         self.refresh_discovery()
 
         if rediscover:
+            fleet_before = len(self.discovered)
             await self.rediscover()
+            if len(self.discovered) > fleet_before:
+                # automatic_config() below gates each discovery key on every managed inverter having
+                # published it, and the adopted inverter has not been published yet this cycle. Without
+                # this every such gate fails on the re-run and the key is handed back to apps.yaml for
+                # the whole fleet, with nothing to re-run it once the next poll does publish.
+                await self.publish_data()
 
         # Re-runs when the fleet has grown. Deliberately not when it shrinks: self.discovered is
         # append-only, because dropping an inverter that stopped answering would rebuild Predbat's
@@ -861,9 +873,14 @@ class GivTCPComponent(ComponentBase):
     async def automatic_config(self):
         """Point Predbat's standard entity-based apps.yaml keys at the entities this component publishes."""
         # What gets claimed is driven by the endpoints that answered discovery, not by the length of
-        # the configured givtcp_rest list - claiming an entity for a URL with nothing behind it
-        # would have Predbat plan and execute against a phantom battery. The fleet size can still
-        # come out larger than that, but only where the user asked for it: see n_inverters below.
+        # the configured givtcp_rest list: no slot is claimed past the highest endpoint that
+        # answered, so the template's trailing placeholder URLs never become inverters. Below that
+        # endpoint Predbat inverter n has to be REST endpoint n (#5209), so a slot whose endpoint has
+        # not answered is claimed too - with the user's own configuration where there is one, and
+        # otherwise with the entities that endpoint will publish once it does. Until then Predbat
+        # plans that inverter without live data, which is the cost of not renumbering the fleet
+        # around it; the warning below says so. Past the highest endpoint the fleet can still come
+        # out larger, but only where the user asked for it: see n_inverters below.
         if not self.automatic:
             self.log("Info: GivTCP: givtcp_automatic is off - publishing entities but leaving apps.yaml to you")
             return
@@ -882,9 +899,20 @@ class GivTCPComponent(ComponentBase):
         n_covered = max(discovered) + 1
         n_inverters = max(n_covered, self._configured_num_inverters())
         self.log("GivTCP: configuring Predbat for {} discovered inverter(s)".format(n_discovered))
-        if n_inverters > n_discovered:
-            not_answered = [n for n in range(n_inverters) if n not in discovered]
-            self.log("Info: GivTCP: {} inverter(s) are configured and {} answered here - leaving inverter(s) {} as configured".format(n_inverters, n_discovered, ", ".join(str(n) for n in not_answered)))
+        # The two kinds of slot that did not answer are treated differently by _per_endpoint_values(),
+        # so they are reported separately: a gap below the highest endpoint that answered is bound
+        # to its own endpoint's entities wherever nothing is configured for it, a slot past it is
+        # only ever left as configured.
+        gap = [n for n in range(n_covered) if n not in discovered]
+        tail = list(range(n_covered, n_inverters))
+        if gap:
+            self.log(
+                "Warn: GivTCP: no inverter has answered yet at {} - Predbat inverter(s) {} keep their own slot and are bound to that endpoint's entities wherever nothing is configured for them, so they are planned without live data until it answers. Remove the URL from givtcp_rest if that inverter no longer exists.".format(
+                    ", ".join(self.rest[n].inverter.rest_api for n in gap), ", ".join(str(n) for n in gap)
+                )
+            )
+        if tail:
+            self.log("Info: GivTCP: {} inverter(s) are configured and {} answered here - leaving inverter(s) {} as configured".format(n_inverters, n_discovered, ", ".join(str(n) for n in tail)))
         self.set_arg_auto("inverter_type", self._per_endpoint_values("inverter_type", lambda n: "GE", n_inverters))
         self.set_arg_auto("num_inverters", n_inverters)
 
@@ -944,7 +972,18 @@ class GivTCPComponent(ComponentBase):
             else:
                 self.log("Info: GivTCP: the battery pause time slots are not reported by every inverter - leaving pause_start_time/pause_end_time to your apps.yaml config")
 
+        # A key claimed on an earlier run whose gate has since failed - typically a late endpoint
+        # adopted on re-probe that lacks the capability the earlier fleet had - goes back to what it
+        # held before. Left alone, its gap-slot entry points at an entity that endpoint will never
+        # publish, so get_arg returns its default instead of the user's own apps.yaml value.
+        for key in [key for key in self.claimed_from if key not in keys]:
+            self.log("Info: GivTCP: {} is no longer supported by every managed inverter - handing it back to your apps.yaml config".format(key))
+            self.set_arg(key, self.claimed_from.pop(key))
+
         for key in keys:
+            if key not in self.claimed_from:
+                previous = self._configured_value(key)
+                self.claimed_from[key] = list(previous) if isinstance(previous, list) else previous
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
             if key == "battery_scaling":

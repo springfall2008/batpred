@@ -835,6 +835,9 @@ def test_rediscovery_picks_up_an_inverter_that_was_down_at_startup(my_predbat=No
     assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
     assert base.args["num_inverters"] == 2, f"Expected automatic_config re-run for 2 inverters, got {base.args.get('num_inverters')}"
     assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"]
+    # Discovery keys are gated on every inverter having published them, so the adopted inverter has
+    # to be published before the re-run - otherwise the gate fails and the key is handed back
+    assert base.args.get("battery_calibration") == ["sensor.predbat_givtcp_0_battery_calibration", "sensor.predbat_givtcp_1_battery_calibration"], f"Expected battery_calibration claimed for both, got {base.args.get('battery_calibration')}"
     print("PASS: an inverter that was down at startup is adopted on re-probe")
     return 0
 
@@ -916,6 +919,85 @@ def test_leading_endpoint_down_does_not_shift_the_fleet(my_predbat=None):
 
     if not failed:
         print("PASS: a leading endpoint that is down at startup leaves every other inverter in its own slot")
+    return 1 if failed else 0
+
+
+def test_gated_claim_is_handed_back_when_a_late_endpoint_lacks_the_capability(my_predbat=None):
+    """
+    A capability-gated claim made while a gap endpoint was down is undone if that endpoint lacks it.
+
+    At startup only v3 endpoint 1 answered, so pause_mode and discharge_target_soc pass their
+    all-v3 gates and gap slot 0 is bound to endpoint 0's own entities. When endpoint 0 is adopted
+    on re-probe and turns out to be v2, those entities will never be published, so the keys have
+    to go back to what apps.yaml had for them rather than keep pointing slot 0 at nothing.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    apps_yaml = {"discharge_target_soc": ["number.inv0_discharge_target", "number.inv1_discharge_target"]}
+    base.args_from_apps_yaml = dict(apps_yaml)
+    base.apps_yaml_override_warned = set()
+    base.args.update(apps_yaml)
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob(version="3.0.4"))
+
+    run_async(component.run(seconds=0, first=True))
+    if base.args.get("pause_mode") != ["select.predbat_givtcp_0_pause_mode", "select.predbat_givtcp_1_pause_mode"]:
+        print("ERROR: expected pause_mode claimed for both slots at startup, got {}".format(base.args.get("pause_mode")))
+        failed = True
+    if base.args.get("discharge_target_soc") != ["number.inv0_discharge_target", "number.predbat_givtcp_1_discharge_target_soc"]:
+        print("ERROR: expected discharge_target_soc claimed for endpoint 1 only, got {}".format(base.args.get("discharge_target_soc")))
+        failed = True
+
+    # Endpoint 0 answers on re-probe, but runs GivTCP v2
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob(version="2.4.0"))
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    if sorted(component.discovered) != [0, 1]:
+        print("ERROR: expected both endpoints discovered, got {}".format(component.discovered))
+        failed = True
+    if "pause_mode" in base.args:
+        print("ERROR: expected pause_mode handed back (nothing configured), got {}".format(base.args.get("pause_mode")))
+        failed = True
+    if base.args.get("discharge_target_soc") != apps_yaml["discharge_target_soc"]:
+        print("ERROR: expected discharge_target_soc handed back to apps.yaml, got {}".format(base.args.get("discharge_target_soc")))
+        failed = True
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"]:
+        print("ERROR: expected the always-claimed keys to stay claimed, got {}".format(base.args.get("charge_rate")))
+        failed = True
+
+    if not failed:
+        print("PASS: a gated claim is handed back when a late endpoint lacks the capability")
+    return 1 if failed else 0
+
+
+def test_gap_and_tail_slots_are_logged_separately(my_predbat=None):
+    """
+    A gap slot is reported as bound to its own endpoint, a slot past the last endpoint as left alone.
+
+    The two are handled differently by _per_endpoint_values(), and one combined "leaving inverter(s)
+    ... as configured" line misdescribed the gap slots, which get their endpoint's own entities.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
+    base.args["num_inverters"] = 3
+    messages = []
+    component.log = lambda message, quiet=True: messages.append(str(message))
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+
+    gap =[m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
+    tail = [m for m in messages if "leaving inverter(s)" in m]
+    if len(gap) != 1 or "http://dead:6345" not in gap[0] or "inverter(s) 0 keep their own slot" not in gap[0]:
+        print("ERROR: expected one warning naming gap slot 0 and its URL, got {}".format(gap))
+        failed = True
+    if len(tail) != 1 or not tail[0].endswith("leaving inverter(s) 2 as configured"):
+        print("ERROR: expected the tail line to name only inverter 2, got {}".format(tail))
+        failed = True
+
+    if not failed:
+        print("PASS: gap and tail slots are logged separately")
     return 1 if failed else 0
 
 
@@ -2944,6 +3026,8 @@ def test_givtcp_component(my_predbat=None):
         ("rediscover_late", test_rediscovery_picks_up_an_inverter_that_was_down_at_startup, "late inverter adopted on re-probe"),
         ("rediscover_append", test_rediscovery_keeps_inverter_identity_by_endpoint, "re-probe keeps slot n on endpoint n"),
         ("leading_endpoint_down", test_leading_endpoint_down_does_not_shift_the_fleet, "leading endpoint down does not shift the fleet (#5209)"),
+        ("gated_claim_handed_back", test_gated_claim_is_handed_back_when_a_late_endpoint_lacks_the_capability, "gated claim handed back when a late endpoint lacks the capability"),
+        ("gap_and_tail_logged", test_gap_and_tail_slots_are_logged_separately, "gap and tail slots logged separately"),
         ("rediscover_no_shrink", test_rediscovery_never_drops_an_inverter_that_stops_answering, "discovered inverters are never dropped"),
         ("rediscover_cheap", test_rediscovery_uses_a_cheap_single_probe, "re-probe uses a single cheap GET"),
         ("rediscover_complete", test_rediscovery_skipped_once_every_endpoint_is_discovered, "no re-probe when fleet is complete"),
