@@ -24,12 +24,15 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 
-# Dynamic load: how long a car inside one of its charging slots must show "not charging" before its
-# slots, and their cheap rate, are cancelled. car_charging_now reports the car directly, so two
-# minutes (one charger/integration update after the slot starts) is enough. The load test reads a
-# PREDICT_STEP average that the rest of the house also moves, so it needs two full periods.
+# Octopus Intelligent slot confirmation (octopus_intelligent_dynamic): how long a car inside a dispatch must
+# show "not charging" before its slots, and their cheap rate, are cancelled. car_charging_now reports the
+# car directly, so two minutes (one charger/integration update) is enough once the start band has passed;
+# the start band covers the car and charger waking up once Octopus starts the dispatch. The load test reads
+# PREDICT_STEP averages that must each lie inside the dispatch, so its grace is one more full window: two
+# low windows in a row, 10 minutes into a dispatch that starts on the 5 minute grid.
 DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
-DYNAMIC_LOAD_CAR_LOAD_MINUTES = 10
+DYNAMIC_LOAD_CAR_START_MINUTES = 3
+DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one

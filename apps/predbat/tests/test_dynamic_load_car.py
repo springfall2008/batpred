@@ -10,7 +10,7 @@
 """
 Dynamic load car-not-charging detection.
 
-With metric_dynamic_load_adjust on, a car inside one of its charging slots that is not actually
+With octopus_intelligent_dynamic on (the default), an Octopus Intelligent car inside one of its dispatch slots that is not actually
 charging has every future slot cancelled (kwh 0, which releases "Hold for car" and the predicted car
 load) and, for an Octopus Intelligent dispatch, loses the dispatch's cheap rate too - so the house
 battery is not planned around a slot Octopus may bill at the full rate. The cancellation is
@@ -36,6 +36,8 @@ STATE_FIELDS = (
     "battery_rate_max_discharge",
     "load_last_period",
     "metric_dynamic_load_adjust",
+    "octopus_intelligent_dynamic",
+    "dynamic_load_car_run",
     "octopus_slots",
     "io_adjusted",
     "rate_max_base",
@@ -47,6 +49,7 @@ STATE_FIELDS = (
     "dynamic_load_car_sensors",
     "dynamic_load_car_warned",
     "dynamic_load_car_warned_iog_off",
+    "dynamic_load_car_warned_dynamic_off",
     "dynamic_load_car_effective",
     "dynamic_load_car_stripped",
     "load_minutes",
@@ -56,10 +59,10 @@ STATE_FIELDS = (
 
 def _slots():
     """
-    Fresh car slots as the fetch would rebuild them each cycle: one in progress from 14:00 and a
-    later one from 15:00.
+    Fresh car slots as the fetch would rebuild them each cycle: one dispatch in progress from 13:50 - so the
+    3 minute start band has passed by 14:00, where most tests start - and a later one from 15:00.
     """
-    return [{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}, {"start": 900, "end": 930, "kwh": 3.5, "octopus": True}]
+    return [{"start": 830, "end": 870, "kwh": 3.5, "octopus": True}, {"start": 900, "end": 930, "kwh": 3.5, "octopus": True}]
 
 
 def _at(my_predbat, minute, seconds=0):
@@ -99,7 +102,9 @@ def _reset(my_predbat):
     A single car with dynamic load on and no detection state carried over.
     """
     my_predbat.num_cars = 1
-    my_predbat.metric_dynamic_load_adjust = True
+    my_predbat.metric_dynamic_load_adjust = False
+    my_predbat.octopus_intelligent_dynamic = True
+    my_predbat.dynamic_load_car_run = {}
     my_predbat.car_energy_reported_load = False
     my_predbat.car_charging_threshold = 3.0 / 60.0
     my_predbat.battery_rate_max_discharge = 5.0 / 60.0
@@ -217,19 +222,20 @@ def _run(my_predbat):
         failed |= _check("t5 literal ignored", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
 
         # Load method: only when the car is inside the CT clamp, and only after 10 minutes
-        print("Test 6: low load inside the CT clamp cancels after 10 minutes")
+        print("Test 6: low load inside the CT clamp cancels 10 minutes into the dispatch")
         _reset(my_predbat)
         _sensor(my_predbat, None)
         my_predbat.car_energy_reported_load = True
         my_predbat.load_last_period = 0.5
-        _cycle(my_predbat, 840)
-        changed = _cycle(my_predbat, 845)
-        failed |= _check("t6 not at 5 minutes", (not changed) and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
-        changed = _cycle(my_predbat, 850)
-        failed |= _check("t6 cancels at 10 minutes", changed and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        dispatch_1400 = [{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}]
+        _cycle(my_predbat, 840, slots=dispatch_1400)
+        changed = _cycle(my_predbat, 845, slots=dispatch_1400)
+        failed |= _check("t6 not at 5 minutes", (not changed) and _kwh(my_predbat) == [3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        changed = _cycle(my_predbat, 850, slots=dispatch_1400)
+        failed |= _check("t6 cancels at 10 minutes", changed and _kwh(my_predbat) == [0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
         my_predbat.load_last_period = 4.0
-        changed = _cycle(my_predbat, 855)
-        failed |= _check("t6 load back up resumes", changed and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        changed = _cycle(my_predbat, 855, slots=dispatch_1400)
+        failed |= _check("t6 load back up resumes", changed and _kwh(my_predbat) == [3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
 
         # A load_forecast-only install has no load_today history and a hard-coded load_last_period of 0,
         # which is not evidence of anything (#5229 review)
@@ -271,12 +277,12 @@ def _run(my_predbat):
         _cycle(my_predbat, 860)
         failed |= _check("t8 sensor says charging", _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
 
-        print("Test 9: dynamic load off does nothing and clears state")
+        print("Test 9: octopus_intelligent_dynamic off does nothing and clears state")
         _reset(my_predbat)
         _sensor(my_predbat, "off")
         _cycle(my_predbat, 840)
         _cycle(my_predbat, 845)
-        my_predbat.metric_dynamic_load_adjust = False
+        my_predbat.octopus_intelligent_dynamic = False
         changed = _cycle(my_predbat, 850)
         failed |= _check("t9 off", changed and _kwh(my_predbat) == [3.5, 3.5] and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {} kwh {}".format(changed, _kwh(my_predbat)))
 
@@ -347,6 +353,7 @@ def _run(my_predbat):
         except IndexError as exc:
             failed |= _check("t11b no IndexError", False, str(exc))
 
+        failed |= _run_edges(my_predbat)
         failed |= _run_rates(my_predbat)
         failed |= _run_poll(my_predbat)
         failed |= _run_untrusted(my_predbat)
@@ -368,6 +375,96 @@ def _dispatch(my_predbat, start_minute, end_minute):
     start = my_predbat.midnight_utc + timedelta(minutes=start_minute)
     end = my_predbat.midnight_utc + timedelta(minutes=end_minute)
     return {"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": 2.0, "source": "smart-charge", "location": "AT_HOME"}
+
+
+def _run_edges(my_predbat):
+    """
+    Only readings well inside a dispatch count as "not charging": a sensor reading from 3 minutes after the
+    dispatch starts (the car and charger waking up), a 5 minute load window only when it lies entirely
+    inside the dispatch. There is no band at the end - a dispatch is over at its real end.
+    """
+    failed = False
+    print("Test 30: no sensor 'not charging' in the first 3 minutes, cancel at start + 5")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    at_1400 = [{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}]
+    _cycle(my_predbat, 840, 30, slots=at_1400)
+    changed = _cycle(my_predbat, 842, 50, slots=at_1400)
+    failed |= _check("t30 inside the start band", (not changed) and my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    changed = _cycle(my_predbat, 843, 10, slots=at_1400)
+    failed |= _check("t30 clock starts at start + 3", (not changed) and my_predbat.dynamic_load_car_since.get(0) is not None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    changed = _cycle(my_predbat, 845, 10, slots=at_1400)
+    failed |= _check("t30 cancelled at start + 5", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+
+    print("Test 30b: charging counts inside the start band")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    my_predbat.octopus_intelligent_trust_slots = False
+    _cycle(my_predbat, 840, 20, slots=at_1400)
+    _sensor(my_predbat, "on")
+    changed = _cycle(my_predbat, 840, 50, slots=at_1400)
+    failed |= _check("t30b trusted on charging at start + 0:50", changed and not my_predbat.dynamic_load_car_cancelled.get(0, True), "changed {}".format(changed))
+    my_predbat.octopus_intelligent_trust_slots = True
+
+    print("Test 31: back-to-back slots are one dispatch - no start band at the half hour")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    back_to_back = [{"start": 810, "end": 840, "kwh": 3.5, "octopus": True}, {"start": 840, "end": 870, "kwh": 3.5, "octopus": True}]
+    _cycle(my_predbat, 840, 30, slots=back_to_back)
+    changed = _cycle(my_predbat, 842, 40, slots=back_to_back)
+    failed |= _check("t31 cancelled across the join", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+
+    # An in-progress dispatch's start can be advanced to now each cycle, so the band counts from the
+    # earliest start seen for the dispatch (identified by its end, which does not move)
+    print("Test 32: a dispatch whose start drifts to now keeps its first start")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    _cycle(my_predbat, 840, 30, slots=[{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}])
+    _cycle(my_predbat, 843, 30, slots=[{"start": 843, "end": 870, "kwh": 3.0, "octopus": True}])
+    failed |= _check("t32 band counted from 14:00", my_predbat.dynamic_load_car_since.get(0) is not None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    changed = _cycle(my_predbat, 845, 40, slots=[{"start": 845, "end": 870, "kwh": 2.7, "octopus": True}])
+    failed |= _check("t32 cancelled", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+
+    # The dispatch that prompted this: two Octopus entries, 15:55-16:00 and 16:00:00-16:01:22 (6.5 minutes)
+    print("Test 33: a 6.5 minute dispatch is cancelled at start + 5")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    short = [{"start": 955, "end": 960, "kwh": 0.57, "octopus": True}, {"start": 960, "end": 961.37, "kwh": 0.16, "octopus": True}]
+    _cycle(my_predbat, 955, 5, slots=short)
+    _cycle(my_predbat, 958, 10, slots=short)
+    changed = _cycle(my_predbat, 960, 15, slots=short)
+    failed |= _check("t33 cancelled at 16:00:15", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+    changed = _cycle(my_predbat, 961, 30, slots=short)
+    failed |= _check("t33 over at 16:01:30", changed and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {}".format(changed))
+
+    print("Test 34: a load window counts only once it lies inside the dispatch")
+    _reset(my_predbat)
+    _sensor(my_predbat, None)
+    my_predbat.car_energy_reported_load = True
+    my_predbat.load_last_period = 0.5
+    off_grid = [{"start": 843, "end": 890, "kwh": 5.0, "octopus": True}]
+    _cycle(my_predbat, 845, slots=off_grid)
+    failed |= _check("t34 14:40-14:45 window straddles the start", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    # Cycles run a few seconds either side of the 5 minute mark: 14:50:40 then 14:55:05 is 4m25s on the
+    # exact clock but one full window on the grid, and the load grace is timed on the grid
+    changed = _cycle(my_predbat, 850, 40, slots=off_grid)
+    failed |= _check("t34 first full window", (not changed) and my_predbat.dynamic_load_car_since.get(0) is not None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+    changed = _cycle(my_predbat, 855, 5, slots=off_grid)
+    failed |= _check("t34 two windows cancel, on the 5 minute grid", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+
+    print("Test 35: dynamic load off does not stop it, octopus_intelligent_dynamic off does")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    my_predbat.metric_dynamic_load_adjust = False
+    _cycle(my_predbat, 840)
+    changed = _cycle(my_predbat, 845)
+    failed |= _check("t35 works with dynamic load off", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+    _reset(my_predbat)
+    my_predbat.octopus_intelligent_dynamic = False
+    my_predbat.octopus_intelligent_trust_slots = False
+    changed = _cycle(my_predbat, 825)
+    failed |= _check("t35 switch off, trust Off ignored", (not changed) and not my_predbat.dynamic_load_car_cancelled.get(0, False) and _kwh(my_predbat) == [3.5, 3.5], "kwh {}".format(_kwh(my_predbat)))
+    return failed
 
 
 def _run_rates(my_predbat):
@@ -501,10 +598,11 @@ def _run_poll(my_predbat):
     print("Test 15: the poll starts the clock itself when the slot began between cycles")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
-    _cycle(my_predbat, 835)
-    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=840, seconds=20))
+    later = [{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}]
+    _cycle(my_predbat, 835, slots=later)
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=843, seconds=20))
     failed |= _check("t15 clock started", (not due) and my_predbat.dynamic_load_car_since.get(0) is not None, "due {} since {}".format(due, my_predbat.dynamic_load_car_since.get(0)))
-    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=842, seconds=30))
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=845, seconds=30))
     failed |= _check("t15 due", due, "due {}".format(due))
 
     print("Test 16: the poll asks for a replan when a cancelled car starts charging")
@@ -517,21 +615,27 @@ def _run_poll(my_predbat):
     due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=846))
     failed |= _check("t16 resume due", due and my_predbat.update_pending, "due {}".format(due))
 
-    # The poll must judge "in a slot" exactly as the replan's check will - on minutes_now, floored to
-    # PREDICT_STEP - or it keeps asking for a change the replan then declines, every 15 seconds
-    print("Test 18: the poll agrees with the check about a slot ending between 5 minute steps")
+    # "In a slot" is judged on the exact clock, not minutes_now floored to 5 minutes: a dispatch ending off
+    # the 5 minute grid (12:23-12:37) is over at 12:37:10, when the car stops because the dispatch ended.
+    # Judged on the floored 12:35 it still looked in the slot, and the stop was taken as not charging.
+    print("Test 18: a dispatch ending off the 5 minute grid is over at its real end")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
-    odd_slots = [{"start": 840, "end": 872, "kwh": 3.5, "octopus": True}]
-    _cycle(my_predbat, 840, slots=odd_slots)
-    _cycle(my_predbat, 845, slots=odd_slots)
+    odd = [{"start": 743, "end": 757, "kwh": 1.6, "octopus": True}]
+    _cycle(my_predbat, 746, 30, slots=odd)
+    changed = _cycle(my_predbat, 748, 40, slots=odd)
+    failed |= _check("t18 cancelled inside the dispatch", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
     my_predbat.update_pending = False
-    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=872, seconds=10))
-    failed |= _check("t18 no reset before minutes_now leaves the slot", not due, "due {}".format(due))
-    changed = _cycle(my_predbat, 872, 25, slots=odd_slots)
-    failed |= _check("t18 check agrees", (not changed) and my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {}".format(changed))
-    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=875, seconds=5))
-    failed |= _check("t18 reset once minutes_now leaves it", due, "due {}".format(due))
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=757, seconds=10))
+    failed |= _check("t18 poll: over at 12:37:10", due, "due {}".format(due))
+    changed = _cycle(my_predbat, 757, 25, slots=odd)
+    failed |= _check("t18 check agrees it is over", changed and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {}".format(changed))
+
+    print("Test 18a: a dispatch starting off the grid is in the slot from its real start")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    _cycle(my_predbat, 743, 30, slots=odd)
+    failed |= _check("t18a run seen at 12:23:30", my_predbat.dynamic_load_car_run.get(0, {}).get("start") == 743, "run {}".format(my_predbat.dynamic_load_car_run))
 
     # Between cycles the poll reads the previous cycle's slots and its midnight_utc together, so after
     # midnight a new-day slot built at 23:55 (minute 1440 on that axis) is where the poll's minute lands
@@ -541,10 +645,10 @@ def _run_poll(my_predbat):
     midnight_slots = [{"start": 1440, "end": 1470, "kwh": 3.5, "octopus": True}]
     _cycle(my_predbat, 1435, slots=midnight_slots)
     my_predbat.update_pending = False
-    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=1440, seconds=30))
-    failed |= _check("t18b not due at 00:00:30", not due, "due {}".format(due))
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=1443, seconds=30))
+    failed |= _check("t18b not due at 00:03:30", not due, "due {}".format(due))
     failed |= _check("t18b clock started in the new-day slot", my_predbat.dynamic_load_car_since.get(0) is not None, "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
-    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=1442, seconds=40))
+    due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=1445, seconds=40))
     failed |= _check("t18b due after the grace in the new-day slot", due, "due {}".format(due))
 
     # The poll runs every 15 seconds: it must not read car_charging_now through get_arg(index=...),
@@ -568,11 +672,11 @@ def _run_poll(my_predbat):
     warnings = [message for message in logged if "incorrectly setup" in message]
     failed |= _check("t18c no per-poll config warnings", not warnings, "logged {}".format(warnings))
 
-    print("Test 17: the poll does nothing with dynamic load off")
+    print("Test 17: the poll does nothing with octopus_intelligent_dynamic off")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
     _cycle(my_predbat, 840)
-    my_predbat.metric_dynamic_load_adjust = False
+    my_predbat.octopus_intelligent_dynamic = False
     due = my_predbat.dynamic_load_car_poll(now=my_predbat.midnight_utc + timedelta(minutes=845))
     failed |= _check("t17 off", not due, "due {}".format(due))
     return failed
@@ -597,7 +701,7 @@ def _run_untrusted(my_predbat):
         _sensor(my_predbat, "off")
         my_predbat.metric_dynamic_load_adjust = False
         my_predbat.octopus_intelligent_trust_slots = False
-        changed = _cycle(my_predbat, 830)
+        changed = _cycle(my_predbat, 825)
         failed |= _check("t19 untrusted outside a slot", changed and _kwh(my_predbat) == [0, 0] and _cancelled(my_predbat) == [3.5, 3.5], "changed {} kwh {} cancelled {}".format(changed, _kwh(my_predbat), _cancelled(my_predbat)))
         changed = _cycle(my_predbat, 840)
         failed |= _check("t19 still untrusted in a slot while not charging", (not changed) and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
@@ -691,6 +795,22 @@ def _run_untrusted(my_predbat):
 
             # Off only governs slots Octopus Intelligent charging turns into the car plan - with it off,
             # the dispatch rate overlay is untouched, so say so rather than silently not applying (#5229 review)
+            print("Test 27d: trust Off with octopus_intelligent_dynamic off warns that it has no effect")
+            my_predbat.octopus_intelligent_trust_slots = False
+            my_predbat.octopus_intelligent_dynamic = False
+            logged = []
+            saved_log = my_predbat.log
+            my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+            try:
+                my_predbat.dynamic_load_car_warned_dynamic_off = False
+                my_predbat.dynamic_load_car_check_config()
+                my_predbat.dynamic_load_car_check_config()
+            finally:
+                my_predbat.log = saved_log
+            dynamic_off = [message for message in logged if "octopus_intelligent_dynamic" in message]
+            failed |= _check("t27d warned once", len(dynamic_off) == 1, "logged {}".format(logged))
+            my_predbat.octopus_intelligent_dynamic = True
+
             print("Test 27b: trust Off with Octopus Intelligent charging off warns that it has no effect")
             _sensor(my_predbat, "off")
             my_predbat.octopus_intelligent_trust_slots = False
@@ -730,11 +850,11 @@ def _run_kwh_cancelled(my_predbat):
     print("Test 26: a cancelled slot records its kWh in kwh_cancelled")
     _reset(my_predbat)
     _sensor(my_predbat, "off")
-    slots = [{"start": 840, "end": 870, "kwh": 3.5, "octopus": True}, {"start": 900, "end": 930, "kwh": 0.0, "octopus": True}]
+    slots = [{"start": 830, "end": 870, "kwh": 3.5, "octopus": True}, {"start": 900, "end": 930, "kwh": 0.0, "octopus": True}]
     _cycle(my_predbat, 840, slots=slots)
     _cycle(my_predbat, 845, slots=slots)
     failed |= _check("t26 recorded", _kwh(my_predbat) == [0, 0] and _cancelled(my_predbat) == [3.5, None], "kwh {} cancelled {}".format(_kwh(my_predbat), _cancelled(my_predbat)))
-    failed |= _check("t26 helper", my_predbat.car_charge_slot_kwh_cancelled(840, 870) == 3.5 and my_predbat.car_charge_slot_kwh(840, 870) == 0, "cancelled {}".format(my_predbat.car_charge_slot_kwh_cancelled(840, 870)))
+    failed |= _check("t26 helper", my_predbat.car_charge_slot_kwh_cancelled(830, 870) == 3.5 and my_predbat.car_charge_slot_kwh(830, 870) == 0, "cancelled {}".format(my_predbat.car_charge_slot_kwh_cancelled(830, 870)))
     _sensor(my_predbat, "on")
     _cycle(my_predbat, 850, slots=slots)
     failed |= _check("t26 gone once resumed", _cancelled(my_predbat) == [None, None], "cancelled {}".format(_cancelled(my_predbat)))
@@ -743,7 +863,7 @@ def _run_kwh_cancelled(my_predbat):
     # longer counts, and the cancelled kWh alongside so the attributes say why kWh is 0 (#5229 review)
     print("Test 26b: a cancelled slot is published with no cost and its kwh_cancelled")
     _sensor(my_predbat, "off")
-    priced = [{"start": 840, "end": 870, "kwh": 3.5, "average": 7.0, "cost": 24.5, "soc": 10.0, "octopus": True}]
+    priced = [{"start": 830, "end": 870, "kwh": 3.5, "average": 7.0, "cost": 24.5, "soc": 10.0, "octopus": True}]
     _cycle(my_predbat, 840, slots=priced)
     _cycle(my_predbat, 845, slots=priced)
     failed |= _check("t26b cost zeroed", my_predbat.car_charging_slots[0][0].get("cost") == 0, "slot {}".format(my_predbat.car_charging_slots[0][0]))

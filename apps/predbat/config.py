@@ -916,6 +916,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_dynamic",
+        "friendly_name": "Confirm Intelligent slots against the car charging",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_intelligent_trust_slots",
         "friendly_name": "Trust Intelligent slots before the car is seen charging",
         "type": "switch",

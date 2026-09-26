@@ -3243,6 +3243,7 @@ class Fetch:
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
         self.octopus_intelligent_trust_slots = self.get_arg("octopus_intelligent_trust_slots")
+        self.octopus_intelligent_dynamic = self.get_arg("octopus_intelligent_dynamic")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.dynamic_load_car_check_config()
