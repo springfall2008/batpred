@@ -50,11 +50,10 @@
 // ABI 7: export limits are packed as PkExportLimit structs (array-of-structs) rather than those
 // three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
 // because mode is explicit (GH#4914).
-#define PK_ABI_VERSION 7
-// Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
-// loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
-// prediction.py.
-#define PK_PARITY_REVISION 14
+// ABI 8: adds int32_t clipping to PkExportLimit for anti-clipping window splitting and target clamping.
+#define PK_ABI_VERSION 8
+// Parity 15: anti-clipping window splitting in clip_intersecting_charge_windows and discharge clamping in pk_run_one.
+#define PK_PARITY_REVISION 15
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -70,9 +69,10 @@ namespace {
 // simulation reads all three fields of the same window on the same step, so they want to be on the
 // same cache line, and it makes the Python side one buffer to fill instead of three.
 struct PkExportLimit {
-    int32_t mode;   // const.py EXPORT_MODE_TARGET / _FREEZE / _IDLE
-    int32_t target; // SoC percent, meaningful only for EXPORT_MODE_TARGET
-    double power;   // fraction of full export rate, 1.0 = full
+    int32_t mode;     // const.py EXPORT_MODE_TARGET / _FREEZE / _IDLE
+    int32_t target;   // SoC percent, meaningful only for EXPORT_MODE_TARGET
+    double power;     // fraction of full export rate, 1.0 = full
+    int32_t clipping; // 1 if anti-clipping headroom window, 0 otherwise
 };
 
 inline bool pk_export_is_idle(int32_t mode) { return mode == PK_EXPORT_MODE_IDLE; }
@@ -454,15 +454,30 @@ inline double rate_curve(double soc_key, double rate_setting, double rate_max, d
 // arithmetically but remove nothing, so they must not count as clipped.
 //
 // PARITY: any change here must be mirrored in utils.remove_intersecting_windows and vice versa.
+struct ActiveExportWindow {
+    int32_t start;
+    int32_t end;
+    int32_t target;
+    int32_t clipping;
+
+    bool operator<(const ActiveExportWindow &other) const
+    {
+        if (start != other.start) {
+            return start < other.start;
+        }
+        return end < other.end;
+    }
+};
+
 static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit, int32_t n_export, const int32_t *export_start,
-                                             const int32_t *export_end, const PkExportLimit *export_limits)
+                                             const int32_t *export_end, const PkExportLimit *export_limits, double soc_max)
 {
     // Enabled export windows only - the sole candidates for clipping anything - in start order
-    std::vector<std::pair<int32_t, int32_t>> export_active;
+    std::vector<ActiveExportWindow> export_active;
     export_active.reserve(n_export);
     for (int32_t n = 0; n < n_export; n++) {
         if (!pk_export_is_idle(export_limits[n].mode)) {
-            export_active.emplace_back(export_start[n], export_end[n]);
+            export_active.push_back(ActiveExportWindow{export_start[n], export_end[n], export_limits[n].target, export_limits[n].clipping});
         }
     }
     std::sort(export_active.begin(), export_active.end());
@@ -498,9 +513,30 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
 
         bool clipped = false;
         for (const auto &dw : export_active) {
-            const int32_t dstart = dw.first;
-            const int32_t dend = dw.second;
-            if ((dstart < end) && (dend >= start)) {
+            const int32_t dstart = dw.start;
+            const int32_t dend = dw.end;
+            if (dw.clipping != 0) {
+                if ((dstart < end) && (dend > start)) {
+                    // Part 1: Before the anti-clipping window
+                    if (dstart > start && (dstart - start) >= 5) {
+                        out_start.push_back(start);
+                        out_end.push_back(dstart);
+                        out_limit.push_back(limit);
+                    }
+                    // Part 2: Intersecting slice capped to target_kwh
+                    const int32_t inter_start = std::max(start, dstart);
+                    const int32_t inter_end = std::min(end, dend);
+                    if ((inter_end - inter_start) >= 5) {
+                        const double target_kwh = (static_cast<double>(dw.target) / 100.0) * soc_max;
+                        out_start.push_back(inter_start);
+                        out_end.push_back(inter_end);
+                        out_limit.push_back(std::min(limit, target_kwh));
+                    }
+                    // Part 3: Advance pointer for remaining tail
+                    start = std::max(start, dend);
+                    clipped = true;
+                }
+            } else if ((dstart < end) && (dend >= start)) {
                 if (dstart <= start) {
                     if (start != dend) {
                         start = dend;
@@ -689,7 +725,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     std::vector<int32_t> &clipped_start = scratch.clipped_start;
     std::vector<int32_t> &clipped_end = scratch.clipped_end;
     std::vector<double> &clipped_limit = scratch.clipped_limit;
-    clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits);
+    clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits, c->soc_max);
     const int32_t n_charge_clipped = static_cast<int32_t>(clipped_start.size());
 
     build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
@@ -801,10 +837,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const bool export_window_active = export_window_n >= 0;
         // Read the fields once per step rather than per use; target and power are only meaningful
         // for EXPORT_MODE_TARGET and are ignored by the branches that handle the other two modes.
-        const PkExportLimit export_now = export_window_active ? s->export_limits[export_window_n] : PkExportLimit{PK_EXPORT_MODE_IDLE, 0, 1.0};
+        const PkExportLimit export_now = export_window_active ? s->export_limits[export_window_n] : PkExportLimit{PK_EXPORT_MODE_IDLE, 0, 1.0, 0};
         const int32_t export_mode_now = export_now.mode;
         const int32_t export_target_now = export_now.target;
         const double export_power_now = export_now.power;
+        const bool is_anti_clipping = export_now.clipping != 0;
 
         // Find charge limit - prediction.py:609-620
         double charge_limit_n = 0;
@@ -977,18 +1014,15 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_discharge, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
         double discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
-        const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
-        const double battery_to_max = std::max(soc_max - soc, 0.0) * battery_loss;
-
-        // prediction.py:791-793. The floor a target exports down to comes from the target field; the
-        // two modes that carry no target keep the floor the packed sentinels used to produce - 99% for
-        // a freeze (hold SoC) and 100% for an idle window (disabled, so the floor never binds) - so
-        // this stays numerically identical to the packed form for them.
         double discharge_min = reserve;
+        double export_floor_percent = 100.0;
         if (export_window_active) {
-            const double export_floor_percent = export_mode_now == PK_EXPORT_MODE_TARGET ? static_cast<double>(export_target_now) : (export_mode_now == PK_EXPORT_MODE_FREEZE ? 99.0 : 100.0);
+            export_floor_percent = export_mode_now == PK_EXPORT_MODE_TARGET ? static_cast<double>(export_target_now) : (export_mode_now == PK_EXPORT_MODE_FREEZE ? 99.0 : 100.0);
             discharge_min = std::max({soc_max * export_floor_percent / 100.0, reserve, c->best_soc_min});
         }
+        const double limit_max = (is_anti_clipping && !pk_export_is_idle(export_mode_now)) ? (soc_max * export_floor_percent / 100.0) : soc_max;
+        const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
+        const double battery_to_max = std::max(limit_max - soc, 0.0) * battery_loss;
 
         double battery_draw = 0;
         double pv_dc = 0;
@@ -1000,7 +1034,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // a target, a freeze or idle - so the interval is gone rather than preserved. The Python
         // engine already asks the mode here (prediction.py:918), so this also ends a real divergence
         // between the two: the comment claiming bit-parity on this line was already out of date.
-        if (!c->set_export_freeze_only && export_window_active && export_mode_now == PK_EXPORT_MODE_TARGET && (soc > discharge_min)) {
+        if ((!c->set_export_freeze_only || is_anti_clipping) && export_window_active && export_mode_now == PK_EXPORT_MODE_TARGET && (soc > discharge_min)) {
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
@@ -1010,7 +1044,12 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
             discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
-            battery_draw = std::min(discharge_rate_now_curve_step, battery_to_min);
+            if (is_anti_clipping) {
+                const double battery_to_discharge_min = std::max(soc - discharge_min, 0.0) * battery_loss_discharge;
+                battery_draw = std::min(discharge_rate_now_curve_step, battery_to_discharge_min);
+            } else {
+                battery_draw = std::min(discharge_rate_now_curve_step, battery_to_min);
+            }
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
 
@@ -1096,7 +1135,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
-            battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
+            if (is_anti_clipping) {
+                battery_draw = -std::max({std::min({charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now), std::max(limit_max - soc, 0.0)}), 0.0, -battery_to_max});
+            } else {
+                battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
+            }
 
             if (inverter_hybrid) {
                 pv_dc = std::min(std::fabs(battery_draw), pv_now);
@@ -1122,7 +1165,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // charge rate to 0 (or pauses charging) and otherwise leaves the inverter in
             // Demand/ECO mode, never touching the discharge rate. So it shares this flow with the
             // charge rate zeroed rather than being modelled by a parallel branch - see #4676.
-            const bool freeze_export = c->set_export_freeze && export_window_active && !pk_export_is_idle(export_mode_now) && (pk_export_is_freeze(export_mode_now) || c->set_export_freeze_only);
+            const bool freeze_export = c->set_export_freeze && export_window_active && !pk_export_is_idle(export_mode_now) && (pk_export_is_freeze(export_mode_now) || c->set_export_freeze_only) && !is_anti_clipping;
 
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
