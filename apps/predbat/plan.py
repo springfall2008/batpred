@@ -5584,10 +5584,49 @@ class Plan:
             final_carbon_g,
         )
 
+    def iboost_rate_okay(self, import_rate, export_rate, minute, import_threshold=None):
+        """
+        Shared iBoost rate-eligibility rules: the import rate against the given threshold
+        (iboost_rate_threshold when none is given), the export rate against
+        iboost_rate_threshold_export, and both gas-rate comparisons. Used by the legacy smart
+        planner, the forecast planner and the forecast fill pass so a rule change applies to
+        all of them.
+        """
+        if import_threshold is None:
+            import_threshold = self.iboost_rate_threshold
+        if import_rate > import_threshold:
+            return False
+        if export_rate > self.iboost_rate_threshold_export:
+            return False
+        if self.iboost_gas and self.rate_gas:
+            if import_rate > self.rate_gas.get(minute, 99) * self.iboost_gas_scale:
+                return False
+        if self.iboost_gas_export and self.rate_gas:
+            if export_rate > self.rate_gas.get(minute, 99) * self.iboost_gas_scale:
+                return False
+        return True
+
+    def iboost_plan_total_days(self):
+        """
+        Number of calendar days covered by the planning horizon, shared by the iBoost planners
+        for their per-day iboost_max_energy cap ledgers
+        """
+        return int((self.forecast_minutes + self.minutes_now + 24 * 60 - 1) / (24 * 60))
+
+    def quantise_slot_minutes(self, minutes, max_minutes):
+        """
+        Round a slot length up to the 5-minute control grid, capped at max_minutes; the shared
+        quantisation used by the iBoost and car charging slot planners
+        """
+        return int(min(round((minutes / 5) + 0.5, 0) * 5, max_minutes))
+
     def plan_iboost_smart(self):
         """
         Smart iboost planning
         """
+        if self.iboost_forecast:
+            return self.plan_iboost_forecast()
+
         plan = []
         iboost_today = self.iboost_today
         iboost_max = self.iboost_max_energy
@@ -5618,7 +5657,7 @@ class Plan:
         else:
             price_sorted = [n for n in range(len(low_rates))]
 
-        total_days = int((self.forecast_minutes + self.minutes_now + 24 * 60 - 1) / (24 * 60))
+        total_days = self.iboost_plan_total_days()
         iboost_soc = [0 for n in range(total_days)]
         iboost_soc[0] = iboost_today
 
@@ -5641,30 +5680,23 @@ class Plan:
                 if slot_start < slot_end:
                     rate_okay = True
 
-                    for start in range(slot_start, slot_end, self.plan_interval_minutes):
-                        end = min(start + self.plan_interval_minutes, slot_end)
+                    # Book on the plan-interval grid: when minutes_now is off-grid the first
+                    # sub-slot is clipped to it, but keying and stepping stay on the grid so
+                    # overlapping windows can never emit overlapping slots
+                    grid_start = int(slot_start / self.plan_interval_minutes) * self.plan_interval_minutes
+                    for start_grid in range(grid_start, slot_end, self.plan_interval_minutes):
+                        start = max(start_grid, slot_start)
+                        end = min(start_grid + self.plan_interval_minutes, slot_end)
+                        if start >= end:
+                            continue
 
                         # Avoid duplicate slots
-                        if minute in used_slots:
+                        if start_grid in used_slots:
                             rate_okay = False
 
-                        # Boost on import/export rate
-                        if price > self.iboost_rate_threshold:
+                        # Boost on import/export rate thresholds and the gas comparisons
+                        if not self.iboost_rate_okay(price, export_price, start):
                             rate_okay = False
-                        if export_price > self.iboost_rate_threshold_export:
-                            rate_okay = False
-
-                        # Boost on gas rate vs import price
-                        if self.iboost_gas and self.rate_gas:
-                            gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
-                            if price > gas_rate:
-                                rate_okay = False
-
-                        # Boost on gas rate vs export price
-                        if self.iboost_gas_export and self.rate_gas:
-                            gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
-                            if export_price > gas_rate:
-                                rate_okay = False
 
                         if not rate_okay:
                             continue
@@ -5677,7 +5709,7 @@ class Plan:
                         # Scale down the number of minutes if the value exceeds the max
                         if kwh > iboost_left:
                             percent = iboost_left / kwh
-                            length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
+                            length = self.quantise_slot_minutes(length * percent, end - start)
                             end = start + length
                             hours = length / 60
                             kwh = min(iboost_power * hours, iboost_left)
@@ -5690,10 +5722,260 @@ class Plan:
                             new_slot["average"] = window["average"]
                             new_slot["cost"] = dp2(new_slot["average"] * kwh)
                             plan.append(new_slot)
-                            used_slots[start] = True
+                            used_slots[start_grid] = True
 
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)
+        return plan
+
+    def iboost_tank_trajectory(self, stored_start, capacity, demand, boost):
+        """
+        Model the hot water tank level across the plan intervals.
+
+        The tank is a charge-only store: each interval first applies any planned boost
+        (clamped to the capacity) and then serves its demand (clamped so the level cannot go
+        negative), so heating within an interval can serve that same interval's draw - the
+        element runs while the water is drawn. Returns (levels_boosted, levels_after) where
+        levels_boosted[i] is the stored energy after the boost of interval i but before its
+        draw, and levels_after[i] is the level once the draw has been taken.
+        """
+        levels_boosted = []
+        levels_after = []
+        level = stored_start
+        for index in range(len(demand)):
+            level = min(level + boost[index], capacity)
+            levels_boosted.append(level)
+            level = max(level - demand[index], 0.0)
+            levels_after.append(level)
+        return levels_boosted, levels_after
+
+    def plan_iboost_forecast(self):
+        """
+        Plan iBoost slots from the hot water demand forecast and the tank state of charge.
+
+        The tank is modelled as a charge-only store of iboost_tank_capacity kWh holding
+        iboost_tank_soc percent of that now (assumed empty when no SoC sensor is configured).
+        The plan walks the intervals in time order and, whenever a draw would take the tank
+        below iboost_tank_reserve, books the cheapest eligible interval at or before the draw
+        (heating within an interval serves that interval's own draw) until the draw is
+        covered, respecting the boost element power, the per-day iboost_max_energy cap, the
+        rate and gas thresholds and the tank capacity. Uncovered demand is logged as a warning
+        and planning continues. Slots are emitted in the same structure as the legacy smart
+        plan (start, end, kwh, average, cost), priced at each slot's own import rate.
+        """
+        interval = self.plan_interval_minutes
+        iboost_max = self.iboost_max_energy
+        interval_energy = self.iboost_max_power * interval
+        capacity = max(self.iboost_tank_capacity, 0.0)
+        reserve = min(max(self.iboost_tank_reserve, 0.0), capacity)
+
+        if interval_energy <= 0:
+            self.log("Warn: iBoost forecast plan cannot boost as iboost_max_power is zero")
+            return []
+
+        # Current stored energy: from the tank SoC sensor when available, otherwise assume the
+        # tank is empty so the whole forecast is provisioned
+        if self.iboost_tank_soc_percent is not None:
+            stored_start = min(max(self.iboost_tank_soc_percent / 100.0 * capacity, 0.0), capacity)
+        else:
+            stored_start = 0.0
+
+        start_minute = int(self.minutes_now / interval) * interval
+        interval_starts = list(range(start_minute, start_minute + self.forecast_minutes, interval))
+        num_intervals = len(interval_starts)
+        demand = [self.iboost_forecast.get(minute, 0.0) for minute in interval_starts]
+        boost = [0.0 for _ in range(num_intervals)]
+
+        # The first interval is usually partially elapsed (the plan is rebuilt every few minutes):
+        # only its remainder can be boosted, mirroring the legacy planner's clamp to minutes_now
+        interval_max_energy = [interval_energy for _ in range(num_intervals)]
+        if num_intervals:
+            interval_max_energy[0] = self.iboost_max_power * max(interval_starts[0] + interval - self.minutes_now, 0)
+
+        # Per-interval import/export rates and boost eligibility, sharing the legacy smart
+        # plan's rate rules. The current interval is read at minutes_now rather than at its
+        # start so a rate step earlier in the interval cannot mis-gate or mis-price the
+        # remainder that is actually bookable.
+        import_rates = []
+        export_rates = []
+        eligible = []
+        for minute in interval_starts:
+            rate_minute = max(minute, self.minutes_now)
+            import_rate = self.rate_import.get(rate_minute, self.rate_min)
+            export_rate = self.rate_export.get(rate_minute, 0)
+            import_rates.append(import_rate)
+            export_rates.append(export_rate)
+            eligible.append(self.iboost_rate_okay(import_rate, export_rate, rate_minute))
+
+        total_days = self.iboost_plan_total_days()
+
+        if (sum(demand) <= 0) and any(value > 0 for value in self.iboost_forecast.values()):
+            horizon_end = start_minute + self.forecast_minutes
+            if all((minute < start_minute) or (minute >= horizon_end) for minute, value in self.iboost_forecast.items() if value > 0):
+                self.log("iBoost demand forecast has no demand within the planning horizon, nothing to plan")
+            else:
+                self.log("Warn: iBoost demand forecast does not align with the current plan grid ({} kWh forecast but none lands on it), no demand will be planned".format(dp2(sum(self.iboost_forecast.values()))))
+
+        self.log("Create iBoost forecast plan, demand {} kWh, stored {} kWh, capacity {} kWh, reserve {} kWh, max {} kWh/day, power {} kW".format(dp2(sum(demand)), dp2(stored_start), capacity, reserve, iboost_max, dp2(self.iboost_max_power * 60)))
+
+        # Earliest-deadline, cheapest-first booking: cover each draw from the cheapest eligible
+        # interval at or before it, preferring intervals adjacent to already-booked ones on
+        # price ties so boosts consolidate into longer runs. The day-cap ledger is maintained
+        # incrementally and each dose does one fused pass building the trajectory to the target
+        # and the running maximum needed for the capacity headroom checks.
+        uncovered_kwh = 0.0
+        day_usage = self.iboost_forecast_day_usage(interval_starts, boost, total_days)
+        for target in range(num_intervals):
+            if demand[target] <= 0:
+                continue
+            while True:
+                level = stored_start
+                levels_boosted = []
+                level_max_to_target = [0.0 for _ in range(target + 1)]
+                for slot_n in range(target + 1):
+                    level = min(level + boost[slot_n], capacity)
+                    levels_boosted.append(level)
+                    level = max(level - demand[slot_n], 0.0)
+                deficit = reserve + demand[target] - levels_boosted[target]
+                if deficit <= 0.001:
+                    break
+                running_max = 0.0
+                for slot_n in range(target, -1, -1):
+                    running_max = max(running_max, levels_boosted[slot_n])
+                    level_max_to_target[slot_n] = running_max
+
+                best = None
+                best_key = None
+                best_room = 0.0
+                for slot_n in range(target + 1):
+                    if not eligible[slot_n]:
+                        continue
+                    power_room = interval_max_energy[slot_n] - boost[slot_n]
+                    if power_room <= 0.001:
+                        continue
+                    day_room = iboost_max - day_usage[interval_starts[slot_n] // (24 * 60)]
+                    if day_room <= 0.001:
+                        continue
+                    capacity_room = capacity - level_max_to_target[slot_n]
+                    if capacity_room <= 0.001:
+                        continue
+                    adjacent = (slot_n > 0 and boost[slot_n - 1] > 0) or ((slot_n + 1 < num_intervals) and boost[slot_n + 1] > 0)
+                    key = (import_rates[slot_n], 0 if adjacent else 1, interval_starts[slot_n])
+                    if (best_key is None) or (key < best_key):
+                        best = slot_n
+                        best_key = key
+                        best_room = min(power_room, day_room, capacity_room)
+
+                if best is None:
+                    self.log("Warn: iBoost forecast plan cannot cover {} kWh of hot water demand at minute {}, no eligible slot".format(dp2(deficit), interval_starts[target]))
+                    uncovered_kwh += deficit
+                    break
+
+                amount = min(deficit, best_room)
+                boost[best] += amount
+                day = interval_starts[best] // (24 * 60)
+                day_usage[day] = dp3(day_usage[day] + amount)
+
+        # Optional fill pass: top the tank up to its capacity in any interval whose import rate
+        # is at or below the fill threshold (default -99 disables this). The fill has its own
+        # import-rate rule so a tighter iboost_rate_threshold cannot block it, but the export
+        # and gas guards still apply. Fills stay within the fetched forecast horizon so a
+        # longer planning horizon (tariff compare raises forecast_minutes after the fetch)
+        # cannot book fills the live plan would never see. After each fill the trajectory is
+        # re-verified and later planned boosts the fill energy has made redundant are trimmed
+        # straight away, so the level stays at or below the capacity everywhere and the day cap
+        # seen by later fill slots only counts energy that survives.
+        fill_threshold = self.iboost_fill_rate_threshold
+        if fill_threshold > -99.0:
+            forecast_extent = self.iboost_forecast_extent if self.iboost_forecast_extent is not None else max(self.iboost_forecast.keys()) + interval
+            levels_boosted, levels_after = self.iboost_tank_trajectory(stored_start, capacity, demand, boost)
+            day_usage = self.iboost_forecast_day_usage(interval_starts, boost, total_days)
+            for slot_n in range(num_intervals):
+                if interval_starts[slot_n] >= forecast_extent:
+                    break
+                rate_minute = max(interval_starts[slot_n], self.minutes_now)
+                if not self.iboost_rate_okay(import_rates[slot_n], export_rates[slot_n], rate_minute, import_threshold=fill_threshold):
+                    continue
+                day_room = iboost_max - day_usage[interval_starts[slot_n] // (24 * 60)]
+                amount = min(interval_max_energy[slot_n] - boost[slot_n], day_room, capacity - levels_boosted[slot_n])
+                if amount <= 0.001:
+                    continue
+                boost[slot_n] += amount
+                self.iboost_forecast_trim(demand, boost, stored_start, capacity)
+                levels_boosted, levels_after = self.iboost_tank_trajectory(stored_start, capacity, demand, boost)
+                day_usage = self.iboost_forecast_day_usage(interval_starts, boost, total_days)
+
+        return self.plan_iboost_forecast_slots(interval_starts, boost, import_rates, stored_start, capacity, demand, uncovered_kwh)
+
+    def iboost_forecast_day_usage(self, interval_starts, boost, total_days):
+        """
+        Sum the planned boost energy per calendar day, with today's already-consumed iBoost
+        energy (iboost_today) included in day 0, for checking the per-day iboost_max_energy cap
+        """
+        day_usage = [0.0 for _ in range(total_days)]
+        day_usage[0] = self.iboost_today
+        for slot_n, start in enumerate(interval_starts):
+            if boost[slot_n]:
+                day = start // (24 * 60)
+                day_usage[day] = dp3(day_usage[day] + boost[slot_n])
+        return day_usage
+
+    def iboost_forecast_trim(self, demand, boost, stored_start, capacity):
+        """
+        Trim planned boosts (in place) that would take the modelled tank level above the
+        capacity, walking the intervals in time order with the boost-before-draw ordering the
+        trajectory model uses. Earlier energy carries forward and replaces what is trimmed, so
+        the level trajectory is unchanged by the trim.
+        """
+        level = stored_start
+        for slot_n in range(len(boost)):
+            if level + boost[slot_n] > capacity:
+                boost[slot_n] = max(capacity - level, 0.0)
+            level = min(level + boost[slot_n], capacity)
+            level = max(level - demand[slot_n], 0.0)
+
+    def plan_iboost_forecast_slots(self, interval_starts, boost, import_rates, stored_start, capacity, demand, uncovered_kwh):
+        """
+        Convert the per-interval boost energies from the forecast planner into iBoost plan slots.
+
+        Slots use the same structure as the legacy smart plan (start, end, kwh, average, cost)
+        with each slot priced at its own import rate and its length trimmed to the boost energy
+        at full element power (in 5-minute steps), so the power implied by kwh over the slot
+        length never exceeds the element power. The current interval's slot starts at
+        minutes_now, never in the past. Residuals below one 5-minute step of element energy
+        are dropped rather than floored up to a 5-minute slot, so the diverter (which runs at
+        full power for the slot) never delivers far more than the plan published. Also logs
+        the plan summary and, when debug is enabled, the modelled tank level trajectory.
+        """
+        plan = []
+        five_minute_energy = self.iboost_max_power * 5
+        for index, start in enumerate(interval_starts):
+            kwh = boost[index]
+            if kwh < max(five_minute_energy - 0.001, 0.001):
+                continue
+            interval = self.plan_interval_minutes
+            slot_start = max(start, self.minutes_now)
+            available = start + interval - slot_start
+            length = min(max(self.quantise_slot_minutes(kwh / self.iboost_max_power, available), 5), available)
+            new_slot = {}
+            new_slot["start"] = slot_start
+            new_slot["end"] = slot_start + length
+            new_slot["kwh"] = dp3(kwh)
+            new_slot["average"] = import_rates[index]
+            new_slot["cost"] = dp2(import_rates[index] * kwh)
+            plan.append(new_slot)
+
+        plan = self.sort_window_by_time(plan)
+
+        levels_boosted, levels_after = self.iboost_tank_trajectory(stored_start, capacity, demand, boost)
+        if self.debug_enable:
+            trajectory = [[interval_starts[index], dp3(levels_boosted[index]), dp3(levels_after[index])] for index in range(len(interval_starts))]
+            self.log("Debug: iBoost forecast tank level trajectory (minute, post-boost, post-draw): {}".format(trajectory))
+        self.log(
+            "iBoost forecast plan booked {} kWh costing {} over {} slots, uncovered demand {} kWh, final tank level {} kWh".format(
+                dp2(sum(boost)), dp2(sum(slot["cost"] for slot in plan)), len(plan), dp2(uncovered_kwh), dp2(levels_after[-1]) if levels_after else 0
+            )
+        )
         return plan
 
     def plan_car_charging(self, car_n, low_rates):
@@ -5758,7 +6040,7 @@ class Plan:
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
                 percent = kwh_left / kwh_add
-                length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
+                length = self.quantise_slot_minutes(length * percent, end - start)
                 end = start + length
                 hours = length / 60
                 kwh = self.car_charging_rate[car_n] * hours

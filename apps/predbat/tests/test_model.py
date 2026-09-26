@@ -2233,19 +2233,24 @@ def run_model_tests(my_predbat, prediction_kernel=False):
     )
     # iboost_smart_min_length (60) is greater than plan_interval_minutes (30), so each window spans two
     # sub-slots and its true average is import_rate * 1.5 (GH#4817). The totals below are the actual
-    # achieved metric/iboost from the fixed averaging, not a hand-derived formula.
+    # achieved metric/iboost from the fixed averaging and the fixed duplicate-slot guard: the old
+    # guard tested a stale loop variable, so overlapping windows double-booked slot starts - the plan
+    # itself was fully booked (120/110 kWh) but in_iboost_slot() only credits the first slot covering
+    # a minute, so the duplicates' energy was dropped from the prediction and only 65/60 kWh was
+    # achieved. With the guard fixed the plan is duplicate-free and the full booking is delivered
+    # (iboost_smart2 now matches iboost_smart1's 120 kWh).
     failed |= simple_scenario(
         "iboost_smart2",
         my_predbat,
         0,
         0,
-        assert_final_metric=950,
+        assert_final_metric=1800,
         assert_final_soc=0,
         with_battery=False,
         iboost_enable=True,
         iboost_charging=False,
         iboost_smart=True,
-        assert_final_iboost=65,
+        assert_final_iboost=120,
         iboost_max_energy=60,
         iboost_smart_min_length=60,
         assert_iboost_running=True,
@@ -2256,13 +2261,13 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         my_predbat,
         0,
         0,
-        assert_final_metric=900,
+        assert_final_metric=1600,
         assert_final_soc=0,
         with_battery=False,
         iboost_enable=True,
         iboost_charging=False,
         iboost_smart=True,
-        assert_final_iboost=60,
+        assert_final_iboost=110,
         iboost_max_energy=55,
         iboost_smart_min_length=60,
         assert_iboost_running=True,
