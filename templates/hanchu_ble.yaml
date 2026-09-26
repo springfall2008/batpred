@@ -1,0 +1,175 @@
+# Predbat config for the Hanchu iESS, via the hanchu-ess-ble HACS
+# integration (https://github.com/upton68/hanchu-ess-ble) — local Bluetooth
+# control, no dependency on the Hanchu cloud.
+#
+# Copy this over your apps.yaml and:
+#   1. Install the "Hanchu ESS BLE" integration via HACS — see its README
+#      for Bluetooth proxy hardware requirements.
+#   2. Create the two helpers (see inverter-setup docs).
+#   3. Create the bridge script (see inverter-setup docs).
+#   4. Create the derived daily-energy helpers for load/PV/import/export —
+#      not natively available over BLE (see inverter-setup docs).
+#   5. Replace YOURDEVICE throughout with your device's entity slug as it
+#      appears in your HA entity IDs (e.g. hc_l110ym56g0915).
+#   6. Adjust inverter_limit, inverter_limit_charge, inverter_limit_discharge,
+#      inverter_limit_export and battery_rate_max to match your hardware.
+#   7. If running this as a second, standalone Predbat instance alongside an
+#      existing cloud-based one (rather than as a Home Assistant add-on),
+#      uncomment and set ha_url/ha_key below, and give this instance its own
+#      unique `prefix` so its entities don't collide with the other instance.
+#   8. Delete the template: True line below once you have configured this file.
+#
+# Note: The 5000W limits are set to the author's hardware — adjust these
+# to match your own inverter and battery rated capacity.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat_ble
+  # Only needed when running Predbat standalone (e.g. in its own Docker
+  # container) rather than as a Home Assistant add-on — uncomment and set
+  # to your HA instance's URL and a Long-Lived Access Token created under
+  # your HA profile's Security settings.
+  # ha_url: 'http://YOUR_HA_IP:8123'
+  # ha_key: 'YOUR_LONG_LIVED_ACCESS_TOKEN'
+  timezone: Europe/London
+  currency_symbols:
+    - '£'
+    - 'p'
+  threads: auto
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+  load_filter_threshold: 30
+  # ─── Hanchu iESS BLE daily energy sensors ─────────────────────────────────
+  # None of these are natively available over BLE (unlike the cloud
+  # integration) — all four are derived using HA's built-in Riemann sum
+  # (Integral) + Utility Meter helpers on the corresponding live power
+  # sensor. See "Step 4 — Create the daily energy helpers" in the
+  # inverter-setup docs for the full worked example (Grid Import/Export);
+  # replicate the same pattern for Load and PV.
+  load_today:
+    - sensor.YOURDEVICE_load_power_today
+  pv_today:
+    - sensor.YOURDEVICE_pv_power_today
+  export_today:
+    - sensor.hanchu_ble_grid_export_today
+  import_today:
+    - sensor.hanchu_ble_grid_import_today
+  # ─── Hanchu iESS BLE inverter definition ──────────────────────────────────
+  num_inverters: 1
+  inverter_type: "HC"
+  inverter:
+    name: "Hanchu iESS BLE"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "power"
+    charge_control_immediate: true
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    has_target_soc: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    soc_units: "%"
+    num_load_entities: 1
+    has_ge_inverter_mode: false
+    has_fox_inverter_mode: false
+    time_button_press: false
+    clock_time_format: "%d-%m-%y %H:%M:%S"
+    write_and_poll_sleep: 2
+    has_time_window: false
+    support_charge_freeze: false
+    support_discharge_freeze: false
+  # ─── Hanchu iESS BLE control surface (write) ──────────────────────────────
+  # All four hooks call the same queued script, passing mode_action so it
+  # knows which state to apply. See inverter-setup docs for the full script.
+  charge_start_service:
+    - service: script.hanchu_ble_set_state_queued
+      data:
+        mode_action: charge_start
+  charge_stop_service:
+    - service: script.hanchu_ble_set_state_queued
+      data:
+        mode_action: charge_stop
+  discharge_start_service:
+    - service: script.hanchu_ble_set_state_queued
+      data:
+        mode_action: discharge_start
+  discharge_stop_service:
+    - service: script.hanchu_ble_set_state_queued
+      data:
+        mode_action: discharge_stop
+  # ─── Hanchu iESS BLE sensor entities (read) ───────────────────────────────
+  charge_rate:
+    - number.YOURDEVICE_charge_power_limit
+  discharge_rate:
+    - number.YOURDEVICE_discharge_power_limit
+  battery_power:
+    - sensor.YOURDEVICE_battery_power
+  battery_power_invert:
+    - true
+  pv_power:
+    - sensor.YOURDEVICE_p237
+  load_power:
+    - sensor.YOURDEVICE_load_power
+  load_power_invert:
+    - false
+  grid_power:
+    - sensor.YOURDEVICE_p644
+  grid_power_invert:
+    - true
+  soc_percent:
+    - sensor.YOURDEVICE_battery_soc
+  soc_max:
+    - sensor.YOURDEVICE_p088  # Already reports capacity in kWh for this integration — no conversion needed
+  battery_min_soc:
+    - 10
+  battery_voltage:
+    - sensor.YOURDEVICE_battery_voltage
+  # ─── Hanchu iESS BLE battery physical specs ───────────────────────────────
+  # Adjust all limits to match your inverter and battery rated capacity in watts
+  inverter_battery_rate_min:
+    - 500
+  inverter_limit:
+    - 5000
+  inverter_limit_charge:
+    - 5000
+  inverter_limit_discharge:
+    - 5000
+  inverter_limit_export:
+    - 5000
+  battery_rate_max:
+    - 5000
+  # Charge/discharge power curves based on observed Hanchu iESS behaviour
+  battery_charge_power_curve:
+    97: 0.5
+    98: 0.2
+    99: 0.1
+  battery_discharge_power_curve:
+    4: 1.0
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  inverter_can_charge_during_export: false  # Single inverter setup
+  clock_skew: 0
+  balance_inverters_seconds: 0
+  # ─── Forecast and history ─────────────────────────────────────────────────
+  days_previous:
+    - 7
+  days_previous_weight:
+    - 1
+  forecast_hours: 48
+  load_ml_enable: true
+  # ─── Scaling ──────────────────────────────────────────────────────────────
+  battery_scaling:
+    - 1.0
+  import_export_scaling: 1.0
+  # ─── Optional extras ───────────────────────────────────────────────────────
+  # This template covers only the Hanchu BLE-specific configuration. For
+  # solar forecasting (Solcast), car charging, Octopus Energy rates/slots,
+  # temperature-based load prediction, or export triggers, see the general
+  # Predbat apps.yaml documentation and add the relevant sections yourself:
+  # https://springfall2008.github.io/batpred/apps-yaml/
