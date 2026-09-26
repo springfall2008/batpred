@@ -3699,6 +3699,15 @@ When set to "current", Predbat will use the inverter sensors configured as  **ti
 Additionally if you are using "current" control for your inverter you must set **battery_voltage** in `apps.yaml` to your nominal maximum battery voltage (NB: not the current battery voltage)
 as Predbat will use this to convert its output commands from watts to amps for the inverter.
 
+### has_charge_rate_entity
+
+Only used when **output_charge_control** is "power". When True (the default), Predbat creates its own **charge_rate** and **discharge_rate** sensors for an inverter that has none configured and no integration (such as GivTCP or a cloud component) supplying them, so the planned rate has somewhere to be stored.
+This is what lets a script-driven inverter receive the planned rate as `{power}` in **charge_start_service** / **discharge_start_service**; without it the service is always sent **battery_rate_max**.
+A sensor you have configured yourself is never replaced, and no sensor is created for an inverter whose **charge_rate_percent** / **discharge_rate_percent** is configured. A plain number inside a **charge_rate** list is not a sensor and is replaced; to fix the rate, give a single value rather than a list.
+With more than one inverter, if an integration controls one of them but its automatic configuration is turned off, no sensor is created for any of them - set **charge_rate** / **discharge_rate** in `apps.yaml` for the script-driven inverter yourself.
+
+Set to False to turn this off for an inverter type.
+
 ### charge_control_immediate
 
 When True, the inverter uses **timed_charge_current** and **timed_discharge_current** in `apps.yaml` to control charging and discharging by setting current levels directly, instead of following a time-based plan.
