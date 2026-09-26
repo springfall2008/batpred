@@ -239,6 +239,34 @@ def run_test_plan_json_rate_adjust(my_predbat):
     my_predbat.car_charging_slots[1] = []
     my_predbat.num_cars = saved_num_cars
 
+    # The first row covers now to the end of its plan interval - its kWh and times already start at now, so
+    # its rates must too. Reading the rate at the aligned interval start showed a price the plan no longer
+    # uses, e.g. a cancelled Intelligent dispatch still at 6.90 after the minutes from now went to 30.26.
+    print("Test the first plan row shows the rate from now, not from the start of its half hour")
+    saved_minutes_now = my_predbat.minutes_now
+    saved_rate_import = my_predbat.rate_import
+    saved_rate_export = my_predbat.rate_export
+    saved_car_slots = my_predbat.car_charging_slots[0]
+    try:
+        aligned = (saved_minutes_now // my_predbat.plan_interval_minutes) * my_predbat.plan_interval_minutes
+        my_predbat.minutes_now = aligned + 10
+        my_predbat.car_charging_slots[0] = []
+        my_predbat.rate_import = {minute: (6.9 if minute < aligned + 10 else 30.26) for minute in range(aligned - 60, aligned + 48 * 60)}
+        my_predbat.rate_export = {minute: (5.0 if minute < aligned + 10 else 12.0) for minute in range(aligned - 60, aligned + 48 * 60)}
+        html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+        first = raw_plan["rows"][0] if raw_plan.get("rows") else {}
+        if first.get("import_rate") != 30.26 or first.get("export_rate") != 12.0:
+            print("ERROR: Expected the first row's rates from now (30.26 / 12.0), got {} / {}".format(first.get("import_rate"), first.get("export_rate")))
+            failed = True
+        if first.get("slot_minute") != aligned:
+            print("ERROR: slot_minute must stay the aligned interval start {} for the override system, got {}".format(aligned, first.get("slot_minute")))
+            failed = True
+    finally:
+        my_predbat.minutes_now = saved_minutes_now
+        my_predbat.rate_import = saved_rate_import
+        my_predbat.rate_export = saved_rate_export
+        my_predbat.car_charging_slots[0] = saved_car_slots
+
     # Clean up
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []
