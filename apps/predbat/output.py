@@ -1181,8 +1181,11 @@ class Output:
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
 
             rate_start = minute_timestamp
-            rate_value_import = dp2(self.rate_import.get(minute, 0))
-            rate_value_export = dp2(self.rate_export.get(minute, 0))
+            # From minute_start, not the aligned interval start: the first row covers now to the end of its
+            # interval, like its times and kWh, and a rate that changed earlier in the interval (a cancelled
+            # Intelligent dispatch, say) no longer applies to it. Every later row starts on its interval anyway.
+            rate_value_import = dp2(self.rate_import.get(minute_start, 0))
+            rate_value_export = dp2(self.rate_export.get(minute_start, 0))
             # Default to a single value; overridden to a "{min}-{max}" range below when this row
             # turns out to be the first of a merged/rowspan cell whose minutes span more than one
             # distinct rate - only the first row of a span is ever actually rendered as a tooltip.
@@ -1231,7 +1234,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
-                    rate_text_import = self.rate_range_text(self.rate_import, minute, charge_end_minute, rate_value_import)
+                    rate_text_import = self.rate_range_text(self.rate_import, minute_start, charge_end_minute, rate_value_import)
                 else:
                     rowspan = 0
 
@@ -1243,7 +1246,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
-                    rate_text_export = self.rate_range_text(self.rate_export, minute, export_end_minute, rate_value_export)
+                    rate_text_export = self.rate_range_text(self.rate_export, minute_start, export_end_minute, rate_value_export)
                 else:
                     rowspan = 0
 
@@ -1553,7 +1556,7 @@ class Output:
                 soc_sym = "&#11015; " + soc_sym
 
             # Import and export rates -> to string
-            adjust_type = self.rate_import_replicated.get(minute, None)
+            adjust_type = self.rate_import_replicated.get(minute_start, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
                 rate_str_import = "<i>%02.02f %s</i>" % (rate_value_import, adjust_symbol)
@@ -1566,7 +1569,7 @@ class Output:
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
 
-            adjust_type = self.rate_export_replicated.get(minute, None)
+            adjust_type = self.rate_export_replicated.get(minute_start, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
                 rate_str_export = "<i>%02.02f %s</i>" % (rate_value_export, adjust_symbol)

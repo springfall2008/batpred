@@ -189,12 +189,7 @@ This setting will not impact the real calculated costs and is only used for plan
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
-If your car is charged by Octopus Intelligent and the current time is inside one of its charging slots but the car is not charging, Predbat cancels that slot and every later one, so the battery is no longer held for the car and the plan can include potential export again.
-The dispatch's cheap rate is withdrawn too, as Octopus may bill a dispatch the car does not use at the full rate.
-Slots Predbat plans itself (Predbat-led charging) are never cancelled, as Predbat is the one deciding when the car charges.
-Whether the car is charging is taken from **car_charging_now** when it is set to a real Home Assistant entity, after 2 minutes of it reporting not charging.
-Without that sensor, if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load** On), the house load is used instead, after 10 minutes of load too low for a car to be charging.
-The slots come back as soon as the car starts charging again or the current slot ends.
+Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).
 Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.
 This is used only for the plan; it is never added as a car charging slot, so it does not turn on **binary_sensor.predbat_car_charging_slot**.
 
@@ -309,10 +304,11 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
 - **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
+- **switch.predbat_octopus_intelligent_dynamic** (_expert mode_) - On by default: cancels Octopus Intelligent slots, and their cheap rate, while the car is in a dispatch but not charging (from **car_charging_now**, or the house load when the car is inside the CT clamp), see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car)
 - **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
-- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
+- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` (car 0)

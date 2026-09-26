@@ -2631,7 +2631,7 @@ class Fetch:
             self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
 
             # Other car related configuration
-            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
+            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
@@ -3243,6 +3243,7 @@ class Fetch:
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
         self.octopus_intelligent_trust_slots = self.get_arg("octopus_intelligent_trust_slots")
+        self.octopus_intelligent_dynamic = self.get_arg("octopus_intelligent_dynamic")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.dynamic_load_car_check_config()

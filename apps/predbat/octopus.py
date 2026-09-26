@@ -605,6 +605,8 @@ class OctopusAPI(ComponentBase):
         self.token_mint_blocked_until = None
         self.token_mint_block_count = 0
         self.token_mint_backoff_logged_at = None
+        # Set by async_read_response() when a GraphQL response is a rate limit, so the retry loop does not re-read it
+        self.last_read_rate_limited = False
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
@@ -2098,14 +2100,16 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: Aborting retry loop due to shutdown")
                 return None
 
+            self.last_read_rate_limited = False
             data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
             if data_as_json is not None:
                 return data_as_json
             else:
-                # 401/403 are definitive for this response. aiohttp caches the body, so
-                # re-reading the same response cannot change the outcome - it would only
-                # duplicate log lines and sleep through the backoff for nothing.
-                if response.status in [401, 403]:
+                # 401/403 and a rate limit (KT-CT-1199) are definitive for this response. aiohttp
+                # caches the body, so re-reading the same response cannot change the outcome - it
+                # would only duplicate log lines and sleep through the backoff for nothing (a
+                # rate-limited request logged five warnings and stalled ~35s before giving up).
+                if response.status in [401, 403] or self.last_read_rate_limited:
                     self.failures_total += 1
                     return None
                 if attempt < max_retries - 1:
@@ -2145,7 +2149,8 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: OctopusAPI: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        # Check for rate limit errors - these should return None immediately (no retry)
+        # Check for rate limit errors - these return None immediately, and async_read_response_retry()
+        # does not re-read them (last_read_rate_limited): re-reading the same response cannot help
         if ("graphql" in url) and data_as_json and ("errors" in data_as_json):
             for error in data_as_json.get("errors", []):
                 error_code = error.get("extensions", {}).get("errorCode")
@@ -2153,9 +2158,7 @@ class OctopusAPI(ComponentBase):
                     msg = f'Warn: OctopusAPI: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
                     record_api_call("octopus", False, "rate_limit")
-                    # Don't sleep if shutting down
-                    if not self.api_stop:
-                        await asyncio.sleep(5)  # Sleep briefly to avoid hammering
+                    self.last_read_rate_limited = True
                     return None
 
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
@@ -3762,7 +3765,7 @@ class Octopus:
         # The feed is re-read every cycle, so the same minutes are stripped again each time - log only
         # when that changes, not every 5 minutes for the length of a cancellation
         if stripped and stripped != self.dynamic_load_car_stripped:
-            self.log("Dynamic load: removed the Intelligent dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
+            self.log("Octopus Intelligent: removed the dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
         self.dynamic_load_car_stripped = stripped
         return rates
 

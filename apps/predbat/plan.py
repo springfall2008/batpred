@@ -25,6 +25,7 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     DYNAMIC_LOAD_CAR_LOAD_MINUTES,
     DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
+    DYNAMIC_LOAD_CAR_START_MINUTES,
     PREDICT_STEP,
     PV_SCENARIO_NOMINAL,
     PV_SCENARIO_PV10,
@@ -56,7 +57,6 @@ from utils import (
     export_limit_exports_no_battery,
     export_limit_is_full_discharge,
     is_entity_id,
-    minutes_since_midnight,
 )
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
@@ -373,31 +373,44 @@ class Plan:
             return "low"
         return "baseline"
 
-    def dynamic_load_car_evidence(self, car_n):
+    def dynamic_load_car_evidence(self, car_n, minute, now, dispatch_start, dispatch_end):
         """
-        Whether car_n is not charging right now, and how long that must hold before its slots are cancelled.
+        Whether car_n, inside a dispatch running dispatch_start to dispatch_end, is not charging at minute
+        (exact) / now, and how long that must hold before its slots are cancelled.
 
-        Returns (not_charging, grace_minutes) where not_charging is True (not charging), False (charging)
-        or None (no evidence either way).
+        Returns (not_charging, grace_minutes, timed_at): not_charging is True (not charging), False
+        (charging) or None (no evidence either way), and timed_at is the clock the grace is measured on.
 
         car_charging_now is used whenever it names a real entity - a static literal in apps.yaml can never
-        report the car stopping. An "unknown"/"unavailable" reading is no evidence, rather than a stop.
+        report the car stopping. An "unknown"/"unavailable" reading is no evidence, rather than a stop. A
+        "not charging" reading only counts from DYNAMIC_LOAD_CAR_START_MINUTES into the dispatch, while the
+        car and charger wake up; "charging" counts anywhere. The grace is timed on the exact clock.
+
         Without a sensor the low-load test stands in, but only when the car is inside the CT clamp
-        (car_energy_reported_load): otherwise its charging never shows in the load at all. The load test
-        is skipped just after midnight, when the load_today sensor resets.
+        (car_energy_reported_load): otherwise its charging never shows in the load at all. load_last_period
+        averages the PREDICT_STEP minutes up to minutes_now, so it only counts when that whole window lies
+        inside the dispatch, and the grace is timed on that 5 minute grid. It is skipped just after
+        midnight, when the load_today sensor resets, and without load history.
         """
         if car_n in self.dynamic_load_car_sensors:
             charging = self.car_charging_now_reading(car_n)
             if charging is None:
-                return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES
-            return (not charging), DYNAMIC_LOAD_CAR_SENSOR_MINUTES
+                return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+            if charging:
+                return False, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+            if minute < dispatch_start + DYNAMIC_LOAD_CAR_START_MINUTES:
+                return None, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+            return True, DYNAMIC_LOAD_CAR_SENSOR_MINUTES, now
+        grid_now = self.midnight_utc + timedelta(minutes=self.minutes_now)
         if self.car_energy_reported_load:
             # No load history (e.g. a load_forecast-only install, where load_last_period is a hard-coded
             # 0) is not low load - it is no reading at all
             if self.minutes_now <= 5 or not self.load_minutes:
-                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
-            return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES
-        return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            if self.minutes_now - PREDICT_STEP < dispatch_start or self.minutes_now > dispatch_end:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+        return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
 
     def car_charging_now_reading(self, car_n):
         """
@@ -416,15 +429,32 @@ class Plan:
         # required_unit: a charging power sensor is compared in watts (see car_charging_now_value())
         return self.car_charging_now_value(self.resolve_arg("car_charging_now", entity_id, default=None, required_unit="W"))
 
-    def dynamic_load_car_in_slot(self, car_n, minute):
+    def dynamic_load_car_minute(self, now):
         """
-        Whether minute falls inside any of car_n's charging slots, whatever their kWh - a slot the
-        check has already cancelled is still one the car is meant to be charging in.
+        now as minutes since midnight_utc on the exact clock (clock skew added, not floored to PREDICT_STEP as
+        minutes_now is) - Octopus dispatches start and end at any minute, and a slot judged on the floored
+        minute still looked in progress for up to 5 minutes after it ended.
         """
-        for slot in self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []:
-            if slot["start"] <= minute < slot["end"]:
-                return True
-        return False
+        return (now + timedelta(minutes=self.args.get("clock_skew", 0)) - self.midnight_utc).total_seconds() / 60
+
+    def dynamic_load_car_dispatch(self, car_n, minute):
+        """
+        The dispatch car_n is in at minute, as (start, end), or None. Slots that touch or overlap are one
+        dispatch, so a long dispatch split into half hours has no start band at each join. A slot the check
+        has already cancelled still counts - the car is meant to be charging in it.
+        """
+        slots = car_n < len(self.car_charging_slots) and self.car_charging_slots[car_n] or []
+        run = None
+        for slot in sorted(slots, key=lambda slot: slot["start"]):
+            if run and slot["start"] <= run[1]:
+                run[1] = max(run[1], slot["end"])
+                continue
+            if run and run[0] <= minute < run[1]:
+                return (run[0], run[1])
+            run = [slot["start"], slot["end"]]
+        if run and run[0] <= minute < run[1]:
+            return (run[0], run[1])
+        return None
 
     def dynamic_load_car_is_octopus(self, car_n):
         """
@@ -449,17 +479,14 @@ class Plan:
 
     def dynamic_load_car_active(self, car_n):
         """
-        Whether car-charging detection applies to car_n: only an Octopus Intelligent car, and only with
-        dynamic load on or its slots untrusted by default - which means nothing without the detection that
-        trusts them again, so it works whether dynamic load is on or not.
+        Whether slot confirmation applies to car_n: an Octopus Intelligent car, with octopus_intelligent_dynamic
+        on (the default). It is independent of metric_dynamic_load_adjust, which is only the load estimate.
         """
-        if not self.dynamic_load_car_is_octopus(car_n):
-            return False
-        return self.metric_dynamic_load_adjust or not self.octopus_intelligent_trust_slots
+        return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n)
 
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
-        Whether car_n's slots should be cancelled at minute (floored, as minutes_now) and now (exact).
+        Whether car_n's slots should be cancelled at minute and now (both on the exact clock).
 
         - Detection not active for the car: never cancelled.
         - Outside any of the car's slots: the default - trusted, unless octopus_intelligent_trust_slots
@@ -471,21 +498,33 @@ class Plan:
         With record True the "not charging since" clock is started and cleared; with record False
         (compare.py runs) it is only read.
         """
-        default_cancelled = not self.dynamic_load_car_trusted_by_default(car_n)
+        active = self.dynamic_load_car_active(car_n)
+        default_cancelled = active and not self.dynamic_load_car_trusted_by_default(car_n)
         cancelled = self.dynamic_load_car_cancelled.get(car_n, default_cancelled)
-        if not self.dynamic_load_car_active(car_n) or not self.dynamic_load_car_in_slot(car_n, minute):
+        dispatch = self.dynamic_load_car_dispatch(car_n, minute) if active else None
+        if dispatch is None:
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
-            return default_cancelled and self.dynamic_load_car_active(car_n)
+                self.dynamic_load_car_run.pop(car_n, None)
+            return default_cancelled
 
-        not_charging, grace_minutes = self.dynamic_load_car_evidence(car_n)
+        # An in-progress dispatch's start can be advanced to now each cycle, so keep the earliest start seen
+        # for this dispatch - identified by its end, which does not move - for the start band
+        dispatch_start, dispatch_end = dispatch
+        run = self.dynamic_load_car_run.get(car_n)
+        if run and run["end"] == dispatch_end:
+            dispatch_start = min(dispatch_start, run["start"])
+        if record:
+            self.dynamic_load_car_run[car_n] = {"start": dispatch_start, "end": dispatch_end}
+
+        not_charging, grace_minutes, timed_at = self.dynamic_load_car_evidence(car_n, minute, now, dispatch_start, dispatch_end)
         if not_charging is False:
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
             return False
         if not_charging:
-            since = self.dynamic_load_car_since.setdefault(car_n, now) if record else self.dynamic_load_car_since.get(car_n)
-            if since is not None and (now - since).total_seconds() >= grace_minutes * 60:
+            since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)
+            if since is not None and (timed_at - since).total_seconds() >= grace_minutes * 60:
                 return True
         elif record:
             # No evidence: the car may have been charging through it, so a "not charging" reading after
@@ -507,11 +546,21 @@ class Plan:
 
     def dynamic_load_car_check_config(self):
         """
-        With octopus_intelligent_trust_slots Off, list the cars whose Octopus Intelligent slots can
-        never be trusted: no car_charging_now entity and not inside the CT clamp, so nothing can ever
-        show the car charging. Logged as a warning whenever that list changes, not every cycle.
+        Refresh which cars have a car_charging_now entity, and warn about settings that leave
+        octopus_intelligent_trust_slots Off without effect, or unable to confirm a slot - each logged only when it changes:
+        - octopus_intelligent_dynamic Off too: nothing confirms a slot, so Off has no effect;
+        - octopus_intelligent_charging Off: the dispatch rates are used as before;
+        - cars with no car_charging_now entity and not inside the CT clamp, whose slots can never be trusted.
+
+        Returns that list of cars.
         """
         self.dynamic_load_car_refresh_sensors()
+        dynamic_off = (not self.octopus_intelligent_trust_slots) and (not self.octopus_intelligent_dynamic)
+        if dynamic_off != self.dynamic_load_car_warned_dynamic_off:
+            if dynamic_off:
+                # Off needs the confirmation that trusts a slot again, which octopus_intelligent_dynamic turns off
+                self.log("Warn: octopus_intelligent_trust_slots is Off but octopus_intelligent_dynamic is Off too, so it has no effect - slots are trusted as normal")
+            self.dynamic_load_car_warned_dynamic_off = dynamic_off
         iog_off = (not self.octopus_intelligent_trust_slots) and (not self.octopus_intelligent_charging) and ("octopus_intelligent_slot" in self.args)
         if iog_off != self.dynamic_load_car_warned_iog_off:
             if iog_off:
@@ -521,7 +570,7 @@ class Plan:
             self.dynamic_load_car_warned_iog_off = iog_off
 
         cars = []
-        if not self.octopus_intelligent_trust_slots and self.octopus_intelligent_charging and not self.car_energy_reported_load:
+        if not self.octopus_intelligent_trust_slots and self.octopus_intelligent_dynamic and self.octopus_intelligent_charging and not self.car_energy_reported_load:
             # Only cars on Octopus Intelligent (with a slot sensor of their own, as fetch_sensor_data_cars()
             # reads them) have Intelligent slots to distrust
             iog_entities = self.get_arg("octopus_intelligent_slot", indirect=False)
@@ -560,19 +609,20 @@ class Plan:
         # This run's decision, which the rates read - in a compare.py run (save False) it can differ from
         # the saved state, and the rates must follow the same decision as the slots
         self.dynamic_load_car_effective = {}
+        minute = self.dynamic_load_car_minute(self.now_utc_real)
         for car_n in range(self.num_cars):
-            cancelled = self.dynamic_load_car_target(car_n, self.minutes_now, self.now_utc_real, record=save)
+            cancelled = self.dynamic_load_car_target(car_n, minute, self.now_utc_real, record=save)
             if save:
                 was_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
                 if cancelled != was_cancelled:
                     changed = True
-                    if cancelled and self.dynamic_load_car_in_slot(car_n, self.minutes_now):
-                        reason = "is in a charging slot but not charging, cancelling its slots"
+                    if cancelled and self.dynamic_load_car_dispatch(car_n, minute) is not None:
+                        reason = "is in a dispatch but not charging, cancelling its slots"
                     elif cancelled:
-                        reason = "has not been seen charging in its Octopus Intelligent slots yet, not trusting them"
+                        reason = "has not been seen charging in its dispatches yet, not trusting them"
                     else:
                         reason = "slots resumed"
-                    self.log("Dynamic load: car {} {}".format(car_n, reason))
+                    self.log("Octopus Intelligent: car {} {}".format(car_n, reason))
                 self.dynamic_load_car_cancelled[car_n] = cancelled
             self.dynamic_load_car_effective[car_n] = cancelled
 
@@ -599,17 +649,12 @@ class Plan:
 
         Returns True when it set update_pending.
         """
-        if not self.num_cars or self.midnight_utc is None:
-            return False
-        if not self.metric_dynamic_load_adjust and self.octopus_intelligent_trust_slots:
+        if not self.num_cars or self.midnight_utc is None or not self.octopus_intelligent_dynamic:
             return False
         if now is None:
             now = datetime.now(self.local_tz)
-        # Judge "in a slot" on the minute the replan's check will use - clock skew added and floored to
-        # PREDICT_STEP, as update_time() builds minutes_now - or for a slot ending between steps the poll
-        # would keep asking for a reset the replan then declines, every 15 seconds. The grace is still
-        # timed on the exact clock, as dynamic_load_car_check() times it on now_utc_real.
-        minute = minutes_since_midnight(now + timedelta(minutes=self.args.get("clock_skew", 0)), self.midnight_utc)
+        # The exact clock, as dynamic_load_car_check() judges it, so the two agree on when a dispatch ends
+        minute = self.dynamic_load_car_minute(now)
 
         due = False
         for car_n in range(self.num_cars):
@@ -619,7 +664,7 @@ class Plan:
                 due = True
 
         if due:
-            self.log("Dynamic load: car charging state changed, will re-plan")
+            self.log("Octopus Intelligent: car charging state changed, will re-plan")
             self.update_pending = True
         return due
 

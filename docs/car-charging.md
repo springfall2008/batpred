@@ -334,7 +334,7 @@ Car 0 using Octopus Intelligent, no charging is planned
 
 The earlier `Cars {n} charging from battery ... smart ... max_price ...` line is **not** the IOG state. It is printed
 during configuration read, before any Octopus dispatch data is merged, and reports the Predbat-led car charging
-settings (`car_charging_plan_smart`, `car_charging_plan_max_price`). It will show `smart: False` and `max_price: 0.0p`
+settings (`car_charging_plan_smart`, `car_charging_plan_max_price`). It shows those settings as configured (for example `max_price: 0.0p`)
 even when IOG is working correctly, so do not use it to diagnose IOG linkage.
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
@@ -470,7 +470,8 @@ If you don't set this Predbat will default to 100%.
 These retrieve details of the charge limit and when the car will finish charging from your Octopus app settings.
 Again, if you are using the Octopus Energy direct method for Predbat then these configuration lines are not required and should be commented out of `apps.yaml`.
 
-- You can configure **car_charging_now** in `apps.yaml` to point to a Home Assistant sensor that indicates that the car is currently charging, so Predbat holds the house battery for the car while it charges.
+- You can configure **car_charging_now** in `apps.yaml` to point to a Home Assistant sensor that indicates that the car is currently charging - an on/off sensor, or a charging power sensor.
+Predbat then holds the house battery for the car while it charges, and checks the car really is charging during each dispatch - see [Checking Intelligent dispatches against the car](#checking-intelligent-dispatches-against-the-car).
 It does not add an Intelligent slot or its cheap rate for a charge the Intelligent API hasn't reported - those come only from Octopus's dispatches.
 
 - The switch **switch.predbat_octopus_intelligent_consider_full** (*expert mode*)
@@ -481,19 +482,78 @@ Predbat will still assume all Octopus charging slots are low rates even if some 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
+- The switch **switch.predbat_octopus_intelligent_dynamic** (*expert mode*) (default value is On) checks each dispatch against whether your car is actually charging, and cancels the car's slots and the dispatch's cheap rate when it is not - see [Checking Intelligent dispatches against the car](#checking-intelligent-dispatches-against-the-car).
+It is independent of **switch.predbat_metric_dynamic_load_adjust**.
+
 - The switch **switch.predbat_octopus_intelligent_trust_slots** (*expert mode*) (default value is On) controls whether Predbat believes an Intelligent charging slot will happen before your car has actually been seen charging in it.
-When On, every slot is trusted until the car is seen not charging in one (see **switch.predbat_metric_dynamic_load_adjust** below).
+When On, every slot is trusted until the car is seen not charging in one (see [Checking Intelligent dispatches against the car](#checking-intelligent-dispatches-against-the-car)).
 When Off, Intelligent slots are assumed not to happen: the car's charging is not predicted and a daytime slot's low rate is not used for the house battery, until the car is seen charging inside a slot.
 From then on that slot and the later ones are trusted, until the car stops charging or the slot ends, after which the next slot has to be confirmed again.
 The overnight 23:30-05:30 rate stays low either way, as that is part of the tariff.
-Whether the car is charging comes from **car_charging_now** when it is set to a real sensor, otherwise from the house load if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load**).
-With neither, the car's slots can never be confirmed, and Predbat logs a warning.
-This switch works whether or not dynamic load adjustment is turned on.
+Whether the car is charging is judged the same way as for **switch.predbat_octopus_intelligent_dynamic**. With neither **car_charging_now** nor the car inside the CT clamp, the car's slots can never be confirmed, and Predbat logs a warning.
+It needs **switch.predbat_octopus_intelligent_dynamic** On, which does the checking; with that Off this switch has no effect and Predbat logs a warning.
 It only applies when **switch.predbat_octopus_intelligent_charging** is On, as it acts on the car plan that Octopus Intelligent charging builds. With that Off, the Intelligent dispatch rates are used as before and Predbat logs a warning.
 
-Slots that Predbat has decided will not happen are still shown in the car column of the plan, with a question mark after the kWh (e.g. **3.5?**), so you can see the car's own schedule even though the plan is not counting on it.
-
 - Let the Octopus app control when your car charges.
+
+#### Checking Intelligent dispatches against the car
+
+Octopus Intelligent tells Predbat when it plans to charge your car (its *dispatches*), and Predbat treats those times as cheap for the house battery too - it may charge the battery then, or hold it back for the car.
+But a dispatch does not always happen: the car may be full, asleep or unplugged, or Octopus may change its plan. Octopus may also bill a dispatch the car does not use at the full rate.
+**switch.predbat_octopus_intelligent_dynamic** (*expert mode*, On by default) makes Predbat check that the car really is charging during a dispatch, and stop relying on the dispatch when it is not.
+It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intelligent_charging** On); slots Predbat plans itself (Predbat-led charging) are never checked.
+
+**Setting it up**
+
+Point **car_charging_now** in `apps.yaml` at a sensor that shows the car charging.
+It can be an on/off sensor (matched against **car_charging_now_response**), or a charging power sensor in W or kW, where 200W or more counts as charging - useful for chargers such as Wallbox that have no "charging" sensor:
+
+```yaml
+  car_charging_now:
+    - sensor.wallbox_portal_charging_power
+```
+
+Without **car_charging_now**, if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load** On), Predbat uses the house load instead - slower and less certain, as other appliances also move it.
+With neither, nothing is checked.
+
+**How Predbat decides**
+
+Octopus schedules dispatches to the minute, and Predbat checks them against their real start and end times. Back-to-back dispatch slots count as one dispatch.
+
+| Evidence | A "not charging" reading counts... | Slots cancelled, at the earliest |
+|---|---|---|
+| **car_charging_now** | from 3 minutes into the dispatch, while the car and charger wake up, and it must last 2 minutes | 5 minutes after the dispatch starts |
+| House load | only for a 5-minute load reading taken entirely inside the dispatch, and two in a row must be too low for a car to be charging | 10 minutes after the dispatch starts |
+
+A reading that shows the car charging counts straight away, and an "unknown" or "unavailable" sensor is ignored rather than taken as not charging.
+With **car_charging_now**, Predbat checks the sensor every 15 seconds between plan updates, so it reacts within seconds of these times.
+
+**What happens when the car is not charging**
+
+- That dispatch slot and every later one for the car are cancelled: Predbat no longer holds the battery for the car ("Hold for car"), no longer predicts the car's load, and no longer uses the dispatch's cheap rate for the house battery. The overnight 23:30-05:30 rate stays cheap, as that is part of the tariff.
+- The slots come back as soon as the car starts charging again, or the dispatch ends.
+- Cancelled slots are still shown in the car column of the plan with a question mark after the kWh (e.g. **3.5?**), so you can see the car's schedule even though the plan is not counting on it.
+- The log shows `Octopus Intelligent: car 0 is in a dispatch but not charging, cancelling its slots`, and later `Octopus Intelligent: car 0 slots resumed`.
+
+For example, Octopus dispatches the car from 15:55 to 16:01 but the charger reports 0W throughout:
+
+| Time | What Predbat does |
+|---|---|
+| 15:55 | The dispatch starts. Too early to judge - the car may still be waking up. |
+| 15:58 | Still 0W, 3 minutes in: Predbat starts timing. |
+| 16:00 | Still 0W after 2 more minutes: the slots are cancelled, the battery hold is released, and the dispatch's cheap rate is dropped. |
+| 16:01 | The dispatch ends, and the car's next dispatch is trusted again as normal. |
+
+**Only trusting slots once the car charges**
+
+**switch.predbat_octopus_intelligent_trust_slots** (*expert mode*, On by default) reverses this check when turned Off: Intelligent slots are assumed *not* to happen until the car is seen charging inside one, see below.
+
+**If nothing is ever cancelled**
+
+- Check **switch.predbat_octopus_intelligent_dynamic** is On (you need expert mode to see it).
+- Check **car_charging_now** names a real sensor, e.g. `sensor.wallbox_portal_charging_power`, not a fixed value like `off` - or that your car is inside the CT clamp.
+- Check **switch.predbat_octopus_intelligent_charging** is On, so Predbat builds the car plan from the Octopus dispatches.
+- Look in the log for `Octopus Intelligent: car` lines. If there are none while the car sits idle in a dispatch, the check is not running. Note that the `Dynamic load last period ...` line is written every cycle whatever these settings are, so it does not show the check is running.
 
 #### Reading the dispatch timeline in the logs
 
@@ -566,7 +626,8 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
-- Turn On **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned Off) all low-rate slots will be used in time order.
+- **switch.predbat_car_charging_plan_smart** (On by default) makes Predbat use the cheapest slots before the charge-by time.
+When disabled (turned Off) all low-rate slots will be used in time order, so the car starts charging in the first low-rate slot after it is plugged in, even when cheaper slots come later.
 Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (*expert mode*).
 By default this threshold is calculated automatically based upon future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details of configuring this threshold.
 
@@ -631,10 +692,8 @@ e.g. you are using Intelligent Octopus or you use the car slots in Predbat to co
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
 
-- **switch.predbat_metric_dynamic_load_adjust** (default `false`) - When On, Predbat cancels a car's Octopus Intelligent charging slots, including the dispatch's cheap rate, while the car is inside a slot but not actually charging, and restores them as soon as it starts charging again or the slot ends.
-Slots Predbat plans itself (Predbat-led charging) are never cancelled.
-This releases the battery hold set by **switch.predbat_car_charging_from_battery**, and stops the house battery being planned around a dispatch Octopus may bill at the full rate.
-It uses **car_charging_now** when that is a real sensor (reacting within about 2 minutes), otherwise the house load if the car is inside the CT clamp (about 10 minutes). If turned Off then Predbat won't export during times the car is planned to charge even if the car is not charging.
+- **switch.predbat_octopus_intelligent_dynamic** (default `true`) - cancels an Octopus Intelligent car's slots, and the dispatch's cheap rate, while the car is inside a dispatch but not actually charging, which releases the battery hold set by **switch.predbat_car_charging_from_battery** - see [Checking Intelligent dispatches against the car](#checking-intelligent-dispatches-against-the-car) above.
+**switch.predbat_metric_dynamic_load_adjust** only adjusts the near-term load prediction from your current load; it does not affect car slots.
 
 - See [Car charging filtering](#filtering-car-charging-energy-from-house-load) and [Planned car charging](#planned-car-charging)
 for further car charging setup details.
