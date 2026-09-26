@@ -14,8 +14,10 @@ Follows the FakeRequest pattern of test_web_debug_history_routes.py.
 """
 
 import asyncio
+import html
 import json
 import os
+import re
 import shutil
 import tempfile
 
@@ -506,4 +508,147 @@ def run_web_apps_edit_tests(my_predbat):
 
     if failed:
         print("**** ERROR: {} apps.yaml editor add/delete test(s) failed ****".format(failed))
+    return failed
+
+
+def _parent_row_path(path):
+    """Return the path of the row a nested path sits under, or '' when it sits at the top level."""
+    # A dict key may itself end in ']' (giving "parent.weird]", which has no '[' to split on),
+    # so index rather than assume - the helper must report a parent, never raise
+    if path.endswith("]"):
+        bracket = path.rfind("[")
+        if bracket != -1:
+            return path[:bracket]
+    if "." in path:
+        return path.rsplit(".", 1)[0]
+    return ""
+
+
+def _attribute_values(text, pattern):
+    """Return the set of values an attribute pattern matches, as the browser would decode them."""
+    return set(html.unescape(value) for value in re.findall(pattern, text))
+
+
+def _render_apps_page(my_predbat, args=None):
+    """Render the /apps page against the given args, or the nested fixture's, and return its HTML."""
+    # Built the way _reset_fixture() does: the full constructor would alias .args to the live
+    # shared args and build AnnualPage/WebChat before the rebinding below, which rendering
+    # needs none of - and which would leave this test sensitive to whatever initialize() picks up
+    web_interface = WebInterface.__new__(WebInterface)
+    web_interface.base = my_predbat
+    web_interface.log = my_predbat.log
+    web_interface.prefix = my_predbat.prefix
+    if args is None:
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        # Render the fixture's nested structures rather than whatever the live test args hold
+        args = yaml.load(APPS_YAML_FIXTURE)["pred_bat"]
+    web_interface.args = args
+    return asyncio.run(web_interface.html_apps(None)).text
+
+
+def run_web_apps_filter_tests(my_predbat):
+    """Unit tests for the apps.yaml page filter box (issue #5210)."""
+    failed = 0
+    print("**** Running apps.yaml page filter tests ****")
+
+    text = _render_apps_page(my_predbat)
+
+    # -------------------------------------------------------------------------
+    print("Test: the apps page carries a filter box wired to filterApps()")
+    for expected in ('id="appsFilter"', 'class="filter-input"', 'oninput="filterApps()"'):
+        if expected not in text:
+            print("  ERROR: the apps page should carry {} so the long settings list can be filtered".format(expected))
+            failed += 1
+    if "function filterApps(" not in text:
+        print("  ERROR: the apps page should define filterApps()")
+        failed += 1
+    if "document.getElementById('appsFilter').value=''; filterApps();" not in text:
+        print("  ERROR: the filter box should have a Clear button, as the Config page does")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the filter box is styled on the apps page, not only on the config page")
+    # .filter-container / .filter-input were defined only in get_html_config_css(), which the
+    # apps page does not load - an unstyled box would be the whole of the bug here
+    for style in (".filter-container {", ".filter-input {"):
+        if style not in text:
+            print("  ERROR: the apps page is missing the {} styling for its filter box".format(style))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the filter survives the apps page's own auto-refresh")
+    if "localStorage.setItem('appsFilterValue'" not in text or "localStorage.getItem('appsFilterValue')" not in text:
+        print("  ERROR: the filter value should persist in localStorage, as the apps page refreshes every 5 minutes")
+        failed += 1
+    if "document.addEventListener('DOMContentLoaded', restoreAppsFilterValue)" not in text:
+        print("  ERROR: the saved filter should be re-applied once the page has loaded")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the rows the filter selects on are the rows the page renders")
+    if "tr[data-arg-name], tr[data-nested-path]" not in text:
+        print("  ERROR: filterApps() should select rows by the data-arg-name / data-nested-path attributes the page renders")
+        failed += 1
+
+    arg_rows = _attribute_values(text, r'data-arg-name="([^"]+)"')
+    nested_rows = _attribute_values(text, r"data-nested-path='([^']+)'")
+    for expected in ("compare_list", "chat", "forecast_solar", "nested_matrix"):
+        if expected not in arg_rows:
+            print("  ERROR: expected a top-level row for {}, got: {}".format(expected, sorted(arg_rows)))
+            failed += 1
+    # The deeply nested rows are exactly the ones scrolling makes hardest to find
+    for expected in ("chat.providers.openrouter.api_key", "forecast_solar[0].declination", "nested_matrix[0][1]"):
+        if expected not in nested_rows:
+            print("  ERROR: expected a nested row for {}, got: {}".format(expected, sorted(nested_rows)))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: every nested row sits under a row of its own prefix")
+    # filterApps() leaves the subtree of a matching row alone and only walks back up to re-show
+    # parents, which holds because a nested path always extends the path of the row above it
+    for path in sorted(nested_rows):
+        parent = _parent_row_path(path)
+        if parent and parent not in nested_rows and parent not in arg_rows:
+            print("  ERROR: nested row {} has no row for its parent {} - filtering on a parent name would hide it".format(path, parent))
+            failed += 1
+        if not path.startswith(parent):
+            print("  ERROR: nested row {} does not extend its parent path {}".format(path, parent))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a key holding a quote cannot truncate the attributes the filter reads")
+    # data-nested-path is delimited with apostrophes and data-arg-name/data-path with quotes, so
+    # an unescaped key such as "it's" ends its attribute early: the browser then reports a path
+    # that is not the row's, and filtering on a parent name no longer keeps the row visible
+    quoted_args = {"chat": {"providers": {"it's": {"api_key": "sk-quoted-credential"}}}, 'say "hi"': 1}
+    quoted_text = _render_apps_page(my_predbat, quoted_args)
+    quoted_nested = _attribute_values(quoted_text, r"data-nested-path='([^']+)'")
+    quoted_top = _attribute_values(quoted_text, r'data-arg-name="([^"]+)"')
+    quoted_edit_paths = _attribute_values(quoted_text, r'data-path="([^"]+)"')
+    for expected, found, attribute in (
+        ("chat.providers.it's", quoted_nested, "data-nested-path"),
+        ("chat.providers.it's.api_key", quoted_nested, "data-nested-path"),
+        ('say "hi"', quoted_top, "data-arg-name"),
+        ("chat.providers.it's.api_key", quoted_edit_paths, "data-path"),
+    ):
+        if expected not in found:
+            print("  ERROR: {} should carry the whole path {}, got: {}".format(attribute, expected, sorted(found)))
+            failed += 1
+    # The truncated attribute the unescaped form produced, named directly so the test still fails
+    # if the escaping is dropped in favour of something that only looks right after unescaping
+    if "data-nested-path='chat.providers.it'" in quoted_text:
+        print("  ERROR: an apostrophe in a key truncated data-nested-path to its prefix")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the parent-path helper handles a key that ends in a bracket")
+    # "parent.weird]" ends with ']' but holds no '[' - the helper must still report a parent
+    for path, expected_parent in (("parent.weird]", "parent"), ("nested_matrix[0][1]", "nested_matrix[0]"), ("chat", "")):
+        if _parent_row_path(path) != expected_parent:
+            print("  ERROR: the parent of {} should be '{}', got '{}'".format(path, expected_parent, _parent_row_path(path)))
+            failed += 1
+
+    if failed:
+        print("**** ERROR: {} apps.yaml page filter test(s) failed ****".format(failed))
     return failed

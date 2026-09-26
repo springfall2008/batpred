@@ -14,7 +14,8 @@ import pytz
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from alphaess import AlphaESSAPI
-from coordinator import validate_report
+from coordinator import CAPABILITY_KEYS, validate_report
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -1230,9 +1231,9 @@ def test_alphaess_catalogue_describes_each_system():
         (first["functions"], ["solar", "battery"]),
         (first["hardware_ids"], {"serial": "AL70110230306xx"}),
         (first["info"], {"model": "SMILE5-INV", "battery_model": "SMILE-BAT-13.3P"}),
-        (first["ratings"], {"inverter_w": 5000.0, "pv_w": 9000.0, "battery_kwh": 13.34}),
-        (sorted(first["capabilities"]), ["charge_rate_power", "discharge_target", "schedule", "target_soc"]),
-        (by_id["alphaess:AL70110230302xx"]["ratings"]["battery_kwh"], 10.1),
+        (first["ratings"], {"inverter_limit": 5000.0, "pv_w": 9000.0, "soc_max": 13.34}),
+        (sorted(first["capabilities"]), sorted(CAPABILITY_KEYS)),
+        (by_id["alphaess:AL70110230302xx"]["ratings"]["soc_max"], 10.1),
     ]
     for actual, expected in checks:
         if actual != expected:
@@ -1287,6 +1288,163 @@ def test_alphaess_catalogue_round_trips_through_validate_report():
         failed = True
     if cleaned.get("inverters") != report["inverters"]:
         print("ERROR: validation changed the records:\n{}\n{}".format(report["inverters"], cleaned.get("inverters")))
+        failed = True
+    return failed
+
+
+def _alphaess_ready(entries, ignore_pv=False):
+    """A discovered MockAlphaESS with live readings and today's energy counters, as automatic_config() sees it after the first telemetry cycle."""
+    client = _alphaess_discovered(entries)
+    client.automatic_ignore_pv = ignore_pv
+    for sn in client.device_list:
+        client.device_values[sn] = {"soc": 56.0, "battery_power": 1264.0, "grid_power": -11.0, "pv_power": 0.0, "load_power": 1275.0, "ev_power": 0.0}
+        client.device_energy[sn] = {"import_today": 14.41, "export_today": 0.42, "pv_today": 10.6, "load_today": 19.49, "ev_energy_today": 3.2}
+    return client
+
+
+def test_alphaess_record_rebuilds_the_inverter_def_row():
+    """Completeness: the record alone rebuilds the AlphaESSCloud INVERTER_DEF row, with no gaps."""
+    client = _alphaess_ready(ESS_LIST_SAMPLE[:1])
+    records = validated_inverters(client.build_discovery())
+    for record in records:
+        if record.get("inverter_type"):
+            assert_definition_complete(record, AlphaESSAPI.WRITE_AND_POLL_SLEEP)
+    return False
+
+
+def test_alphaess_record_agrees_with_automatic_config():
+    """Agreement both ways: every setting automatic_config() binds for the device is in its record, and the record binds nothing else."""
+    client = _alphaess_ready(ESS_LIST_SAMPLE[:1])
+    client._ev_present = {"AL70110230306xx": True}
+    records = validated_inverters(client.build_discovery())
+    captured = capture_automatic_config(client)
+    if "reserve" not in captured or "car_charging_energy" not in captured:
+        print("ERROR: the fixture must drive automatic_config() through its control and EV branches, got {}".format(sorted(captured)))
+        return True
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    return False
+
+
+def test_alphaess_two_devices_give_two_records_with_their_own_entities():
+    """Two systems give two records, each bound to its own serial's entities (plan Review Focus 1)."""
+    failed = False
+    client = _alphaess_ready(ESS_LIST_SAMPLE)
+    records = validated_inverters(client.build_discovery())
+    if len(records) != 2:
+        print("ERROR: expected two records, got {}".format(len(records)))
+        return True
+    first, second = (records[0]["entities"], records[1]["entities"])
+    if set(first) != set(second):
+        print("ERROR: two like systems should bind the same settings: {} vs {}".format(sorted(first), sorted(second)))
+        failed = True
+    for setting in sorted(set(first) & set(second)):
+        if first[setting]["entity_id"] == second[setting]["entity_id"]:
+            print("ERROR: {} is bound to the same entity {} on both systems".format(setting, first[setting]["entity_id"]))
+            failed = True
+    captured = capture_automatic_config(client)
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    return failed
+
+
+def test_alphaess_mixed_fleet_records_describe_each_device():
+    """Spec D10: each record states what its own system reports, not automatic_config()'s every-inverter gate.
+
+    The second system has not reported load_today and has no poinv, so automatic_config() binds
+    neither load_today nor inverter_limit nor battery_rate_max for either system. The first system's
+    record still carries all three; the second's carries none of them.
+    """
+    failed = False
+    client = _alphaess_ready(ESS_LIST_SAMPLE)
+    second = client.device_list[1]
+    client.device_energy[second] = {key: value for key, value in client.device_energy[second].items() if key != "load_today"}
+    client.device_detail[second] = dict(client.device_detail[second], poinv=0)
+    records = validated_inverters(client.build_discovery())
+    captured = capture_automatic_config(client)
+    withheld = ("load_today", "inverter_limit", "battery_rate_max")
+    for setting in withheld:
+        if setting in captured:
+            print("ERROR: the fixture must make automatic_config()'s fleet gate withhold {}, but it bound {}".format(setting, captured[setting]))
+            failed = True
+        if setting not in records[0]["entities"]:
+            print("ERROR: the first system reports {} and its record must say so".format(setting))
+            failed = True
+        if setting in records[1]["entities"]:
+            print("ERROR: the second system does not report {} but its record binds it".format(setting))
+            failed = True
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+    assert_record_binds_nothing_extra(records[0], captured, index=0, allowed_extra=withheld)
+    assert_record_binds_nothing_extra(records[1], captured, index=1)
+    return failed
+
+
+def test_alphaess_record_capabilities_and_ratings():
+    """All seven capability keys are stated (support_feedin_first False, the row's default); no export limit is invented."""
+    failed = False
+    client = _alphaess_ready(ESS_LIST_SAMPLE[:1])
+    record = client.build_discovery()["inverters"][0]
+    capabilities = record["capabilities"]
+    if set(capabilities) != set(CAPABILITY_KEYS):
+        print("ERROR: capabilities must state all seven keys, got {}".format(sorted(capabilities)))
+        failed = True
+    if capabilities.get("support_feedin_first") is not False:
+        print("ERROR: the AlphaESSCloud row has no support_feedin_first, which inverter.py reads as False; got {!r}".format(capabilities.get("support_feedin_first")))
+        failed = True
+    # AlphaESS reports no export power limit: poinv is the inverter rating, not the grid connection's cap
+    if "export_limit" in record.get("ratings", {}) or "export_limit" in record["entities"]:
+        print("ERROR: AlphaESS reports no export limit, so the record must not claim one: {}".format(record))
+        failed = True
+    # battery_rate_max is poinv or the user's override, not a figure the device reports - entity only
+    if "battery_rate_max" in record.get("ratings", {}) or "battery_rate_max" not in record["entities"]:
+        print("ERROR: battery_rate_max must be an entity binding and not a rating: {}".format(record))
+        failed = True
+    for old in ("inverter_w", "battery_kwh", "max_charge_w"):
+        if old in record.get("ratings", {}):
+            print("ERROR: rating {} was renamed to its Predbat setting name".format(old))
+            failed = True
+    for setting, access in (("reserve", "rw"), ("charge_rate", "rw"), ("schedule_write_button", "rw"), ("soc_percent", "r"), ("soc_max", "r")):
+        if record["entities"].get(setting, {}).get("access") != access:
+            print("ERROR: {} should have access {}, got {}".format(setting, access, record["entities"].get(setting)))
+            failed = True
+    return failed
+
+
+def test_alphaess_record_keeps_pv_under_automatic_ignore_pv():
+    """Spec D11: automatic_ignore_pv is the user's opt-out, not a device fact, so the record keeps pv_power and pv_today."""
+    failed = False
+    client = _alphaess_ready(ESS_LIST_SAMPLE[:1], ignore_pv=True)
+    record = validated_inverters(client.build_discovery())[0]
+    for setting in ("pv_power", "pv_today"):
+        if setting not in record["entities"]:
+            print("ERROR: {} must stay in the record although automatic_ignore_pv is set".format(setting))
+            failed = True
+    captured = capture_automatic_config(client)
+    if "pv_power" in captured or "pv_today" in captured:
+        print("ERROR: automatic_config() must still skip the PV settings under automatic_ignore_pv: {}".format(sorted(captured)))
+        failed = True
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured, allowed_extra=("pv_power", "pv_today"))
+    return failed
+
+
+def test_alphaess_record_leaves_out_what_the_device_has_not_reported():
+    """An energy counter not yet seen, or a zero capacity/poinv, is not claimed as an entity."""
+    failed = False
+    client = _alphaess_ready(ESS_LIST_SAMPLE[:1])
+    sn = client.device_list[0]
+    client.device_energy[sn] = {"import_today": 1.0}
+    client.device_detail[sn] = dict(client.device_detail[sn], poinv=0)
+    record = client.build_discovery()["inverters"][0]
+    for setting in ("load_today", "export_today", "pv_today", "inverter_limit", "battery_rate_max"):
+        if setting in record["entities"]:
+            print("ERROR: {} is bound but the device has not reported it: {}".format(setting, record["entities"][setting]))
+            failed = True
+    if "import_today" not in record["entities"]:
+        print("ERROR: import_today is reported and should be bound")
         failed = True
     return failed
 
@@ -1605,6 +1763,13 @@ def run_alphaess_api_tests(my_predbat):
         ("catalogue_none_before_discovery", test_alphaess_catalogue_none_before_discovery),
         ("catalogue_round_trips", test_alphaess_catalogue_round_trips_through_validate_report),
         ("catalogue_filed_when_first_cycle_defers", test_alphaess_catalogue_filed_when_first_cycle_defers),
+        ("record_rebuilds_inverter_def_row", test_alphaess_record_rebuilds_the_inverter_def_row),
+        ("record_agrees_with_automatic_config", test_alphaess_record_agrees_with_automatic_config),
+        ("record_two_devices", test_alphaess_two_devices_give_two_records_with_their_own_entities),
+        ("record_capabilities_and_ratings", test_alphaess_record_capabilities_and_ratings),
+        ("record_mixed_fleet", test_alphaess_mixed_fleet_records_describe_each_device),
+        ("record_keeps_pv_under_ignore_pv", test_alphaess_record_keeps_pv_under_automatic_ignore_pv),
+        ("record_leaves_out_unreported", test_alphaess_record_leaves_out_what_the_device_has_not_reported),
     ]:
         try:
             if fn():

@@ -3601,6 +3601,10 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
+        # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
+        # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
+        # what the tariff charged, and today's cost is built from them.
+        car_cancelled = self.dynamic_load_car_effective.get(car_n, False)
 
         if octopus_slots:
             # Add in IO slots
@@ -3637,6 +3641,9 @@ class Octopus:
                             # the previous cycle's data here. (On main these were the same object, so this
                             # is behaviour-preserving there and simply avoids the staleness this PR adds.)
                             assumed_price = rates.get(start_minutes, self.rate_min)
+
+                        if car_cancelled and minute >= self.minutes_now:
+                            continue  # Car is not charging, its dispatch is not trusted as cheap
 
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
@@ -3686,6 +3693,60 @@ class Octopus:
             if slots_per_day[day_offset] > 0:
                 self.log("Octopus: Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
 
+        return rates
+
+    def dynamic_load_car_strip_feed_rates(self, rates):
+        """
+        Remove an Octopus Intelligent discount the rate feed itself delivered for a dispatch of a car that
+        dynamic load has cancelled (see dynamic_load_car_check()).
+
+        The feed marks dispatch minutes as is_intelligent_adjusted (self.io_adjusted) and has already
+        lowered their price, so unlike rate_add_io_slots()'s own overlay there is nothing to withhold -
+        the price has to be overwritten. Called before the rates are replicated and snapshotted, so
+        nothing downstream sees the discount.
+
+        A minute is set back to rate_max_base, and loses its io_adjusted marker, only when it is from now
+        onwards, outside the fixed 23:30-05:30 window (cheap by tariff, not by dispatch), covered by a
+        cancelled car's dispatch and not covered by a dispatch of any car still trusted - the rates are
+        shared by every car.
+        """
+        cancelled_cars = [car_n for car_n in range(self.num_cars) if self.dynamic_load_car_effective.get(car_n, False)]
+        if not cancelled_cars or not self.io_adjusted:
+            self.dynamic_load_car_stripped = 0
+            return rates
+
+        # Rounded out to whole 30 minute rate periods: the feed marks and prices whole periods, and
+        # rate_add_io_slots() likewise treats any overlap with a period as the whole period
+        cancelled_minutes = set()
+        trusted_minutes = set()
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            covered = cancelled_minutes if car_n in cancelled_cars else trusted_minutes
+            for slot in self.octopus_slots[car_n]:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_minutes = (start_minutes // 30) * 30
+                end_minutes = ((end_minutes + 29) // 30) * 30
+                covered.update(range(max(start_minutes, self.minutes_now), end_minutes))
+
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        window_start = window["start"][0] * 60 + window["start"][1]
+        window_end = window["end"][0] * 60 + window["end"][1]
+        stripped = 0
+        for minute in sorted(cancelled_minutes - trusted_minutes):
+            if not self.io_adjusted.get(minute, False):
+                continue
+            minute_of_day = minute % (24 * 60)
+            if minute_of_day >= window_start or minute_of_day < window_end:
+                continue
+            rates[minute] = self.rate_max_base
+            del self.io_adjusted[minute]
+            stripped += 1
+        # The feed is re-read every cycle, so the same minutes are stripped again each time - log only
+        # when that changes, not every 5 minutes for the length of a cancellation
+        if stripped and stripped != self.dynamic_load_car_stripped:
+            self.log("Dynamic load: removed the Intelligent dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
+        self.dynamic_load_car_stripped = stripped
         return rates
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):

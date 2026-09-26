@@ -97,10 +97,11 @@ SAMPLE_REPORT = {
             "inverter_type": "GE",
             "composition": "direct",
             "functions": ["solar", "battery"],
-            "capabilities": ["rest_v3", "pause_mode"],
+            "capabilities": {"support_charge_freeze": True, "can_span_midnight": True},
+            "flags": ["rest_v3"],
             "hardware_ids": {"serial": "CE2143G123"},
             "info": {"model": "Gen3", "firmware": "D0.450"},
-            "ratings": {"battery_kwh": 9.5, "max_charge_w": 3000},
+            "ratings": {"soc_max": 9.5, "battery_rate_max": 3000},
             "entities": {"charge_rate": {"entity_id": "number.givtcp_ce2143g123_charge_rate", "domain": "number", "access": "rw"}},
         }
     ],
@@ -156,7 +157,7 @@ def test_discovery_page_renders_the_catalogue(my_predbat):
     try:
         body = _render(my_predbat, _real_coordinator(my_predbat))
 
-        for expected in ("Inverters", "Meters", "givtcp:CE2143G123", "Gen3", "D0.450", "rest_v3"):
+        for expected in ("Inverters", "Meters", "givtcp:CE2143G123", "Gen3", "D0.450", "rest_v3", "support_charge_freeze", "soc_max"):
             if expected not in body:
                 print(f"  ERROR: expected the page to show {expected!r}")
                 failed = True

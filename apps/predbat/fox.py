@@ -328,6 +328,20 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0, baseline
     return pad_schedule(result_schedule, target_count, reserve, fdPwr_max)
 
 
+# The behaviour a driven Fox Cloud inverter has, as the discovery record's capabilities - the seven
+# coordinator.CAPABILITY_KEYS, with the values INVERTER_DEF["FoxCloud"] (config.py) holds. A literal,
+# never read back from the row: the record has to rebuild the row on its own, and reading the row here
+# would make that test prove nothing.
+FOX_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
 # Group fields that the v3 scheduler API nests inside 'extraParam'
 V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc", "importLimit", "exportLimit", "pvLimit", "reactivePower"]
 
@@ -2393,6 +2407,96 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
 
+    @staticmethod
+    def _device_setting(settings, name):
+        """
+        The device's setting entry called name, or None. Matched case-insensitively, as
+        automatic_config() matches ExportLimit when it sets hasExportLimit.
+        """
+        for key, entry in settings.items():
+            if str(key).lower() == name.lower():
+                return entry if isinstance(entry, dict) else {}
+        return None
+
+    @staticmethod
+    def _setting_number(entry):
+        """A setting entry's value when it is a number of watts Fox reports (not negative, not a bool), else None."""
+        value = (entry or {}).get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    def _fox_entity(self, serial, entity_domain, suffix, access="r", **extra):
+        """
+        One discovery descriptor for an entity Fox publishes for this device, its id formed exactly as
+        automatic_config() forms its per-device list element (f"<domain>.{self.prefix}_fox_{sn.lower()}_<suffix>").
+        extra holds descriptor fields (domain, format, unit, invert).
+        """
+        return dict({"entity_id": f"{entity_domain}.{self.prefix}_fox_{serial.lower()}_{suffix}", "access": access}, **extra)
+
+    def _discovery_pv_entities(self, serial, has_pv, third_party):
+        """
+        pv_today and pv_power for one device, as automatic_config() binds them for it: the device's own
+        PV sensors when it has PV, otherwise a metered third-party generator's, otherwise 0 - the [0]
+        stand-in automatic_config() sets when nothing on the site has PV.
+
+        fox_automatic_ignore_pv is the user's opt-out, not a fact about the device, so it does not
+        remove them (spec D11); the coordinator applies it.
+        """
+        if has_pv:
+            return {"pv_today": self._fox_entity(serial, "sensor", "pvenergytotal_today"), "pv_power": self._fox_entity(serial, "sensor", "pvpower")}
+        if third_party:
+            return {"pv_today": self._fox_entity(serial, "sensor", "feedin2"), "pv_power": self._fox_entity(serial, "sensor", "meterpower2")}
+        return {"pv_today": {"value": 0, "access": "r"}, "pv_power": {"value": 0, "access": "r"}}
+
+    def _discovery_entities(self, serial, has_pv, third_party, has_export_limit, first):
+        """
+        The discovery record's entities for one inverter Fox drives: one descriptor per setting
+        automatic_config() binds for it, each entity id formed as automatic_config() forms it (see
+        _fox_entity()), so the agreement tests that run the real automatic_config() pin the two together.
+
+        access is "rw" for the settings Predbat writes (the schedule, reserve and the write
+        button) and "r" for what it only reads. grid_power_invert becomes invert on grid_power.
+        export_limit is automatic_config()'s 99999 ("no cap") stand-in when the device has no
+        ExportLimit setting. PV is _discovery_pv_entities().
+
+        battery_temperature_history is a single site-wide entity automatic_config() binds to the
+        first driven device's sensor, so only that device's record (first) carries it (spec D15).
+        """
+        time_select = {"domain": "select", "format": "HH:MM:SS"}
+        entities = {
+            "load_today": self._fox_entity(serial, "sensor", "loads"),
+            "import_today": self._fox_entity(serial, "sensor", "gridconsumption"),
+            "export_today": self._fox_entity(serial, "sensor", "feedin"),
+            "battery_rate_max": self._fox_entity(serial, "sensor", "battery_rate_max"),
+            "battery_power": self._fox_entity(serial, "sensor", "invbatpower"),
+            "grid_power": self._fox_entity(serial, "sensor", "meterpower", invert=True),
+            "load_power": self._fox_entity(serial, "sensor", "loadspower"),
+            "soc_percent": self._fox_entity(serial, "sensor", "soc", unit="%"),
+            "soc_max": self._fox_entity(serial, "sensor", "battery_capacity"),
+            "reserve": self._fox_entity(serial, "number", "battery_schedule_reserve", "rw"),
+            "battery_min_soc": self._fox_entity(serial, "sensor", "battery_reserve_min"),
+            "charge_start_time": self._fox_entity(serial, "select", "battery_schedule_charge_start_time", "rw", **time_select),
+            "charge_end_time": self._fox_entity(serial, "select", "battery_schedule_charge_end_time", "rw", **time_select),
+            "charge_limit": self._fox_entity(serial, "number", "battery_schedule_charge_soc", "rw"),
+            "scheduled_charge_enable": self._fox_entity(serial, "switch", "battery_schedule_charge_enable", "rw"),
+            "charge_rate": self._fox_entity(serial, "number", "battery_schedule_charge_power", "rw", unit="W"),
+            "scheduled_discharge_enable": self._fox_entity(serial, "switch", "battery_schedule_discharge_enable", "rw"),
+            "discharge_target_soc": self._fox_entity(serial, "number", "battery_schedule_discharge_soc", "rw"),
+            "discharge_start_time": self._fox_entity(serial, "select", "battery_schedule_discharge_start_time", "rw", **time_select),
+            "discharge_end_time": self._fox_entity(serial, "select", "battery_schedule_discharge_end_time", "rw", **time_select),
+            "discharge_rate": self._fox_entity(serial, "number", "battery_schedule_discharge_power", "rw", unit="W"),
+            "battery_temperature": self._fox_entity(serial, "sensor", "battemperature"),
+            "inverter_limit": self._fox_entity(serial, "sensor", "inverter_capacity"),
+            "battery_scaling": self._fox_entity(serial, "sensor", "battery_soh"),
+            "schedule_write_button": self._fox_entity(serial, "switch", "battery_schedule_charge_write", "rw"),
+            "export_limit": self._fox_entity(serial, "number", "setting_exportlimit") if has_export_limit else {"value": 99999, "access": "r"},
+        }
+        entities.update(self._discovery_pv_entities(serial, has_pv, third_party))
+        if first:
+            entities["battery_temperature_history"] = self._fox_entity(serial, "sensor", "battemperature")
+        return entities
+
     def build_discovery(self):
         """
         Describe the discovered Fox devices for the discovery catalogue.
@@ -2413,11 +2517,26 @@ class FoxAPI(ComponentBase, OAuthMixin):
         rather than shared, because sharing it means changing automatic_config(), a control path;
         automatic_config() is the source of truth, and a test runs it to pin this copy to it.
 
-        The inverter's rating goes through capacity_watts(), never capacity * 1000: Fox reports a
-        half-kW model's capacity truncated (a KH10.5 says 10), and capacity_watts() is what
-        restores the 500 W. For a battery device that is also the value of the _inverter_capacity
-        sensor publish_data() publishes; for a PV-only device publish_data() sets that sensor to
-        0, while the catalogue still reports the device's own rating.
+        Only a driven device carries capabilities (FOX_CAPABILITIES, the FoxCloud row's behaviour)
+        and its full entities (what automatic_config() binds for it - see _discovery_entities()).
+        automatic_config() builds its per-device lists over the driven devices in device_list
+        order, so the Nth driven record here is index N of those lists. A PV-only device (hasPV,
+        no battery - the devices automatic_config() takes as PV sources) carries just its
+        pv_power and pv_today (spec D12), so its generation is not lost when the coordinator
+        configures from records. Any other device - a battery automatic_config() refuses, or one
+        whose detail has not been read yet - claims no entities.
+
+        A third-party generator this inverter meters is topology, not something the inverter can
+        do, so it is a flag.
+
+        ratings are figures the device reports, keyed by Predbat setting name. inverter_limit goes
+        through capacity_watts(), never capacity * 1000: Fox reports a half-kW model's capacity
+        truncated (a KH10.5 says 10), and capacity_watts() is what restores the 500 W. For a
+        battery device that is also the value of the _inverter_capacity sensor publish_data()
+        publishes; for a PV-only device publish_data() sets that sensor to 0, while the catalogue
+        still reports the device's own rating. export_limit and import_limit are the ExportLimit
+        and ImportLimit settings' configured values in W, when the device has the setting and it
+        holds a number.
 
         stationName, stationID and moduleSN are deliberately not reported. stationName is
         user-authored free text that can hold a street address (get_device_list()'s own sample
@@ -2430,7 +2549,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         capacity (bcu, ivu) with bmu entries carrying one in Wh, and publish_data() sums every
         entry that carries one - a known live bug (GH#4919): an AIO ESS reports its one pack as
         four bmu entries, each claiming the whole pack and all carrying the inverter's own
-        serial, so the sum is 4x the truth. Publishing it would put a knowingly-wrong battery_kwh
+        serial, so the sum is 4x the truth. Publishing it would put a knowingly-wrong soc_max
         in every affected dump. Two ratings are reported instead, named for what the API returned
         rather than as the spec's "modules", since the vendor figure is known to be wrong:
         battery_capacity_entries, how many entries publish_data() sums, and
@@ -2447,6 +2566,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return None
 
         inverters = []
+        driven_count = 0
         for device in self.device_list:
             serial = device.get("deviceSN")
             if not serial:
@@ -2455,6 +2575,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             has_battery = bool(detail.get("hasBattery", False))
             has_pv = bool(detail.get("hasPV", False))
             has_scheduler = bool((detail.get("function") or {}).get("scheduler", False))
+            third_party = bool(detail.get("thirdPartyGen", False))
 
             functions = []
             if has_pv:
@@ -2462,18 +2583,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             if has_battery:
                 functions.append("battery")
 
-            # "schedule" is the spec's token for a device-side scheduler; export_limit has no spec
-            # equivalent. A third-party generator this inverter meters is topology, not something
-            # the inverter can do, so it is a flag rather than a capability.
-            capabilities = []
-            if has_scheduler:
-                capabilities.append("schedule")
-            settings = self.device_settings.get(serial, {}) or {}
-            # Matched case-insensitively, as automatic_config() does when it sets hasExportLimit
-            if any(str(name).lower() == "exportlimit" for name in settings):
-                capabilities.append("export_limit")
             flags = []
-            if detail.get("thirdPartyGen", False):
+            if third_party:
                 flags.append("third_party_gen")
 
             info = {}
@@ -2497,7 +2608,13 @@ class FoxAPI(ComponentBase, OAuthMixin):
             capacity_is_rating = isinstance(capacity, (int, float)) and capacity > 0
             ratings = {}
             if capacity_is_rating:
-                ratings["inverter_w"] = self.capacity_watts(detail)
+                ratings["inverter_limit"] = self.capacity_watts(detail)
+            settings = self.device_settings.get(serial, {}) or {}
+            export_setting = self._device_setting(settings, "ExportLimit")
+            for rating, entry in (("export_limit", export_setting), ("import_limit", self._device_setting(settings, "ImportLimit"))):
+                value = self._setting_number(entry)
+                if value is not None:
+                    ratings[rating] = value
             battery_list = detail.get("batteryList") or []
             summed = [entry for entry in battery_list if isinstance(entry, dict) and "capacity" in entry] if isinstance(battery_list, list) else []
             if summed:
@@ -2510,6 +2627,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
             # path; test_fox_build_discovery_sets_inverter_type_only_where_automatic_config_would
             # runs the real automatic_config() to keep the two in step.
             drives_it = has_battery and has_scheduler and capacity_is_rating
+            entities = None
+            if drives_it:
+                entities = self._discovery_entities(serial, has_pv, third_party, export_setting is not None, driven_count == 0)
+                driven_count += 1
+            elif has_pv and not has_battery:
+                entities = self._discovery_pv_entities(serial, has_pv, third_party)
 
             inverters.append(
                 inverter_record(
@@ -2517,11 +2640,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     inverter_type="FoxCloud" if drives_it else None,
                     composition="direct",
                     functions=functions,
-                    capabilities=capabilities,
+                    capabilities=FOX_CAPABILITIES if drives_it else None,
                     flags=flags,
                     hardware_ids={"serial": serial},
                     info=info,
                     ratings=ratings,
+                    entities=entities,
                 )
             )
 

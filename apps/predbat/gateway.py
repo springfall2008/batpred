@@ -12,6 +12,7 @@ import json
 import math
 import os
 import ssl
+import threading
 import time
 import uuid
 import traceback
@@ -55,6 +56,21 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
 
+# How long an identical control command waits for the hub's ack (or, after an ack,
+# for telemetry to catch up) before it may be published again (seconds). Longer than
+# the generic write_and_poll loop (10 x 2 s), so one write sends the command once.
+_COMMAND_ACK_WINDOW = 30
+
+# Ids kept per tracked command, so an ack for an earlier send of the same value still
+# counts (matches the number of recent ids the hub remembers for replay protection)
+_COMMAND_ACK_IDS_KEPT = 16
+
+
+def _monotonic():
+    """Clock for the ack window: immune to wall-clock corrections, and patchable in tests."""
+    return time.monotonic()
+
+
 # Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
 _STARTUP_WAIT_TICKS = 120 * 2
 _STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
@@ -87,6 +103,7 @@ PLAN_MODE_DISCHARGE = 2
 GATEWAY_ATTRIBUTE_TABLE = {
     # Binary sensors
     "gateway_online": {"friendly_name": "Gateway Online", "device_class": "connectivity"},
+    "gateway_read_only": {"friendly_name": "Gateway Read-Only (enforced)", "icon": "mdi:lock"},
     # Timestamps
     "inverter_time": {"friendly_name": "Inverter Time", "icon": "mdi:clock", "device_class": "timestamp"},
     # Battery state
@@ -184,6 +201,10 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
+    # Guards the command id counter and the in-flight command map, which are touched both by
+    # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
+    _command_lock = threading.Lock()
+
     def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
@@ -240,6 +261,8 @@ class GatewayMQTT(ComponentBase):
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
         self.topic_ev_command = f"{self._topic_base}/ev/command"
+        self.topic_ack = f"{self._topic_base}/ack/+"
+        self._ack_topic_prefix = f"{self._topic_base}/ack/"
 
         # Runtime state
         self._mqtt_client = None
@@ -279,7 +302,18 @@ class GatewayMQTT(ComponentBase):
         self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
         self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
-        self._command_id = 0  # incrementing counter included in every published command
+        # Incrementing counter included in every published command, seeded from the clock so
+        # ids do not restart at PBAT1 after a restart: the hub rejects ids it has recently seen
+        # as replays, and a late ack for the previous process's PBAT1 must not match ours.
+        self._command_id = int(time.time() * 1000)
+
+        # Command acks (predbat/devices/<id>/ack/<command_id>). Control writes are
+        # tracked per entity so an identical re-send can wait for the hub's ack
+        # instead of queueing another Modbus write every poll. See _send_control().
+        self._pending_commands = {}  # entity_id -> {command_ids, outcomes, command, kwargs, state, sent_at, resent, cached (id that updated the cache)}
+        self._ack_subscribed = False  # broker granted the ack subscription on this connection
+        self._acks_seen = False  # at least one ack matched a tracked command on this connection
+        self._ack_subscribe_warned = False  # the denied-subscription warning is logged once
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
@@ -293,6 +327,9 @@ class GatewayMQTT(ComponentBase):
         # Monotonic-ish timestamp of the last set_read_only send, used to force a
         # periodic re-send so the gateway re-syncs even if a command was missed
         self._last_read_only_sent_time = 0
+        # Latch so a gateway whose reported read-only state disagrees with what PredBat
+        # requested is logged once per transition, not on every status cycle
+        self._read_only_mismatch_logged = False
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -646,6 +683,12 @@ class GatewayMQTT(ComponentBase):
                     await client.subscribe(self.topic_online, qos=1)
                     self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_status} and {self.topic_online}")
 
+                    # Command acks are optional: without them control writes behave as before
+                    with self._command_lock:
+                        self._pending_commands = {}
+                        self._acks_seen = False
+                    self._ack_subscribed = await self._subscribe_acks(client)
+
                     async for message in client.messages:
                         if self.api_stop:
                             break
@@ -659,6 +702,7 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: MQTT connection error: {e}")
                 self._mqtt_connected = False
                 self._mqtt_client = None
+                self._ack_subscribed = False
                 self._first_connection_attempted = True
 
                 if self.api_stop:
@@ -675,6 +719,28 @@ class GatewayMQTT(ComponentBase):
 
         self._mqtt_connected = False
         self._mqtt_client = None
+        self._ack_subscribed = False
+
+    async def _subscribe_acks(self, client):
+        """Subscribe to the hub's per-command acks, tolerating a broker that refuses it.
+
+        Returns:
+            bool: True if the broker granted the subscription.
+        """
+        try:
+            result = await client.subscribe(self.topic_ack, qos=0)
+            code = result[0] if result else 0x80
+            code = int(getattr(code, "value", code))
+            if code < 0x80:
+                self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_ack}")
+                return True
+            reason = f"refused by broker, code {code}"
+        except Exception as e:
+            reason = str(e)
+        if not self._ack_subscribe_warned:
+            self._ack_subscribe_warned = True
+            self.log(f"Warn: GatewayMQTT: Cannot subscribe to command acks ({reason}) - control writes will be re-sent until telemetry confirms them")
+        return False
 
     async def _handle_message(self, message):
         """Dispatch an incoming MQTT message to the appropriate handler.
@@ -687,6 +753,8 @@ class GatewayMQTT(ComponentBase):
         try:
             if topic == self.topic_status:
                 self._process_telemetry(message.payload)
+            elif topic.startswith(getattr(self, "_ack_topic_prefix", "\0")):
+                self._process_ack(message.payload)
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
@@ -791,12 +859,26 @@ class GatewayMQTT(ComponentBase):
         device_id = status.device_id
         firmware = status.firmware
 
+        # Read-only as the gateway actually enforces it. Absent on firmware predating
+        # the field, which is UNKNOWN and not False — publishing False there would claim
+        # the gateway is controllable when nothing has reported either way.
+        read_only = status.read_only if status.HasField("read_only") else None
+
         self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_online",
             True,
-            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware},
+            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware, "read_only": read_only},
             app="gateway",
         )
+
+        if read_only is not None:
+            self.dashboard_item(
+                f"binary_sensor.{self.prefix}_gateway_read_only",
+                read_only,
+                attributes=GATEWAY_ATTRIBUTE_TABLE.get("gateway_read_only", {}),
+                app="gateway",
+            )
+            self._check_read_only_mismatch(read_only)
 
         # Inverter time from gateway timestamp — write it under the suffix PredBat
         # actually reads (the control target), not the primary's, or the bound
@@ -919,12 +1001,7 @@ class GatewayMQTT(ComponentBase):
             ("discharge_end", "discharge_slot1_end"),
         ]:
             hhmm = getattr(sched, field, 0) if sched else 0
-            hours = hhmm // 100
-            minutes = hhmm % 100
-            if hours >= 24:
-                hours = 0  # firmware sends 2400 for midnight end-of-day
-            time_str = f"{hours:02d}:{minutes:02d}:00"
-            self.dashboard_item(f"select.{pfx}_{name}", time_str, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            self.dashboard_item(f"select.{pfx}_{name}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
 
         # Inverter time (from GatewayStatus timestamp for clock drift detection)
         if self._last_status and self._last_status.timestamp:
@@ -1592,6 +1669,27 @@ class GatewayMQTT(ComponentBase):
         self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
 
+    def _check_read_only_mismatch(self, reported):
+        """Warn when the gateway's enforced read-only state differs from what PredBat asked for.
+
+        Observe-only: called from the telemetry path with the value the gateway reports in
+        its status, and never sends a command. _last_read_only holds the value of the last
+        set_read_only command PredBat published, so the two are directly comparable; it is
+        None before the first send (and after a disconnect forces a re-send), in which case
+        there is nothing to compare against yet.
+
+        The status arrives every cycle, so the warning is latched and logged once per
+        transition into disagreement, and the latch is cleared as soon as the two agree
+        again — otherwise a stuck gateway would fill the log.
+        """
+        requested = self._last_read_only
+        if requested is None or reported == requested:
+            self._read_only_mismatch_logged = False
+            return
+        if not self._read_only_mismatch_logged:
+            self.log(f"Warn: GatewayMQTT: gateway reports read_only={reported} but PredBat requested {requested}")
+            self._read_only_mismatch_logged = True
+
     async def _check_inverter_resets(self):
         """Send inverter_reset for each configured inverter not yet reset in control mode.
 
@@ -1667,15 +1765,23 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_publish_time = time.time()
         self.log("Info: GatewayMQTT: Re-published execution plan (refreshed timestamp)")
 
-    async def publish_command(self, command, **kwargs):
+    def _next_command_id(self):
+        """Allocate the next command id number (callers may be on different threads)."""
+        with self._command_lock:
+            self._command_id += 1
+            return self._command_id
+
+    async def publish_command(self, command, command_id=None, **kwargs):
         """Build and publish a JSON command to the gateway.
 
         Args:
             command: Command name (set_charge_rate, set_reserve, etc.)
+            command_id: Pre-allocated id number (from _next_command_id); allocated here when None.
             **kwargs: Command-specific fields (power_w, target_soc, etc.).
         """
-        self._command_id += 1
-        cmd_json = self.build_command(command, command_id=self._command_id, **kwargs)
+        if command_id is None:
+            command_id = self._next_command_id()
+        cmd_json = self.build_command(command, command_id=command_id, **kwargs)
 
         self.log("Info: GatewayMQTT: publish_command: command={}, payload={}".format(command, cmd_json))
 
@@ -1797,7 +1903,7 @@ class GatewayMQTT(ComponentBase):
             schedule = {"start": hhmm}
         else:
             schedule = {"end": hhmm}
-        await self.publish_command("set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
+        await self._send_control(entity_id, "set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
         self.log(f"Info: GatewayMQTT: Charge slot update: {schedule}")
 
     async def _update_discharge_slot(self, entity_id, hhmm, serial):
@@ -1806,7 +1912,7 @@ class GatewayMQTT(ComponentBase):
             schedule = {"start": hhmm}
         else:
             schedule = {"end": hhmm}
-        await self.publish_command("set_discharge_slot", schedule_json=json.dumps(schedule), serial=serial)
+        await self._send_control(entity_id, "set_discharge_slot", schedule_json=json.dumps(schedule), serial=serial)
         self.log(f"Info: GatewayMQTT: Discharge slot update: {schedule}")
 
     async def number_event(self, entity_id, value):
@@ -1829,13 +1935,13 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: number_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
         if "_discharge_rate" in entity_id:
-            await self.publish_command("set_discharge_rate", power_w=val, serial=serial)
+            await self._send_control(entity_id, "set_discharge_rate", power_w=val, serial=serial)
         elif "_charge_rate" in entity_id:
-            await self.publish_command("set_charge_rate", power_w=val, serial=serial)
+            await self._send_control(entity_id, "set_charge_rate", power_w=val, serial=serial)
         elif "_reserve" in entity_id:
-            await self.publish_command("set_reserve", target_soc=val, serial=serial)
+            await self._send_control(entity_id, "set_reserve", target_soc=val, serial=serial)
         elif "_target_soc" in entity_id:
-            await self.publish_command("set_target_soc", target_soc=val, serial=serial)
+            await self._send_control(entity_id, "set_target_soc", target_soc=val, serial=serial)
 
     async def switch_event(self, entity_id, service):
         """Handle switch entity service calls (charge/discharge enable).
@@ -1864,11 +1970,213 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: switch_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
         if "_charge_enabled" in entity_id:
-            await self.publish_command("set_charge_enable", enable=is_on, serial=serial)
+            await self._send_control(entity_id, "set_charge_enable", enable=is_on, serial=serial)
             self.log(f"Info: GatewayMQTT: Charge {'enabled' if is_on else 'disabled'}")
         elif "_discharge_enabled" in entity_id:
-            await self.publish_command("set_discharge_enable", enable=is_on, serial=serial)
+            await self._send_control(entity_id, "set_discharge_enable", enable=is_on, serial=serial)
             self.log(f"Info: GatewayMQTT: Discharge {'enabled' if is_on else 'disabled'}")
+
+    async def _send_control(self, entity_id, command, **kwargs):
+        """Publish a control write once and let the hub's ack confirm it.
+
+        The generic write_and_poll loop calls the event handlers again every couple of
+        seconds until the read-back matches. Publishing on every call queued a fresh
+        Modbus write on the hub each time, so a slow dongle write turned into a storm.
+        Once the hub has shown it acks commands on this connection, an identical command
+        (same entity, command and payload) is published only once per _COMMAND_ACK_WINDOW:
+        while it waits for its ack, after an ok ack (telemetry may lag), and after a
+        refusal (re-sending cannot change the answer). A different value is published
+        immediately and replaces the tracked one. A command still unanswered after the window
+        is re-sent once; if that goes unanswered too, acks stop being relied on until the
+        next one arrives. With no ack subscription, or before any ack has been seen,
+        every call publishes exactly as before.
+
+        Args:
+            entity_id: The entity being written, used as the tracking key.
+            command: Command name (set_charge_slot, set_charge_enable, ...).
+            **kwargs: Command fields passed on to publish_command.
+        """
+        if not (getattr(self, "_ack_subscribed", False) and self._mqtt_connected):
+            await self.publish_command(command, **kwargs)
+            return
+
+        now = _monotonic()
+        with self._command_lock:
+            entry = self._pending_commands.get(entity_id)
+            same = entry is not None and entry["command"] == command and entry["kwargs"] == kwargs
+            if same and self._acks_seen:
+                if now - entry["sent_at"] < _COMMAND_ACK_WINDOW:
+                    self.log(f"Info: GatewayMQTT: {command} for {kwargs.get('serial')} already sent as {entry['command_ids'][-1]} ({entry['state']}), not re-sending")
+                    return
+                if entry["state"] == "sent" and entry["resent"]:
+                    self._acks_seen = False
+                    self.log(f"Warn: GatewayMQTT: {command} for {kwargs.get('serial')} was never acknowledged, re-sending until telemetry confirms it")
+            if not same:
+                entry = {"command_ids": [], "outcomes": {}, "command": command, "kwargs": dict(kwargs), "state": "sent", "sent_at": now, "resent": False, "cached": None, "cached_ids": [], "attempt_ids": [], "acks": 0}
+                self._pending_commands[entity_id] = entry
+            previous = {"attempt_ids": list(entry["attempt_ids"]), "state": entry["state"], "sent_at": entry["sent_at"], "resent": entry["resent"], "cached": entry["cached"]}
+            if entry["state"] != "sent":
+                # A fresh attempt after the previous one was answered. Earlier ids and their
+                # outcomes stay, so a late ack from another unit is still logged and acted on and
+                # a refusal still outranks that id's later ok.
+                entry.update(state="sent", resent=False, cached=None, attempt_ids=[])
+            elif self._acks_seen and entry["command_ids"]:
+                entry["resent"] = True  # the one re-send after an unanswered window
+            command_id = self._command_id = self._command_id + 1
+            command_ref = f"PBAT{command_id}"
+            # Earlier ids of the same value stay matchable: an ack for any of them confirms it.
+            # The oldest id is only pruned once this send has gone out (see below).
+            entry["command_ids"] = entry["command_ids"] + [command_ref]
+            entry["attempt_ids"] = entry["attempt_ids"] + [command_ref]
+            entry["sent_at"] = now
+            acks_before = entry["acks"]
+
+        try:
+            await self.publish_command(command, command_id=command_id, **kwargs)
+        except BaseException:
+            # This id was never sent, so it must not hold back the next attempt; ids that
+            # were sent earlier stay matchable
+            with self._command_lock:
+                # An ack for this id may already have arrived while the publish was awaiting its
+                # broker confirmation: then the command did reach the hub, so keep it
+                if self._pending_commands.get(entity_id) is entry and command_ref in entry["command_ids"] and command_ref not in entry["outcomes"]:
+                    entry["command_ids"].remove(command_ref)
+                    entry["attempt_ids"].remove(command_ref)
+                    if not entry["command_ids"]:
+                        del self._pending_commands[entity_id]
+                    elif entry["acks"] == acks_before:
+                        # No ack arrived meanwhile: back to how the earlier attempt left it
+                        entry.update(previous)
+            raise
+
+        with self._command_lock:
+            # Keep the id history bounded now that this send is out
+            if self._pending_commands.get(entity_id) is entry and len(entry["command_ids"]) > _COMMAND_ACK_IDS_KEPT:
+                entry["command_ids"] = entry["command_ids"][-_COMMAND_ACK_IDS_KEPT:]
+                entry["outcomes"] = {key: value for key, value in entry["outcomes"].items() if key in entry["command_ids"]}
+                entry["attempt_ids"] = [ref for ref in entry["attempt_ids"] if ref in entry["command_ids"]]
+                entry["cached_ids"] = [ref for ref in entry["cached_ids"] if ref in entry["command_ids"]]
+
+    def _process_ack(self, data):
+        """Handle a command ack from the hub.
+
+        Every id sent for a tracked value carries the same payload, so an ok for any of
+        them means the value was applied. A command reaching several units acks once per
+        unit under the same id: there a refusal outranks an ok.
+
+        Args:
+            data: Raw JSON payload from predbat/devices/<id>/ack/<command_id>.
+        """
+        try:
+            ack = json.loads(data)
+        except (ValueError, TypeError) as e:
+            self.log(f"Warn: GatewayMQTT: Failed to decode command ack: {e}")
+            return
+        if not isinstance(ack, dict):
+            return
+        command_id = str(ack.get("command_id", ""))
+        ok = ack.get("ok") is True
+        error = ack.get("error") or "unknown"
+        replay = not ok and error == "replay"
+        apply_cache = restore_status = keep_entry = False
+
+        with self._command_lock:
+            entity_id, entry = next(((e, r) for e, r in self._pending_commands.items() if command_id in r["command_ids"]), (None, None))
+            # Acks for other senders or superseded values are ignored
+            if entry is None or ack.get("command", entry["command"]) != entry["command"]:
+                return
+            self._acks_seen = True
+            entry["acks"] += 1  # lets a failing publish tell whether any ack arrived meanwhile
+            # A replay for the newest id, before any unit answered it, means the hub has seen that
+            # id before and never considered this send. Drop the id; if nothing else has answered
+            # the value, let the next attempt go out under a fresh id straight away. For an older
+            # or already-answered id a replay is just another unit's refusal.
+            drop_replay = replay and entry["command_ids"][-1] == command_id and command_id not in entry["outcomes"]
+            keep_entry = drop_replay and any(entry["outcomes"].get(ref) == "ok" for ref in entry["attempt_ids"])
+            if keep_entry:
+                # Another send in this attempt already applied the value: only forget this id
+                entry["command_ids"].remove(command_id)
+                entry["attempt_ids"].remove(command_id)
+                entry["sent_at"] = _monotonic()  # still a refusal: the window runs from it
+            elif drop_replay:
+                del self._pending_commands[entity_id]
+            else:
+                if ok and entry["outcomes"].get(command_id) == "refused":
+                    return  # a refusal for this id outranks any other unit's ok
+                entry["outcomes"][command_id] = "ok" if ok else "refused"
+                entry["state"] = "applied" if "ok" in entry["outcomes"].values() else "refused"
+                if not ok:
+                    entry["sent_at"] = _monotonic()  # the window runs from the latest refusal
+                    # Another unit refused an id whose ok updated the cache (in this attempt or an
+                    # earlier one): that update overstated what was applied, so put back the last
+                    # telemetry until the next status arrives
+                    restore_status = command_id in entry["cached_ids"]
+                    if restore_status:
+                        entry["cached_ids"].remove(command_id)
+                    if entry["cached"] == command_id:
+                        entry["cached"] = None
+                apply_cache = ok and entry["cached"] is None
+            command = entry["command"]
+            serial = entry["kwargs"].get("serial")
+
+        if ok:
+            self.log(f"Info: GatewayMQTT: {command} for {serial} acknowledged by hub ({command_id}) applied={ack.get('applied')}")
+            if apply_cache and self._apply_ack(entity_id, command, ack.get("applied")):
+                with self._command_lock:
+                    if self._pending_commands.get(entity_id) is entry and entry["outcomes"].get(command_id) == "ok":
+                        entry["cached"] = command_id
+                        entry["cached_ids"] = entry["cached_ids"][-(_COMMAND_ACK_IDS_KEPT - 1) :] + [command_id]
+        elif drop_replay:
+            action = "already applied by another send" if keep_entry else "re-sending with a new id"
+            self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), {action}")
+        else:
+            self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
+            if restore_status and self._last_status is not None:
+                self._inject_entities(self._last_status)
+
+    def _apply_ack(self, entity_id, command, applied):
+        """Update the cached entity from an ok ack so the write's read-back matches without waiting for telemetry.
+
+        Only the values that map cleanly are applied: slot start/end actually written and
+        charge/discharge enables. Staged or recorded EMS slot endpoints are not written to
+        the inverter, and numbers wait for telemetry.
+
+        Returns:
+            bool: True if a cached entity was updated.
+        """
+        if not isinstance(applied, dict):
+            return False
+        if command in ("set_charge_slot", "set_discharge_slot"):
+            if applied.get("staged") or applied.get("recorded"):
+                return False
+            start, end = applied.get("start"), applied.get("end")
+            if not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 2400 for v in (start, end)):
+                return False
+            name = "discharge_slot1" if command == "set_discharge_slot" else "charge_slot1"
+            suffix = next((f"_{name}_{field}" for field in ("start", "end") if entity_id.endswith(f"_{name}_{field}")), None)
+            if suffix is None:
+                return False
+            base = entity_id[: -len(suffix)]
+            for field, hhmm in (("start", start), ("end", end)):
+                self.dashboard_item(f"{base}_{name}_{field}", self._hhmm_to_time_str(hhmm), attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{name}_{field}", {}), app="gateway")
+            return True
+        elif command in ("set_charge_enable", "set_discharge_enable"):
+            enable = applied.get("enable")
+            if not isinstance(enable, bool):
+                return False
+            name = "discharge_enabled" if command == "set_discharge_enable" else "charge_enabled"
+            self.dashboard_item(entity_id, "on" if enable else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
+            return True
+        return False
+
+    @staticmethod
+    def _hhmm_to_time_str(hhmm):
+        """Convert an HHMM integer to the HH:MM:SS string the schedule selects use (2400 -> 00:00:00)."""
+        hours = hhmm // 100
+        minutes = hhmm % 100
+        if hours >= 24:
+            hours = 0  # firmware sends 2400 for midnight end-of-day
+        return f"{hours:02d}:{minutes:02d}:00"
 
     async def final(self):
         """Cleanup: cancel listener task, disconnect."""

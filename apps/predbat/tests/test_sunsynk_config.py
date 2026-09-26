@@ -14,7 +14,8 @@ from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
 from coordinator import validate_report
 from sunsynk_const import SUNSYNK_TTL_STATIC
-from sunsynk import load_apps_yaml_credentials, _tou_test_window
+from sunsynk import SunsynkAPI, load_apps_yaml_credentials, _tou_test_window
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_sunsynk_publish import PublishingSunsynk
 from tests.test_infra import run_async as run_async_local
@@ -352,6 +353,18 @@ def test_run_first_cycle_polls_and_publishes():
 
 SUNSYNK_LIVE_SERIAL = "2405116013"
 
+# The seven behaviour keys as the SunsynkCloud INVERTER_DEF row states them (config.py). Spelled out, not
+# read from the row, so a change to either side shows up here.
+SUNSYNK_ROW_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
 
 def _sunsynk_fleet():
     """A MockSunsynk holding one inverter built from sunsynk_const.py's CONFIRMED-live values only.
@@ -371,7 +384,7 @@ def _sunsynk_fleet():
 
 
 def test_sunsynk_catalogue_describes_each_inverter():
-    """Each inverter is a SunsynkCloud record with the confirmed-live ratings."""
+    """Each inverter is a SunsynkCloud record with the confirmed-live ratings under Predbat's setting names."""
     failed = False
     s = _sunsynk_fleet()
     record = s.build_discovery()["inverters"][0]
@@ -381,18 +394,22 @@ def test_sunsynk_catalogue_describes_each_inverter():
         (record["composition"], "direct"),
         (record["functions"], ["solar", "battery"]),
         (record["hardware_ids"], {"serial": SUNSYNK_LIVE_SERIAL}),
-        (sorted(record["capabilities"]), ["charge_rate_power", "discharge_target", "export_limit", "schedule", "target_soc"]),
-        (record["ratings"]["inverter_w"], 8000.0),
+        (record["capabilities"], SUNSYNK_ROW_CAPABILITIES),
+        (record["ratings"]["inverter_limit"], 8000.0),
+        (record["ratings"]["export_limit"], 7000.0),
         (record["ratings"]["battery_capacity_ah"], 200.0),
-        (record["ratings"]["battery_kwh"], s.battery_capacity(SUNSYNK_LIVE_SERIAL)),
+        (record["entities"]["soc_max"]["entity_id"], s._sensor_name(SUNSYNK_LIVE_SERIAL, "battery_capacity")),
     ]
     for actual, expected in checks:
         if actual != expected:
             print("ERROR: expected {!r}, got {!r}".format(expected, actual))
             failed = True
-    if abs(record["ratings"]["battery_kwh"] - 10.24) > 0.01:
-        print("ERROR: the confirmed-live pack is 10.24 kWh, got {}".format(record["ratings"]["battery_kwh"]))
-        failed = True
+    # Spec D14: the kWh is Predbat's derivation (Ah x an inferred or user-set pack voltage), so it is
+    # bound as the battery_capacity sensor above but is not a rating
+    for old in ("inverter_w", "battery_kwh", "max_charge_w", "soc_max"):
+        if old in record["ratings"]:
+            print("ERROR: rating {} must be absent (renamed, or a Predbat derivation): {}".format(old, record["ratings"]))
+            failed = True
     for absent in ("info", "account_ids"):
         if absent in record:
             print("ERROR: Sunsynk holds no model, firmware or station ID, so {} must be absent: {}".format(absent, record[absent]))
@@ -401,63 +418,63 @@ def test_sunsynk_catalogue_describes_each_inverter():
 
 
 def test_sunsynk_catalogue_export_limit_only_on_evidence():
-    """export_limit is reported per device where export_limit() > 0 - the per-device half of automatic_config()'s test, which binds the arg only when every inverter passes it."""
+    """The export_limit rating is the raw pvMaxLimit only; the entity follows automatic_config()'s export_limit() test.
+
+    export_limit() falls back to the inverter rating when pvMaxLimit is absent, so automatic_config()
+    still binds the export_limit sensor, and so does the record - but the rating is the configured
+    cap (spec D1), which this install has not stated, so there is no rating.
+    """
+    failed = False
     s = _sunsynk_fleet()
-    s.device_rated_power = {}
     s.device_settings = {}
     record = s.build_discovery()["inverters"][0]
-    if "export_limit" in record.get("capabilities", []):
-        print("ERROR: with no rating and no pvMaxLimit, export_limit() is 0 and the capability must be absent")
-        return True
-    return False
+    if "export_limit" in record.get("ratings", {}):
+        print("ERROR: with no pvMaxLimit there is no configured export cap to report: {}".format(record["ratings"]))
+        failed = True
+    if record.get("entities", {}).get("export_limit", {}).get("entity_id") != s._sensor_name(SUNSYNK_LIVE_SERIAL, "export_limit"):
+        print("ERROR: export_limit() falls back to the rating, so the export_limit sensor is bound: {}".format(record.get("entities", {}).get("export_limit")))
+        failed = True
+    nothing = _sunsynk_fleet()
+    nothing.device_rated_power = {}
+    nothing.device_settings = {}
+    record = nothing.build_discovery()["inverters"][0]
+    if "export_limit" in record.get("ratings", {}) or "export_limit" in record.get("entities", {}):
+        print("ERROR: with no rating and no pvMaxLimit, export_limit() is 0 - no rating and no entity: {}".format(record))
+        failed = True
+    return failed
 
 
 def test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll():
-    """A poll that omits the battery fields keeps the last battery ratings, as the published sensor does.
+    """A poll that omits the battery fields keeps the last battery Ah rating, as the published sensors keep their state.
 
     fetch_device_data() rebuilds device_values from every poll and leaves out a field the battery
-    endpoint did not return. publish_data() then skips the battery_capacity sensor, so Home
-    Assistant - and Predbat's soc_max - keep the last value. The catalogue keeps its last ratings
-    too, rather than filing a thinner report and then the full one again when the fields return.
+    endpoint did not return. publish_data() then skips the battery sensors, so Home Assistant - and
+    Predbat's soc_max - keep the last value. The catalogue keeps its last Ah too, rather than filing a
+    thinner report and then the full one again when the fields return. The kWh is never a rating
+    (spec D14), so there is no Ah/kWh pair left to keep consistent.
     """
     failed = False
     s = _sunsynk_fleet()
     sn = SUNSYNK_LIVE_SERIAL
     full = s.build_discovery()
-    # A new capacity with no chargeVolt cannot give a kWh for it, so the kept Ah and kWh stay
-    # together rather than a new Ah being filed beside the old kWh
-    for name, partial in (("no capacity", {"chargeVolt": 58.4}), ("no chargeVolt", {"capacity": 200}), ("new capacity, no chargeVolt", {"capacity": 280}), ("no battery fields", {})):
+    for name, partial in (("no capacity", {"chargeVolt": 58.4}), ("no battery fields", {})):
         s.device_values = {sn: dict(partial)}
         if s.build_discovery() != full:
             print("ERROR: {}: the report changed on a partial poll: {}".format(name, s.build_discovery()))
             failed = True
 
-    # A poll that does carry the fields replaces the kept ratings: 280 Ah at 51.2 V nominal
-    s.device_values = {sn: {"capacity": 280, "chargeVolt": 58.4}}
+    # A poll that carries a new Ah replaces the kept one, with or without a chargeVolt
+    s.device_values = {sn: {"capacity": 280}}
     ratings = s.build_discovery()["inverters"][0]["ratings"]
-    if ratings.get("battery_capacity_ah") != 280.0 or ratings.get("battery_kwh") != 14.34:
-        print("ERROR: fresh battery fields must replace the kept ratings: {}".format(ratings))
-        failed = True
-
-    # An install that has never reported a chargeVolt still reports the Ah it states, with no kWh,
-    # and gains the kWh once a poll carries both
-    ah_only = _sunsynk_fleet()
-    ah_only.device_values = {sn: {"capacity": 200}}
-    ratings = ah_only.build_discovery()["inverters"][0]["ratings"]
-    if ratings.get("battery_capacity_ah") != 200.0 or "battery_kwh" in ratings:
-        print("ERROR: an Ah-only install must report its Ah and no kWh: {}".format(ratings))
-        failed = True
-    ah_only.device_values = {sn: {"capacity": 200, "chargeVolt": 58.4}}
-    ratings = ah_only.build_discovery()["inverters"][0]["ratings"]
-    if ratings.get("battery_capacity_ah") != 200.0 or ratings.get("battery_kwh") != 10.24:
-        print("ERROR: a poll carrying both fields must add the kWh: {}".format(ratings))
+    if ratings.get("battery_capacity_ah") != 280.0 or "soc_max" in ratings:
+        print("ERROR: a fresh Ah must replace the kept one, and soc_max is never a rating: {}".format(ratings))
         failed = True
 
     # Nothing is invented for an inverter whose battery fields have never been seen
     s.device_list = [sn, "UNSEEN1"]
     unseen = {record["device_id"]: record for record in s.build_discovery()["inverters"]}["sunsynk:UNSEEN1"]
-    if {"battery_kwh", "battery_capacity_ah"} & set(unseen.get("ratings", {})):
-        print("ERROR: an inverter never polled must carry no battery ratings: {}".format(unseen.get("ratings")))
+    if {"soc_max", "battery_capacity_ah"} & set(unseen.get("ratings", {})) or "soc_max" in unseen.get("entities", {}):
+        print("ERROR: an inverter never polled must carry no battery rating or capacity binding: {}".format(unseen))
         failed = True
     return failed
 
@@ -479,6 +496,169 @@ def test_sunsynk_catalogue_round_trips_through_validate_report():
         print("ERROR: validation changed or warned on the report: {} {}".format(warnings, cleaned.get("inverters")))
         return True
     return False
+
+
+def _sunsynk_driven_fleet(serials=(SUNSYNK_LIVE_SERIAL,)):
+    """A MockSunsynk whose inverters report everything automatic_config() binds.
+
+    The confirmed-live figures of _sunsynk_fleet() (ratePower 8000, pvMaxLimit 7000, 200 Ah at
+    chargeVolt 58.4) plus the confirmed-live importPower 10350, a batteryLowCap floor, a charge
+    current limit and every daily energy counter, so every conditional binding in
+    automatic_config() is taken.
+    """
+    s = MockSunsynk()
+    s.device_list = list(serials)
+    for sn in serials:
+        s.device_rated_power[sn] = 8000.0
+        s.device_values[sn] = {"soc": 50, "capacity": 200, "chargeVolt": 58.4, "chargeCurrentLimit": 100}
+        s.device_energy[sn] = {"pv_today": 1.0, "import_today": 1.0, "export_today": 1.0, "load_today": 1.0, "battery_charge_today": 1.0, "battery_discharge_today": 1.0}
+        s.device_settings[sn] = {"batteryLowCap": "20", "pvMaxLimit": "7000", "importPower": "10350"}
+    return s
+
+
+def test_sunsynk_record_rebuilds_its_inverter_def_row():
+    """Completeness: the record alone, with no INVERTER_DEF row as a base, rebuilds the SunsynkCloud row."""
+    s = _sunsynk_driven_fleet()
+    for record in validated_inverters(s.build_discovery()):
+        assert_definition_complete(record, SunsynkAPI.WRITE_AND_POLL_SLEEP)
+    return False
+
+
+def test_sunsynk_record_agrees_with_automatic_config():
+    """Agreement both ways: every setting automatic_config() binds is in the record, and the record binds nothing more."""
+    s = _sunsynk_driven_fleet()
+    records = validated_inverters(s.build_discovery())
+    captured = capture_automatic_config(s)
+    assert_record_agrees(records[0], captured, index=0)
+    assert_record_binds_nothing_extra(records[0], captured, index=0)
+    return False
+
+
+def test_sunsynk_two_inverters_give_two_records_with_their_own_entities():
+    """Review Focus 1: two inverters give two records, each binding its own serial's entities and agreeing at its own index."""
+    failed = False
+    s = _sunsynk_driven_fleet(("2405116013", "2211093089"))
+    records = validated_inverters(s.build_discovery())
+    if [record["device_id"] for record in records] != ["sunsynk:2405116013", "sunsynk:2211093089"]:
+        print("ERROR: expected one record per serial, got {}".format([record["device_id"] for record in records]))
+        return True
+    captured = capture_automatic_config(s)
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    first, second = (record["entities"] for record in records)
+    if set(first) != set(second):
+        print("ERROR: both inverters report the same data, so they bind the same settings: {} vs {}".format(sorted(first), sorted(second)))
+        failed = True
+    for setting in sorted(set(first) & set(second)):
+        if first[setting]["entity_id"] == second[setting]["entity_id"]:
+            print("ERROR: {} is bound to the same entity {} for both inverters".format(setting, first[setting]["entity_id"]))
+            failed = True
+    return failed
+
+
+def test_sunsynk_record_ratings_are_the_configured_figures():
+    """Spec D1: export_limit is the raw pvMaxLimit and import_limit the raw importPower, never capped by the rating.
+
+    A cap set above the inverter's rating is reported as set. export_limit() - the state of the
+    export_limit sensor automatic_config() binds - is the lower of the two, 8000; the rating is
+    the configured 9000.
+    """
+    failed = False
+    s = _sunsynk_driven_fleet()
+    s.device_settings[SUNSYNK_LIVE_SERIAL]["pvMaxLimit"] = "9000"
+    record = s.build_discovery()["inverters"][0]
+    expected = {"inverter_limit": 8000.0, "export_limit": 9000.0, "import_limit": 10350.0, "battery_min_soc": 20, "battery_capacity_ah": 200.0}
+    if record["ratings"] != expected:
+        print("ERROR: ratings {}, expected {}".format(record["ratings"], expected))
+        failed = True
+    if s.export_limit(SUNSYNK_LIVE_SERIAL) != 8000.0:
+        print("ERROR: export_limit() should still be the lower of cap and rating, got {}".format(s.export_limit(SUNSYNK_LIVE_SERIAL)))
+        failed = True
+    if record["entities"]["export_limit"] != {"entity_id": s._sensor_name(SUNSYNK_LIVE_SERIAL, "export_limit"), "access": "r", "unit": "W"}:
+        print("ERROR: the export_limit binding must be automatic_config()'s sensor: {}".format(record["entities"]["export_limit"]))
+        failed = True
+    return failed
+
+
+def test_sunsynk_record_keeps_pv_despite_automatic_ignore_pv():
+    """Spec D11: automatic_ignore_pv stops automatic_config() binding PV, but the record still describes the device's PV."""
+    failed = False
+    s = _sunsynk_driven_fleet()
+    s.automatic_ignore_pv = True
+    record = validated_inverters(s.build_discovery())[0]
+    for setting, leaf in (("pv_power", "pv_power"), ("pv_today", "pv_today")):
+        if record["entities"].get(setting, {}).get("entity_id") != s._sensor_name(SUNSYNK_LIVE_SERIAL, leaf):
+            print("ERROR: {} must stay in the record despite automatic_ignore_pv: {}".format(setting, record["entities"].get(setting)))
+            failed = True
+    captured = capture_automatic_config(s)
+    for setting in ("pv_power", "pv_today"):
+        if setting in captured:
+            print("ERROR: automatic_config() should still skip {} under automatic_ignore_pv".format(setting))
+            failed = True
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured, allowed_extra=("pv_power", "pv_today"))
+    return failed
+
+
+def test_sunsynk_mixed_fleet_records_describe_each_device():
+    """Spec D10: each record lists what its own device has, not what automatic_config()'s all-inverters gate allows.
+
+    The second inverter reports no chargeVolt, charge current or PV counter, so automatic_config()
+    binds soc_max, battery_rate_max and pv_today for neither. The first inverter's record still
+    carries all three; the second's carries none of them.
+    """
+    failed = False
+    per_device = ("soc_max", "battery_rate_max", "pv_today")
+    s = _sunsynk_driven_fleet(("2405116013", "2211093089"))
+    s.device_values["2211093089"] = {"soc": 50, "capacity": 200}
+    del s.device_energy["2211093089"]["pv_today"]
+    first, second = validated_inverters(s.build_discovery())
+    captured = capture_automatic_config(s)
+    for setting in per_device:
+        if setting in captured:
+            print("ERROR: the fleet gate should have withheld {} from automatic_config(): {}".format(setting, captured[setting]))
+            failed = True
+        if setting not in first["entities"]:
+            print("ERROR: the first inverter reports {}, so its record must bind it".format(setting))
+            failed = True
+        if setting in second["entities"]:
+            print("ERROR: the second inverter does not report {}, so its record must not bind it: {}".format(setting, second["entities"][setting]))
+            failed = True
+    assert_record_agrees(first, captured, index=0)
+    assert_record_agrees(second, captured, index=1)
+    assert_record_binds_nothing_extra(first, captured, index=0, allowed_extra=per_device)
+    assert_record_binds_nothing_extra(second, captured, index=1)
+    return failed
+
+
+def test_sunsynk_record_keeps_sensor_bindings_through_a_partial_poll():
+    """A poll that omits a rating's inputs or an energy counter keeps the binding, as Home Assistant keeps the sensor.
+
+    publish_data() skips a sensor whose value this poll did not bring, so the entity keeps its last
+    state and automatic_config()'s binding stays good. The record keeps the binding too, rather than
+    filing a thinner report and then the full one again.
+    """
+    failed = False
+    s = _sunsynk_driven_fleet()
+    full = s.build_discovery()
+    s.device_values = {SUNSYNK_LIVE_SERIAL: {"soc": 50}}
+    s.device_energy = {SUNSYNK_LIVE_SERIAL: {}}
+    if s.build_discovery() != full:
+        print("ERROR: a partial poll changed the report: {}".format(s.build_discovery()))
+        failed = True
+    fresh = _sunsynk_driven_fleet()
+    fresh.device_values = {SUNSYNK_LIVE_SERIAL: {"soc": 50}}
+    fresh.device_energy = {SUNSYNK_LIVE_SERIAL: {"load_today": 1.0}}
+    entities = fresh.build_discovery()["inverters"][0]["entities"]
+    for setting in ("soc_max", "battery_rate_max", "pv_today", "import_today"):
+        if setting in entities:
+            print("ERROR: {} was never reported, so no sensor exists to bind: {}".format(setting, entities[setting]))
+            failed = True
+    if "load_today" not in entities:
+        print("ERROR: load_today is reported, so its sensor must be bound")
+        failed = True
+    return failed
 
 
 def test_sunsynk_catalogue_filed_when_first_cycle_defers():
@@ -1126,6 +1306,13 @@ def run_sunsynk_config_tests(my_predbat):
         ("catalogue_none_before_discovery", test_sunsynk_catalogue_none_before_discovery),
         ("catalogue_round_trips", test_sunsynk_catalogue_round_trips_through_validate_report),
         ("catalogue_filed_when_first_cycle_defers", test_sunsynk_catalogue_filed_when_first_cycle_defers),
+        ("record_rebuilds_inverter_def_row", test_sunsynk_record_rebuilds_its_inverter_def_row),
+        ("record_agrees_with_automatic_config", test_sunsynk_record_agrees_with_automatic_config),
+        ("record_two_inverters", test_sunsynk_two_inverters_give_two_records_with_their_own_entities),
+        ("record_ratings_are_configured_figures", test_sunsynk_record_ratings_are_the_configured_figures),
+        ("record_keeps_pv_despite_ignore_pv", test_sunsynk_record_keeps_pv_despite_automatic_ignore_pv),
+        ("record_mixed_fleet", test_sunsynk_mixed_fleet_records_describe_each_device),
+        ("record_keeps_bindings_through_partial_poll", test_sunsynk_record_keeps_sensor_bindings_through_a_partial_poll),
         ("run_login_failure", test_run_returns_false_on_login_failure),
         ("run_no_inverters", test_run_returns_false_with_no_inverters),
         ("run_publishes_every_tick", test_run_publishes_schedule_every_tick_not_only_first),

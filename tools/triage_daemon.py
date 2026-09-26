@@ -663,18 +663,25 @@ def is_actionable(issue_number):
     return bool(label_names & {"bug", "enhancement"})
 
 
-def flag_pr_for_review(pr_number):
-    """Add BOT_REVIEW to a PR, so the next poll cycle runs /code-review against it.
-    Idempotent - adding a label the PR already carries is a no-op, not an error.
+def flag_pr_for_review(pr_number, cleanup=False):
+    """Add BOT_REVIEW to a PR, so the next poll cycle runs /code-review against it - and
+    with cleanup, BOT_CLEANUP too, so /pr-cleanup then acts on what the review found.
+    Both go in one edit: a cycle that saw BOT_CLEANUP alone would run the cleanup before
+    the review existed. Idempotent - adding a label the PR already carries is a no-op.
     """
-    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--add-label", "BOT_REVIEW"], check=True)
+    labels = ["--add-label", "BOT_REVIEW"] + (["--add-label", "BOT_CLEANUP"] if cleanup else [])
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO] + labels, check=True)
 
 
-def mark_pr_opened(issue_number):
+def mark_pr_opened(issue_number, cleanup=False):
     """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open, and
     flag the PR itself with BOT_REVIEW so a code review runs against it automatically -
     /issue-pr's own quality gate (step 4 of its SKILL.md) is pre-commit and a targeted
     test, not an LLM review of the diff.
+
+    cleanup also queues BOT_CLEANUP. Only process_bot_pr_issue() passes it, and only for a
+    PR its own create_pr() just opened: a PR found already open on entry may be someone's
+    own branch, and BOT_CLEANUP is the label that commits and pushes to it.
     """
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
@@ -682,7 +689,7 @@ def mark_pr_opened(issue_number):
     )
     pr_number = find_pr_number_for_issue(issue_number)
     if pr_number is not None:
-        flag_pr_for_review(pr_number)
+        flag_pr_for_review(pr_number, cleanup=cleanup)
 
 
 def mark_triage_failed(issue_number, attempts):
@@ -1301,7 +1308,7 @@ def process_bot_pr_issue(issue):
         return
     create_pr(issue_number)
     if has_existing_pr(issue_number):
-        mark_pr_opened(issue_number)
+        mark_pr_opened(issue_number, cleanup=True)
     else:
         mark_pr_failed(issue_number)
 
@@ -1341,9 +1348,9 @@ def pr_head_is_fork(pr):
 
 
 def fetch_bot_cleanup_prs():
-    """Return open PRs currently labelled BOT_CLEANUP, each with its title."""
+    """Return open PRs currently labelled BOT_CLEANUP, each with its title and labels."""
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title,headRepositoryOwner", "--limit", "100"],
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title,headRepositoryOwner,labels", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
@@ -1694,9 +1701,15 @@ def process_bot_cleanup_pr(pr):
     """Run the BOT_CLEANUP flow for one PR: address review feedback and CI failures,
     then remove the trigger label. A failed run swaps to BOT_FAILED instead, with an
     explanatory comment.
+
+    A PR still carrying BOT_REVIEW is left alone, label and all: the cleanup acts on the
+    review's findings, so the review goes first and a later poll picks this PR up again.
     """
     pr_number = pr["number"]
     print(f'[cleanup-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    if "BOT_REVIEW" in {label["name"] for label in pr.get("labels", [])}:
+        print(f"[cleanup-pr] PR #{pr_number}: BOT_REVIEW still pending - waiting for the review before cleaning up", flush=True)
+        return
     if pr_head_is_fork(pr):
         print(f"[cleanup-pr] PR #{pr_number}: head branch is in a fork - not writable with this credential, skipping", flush=True)
         mark_pr_cleanup_unsupported(pr_number)
@@ -1762,6 +1775,8 @@ def main():
                 process_bot_pr_issue(issue)
             for issue in fetch_bot_review_issues():
                 process_bot_review_issue(issue)
+            # Reviews before cleanups, so a PR carrying both is reviewed and cleaned up in
+            # the same cycle; process_bot_cleanup_pr() holds any PR whose review is pending.
             for pr in fetch_bot_review_prs():
                 process_bot_review_pr(pr)
             for pr in fetch_bot_cleanup_prs():
