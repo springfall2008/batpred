@@ -33,6 +33,9 @@ REASON_TEMPLATES = {
     "demand_rising": "Demand — battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
     "demand_falling": "Demand — the battery is expected to discharge to cover house load; no charging or exporting is scheduled this slot.",
     "demand_steady": "Demand — battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
+    "hold_for_car": "Hold for car — the battery is prevented from discharging while the car charges; house load beyond what solar covers comes from the grid instead.",
+    # First half of a split slot held for a car - worded like the demand_before_export_* codes below
+    "hold_for_car_before_export": "Until {split_time}, the battery is prevented from discharging while the car charges.",
     # Used for the first half of a split slot where the export window only starts partway through -
     # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
     # reasons above, which would contradict the export reason sitting alongside it in the same slot.
@@ -1102,9 +1105,13 @@ class Output:
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None):
         """
         Publish the current plan in HTML format
+
+        car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
+        the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
+        rather than from the model (see plan_row_holding_for_car()).
         """
         html = ""
         plan_debug = self.plan_debug
@@ -1320,13 +1327,19 @@ class Output:
             else:
                 soc_sym = "&searr;"
 
-            state = soc_sym
+            # The discharge hold for a charging car, so the row explains a held SoC with the same "Hold for
+            # car" execute.py shows live (#5147 review)
+            holding_for_car = self.plan_row_holding_for_car(minute_start, minute_end, prediction, car_hold_minutes)
+
+            state = "&#128663;" if holding_for_car else soc_sym
             state_color = "#FFFFFF"
             if minute in self.manual_demand_times:
                 state += " &#8526;"
                 raw_state_override = "Manual demand"
 
-            if soc_sym == "&nearr;":
+            if holding_for_car:
+                demand_reason = {"code": "hold_for_car", "params": {}}
+            elif soc_sym == "&nearr;":
                 demand_reason = {"code": "demand_rising", "params": {}}
             elif soc_sym == "&searr;":
                 demand_reason = {"code": "demand_falling", "params": {}}
@@ -1443,12 +1456,24 @@ class Output:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
+                        # holding_for_car above was computed for the whole 30-minute row, but this
+                        # branch only describes the pre-export segment (minute_start to start) - a
+                        # car held for only during that segment must still get the car icon/reason
+                        # here, not lose it to the pre-export arrow below (Copilot review on
+                        # #5147). Same "car icon replaces the trend arrow/reason" convention as the
+                        # whole-row case above, so this takes priority over the trend below rather
+                        # than being shown alongside it.
+                        holding_for_car_segment = self.plan_row_holding_for_car(minute_start, start, prediction, car_hold_minutes)
+
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
                         split_time_str = (self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M")
+                        if holding_for_car_segment:
+                            state = "&#128663;"
+                            reason_parts.append({"code": "hold_for_car_before_export", "params": {"split_time": split_time_str}})
                         # Same near-flat tolerance as the whole-slot demand arrow above - testing
                         # soc_change_this >= 0 first would make the steady case unreachable and
                         # render a flat pre-window period as rising
-                        if abs(soc_change_this) < 0.05:
+                        elif abs(soc_change_this) < 0.05:
                             state = " &rarr;"
                             reason_parts.append({"code": "demand_before_export_steady", "params": {"split_time": split_time_str}})
                         elif soc_change_this >= 0:
@@ -3141,6 +3166,18 @@ class Output:
                         load_value = yesterday_load_step.get(minute, 0)
                         yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
 
+    def plan_row_holding_for_car(self, minute_start, minute_end, prediction=None, car_hold_minutes=None):
+        """
+        Whether a plan row (or a split row's pre-export segment) shows the battery held for a charging car.
+
+        With car_hold_minutes (the Yesterday actual-history table, whose SoC is measured) it is whether any
+        minute's recorded status was "Hold for car". Otherwise it is the hold the model assumes: charge
+        windows in use, the car not allowed to draw from the battery, and car_charging_hold_active().
+        """
+        if car_hold_minutes is not None:
+            return any(minute in car_hold_minutes for minute in range(minute_start, minute_end))
+        return bool(self.set_charge_window and (not self.car_charging_from_battery) and self.car_charging_hold_active(minute_start, minute_end, prediction))
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
@@ -3406,6 +3443,7 @@ class Output:
         self.predict_metric_best = cost_yesterday_array
 
         # Fake charge/export windows based on previous predbat status
+        car_hold_minutes = set()
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
             for minute in predbat_status:
@@ -3413,6 +3451,9 @@ class Output:
                 if "," in status:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
+            # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
+            # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
+            car_hold_minutes = {minutes_now + end_record - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
             # Ignore the first and last edge_minutes of each slot when they don't hold one state
             # throughout - Predbat's reported status can lag a slot boundary by a minute or two while
             # it catches up to a replan, and that leftover from the previous (or next) slot must not
@@ -3518,7 +3559,9 @@ class Output:
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
+        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(
+            yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction, car_hold_minutes=car_hold_minutes
+        )
         self.forecast_minutes = end_record
 
         # Restore state

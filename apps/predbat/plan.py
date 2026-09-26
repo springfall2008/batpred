@@ -5826,6 +5826,45 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def car_charging_hold_active(self, minute_start, minute_end, prediction=None):
+        """
+        True if the plan holds the battery for a car during this window: a car that is not yet full
+        has a slot with energy overlapping it.
+
+        Follows the model the plan row was drawn from, so the car icon matches the held SoC that model
+        predicts. With a prediction (e.g. Yesterday's baseline) that is its own car slots, limit and SoC.
+        Without one it is what the live plan's prediction is given: car_charging_slots_model(), which adds a car
+        reporting car_charging_now outside its plan (#5245), and car_charging_limit_model where set,
+        which uncaps a car charging now (#5245) and, with octopus_intelligent_consider_full off, a car
+        with Octopus Intelligent slots (#4967).
+
+        That matches execute.py's hold for a car charging now, which ignores the modelled car SoC. For
+        a slot-only hold execute.py still stops once car_charging_soc reaches car_charging_limit, so on
+        the #4967 uncapped path the plan can show a hold that execute.py skips for a car it believes
+        full - the plan's flat SoC assumes the hold, and the icon explains that SoC (#5147 review).
+
+        The full check uses the SoC once per car at render time, while prediction.py clamps per minute, so
+        a car the model fills part-way through the plan keeps its icon on later slots that still carry kWh.
+        Rare in practice: planned slots are sized to the car's limit.
+        """
+        if self.num_cars == 0:
+            return False
+        if prediction is not None:
+            car_slots = prediction.car_charging_slots
+            car_limit = prediction.car_charging_limit
+            car_soc = prediction.car_charging_soc
+        else:
+            car_slots = self.car_charging_slots_model()
+            car_limit = self.car_charging_limit_model if self.car_charging_limit_model is not None else self.car_charging_limit
+            car_soc = self.car_charging_soc
+        for car_n in range(self.num_cars):
+            if car_soc[car_n] >= car_limit[car_n]:
+                continue
+            for window in car_slots[car_n]:
+                if window["start"] < minute_end and window["end"] > minute_start and window.get("kwh", 0) > 0:
+                    return True
+        return False
+
     def car_charge_slot_kwh(self, minute_start, minute_end):
         """
         Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot
