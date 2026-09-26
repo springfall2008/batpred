@@ -437,6 +437,20 @@ def _run_edges(my_predbat):
     changed = _cycle(my_predbat, 961, 30, slots=short)
     failed |= _check("t33 over at 16:01:30", changed and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {}".format(changed))
 
+    # Live sequence: cancelled at 16:42 against the planned 16:30-17:00 entry; at 16:43 Octopus replaced it
+    # with a started entry 16:40:39-17:00. Judged on minutes_now floored to 16:40 that looked like leaving
+    # the slot, so the cancellation was dropped although car_charging_now never changed
+    print("Test 33b: a planned dispatch turning into a started one keeps the cancellation")
+    _reset(my_predbat)
+    _sensor(my_predbat, "off")
+    planned = [{"start": 990, "end": 1020, "kwh": 2.2, "octopus": True}]
+    _cycle(my_predbat, 997, slots=planned)
+    changed = _cycle(my_predbat, 1002, 4, slots=planned)
+    failed |= _check("t33b cancelled at 16:42", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+    started = [{"start": 1000 + 39 / 60, "end": 1020, "kwh": 1.96, "octopus": True}]
+    changed = _cycle(my_predbat, 1003, 5, slots=started)
+    failed |= _check("t33b still cancelled at 16:43", (not changed) and my_predbat.dynamic_load_car_cancelled.get(0) and _kwh(my_predbat) == [0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+
     print("Test 34: a load window counts only once it lies inside the dispatch")
     _reset(my_predbat)
     _sensor(my_predbat, None)
