@@ -5816,6 +5816,11 @@ class Plan:
                 new_slot = {}
                 new_slot["start"] = start
                 new_slot["end"] = end
+                # start is clamped to minutes_now above so the kWh maths only counts time the car
+                # can still charge for, but that makes an in-progress window's start walk forward
+                # by plan_interval_minutes every cycle. Keep the window's real start for display
+                # and for anything driving a charger off the published plan (issue #269).
+                new_slot["start_orig"] = window["start"]
                 new_slot["kwh"] = dp3(kwh)
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)

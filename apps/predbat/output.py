@@ -160,10 +160,15 @@ class Output:
                 else:
                     slot = False
 
+                # Show when the window really began, not the planner's clamped start, so the
+                # displayed start time stops walking forward once charging is underway (#269).
+                # Octopus slots carry no start_orig, so they keep their own start unchanged.
+                window_start = window.get("start_orig", window["start"])
+
                 time_format_time = "%H:%M:%S"
-                car_startt = self.midnight_utc + timedelta(minutes=window["start"])
+                car_startt = self.midnight_utc + timedelta(minutes=window_start)
                 car_start_time_str = car_startt.strftime(time_format_time)
-                minutes_to = max(window["start"] - self.minutes_now, 0)
+                minutes_to = max(window_start - self.minutes_now, 0)
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state=car_start_time_str,
@@ -181,7 +186,7 @@ class Output:
                 total_kwh = 0
                 total_cost = 0
                 for window in self.car_charging_slots[car_n]:
-                    start = self.time_abs_str(window["start"])
+                    start = self.time_abs_str(window.get("start_orig", window["start"]))
                     end = self.time_abs_str(window["end"])
                     kwh = dp2(window["kwh"])
                     average = dp2(window["average"])
