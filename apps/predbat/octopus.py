@@ -3604,7 +3604,7 @@ class Octopus:
         # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
         # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
         # what the tariff charged, and today's cost is built from them.
-        car_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
+        car_cancelled = self.dynamic_load_car_effective.get(car_n, False)
 
         if octopus_slots:
             # Add in IO slots
@@ -3710,8 +3710,9 @@ class Octopus:
         cancelled car's dispatch and not covered by a dispatch of any car still trusted - the rates are
         shared by every car.
         """
-        cancelled_cars = [car_n for car_n in range(self.num_cars) if self.dynamic_load_car_cancelled.get(car_n, False)]
+        cancelled_cars = [car_n for car_n in range(self.num_cars) if self.dynamic_load_car_effective.get(car_n, False)]
         if not cancelled_cars or not self.io_adjusted:
+            self.dynamic_load_car_stripped = 0
             return rates
 
         # Rounded out to whole 30 minute rate periods: the feed marks and prices whole periods, and
@@ -3741,8 +3742,11 @@ class Octopus:
             rates[minute] = self.rate_max_base
             del self.io_adjusted[minute]
             stripped += 1
-        if stripped:
+        # The feed is re-read every cycle, so the same minutes are stripped again each time - log only
+        # when that changes, not every 5 minutes for the length of a cancellation
+        if stripped and stripped != self.dynamic_load_car_stripped:
             self.log("Dynamic load: removed the Intelligent dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
+        self.dynamic_load_car_stripped = stripped
         return rates
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):

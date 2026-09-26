@@ -193,6 +193,8 @@ class Output:
                     show["kwh"] = kwh
                     show["average"] = average
                     show["cost"] = cost
+                    if window.get("kwh_cancelled"):
+                        show["kwh_cancelled"] = dp2(window["kwh_cancelled"])
                     total_cost += cost
                     total_kwh += kwh
                     plan.append(show)

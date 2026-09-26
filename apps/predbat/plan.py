@@ -350,7 +350,9 @@ class Plan:
                 charging = bool(raw)
             return (not charging), DYNAMIC_LOAD_CAR_SENSOR_MINUTES
         if self.car_energy_reported_load:
-            if self.minutes_now <= 5:
+            # No load history (e.g. a load_forecast-only install, where load_last_period is a hard-coded
+            # 0) is not low load - it is no reading at all
+            if self.minutes_now <= 5 or not self.load_minutes:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
             return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES
         return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES
@@ -426,6 +428,10 @@ class Plan:
             since = self.dynamic_load_car_since.setdefault(car_n, now) if record else self.dynamic_load_car_since.get(car_n)
             if since is not None and (now - since).total_seconds() >= grace_minutes * 60:
                 return True
+        elif record:
+            # No evidence: the car may have been charging through it, so a "not charging" reading after
+            # it starts a fresh grace period rather than counting the unknown stretch towards the old one
+            self.dynamic_load_car_since.pop(car_n, None)
         return cancelled
 
     def dynamic_load_car_refresh_sensors(self):
@@ -457,7 +463,13 @@ class Plan:
 
         cars = []
         if not self.octopus_intelligent_trust_slots and self.octopus_intelligent_charging and not self.car_energy_reported_load:
-            cars = [car_n for car_n in range(self.num_cars) if car_n not in self.dynamic_load_car_sensors]
+            # Only cars on Octopus Intelligent (with a slot sensor of their own, as fetch_sensor_data_cars()
+            # reads them) have Intelligent slots to distrust
+            iog_entities = self.get_arg("octopus_intelligent_slot", indirect=False)
+            if iog_entities and not isinstance(iog_entities, list):
+                iog_entities = [iog_entities]
+            iog_entities = iog_entities or []
+            cars = [car_n for car_n in range(self.num_cars) if car_n < len(iog_entities) and iog_entities[car_n] and car_n not in self.dynamic_load_car_sensors]
         if cars != self.dynamic_load_car_warned:
             if cars:
                 self.log("Warn: octopus_intelligent_trust_slots is Off but car(s) {} have no car_charging_now sensor and are outside the CT clamp, so their Intelligent slots will never be trusted".format(cars))
@@ -486,6 +498,9 @@ class Plan:
         Returns True when a car's cancellation changed, so the plan is recomputed.
         """
         changed = False
+        # This run's decision, which the rates read - in a compare.py run (save False) it can differ from
+        # the saved state, and the rates must follow the same decision as the slots
+        self.dynamic_load_car_effective = {}
         for car_n in range(self.num_cars):
             cancelled = self.dynamic_load_car_target(car_n, self.minutes_now, self.now_utc_real, record=save)
             if save:
@@ -500,6 +515,7 @@ class Plan:
                         reason = "slots resumed"
                     self.log("Dynamic load: car {} {}".format(car_n, reason))
                 self.dynamic_load_car_cancelled[car_n] = cancelled
+            self.dynamic_load_car_effective[car_n] = cancelled
 
             if cancelled and car_n < len(self.car_charging_slots):
                 for slot in self.car_charging_slots[car_n]:
@@ -507,6 +523,10 @@ class Plan:
                         if slot.get("kwh", 0) > 0:
                             slot["kwh_cancelled"] = slot["kwh"]
                         slot["kwh"] = 0
+                        # No cost for energy the plan no longer counts, so the published car plan stays
+                        # self-consistent
+                        if "cost" in slot:
+                            slot["cost"] = 0
         return changed
 
     def dynamic_load_car_poll(self, now=None):
