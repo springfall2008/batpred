@@ -58,6 +58,11 @@ class ComponentBase(ABC):
             the registry (the standalone CLI harnesses), so report_discovery() always has a name.
     """
 
+    # Seconds inverter.py waits between writing a setting and reading it back. The component owns the
+    # entities, so it owns this timing; INVERTER_DEF's write_and_poll_sleep is 2 for every cloud type and
+    # 10 for the GivEnergy types (GivTCP and GE Cloud override it). See coordinator.inverter_definition().
+    WRITE_AND_POLL_SLEEP = 2
+
     # Declared on the class, not only assigned in __init__, so they exist even on a component built
     # without it - the test harnesses construct components with Cls.__new__(Cls) to exercise one
     # method in isolation. refresh_discovery() must not be able to raise on such an instance: an
