@@ -1941,6 +1941,13 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_event_queued_not_executed_on_calling_loop())
         failed |= asyncio.run(test_queued_event_failure_does_not_stop_the_queue())
         failed |= asyncio.run(test_queued_event_drained_after_startup())
+        failed |= asyncio.run(test_slot_select_applied_before_queue_drains())
+        failed |= asyncio.run(test_slot_number_and_switch_applied_before_queue_drains())
+        failed |= asyncio.run(test_slot_event_before_discovery_still_queued())
+        failed |= asyncio.run(test_read_and_write_cid_trusts_read_back_after_write_error())
+        failed |= asyncio.run(test_failed_slot_time_write_restores_inverter_value())
+        failed |= asyncio.run(test_failed_slot_enable_write_restores_inverter_value())
+        failed |= asyncio.run(test_failed_slot_write_keeps_newer_request())
         failed |= asyncio.run(test_select_event_storage_mode())
         failed |= asyncio.run(test_select_event_charge_time())
         failed |= asyncio.run(test_select_event_discharge_time())
@@ -6049,8 +6056,10 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
     max_discharge_entity = f"number.{prefix}_solis_{sn.lower()}_max_discharge_power"
     slot_entity = f"number.{prefix}_solis_{sn.lower()}_discharge_slot1_power"
 
-    # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes
+    # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes the
+    # slots, and run() republishes everything else
     await api.number_event_handler(slot_entity, 3437)
+    await api.publish_entities()
     written_amps = api.charge_discharge_time_windows[sn][1]["discharge_current"]
     before = {entity: api.dashboard_items[entity]["state"] for entity in (max_charge_entity, max_discharge_entity, slot_entity)}
 
@@ -6424,6 +6433,203 @@ async def test_queued_event_drained_after_startup():
         return 1
     if api.queued_events:
         print("ERROR: queue should be empty after a successful run, got {}".format(api.queued_events))
+        return 1
+    return 0
+
+
+def _slot_event_api():
+    """A discovered V2 inverter whose slot 1 is idle, as Predbat finds it before programming an export."""
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    sn = "1031730261290196"
+    api.inverter_sn = [sn]
+    api.charge_discharge_time_windows[sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100.0,
+            "charge_current": 75.0,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10.0,
+            "discharge_current": 75.0,
+        }
+    }
+    return api, sn
+
+
+async def test_slot_select_applied_before_queue_drains():
+    """A slot time Predbat writes shows on its select straight away, not at the next run().
+
+    Predbat writes the select and polls it for about 20s; the queue is only drained once a
+    minute, so a queued slot time left the select on the old value and Predbat logged a write
+    that then went through as failed. The slot handlers only touch the in-memory schedule -
+    there is no API work to keep off the calling loop (issue #4875).
+    """
+    api, sn = _slot_event_api()
+    entity_id = f"select.predbat_solis_{sn}_discharge_slot1_start_time"
+
+    await api.select_event(entity_id, "11:30:00")
+
+    if api.queued_events:
+        print("ERROR: slot time should be applied, not queued: {}".format(api.queued_events))
+        return 1
+    if api.charge_discharge_time_windows[sn][1]["discharge_start_time"] != "11:30":
+        print("ERROR: schedule not updated, got {}".format(api.charge_discharge_time_windows[sn][1]["discharge_start_time"]))
+        return 1
+    state = api.dashboard_items.get(entity_id, {}).get("state")
+    if state != "11:30:00":
+        print("ERROR: select should read back 11:30:00 for Predbat's poll, got {}".format(state))
+        return 1
+    return 0
+
+
+async def test_slot_number_and_switch_applied_before_queue_drains():
+    """Slot SoC numbers and slot enable switches are schedule-only too, so they apply straight away."""
+    api, sn = _slot_event_api()
+    soc_entity = f"number.predbat_solis_{sn}_discharge_slot1_soc"
+    enable_entity = f"switch.predbat_solis_{sn}_discharge_slot1_enable"
+
+    await api.number_event(soc_entity, 15)
+    await api.switch_event(enable_entity, "turn_on")
+
+    if api.queued_events:
+        print("ERROR: slot number/switch should be applied, not queued: {}".format(api.queued_events))
+        return 1
+    slot = api.charge_discharge_time_windows[sn][1]
+    if slot["discharge_soc"] != 15.0 or slot["discharge_enable"] != 1:
+        print("ERROR: schedule not updated, got soc {} enable {}".format(slot["discharge_soc"], slot["discharge_enable"]))
+        return 1
+    if api.dashboard_items.get(soc_entity, {}).get("state") != 15.0:
+        print("ERROR: SoC number should read back 15, got {}".format(api.dashboard_items.get(soc_entity)))
+        return 1
+    if api.dashboard_items.get(enable_entity, {}).get("state") != "on":
+        print("ERROR: enable switch should read back on, got {}".format(api.dashboard_items.get(enable_entity)))
+        return 1
+    return 0
+
+
+async def test_slot_event_before_discovery_still_queued():
+    """Before the first run() has discovered the inverter a slot event cannot be applied, so it waits in the queue."""
+    api, sn = _slot_event_api()
+    api.inverter_sn = []
+
+    await api.select_event(f"select.predbat_solis_{sn}_discharge_slot1_start_time", "11:30:00")
+
+    if len(api.queued_events) != 1:
+        print("ERROR: expected the event to be queued until discovery, got {}".format(api.queued_events))
+        return 1
+    return 0
+
+
+async def test_read_and_write_cid_trusts_read_back_after_write_error():
+    """A write whose reply errored but whose value is on the inverter is a success, not a failure.
+
+    SolisCloud relays a control write to the datalogger, and the reply can time out or error
+    after the value has landed. read_and_write_cid already reads the value back; it must use
+    that read before reporting failure.
+    """
+    api = MockSolisAPI()
+    api.read_and_write_cid = SolisAPI.read_and_write_cid.__get__(api, MockSolisAPI)
+    cid_state = {5964: "00:00-00:00"}
+
+    async def mock_read_cid(inv_sn, cid):
+        return cid_state[cid], {"msg": cid_state[cid]}
+
+    async def mock_write_cid_landed_but_errored(inv_sn, cid, value, old_value=None, field_description=None):
+        cid_state[cid] = value
+        return False
+
+    api.read_cid = mock_read_cid
+    api.write_cid = mock_write_cid_landed_but_errored
+
+    result = await api.read_and_write_cid("SN1", 5964, "11:30-12:00", field_description="discharge slot 1 time")
+
+    if result is not True:
+        print("ERROR: a value confirmed by the read-back should report success, got {}".format(result))
+        return 1
+    if any("Failed to write" in msg for msg in api.log_messages):
+        print("ERROR: should not log a write failure for a value that landed: {}".format(api.log_messages))
+        return 1
+    return 0
+
+
+def _fail_slot_cids(api, failing_cids, on_attempt=None):
+    """Make read_and_write_cid refuse the given CIDs, leaving the inverter (cached_values) unchanged."""
+    original = api.read_and_write_cid
+
+    async def read_and_write_cid(inverter_sn, cid, value, field_description=None):
+        if cid in failing_cids:
+            api.read_and_write_cid_calls.append({"inverter_sn": inverter_sn, "cid": cid, "value": str(value), "field_description": field_description})
+            if on_attempt:
+                on_attempt(cid)
+            return False
+        return await original(inverter_sn, cid, value, field_description=field_description)
+
+    api.read_and_write_cid = read_and_write_cid
+
+
+async def test_failed_slot_time_write_restores_inverter_value():
+    """A slot time the inverter refused goes back to what the inverter holds, so Predbat sees it and writes again."""
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
+    api, sn = _slot_event_api()
+    api.cached_values[sn] = {SOLIS_CID_DISCHARGE_TIME[0]: "00:00-00:00", SOLIS_CID_DISCHARGE_ENABLE_BASE: "0"}
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+    _fail_slot_cids(api, {SOLIS_CID_DISCHARGE_TIME[0]})
+
+    result = await api.write_time_windows_if_changed(sn)
+
+    if result is not False:
+        print("ERROR: a refused write should still report failure, got {}".format(result))
+        return 1
+    if (slot["discharge_start_time"], slot["discharge_end_time"]) != ("00:00", "00:00"):
+        print("ERROR: refused time should be restored to the inverter's 00:00-00:00, got {}-{}".format(slot["discharge_start_time"], slot["discharge_end_time"]))
+        return 1
+    if slot["discharge_enable"] != 1:
+        print("ERROR: the enable write succeeded and should be left alone, got {}".format(slot["discharge_enable"]))
+        return 1
+    return 0
+
+
+async def test_failed_slot_enable_write_restores_inverter_value():
+    """A slot enable the inverter refused goes back to what the inverter holds."""
+    api, sn = _slot_event_api()
+    api.cached_values[sn] = {SOLIS_CID_DISCHARGE_ENABLE_BASE: "0"}
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+    _fail_slot_cids(api, {SOLIS_CID_DISCHARGE_ENABLE_BASE})
+
+    await api.write_time_windows_if_changed(sn)
+
+    if slot["discharge_enable"] != 0:
+        print("ERROR: refused enable should be restored to the inverter's 0, got {}".format(slot["discharge_enable"]))
+        return 1
+    return 0
+
+
+async def test_failed_slot_write_keeps_newer_request():
+    """A request that arrives while the old value is being written is not overwritten when that write fails."""
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
+    api, sn = _slot_event_api()
+    api.cached_values[sn] = {SOLIS_CID_DISCHARGE_TIME[0]: "00:00-00:00", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1"}
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+
+    def newer_request_arrives(cid):
+        slot["discharge_start_time"] = "13:00"
+
+    _fail_slot_cids(api, {SOLIS_CID_DISCHARGE_TIME[0]}, on_attempt=newer_request_arrives)
+
+    await api.write_time_windows_if_changed(sn)
+
+    if (slot["discharge_start_time"], slot["discharge_end_time"]) != ("13:00", "12:00"):
+        print("ERROR: the newer 13:00 request should survive the failed write, got {}-{}".format(slot["discharge_start_time"], slot["discharge_end_time"]))
         return 1
     return 0
 
