@@ -68,6 +68,29 @@ def yesterday_slot_is_exporting(slot_status):
     return "exporting" in slot_status or "cross-charging" in slot_status
 
 
+def yesterday_status_core(status):
+    """Strip a historical ``predbat.status`` string down to the charge/export state it records, for
+    the "yesterday" plan reconstruction in ``calculate_yesterday()``.
+
+    A warning or error pins itself on the status sensor for the rest of the run, and update_pred()
+    then only logs the real run status rather than publishing it, so a fault that recurs every cycle
+    replaces the recorded state for as long as it lasts. The reconstruction classifies states by
+    substring, so such a message was read as whatever its text happened to mention - a warning about
+    an unavailable ``car_charging_soc`` contains "charging" and rebuilt a whole day of force exports
+    as charge holds. A warning or error says nothing about the charge/export state, so it maps to
+    an empty status that matches neither side. The one exception is the component-error summary,
+    which carries the real run status inside it and is unwrapped to that.
+    """
+    lowered = status.lower()
+    component_prefix = "error: complete run status "
+    component_suffix = " with component errors"
+    if lowered.startswith(component_prefix) and component_suffix in lowered:
+        return status[len(component_prefix) : lowered.index(component_suffix)].strip()
+    if lowered.startswith("warn:") or lowered.startswith("error:"):
+        return ""
+    return status
+
+
 def more_active_slot_status(current, candidate, precedence):
     """Pick the more significant of two ``predbat.status`` strings, used to break a tie in
     ``dominant_slot_status()`` below.
@@ -3456,7 +3479,8 @@ class Output:
                 status = predbat_status[minute]
                 if "," in status:
                     # If there are multiple statuses take the first one
-                    predbat_status[minute] = status.split(",")[0].strip()
+                    status = status.split(",")[0].strip()
+                predbat_status[minute] = yesterday_status_core(status)
             # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
             # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
             car_hold_minutes = {minutes_now + end_record - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
