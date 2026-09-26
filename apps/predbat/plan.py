@@ -926,7 +926,7 @@ class Plan:
                                         if hit_charge >= 0:
                                             if hit_charge in charge_mods:
                                                 if not charge_mods[hit_charge] and "clipping_target_soc_pct" in charge_window[hit_charge]:
-                                                    hit_charge_limit = charge_window[hit_charge]["clipping_target_soc_pct"]
+                                                    hit_charge_limit = (charge_window[hit_charge]["clipping_target_soc_pct"] / 100.0) * self.soc_max
                                                 else:
                                                     hit_charge_limit = self.reserve if charge_mods[hit_charge] else self.soc_max
                                             else:
@@ -970,7 +970,7 @@ class Plan:
                                             if e_win.get("clipping_target_soc_pct") is not None and e_win["start"] < c_win["end"] and e_win["end"] > c_win["start"]:
                                                 tgt = e_win["clipping_target_soc_pct"]
                                                 clip_target = min(clip_target, tgt) if clip_target is not None else tgt
-                                        try_charge_limit[window_n] = clip_target if clip_target is not None else self.soc_max
+                                        try_charge_limit[window_n] = (clip_target / 100.0) * self.soc_max if clip_target is not None else self.soc_max
                                     else:
                                         try_charge_limit[window_n] = self.reserve
                                 try_export = best_export_limits_reset.copy()
@@ -1515,27 +1515,13 @@ class Plan:
                 if accumulated_kwh >= total_kwh_loss - 1e-9:
                     break
 
-            # Add 30 mins safety margin
-            minutes_needed += 30
+            # Dynamic buffer-proportional scaling (REQ-40)
+            margin = max(5, min(30, int(minutes_needed * 0.25)))
+            min_floor = max(15, min(60, int(15 + 45 * min(1.0, total_kwh_loss / 2.0))))
+            window_duration = max(min_floor, min(360, minutes_needed + margin))
+            window_duration = int((window_duration + 29) / 30) * 30  # Align to 30-min boundary
 
-            # Clamp the window between 60 minutes and 360 minutes (6 hours)
-            minutes_needed = max(60, min(360, minutes_needed))
-
-            morning_start = max(self.minutes_now, peak_start - minutes_needed)
-
-            # Stretch the start time back to the end of the overnight charge window, or 06:00 if unknown
-            midnight = int(peak_start / 1440) * 1440
-            early_start = midnight + (6 * 60)
-
-            # Find the end of the last charge window before the peak
-            if getattr(self, "charge_window_best", None):
-                last_charge_end = midnight
-                for w in self.charge_window_best:
-                    if w["end"] <= peak_start and w["end"] > last_charge_end:
-                        last_charge_end = w["end"]
-                # Start clipping window right after the morning charge finishes
-                if last_charge_end > midnight:
-                    early_start = last_charge_end
+            morning_start = max(self.minutes_now, peak_start - window_duration)
 
             # Read manual start override from config if the attribute hasn't been
             # initialised yet (first plan cycle, before the main clipping config block runs).
@@ -1545,19 +1531,20 @@ class Plan:
                 if start_time_str and start_time_str != "None":
                     clipping_start_override = self.time_to_minutes(start_time_str)
                     self.clipping_buffer_start = clipping_start_override
+
+            # Stretch the start time backward only if clipping_start_override is explicitly set (REQ-40)
             if clipping_start_override is not None:
+                midnight = int(peak_start / 1440) * 1440
                 early_start = midnight + clipping_start_override
-
-            if early_start < morning_start:
-                # Stop stretching backward if we hit a native export window
-                # to allow charging before profitable export events.
-                for w in sorted(self.export_window_best, key=lambda x: x["end"], reverse=True):
-                    if early_start < w["end"] <= morning_start:
-                        early_start = w["end"]
-                        break
-
-            if early_start < morning_start:
-                morning_start = early_start
+                if early_start < morning_start:
+                    # Stop stretching backward if we hit a native export window
+                    # to allow charging before profitable export events.
+                    for w in sorted(self.export_window_best, key=lambda x: x["end"], reverse=True):
+                        if early_start < w["end"] <= morning_start:
+                            early_start = w["end"]
+                            break
+                if early_start < morning_start:
+                    morning_start = early_start
             morning_start = max(self.minutes_now, morning_start)
 
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
@@ -1666,11 +1653,38 @@ class Plan:
                     )
                 )
 
-            # Inject candidate charge windows for any negative import rate slots during anti-clipping windows
-            for m in range(morning_start, peak_start, 30):
+            # Solar-deficit gated daytime import arbitrage (REQ-39)
+            eta_chg = getattr(self, "battery_loss", 1.0) * getattr(self, "inverter_loss", 1.0)
+            eta_dis = getattr(self, "battery_loss_discharge", 1.0) * getattr(self, "inverter_loss", 1.0)
+            metric_battery_cycle = getattr(self, "metric_battery_cycle", 0.0)
+            soc_kw = getattr(self, "soc_kw", 0.0)
+
+            pv_pre_peak = 0.0
+            load_pre_peak = 0.0
+            if peak_start > self.minutes_now:
+                pv_step = getattr(self, "pv_forecast_minute_step", {})
+                load_step = getattr(self, "load_minutes_step", {})
+                if pv_step:
+                    step = getattr(self, "step", PREDICT_STEP)
+                    for m_rel in range(0, peak_start - self.minutes_now, step):
+                        pv_pre_peak += pv_step.get(m_rel, 0.0)
+                        load_pre_peak += load_step.get(m_rel, 0.0) if load_step else 0.0
+                elif getattr(self, "pv_forecast_minute", None):
+                    for m_rel in range(0, peak_start - self.minutes_now):
+                        pv_pre_peak += self.pv_forecast_minute.get(m_rel, 0.0)
+                        load_pre_peak += getattr(self, "load_minutes", {}).get(m_rel, 0.0)
+
+            net_solar_gain = max(0.0, pv_pre_peak - load_pre_peak) * eta_chg
+            headroom_deficit = target_soc_kwh - (soc_kw + net_solar_gain)
+
+            for m in range(morning_start, peak_end, 30):
                 imp_rate = self.rate_import.get(m, 0.0)
-                if imp_rate < 0.0:
-                    m_end = min(m + 30, peak_start)
+                displace_rate = self.rate_export.get(m, 0.0) or getattr(self, "rate_export_min", 0.0)
+                arbitrage_threshold = (displace_rate * eta_dis - 2 * metric_battery_cycle) * eta_chg
+
+                allow_charge = (imp_rate < 0.0) or (headroom_deficit > 0.25 and imp_rate <= arbitrage_threshold)
+                if allow_charge:
+                    m_end = min(m + 30, peak_end)
                     if m_end <= m:
                         continue
                     already_covered = False
@@ -1679,15 +1693,24 @@ class Plan:
                             already_covered = True
                             break
                     if not already_covered:
-                        new_cw = {"start": m, "end": m_end, "average": imp_rate, "clipping_target_soc_pct": target_soc_pct, "target": target_soc_pct}
+                        win_target_pct = target_soc_pct
+                        for nw in new_windows:
+                            if nw["start"] <= m < nw["end"] and "clipping_target_soc_pct" in nw:
+                                win_target_pct = nw["clipping_target_soc_pct"]
+                                break
+                        win_target_kwh = (win_target_pct / 100.0) * self.soc_max
+                        new_cw = {"start": m, "end": m_end, "average": imp_rate, "clipping_target_soc_pct": win_target_pct, "target": win_target_pct}
                         self.charge_window_best.append(new_cw)
-                        self.charge_limit_best.append(target_soc_pct)
+                        self.charge_limit_best.append(win_target_kwh)
                         self.log(
-                            "Injected negative-rate candidate charge window {} to {} at rate {}p (Target SOC cap: {}%)".format(
+                            "Injected candidate charge window {} to {} at rate {}p (Target SOC cap: {}% / {} kWh, deficit: {} kWh, threshold: {}p)".format(
                                 self.time_abs_str(m),
                                 self.time_abs_str(m_end),
                                 round(imp_rate, 2),
-                                target_soc_pct,
+                                win_target_pct,
+                                round(win_target_kwh, 2),
+                                round(headroom_deficit, 2),
+                                round(arbitrage_threshold, 2),
                             )
                         )
 
@@ -2748,15 +2771,6 @@ class Plan:
                         tgt = e_win["clipping_target_soc_pct"]
                         clip_target = min(clip_target, tgt) if clip_target is not None else tgt
 
-        if clip_target is not None:
-            # Bug 27: convert percentage to kWh
-            clip_target_kwh = (clip_target / 100.0) * self.soc_max
-            # We don't cap loop_soc (so it can search up to soc_max for profitable arbitrage),
-            # but we explicitly inject clip_target_kwh as a candidate to ensure the
-            # exact headroom limit is always evaluated.
-            if clip_target_kwh not in try_charge_limit:
-                try_charge_limit.append(clip_target_kwh)
-
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known
         if not all_n and not freeze_only and not charge_freeze_only:
@@ -2890,6 +2904,10 @@ class Plan:
         # Assemble list of SoC's to try - starting from a full charge, unless grid charging is
         # forbidden in which case best_soc_min_setting below becomes the first (baseline) candidate
         try_socs = [] if charge_freeze_only else [loop_soc]
+        if clip_target is not None and not freeze_only and not charge_freeze_only:
+            clip_target_kwh = dp2((clip_target / 100.0) * self.soc_max)
+            if clip_target_kwh not in try_socs and clip_target_kwh > self.reserve:
+                try_socs.append(clip_target_kwh)
         loop_step = max(best_soc_step, 0.1)
         best_soc_min_setting = self.best_soc_min
         if best_soc_min_setting > 0:
@@ -3857,6 +3875,9 @@ class Plan:
                     # model whether the nominal plan changes without the slot, which subsumes the old
                     # never-reaches-limit and freeze-at-100% removal branches. What is left here narrows the
                     # limit to what the window can actually achieve, so adjacent windows share a limit and merge.
+                    max_allowed_limit = self.soc_max
+                    if "clipping_target_soc_pct" in window:
+                        max_allowed_limit = min(self.soc_max, (window["clipping_target_soc_pct"] / 100.0) * self.soc_max)
                     if self.set_charge_freeze_only:
                         # Each branch below raises the limit to a full charge, which is exactly what
                         # set_charge_freeze_only forbids - including turning a freeze into a charge
@@ -3866,18 +3887,18 @@ class Plan:
                     elif soc_max < (limit - charge_step):
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
-                        charge_limit_best[window_n] = self.soc_max
+                        charge_limit_best[window_n] = max_allowed_limit
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
                     elif (soc_max > (soc_m1 + charge_step)) and soc_max == limit:
                         window["target"] = soc_max
-                        charge_limit_best[window_n] = self.soc_max
+                        charge_limit_best[window_n] = max_allowed_limit
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
                     elif limit == self.reserve and (dp1(soc_min) == dp1(self.soc_max)) and (dp1(soc_max) == dp1(self.soc_max)):
                         # Reserve slot, so set to 100% if we are already at 100%
                         window["target"] = soc_max
-                        charge_limit_best[window_n] = self.soc_max
+                        charge_limit_best[window_n] = max_allowed_limit
                         if self.debug_enable:
                             self.log(
                                 "Change freeze charge into charge, already at 100% - window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"])

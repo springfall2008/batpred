@@ -37,12 +37,16 @@ def run_clipping_tests(my_predbat):
     failed |= test_inject_clipping_idempotent_multi_run(my_predbat)
     failed |= test_inject_replaces_existing_peak_window(my_predbat)
     failed |= test_publish_html_plan_overlapping_windows_tuple_limit(my_predbat)
+    failed |= test_dynamic_window_duration_scaling(my_predbat)
+    failed |= test_solar_deficit_gated_arbitrage_injection(my_predbat)
+    failed |= test_try_socs_includes_clipping_target_kwh(my_predbat)
     return failed
 
 
 def setup(my_predbat):
     reset_inverter(my_predbat)
     my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_buffer_start = None
     my_predbat.clipping_buffer_forecast_kwh = {}
     my_predbat.clipping_buffer_start_offset = 0
     my_predbat.clipping_buffer_end_offset = 0
@@ -103,6 +107,7 @@ def test_inject_creates_contiguous_window(my_predbat):
     failed = False
     setup(my_predbat)
     my_predbat.minutes_now = 240  # 04:00
+    my_predbat.clipping_buffer_start = 360  # Explicit dawn override (06:00)
     # Peak from 13:00 to 14:00 (780 to 840). Keys must be relative: 780-240=540, 810-240=570.
     my_predbat.clipping_buffer_forecast_kwh = {540: 1.0, 570: 2.0}
 
@@ -114,7 +119,7 @@ def test_inject_creates_contiguous_window(my_predbat):
 
     w = my_predbat.export_window_best[0]
 
-    # With the new behavior, morning_start is stretched back to 06:00 (360 minutes absolute)
+    # With explicit clipping_buffer_start=360, morning_start is stretched back to 06:00 (360 minutes absolute)
     if w["start"] != 360:
         print("ERROR: Expected window start at 360, got {}".format(w["start"]))
         failed = True
@@ -143,18 +148,18 @@ def test_inject_cleans_fragmented_windows(my_predbat):
 
     # Inject intersecting fragmented windows
     my_predbat.export_window_best = [
-        {"start": 30, "end": 50, "average": 0},  # Before morning_start (690) - should KEEP
-        {"start": 100, "end": 120, "average": 0},  # Before morning_start (690) - should KEEP
-        {"start": 700, "end": 800, "average": 0},  # Intersecting the new window [690, 810] - should DROP
+        {"start": 30, "end": 50, "average": 0},  # Before morning_start (720) - should KEEP
+        {"start": 100, "end": 120, "average": 0},  # Before morning_start (720) - should KEEP
+        {"start": 700, "end": 800, "average": 0},  # Intersecting the new window [720, 810] - should DROP
         {"start": 900, "end": 960, "average": 0},  # After peak_end (810) - should KEEP
     ]
     my_predbat.export_limits_best = [10.0, 20.0, 30.0, 40.0]
 
     my_predbat.inject_clipping_export_windows()
 
-    # We expect 4 windows: 3 kept + 1 newly injected
+    # We expect 5 windows: 3 kept + 2 newly injected ([720, 780] and [780, 810])
     if len(my_predbat.export_window_best) != 5:
-        print("ERROR: Expected 5 windows (3 kept + 1 new), got {}".format(len(my_predbat.export_window_best)))
+        print("ERROR: Expected 5 windows (3 kept + 2 new), got {}".format(len(my_predbat.export_window_best)))
         return True
 
     if len(my_predbat.export_limits_best) != len(my_predbat.export_window_best):
@@ -170,8 +175,8 @@ def test_inject_cleans_fragmented_windows(my_predbat):
         print("ERROR: Non-intersecting windows were incorrectly dropped!")
         failed = True
 
-    if 360 not in starts:  # Injected window start
-        print("ERROR: Injected window start 360 not found, got starts: {}".format(starts))
+    if 690 not in starts:  # Injected window start
+        print("ERROR: Injected window start 690 not found, got starts: {}".format(starts))
         failed = True
 
     # Check that limits are aligned: W0 (limit 10.0), W1 (limit 20.0), W3 (limit 40.0), and new window (target_soc_pct, e.g. 80.0)
@@ -757,11 +762,10 @@ def test_inject_negative_minute_offset_lookup(my_predbat):
     setup(my_predbat)
     my_predbat.soc_max = 10.0
     my_predbat.minutes_now = 675  # 11:15
-    # Forecast with peak from 720 (12:00) to 840 (14:00)
-    # relative keys: 720 - 675 = 45, 750 - 675 = 75
-    my_predbat.clipping_buffer_forecast_kwh = {45: 0.6}
+    # Forecast with peak starting at 690 (11:30): relative key 690 - 675 = 15 -> morning_start = 660 < 675
+    my_predbat.clipping_buffer_forecast_kwh = {15: 0.6}
     # Dynamic target soc: at minute 0, target is 9.4 kWh (94%)
-    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 5: 9.4, 45: 9.4, 75: 9.4}
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 5: 9.4, 15: 9.4, 45: 9.4}
 
     my_predbat.inject_clipping_export_windows()
 
@@ -826,7 +830,7 @@ def test_clipping_window_preserved_through_prune_and_discard(my_predbat):
     my_predbat.soc_max = 10.0
     my_predbat.minutes_now = 660  # 11:00
     my_predbat.clipping_buffer_forecast_kwh = {60: 0.6}
-    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 60: 9.4}
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 15: 9.4, 30: 9.4, 60: 9.4}
 
     my_predbat.inject_clipping_export_windows()
 
@@ -905,8 +909,8 @@ def test_inject_clipping_idempotent_multi_run(my_predbat):
     setup(my_predbat)
     my_predbat.soc_max = 10.0
     my_predbat.minutes_now = 675  # 11:15
-    my_predbat.clipping_buffer_forecast_kwh = {45: 0.6}
-    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 45: 9.4, 75: 9.4}
+    my_predbat.clipping_buffer_forecast_kwh = {15: 0.6}
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 15: 9.4, 45: 9.4}
     my_predbat.high_export_rates = []
 
     # First injection
@@ -956,7 +960,7 @@ def test_inject_replaces_existing_peak_window(my_predbat):
     my_predbat.soc_max = 10.0
     my_predbat.minutes_now = 660  # 11:00
     my_predbat.clipping_buffer_forecast_kwh = {60: 0.6}  # Peak at 720 to 750
-    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 60: 9.4, 90: 9.4}
+    my_predbat.predict_clipping_target_soc_best = {0: 9.4, 30: 9.4, 60: 9.4, 90: 9.4}
 
     # Pre-existing idle window covering the peak period with idle limit
     my_predbat.export_window_best = [{"start": 720, "end": 750}]
@@ -1047,6 +1051,165 @@ def test_publish_html_plan_overlapping_windows_tuple_limit(my_predbat):
             failed = True
     except Exception as e:
         print("ERROR: Case 4 publish_html_plan raised unexpected exception: {}".format(e))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_dynamic_window_duration_scaling(my_predbat):
+    """Verify REQ-40: tiny clipping buffers (0.07 kWh) receive a short 30m pre-peak window without
+    stretching to 06:00 when clipping_buffer_start is None, while large summer buffers (3.5 kWh)
+    receive a multi-hour pre-peak window."""
+    print("**** test_dynamic_window_duration_scaling ****")
+    failed = False
+
+    # Case A: Tiny buffer (0.07 kWh) at peak_start=720 (12:00), minutes_now=240 (04:00)
+    setup(my_predbat)
+    my_predbat.minutes_now = 240
+    my_predbat.clipping_buffer_start = None
+    my_predbat.clipping_buffer_forecast_kwh = {480: 0.07}  # 480 + 240 = 720
+
+    my_predbat.inject_clipping_export_windows()
+
+    if not my_predbat.export_window_best:
+        print("ERROR: Case A failed to inject window")
+        return True
+
+    w_tiny = my_predbat.export_window_best[0]
+    if w_tiny["start"] != 690:
+        print("ERROR: Case A tiny buffer (0.07 kWh) expected start at 690 (11:30), got {}".format(w_tiny["start"]))
+        failed = True
+
+    # Case B: Large summer buffer (3.5 kWh) at peak_start=720 (12:00), minutes_now=240 (04:00)
+    setup(my_predbat)
+    my_predbat.minutes_now = 240
+    my_predbat.clipping_buffer_start = None
+    my_predbat.clipping_buffer_forecast_kwh = {480: 3.5}  # 480 + 240 = 720
+
+    my_predbat.inject_clipping_export_windows()
+
+    if not my_predbat.export_window_best:
+        print("ERROR: Case B failed to inject window")
+        return True
+
+    w_large = my_predbat.export_window_best[0]
+    if w_large["start"] > 630:
+        print("ERROR: Case B large buffer (3.5 kWh) expected start <= 630 (10:30), got {}".format(w_large["start"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_solar_deficit_gated_arbitrage_injection(my_predbat):
+    """Verify REQ-39: positive arbitrage candidate charge windows are injected inside anti-clipping
+    windows when pre-peak solar deficit > 0.25 kWh (with limit in kWh), and suppressed in summer when
+    pre-peak solar naturally fills the battery to target_soc_kwh."""
+    print("**** test_solar_deficit_gated_arbitrage_injection ****")
+    failed = False
+
+    # Case A: Low pre-peak solar + cheap daytime import slot (3.27p vs 12.0p export)
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 2.0
+    my_predbat.minutes_now = 600  # 10:00
+    my_predbat.clipping_buffer_forecast_kwh = {120: 0.1}  # Peak at 720 (12:00), target = 9.9 kWh (99%)
+    my_predbat.predict_clipping_target_soc_best = {m: 9.9 for m in range(0, 300, 5)}
+    my_predbat.pv_forecast_minute_step = {m: 0.0 for m in range(0, 300, 5)}
+    my_predbat.rate_import = {m: 20.0 for m in range(600, 900, 30)}
+    my_predbat.rate_import[720] = 3.27  # Cheap slot at 12:00
+    my_predbat.rate_export = {m: 12.0 for m in range(600, 900, 30)}
+    my_predbat.charge_window_best = [{"start": 630, "end": 660, "average": 7.63}]
+    my_predbat.charge_limit_best = [6.0]  # Only charged to 6.0 kWh (60%), leaving 3.9 kWh deficit
+
+    my_predbat.inject_clipping_export_windows()
+
+    injected_720 = None
+    injected_limit = None
+    for cw, cl in zip(my_predbat.charge_window_best, my_predbat.charge_limit_best):
+        if cw["start"] == 720 and cw["end"] == 750:
+            injected_720 = cw
+            injected_limit = cl
+            break
+
+    if injected_720 is None:
+        print("ERROR: Case A expected positive arbitrage candidate charge window at 720-750, got {}".format(my_predbat.charge_window_best))
+        failed = True
+    elif injected_limit > my_predbat.soc_max or abs(injected_limit - 9.9) > 0.01:
+        print("ERROR: Case A expected charge_limit_best in kWh (9.9), got {}".format(injected_limit))
+        failed = True
+
+    # Case B: High pre-peak solar (pv_pre_peak > headroom_deficit) suppresses positive arbitrage injection
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 2.0
+    my_predbat.minutes_now = 600  # 10:00
+    my_predbat.clipping_buffer_forecast_kwh = {120: 3.5}  # Peak at 720 (12:00), target = 6.5 kWh (65%)
+    my_predbat.predict_clipping_target_soc_best = {m: 6.5 for m in range(0, 300, 5)}
+    # 24 steps * 0.5 kWh = 12.0 kWh pre-peak PV (> 6.5 kWh target, so headroom_deficit == 0)
+    my_predbat.pv_forecast_minute_step = {m: 0.5 for m in range(0, 300, 5)}
+    my_predbat.rate_import = {m: 20.0 for m in range(600, 900, 30)}
+    my_predbat.rate_import[720] = 3.27
+    my_predbat.rate_export = {m: 12.0 for m in range(600, 900, 30)}
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+
+    my_predbat.inject_clipping_export_windows()
+
+    for cw in my_predbat.charge_window_best:
+        if cw["start"] == 720:
+            print("ERROR: Case B injected positive-rate charge window at 720 despite sufficient pre-peak solar!")
+            failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_try_socs_includes_clipping_target_kwh(my_predbat):
+    """Verify REQ-42: optimise_charge_limit injects clip_target_kwh (in kWh, <= soc_max) into try_socs
+    and never appends raw percentage values to try_charge_limit."""
+    print("**** test_try_socs_includes_clipping_target_kwh ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.reserve = 1.0
+    my_predbat.best_soc_min = 1.0
+    my_predbat.best_soc_max = 0.0
+    my_predbat.best_soc_step = 2.0  # Coarse 2.0 kWh steps (10.0, 8.0, 6.0...) so 7.5 kWh is only tested if explicitly injected
+    my_predbat.minutes_now = 600
+    my_predbat.set_export_freeze_only = False
+    my_predbat.set_charge_freeze_only = False
+
+    charge_window = [{"start": 660, "end": 720, "average": 5.0}]
+    charge_limit = [10.0]
+    export_window = [{"start": 660, "end": 780, "clipping_target_soc_pct": 75.0, "average": 12.0}]
+    export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 75)]
+
+    tested_socs = []
+    tested_limit_lengths = []
+    orig_launch = my_predbat.launch_run_prediction_charge
+
+    def spy_launch(try_soc, window_n, try_charge_limit, *args, **kwargs):
+        tested_socs.append(try_soc)
+        tested_limit_lengths.append(len(try_charge_limit))
+        return orig_launch(try_soc, window_n, try_charge_limit, *args, **kwargs)
+
+    my_predbat.launch_run_prediction_charge = spy_launch
+    try:
+        my_predbat.optimise_charge_limit(0, {}, charge_limit, charge_window, export_window, export_limits, end_record=24 * 60)
+    finally:
+        my_predbat.launch_run_prediction_charge = orig_launch
+
+    if 7.5 not in tested_socs:
+        print("ERROR: Expected clip_target_kwh 7.5 to be evaluated in try_socs, got {}".format(tested_socs))
+        failed = True
+
+    if any(length != len(charge_window) for length in tested_limit_lengths):
+        print("ERROR: try_charge_limit length was corrupted during optimise_charge_limit: {}".format(tested_limit_lengths))
         failed = True
 
     if not failed:
