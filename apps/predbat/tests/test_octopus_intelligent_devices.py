@@ -26,6 +26,81 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat)
     failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
     failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
+    failed += test_intelligent_dispatch_change_requests_replan(my_predbat)
+    return failed
+
+
+def test_intelligent_dispatch_change_requests_replan(my_predbat):
+    """
+    A poll whose Octopus Intelligent dispatches differ from the last one asks for a replan straight away,
+    through ComponentBase.request_replan(). Before, nothing did: a dispatch that appeared at 17:00:40 was
+    only planned around at the 17:05 cycle, as nothing had the entity on its watch list.
+
+    Compared on the same signature fetch uses (dispatch_slots_signature()), so an in-progress dispatch whose
+    start and energy drift every poll does not replan each time, and the first poll after startup - when
+    the startup cycle runs anyway - does not either.
+    """
+    print("\n*** Test: a change in Intelligent dispatches requests a replan ***")
+    api = _make_discovery_api(my_predbat, "dispatch-replan")
+    requests = []
+    api.request_replan = lambda reason: requests.append(reason)
+    now = api.now_utc_exact.replace(second=0, microsecond=0)
+
+    def dispatch(start_offset, end_offset, kwh):
+        """A dispatch start_offset to end_offset minutes from now, in the component's format."""
+        return {
+            "start": (now + timedelta(minutes=start_offset)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "end": (now + timedelta(minutes=end_offset)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "charge_in_kwh": kwh,
+            "source": "smart-charge",
+            "location": "AT_HOME",
+        }
+
+    def poll(planned):
+        """One component poll publishing planned as the car's dispatches."""
+        api.intelligent_devices = {"car-1": {"device_id": "car-1", "planned_dispatches": planned, "completed_dispatches": []}}
+        asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+
+    failed = 0
+    poll([dispatch(-10, 30, 3.5)])
+    if requests:
+        print(f"ERROR: the first poll after startup should not request a replan, got {requests}")
+        failed += 1
+    # The in-progress dispatch's start is advanced to now and its energy scaled - not a real change
+    poll([dispatch(0, 30, 2.6)])
+    if requests:
+        print(f"ERROR: a drifting in-progress dispatch should not request a replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 3.5)])
+    if len(requests) != 1:
+        print(f"ERROR: a new dispatch should request one replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 3.5)])
+    if len(requests) != 1:
+        print(f"ERROR: an unchanged poll should not request another replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6)])
+    if len(requests) != 2:
+        print(f"ERROR: a withdrawn dispatch should request a replan, got {requests}")
+        failed += 1
+    # Octopus's completed record for a dispatch that has already ended cannot change the plan ahead
+    api.intelligent_devices = {"car-1": {"device_id": "car-1", "planned_dispatches": [dispatch(0, 30, 2.6)], "completed_dispatches": [dispatch(-120, -90, 3.4)]}}
+    asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+    if len(requests) != 2:
+        print(f"ERROR: a completed record for a past dispatch should not request a replan, got {requests}")
+        failed += 1
+    # The last car deregistered: its dispatches are gone, which the plan must pick up
+    api.intelligent_devices = {}
+    asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+    if len(requests) != 3:
+        print(f"ERROR: losing the last car should request a replan, got {requests}")
+        failed += 1
+    asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+    if len(requests) != 3:
+        print(f"ERROR: still no cars should not request another replan, got {requests}")
+        failed += 1
+    if not failed:
+        print("PASS: new and withdrawn dispatches request a replan, a drifting in-progress one does not")
     return failed
 
 
@@ -689,6 +764,45 @@ async def test_octopus_intelligent_devices(my_predbat):
             failed += 1
         else:
             print("PASS: Cache empties once the last EV is deregistered")
+
+    # ------------------------------------------------------------------
+    # Test 14: a failed dispatch query keeps the device's last known planned dispatches, as a failed
+    # settings query keeps its settings (Test 11). Publishing an empty list instead removed the car's
+    # dispatches until the next successful poll - and a change in them now requests a replan, so the
+    # plan was recomputed without them and then recomputed again two minutes later.
+    # ------------------------------------------------------------------
+    print("\n*** Test 14: A failed dispatch query keeps the last known planned dispatches ***")
+    api = make_api()
+    known_planned = [{"start": "2025-12-22T15:00:00+00:00", "end": "2025-12-22T16:00:00+00:00", "charge_in_kwh": 7.0, "source": "smart-charge", "location": "AT_HOME"}]
+
+    async def mock_query_dispatch_fail(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return None
+        elif "get-intelligent-settings" in context:
+            return {"devices": [{"id": "device-abc", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
+        return None
+
+    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": known_planned}}
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_dispatch_fail)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+    if result.get("device-abc", {}).get("planned_dispatches") != known_planned:
+        print(f"ERROR: Expected the last known planned dispatches to be kept, got {result.get('device-abc', {}).get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: Last known planned dispatches kept when the dispatch query fails")
+
+    # A device never seen before has nothing to keep
+    api2 = make_api()
+    api2.intelligent_devices = {}
+    api2.async_graphql_query = AsyncMock(side_effect=mock_query_dispatch_fail)
+    result2 = await api2.async_get_intelligent_devices("test-account", "device-abc")
+    if result2.get("device-abc", {}).get("planned_dispatches") != []:
+        print(f"ERROR: A never-seen device has no dispatches to keep, got {result2.get('device-abc', {}).get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: A never-seen device gets no planned dispatches when the dispatch query fails")
 
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")
