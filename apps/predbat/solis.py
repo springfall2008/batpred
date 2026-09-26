@@ -14,6 +14,7 @@ import hmac
 import json
 import time
 import copy
+import threading
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
@@ -440,6 +441,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.session = None
         self.queued_events = []
+        # Slot events change the schedule from the caller's loop while run() copies and restores it on this one
+        self.schedule_lock = threading.Lock()
+        self.schedules_loaded = set()  # Inverters whose schedule has been decoded, so slot events can apply to it
         # Last-resort fallback, used only for an LV pack that reports no BMS charge voltage to be
         # classified by - matches the previous hard-coded assumption (issue #4493).
         # get_nominal_voltage() below is the real source of truth for the full priority order.
@@ -932,6 +936,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 "field_length": 0,  # Indicate v2 format
             }
         self.charge_discharge_time_windows[inverter_sn] = result
+        self.schedules_loaded.add(inverter_sn)
         self.log("Solis API: Decoded time windows v2 for {}: {}".format(inverter_sn, result))  # Debug log
         return result
 
@@ -1041,21 +1046,32 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         Only restored while the schedule still holds the value that was attempted: slot events are
         applied on the caller's loop, so a newer request can arrive during the write and must win.
+        The check and the update are made under schedule_lock so no event lands between them.
+
+        A time is restored as a whole start-end pair, because that is how the inverter holds it.
+        Predbat programs a slot as two select writes, start then end, back to back in
+        adjust_force_export(); with slot events applied immediately the end lands well under a
+        second after the start. The restore only happens once a refused cloud write returns, some
+        15-20s after run() copied the schedule, so by then the schedule holds the whole new window
+        and the check above leaves it alone. The one way the end can arrive after a restore is for
+        the start event to have been queued - only before the first decode - in which case the
+        slot shows the inverter's start with Predbat's end until Predbat's next execute rewrites both.
         """
         inverter_value = str(self.cached_values.get(inverter_sn, {}).get(cid, ""))
-        slot_data = self.charge_discharge_time_windows.get(inverter_sn, {}).get(slot)
-        if slot_data is None:
-            return
-        if kind == "enable":
-            if inverter_value not in ("0", "1") or not slot_data.get(f"{direction}_enable"):
+        with self.schedule_lock:
+            slot_data = self.charge_discharge_time_windows.get(inverter_sn, {}).get(slot)
+            if slot_data is None:
                 return
-            restored = {f"{direction}_enable": int(inverter_value)}
-        else:
-            inverter_times = inverter_value.split("-")
-            if len(inverter_times) != 2 or f"{slot_data.get(f'{direction}_start_time')}-{slot_data.get(f'{direction}_end_time')}" != attempted:
-                return
-            restored = {f"{direction}_start_time": inverter_times[0], f"{direction}_end_time": inverter_times[1]}
-        slot_data.update(restored)
+            if kind == "enable":
+                if inverter_value not in ("0", "1") or not slot_data.get(f"{direction}_enable"):
+                    return
+                restored = {f"{direction}_enable": int(inverter_value)}
+            else:
+                inverter_times = inverter_value.split("-")
+                if len(inverter_times) != 2 or f"{slot_data.get(f'{direction}_start_time')}-{slot_data.get(f'{direction}_end_time')}" != attempted:
+                    return
+                restored = {f"{direction}_start_time": inverter_times[0], f"{direction}_end_time": inverter_times[1]}
+            slot_data.update(restored)
         self.log(f"Warn: Solis API: {direction} slot {slot} {kind} was not accepted by {inverter_sn}, showing the inverter's {inverter_value} so Predbat writes it again")
 
     async def write_time_windows_if_changed(self, inverter_sn):
@@ -1074,7 +1090,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 return True
 
             #  Make a copy as we will locally modify the data before writing it
-            time_windows = copy.deepcopy(self.charge_discharge_time_windows[inverter_sn])
+            with self.schedule_lock:
+                time_windows = copy.deepcopy(self.charge_discharge_time_windows[inverter_sn])
 
             if self.is_tou_v2_mode(inverter_sn):
                 #  V2 mode: check and write individual registers for changed values only
@@ -1497,6 +1514,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         self.log(f"Solis API: Decoded time windows for {inverter_sn}: {result}")
         self.charge_discharge_time_windows[inverter_sn] = result
+        self.schedules_loaded.add(inverter_sn)
         return result
 
     async def read_and_write_cid(self, inverter_sn, cid, value, field_description=None):
@@ -1529,18 +1547,20 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}")
                 return True
 
-            if not result:
-                self.log(f"Warn: Solis API: Failed to write CID {cid} {field_description} on {inverter_sn}")
-                return False
-
             # A read taken this soon after the write can still be reporting the value from before
             # it, so read once more after a pause rather than concluding the write was refused
-            # (issue #4774). The settled read also leaves the cache holding the better answer.
+            # (issue #4774). The settled read also leaves the cache holding the better answer. It
+            # applies when the reply errored too: the value can land a moment after a reply that
+            # timed out, and a failure here rolls the slot schedule back to the old value.
             await asyncio.sleep(self.verify_settle_seconds)
             settled_value, info = await self.read_cid(inverter_sn, cid)
             if cid_value_matches(settled_value, value):
                 self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}, read back {old_value} until it settled {self.verify_settle_seconds}s later")
                 return True
+
+            if not result:
+                self.log(f"Warn: Solis API: Failed to write CID {cid} {field_description} on {inverter_sn}")
+                return False
 
             self.log(f"Warn: Solis API: Failed to verify CID {cid} {field_description} on {inverter_sn}, wrote {value} but read back {old_value} and still {settled_value} after {self.verify_settle_seconds}s")
             return False
@@ -3244,43 +3264,49 @@ class SolisAPI(ComponentBase, OAuthMixin):
     # there is no API work to protect. They are applied here, because Predbat reads
     # the entity back for about 20s after writing it and the queue is only drained
     # once a minute - a queued slot time was reported as a failed write that then
-    # went through.
+    # went through. The schedule is shared with run() on the Solis loop, so every
+    # change to it goes through set_slot_schedule_field() under schedule_lock.
     SLOT_SCHEDULE_FIELDS = {"select": ("start_time", "end_time"), "number": ("soc", "power"), "switch": ("enable",)}
 
     def is_slot_schedule_event(self, entity_id):
-        """True if entity_id is a slot schedule control of an inverter that has already been discovered."""
+        """True if entity_id is a slot schedule control of an inverter whose schedule has been decoded."""
         domain, _, name = entity_id.partition(".")
-        entity_prefix = f"{self.base.get_arg('prefix', 'predbat')}_solis_"
+        entity_prefix = f"{self.prefix}_solis_"
         if domain not in self.SLOT_SCHEDULE_FIELDS or not name.startswith(entity_prefix):
             return False
         inverter_sn, _, field = name[len(entity_prefix):].partition("_")
-        # Until the first run() has discovered the inverter the handler would drop the event, so it waits in the queue
-        if self.find_inverter_by_sn(inverter_sn) is None:
+        # The first run() discovers the inverter before it decodes the schedule, and the decode replaces the schedule
+        # wholesale - an event applied in between would be lost, so until then it waits in the queue
+        inverter_sn = self.find_inverter_by_sn(inverter_sn)
+        if inverter_sn is None or inverter_sn not in self.schedules_loaded:
             return False
         direction, _, rest = field.partition("_slot")
         slot, _, suffix = rest.partition("_")
         return direction in ("charge", "discharge") and slot.isdigit() and suffix in self.SLOT_SCHEDULE_FIELDS[domain]
 
-    async def select_event(self, entity_id, value):
-        """Apply a slot time now, queue anything else for the Solis loop."""
+    async def route_event(self, handler, entity_id, value):
+        """Apply a slot schedule event now, queue anything else for the Solis loop."""
         if self.is_slot_schedule_event(entity_id):
-            await self.select_event_handler(entity_id, value)
+            await handler(entity_id, value)
         else:
-            self.queued_events.append((self.select_event_handler, entity_id, value))
+            self.queued_events.append((handler, entity_id, value))
+
+    async def select_event(self, entity_id, value):
+        """Handle a select change from Home Assistant."""
+        await self.route_event(self.select_event_handler, entity_id, value)
 
     async def number_event(self, entity_id, value):
-        """Apply a slot SoC or power now, queue anything else for the Solis loop."""
-        if self.is_slot_schedule_event(entity_id):
-            await self.number_event_handler(entity_id, value)
-        else:
-            self.queued_events.append((self.number_event_handler, entity_id, value))
+        """Handle a number change from Home Assistant."""
+        await self.route_event(self.number_event_handler, entity_id, value)
 
     async def switch_event(self, entity_id, service):
-        """Apply a slot enable now, queue anything else for the Solis loop."""
-        if self.is_slot_schedule_event(entity_id):
-            await self.switch_event_handler(entity_id, service)
-        else:
-            self.queued_events.append((self.switch_event_handler, entity_id, service))
+        """Handle a switch service call from Home Assistant."""
+        await self.route_event(self.switch_event_handler, entity_id, service)
+
+    def set_slot_schedule_field(self, inverter_sn, slot_num, field, value):
+        """Set one field of a slot in the in-memory schedule, under the lock run() copies and restores it under."""
+        with self.schedule_lock:
+            self.charge_discharge_time_windows.setdefault(inverter_sn, {}).setdefault(slot_num, {})[field] = value
 
     async def select_event_handler(self, entity_id, value):
         """Handle select entity changes"""
@@ -3334,15 +3360,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 new_hhmm = value[:5] if len(value) >= 5 else value
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
                 if "start_time" in field:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num]["charge_start_time"] = new_hhmm
+                    self.set_slot_schedule_field(inverter_sn, slot_num, "charge_start_time", new_hhmm)
                 elif "end_time" in field:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num]["charge_end_time"] = new_hhmm
+                    self.set_slot_schedule_field(inverter_sn, slot_num, "charge_end_time", new_hhmm)
 
                 # Write will happen in the main loop
 
@@ -3366,15 +3387,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 new_hhmm = value[:5] if len(value) >= 5 else value
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
                 if "start_time" in field:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num]["discharge_start_time"] = new_hhmm
+                    self.set_slot_schedule_field(inverter_sn, slot_num, "discharge_start_time", new_hhmm)
                 elif "end_time" in field:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num]["discharge_end_time"] = new_hhmm
+                    self.set_slot_schedule_field(inverter_sn, slot_num, "discharge_end_time", new_hhmm)
 
                 # Write will happen in the main loop
 
@@ -3428,12 +3444,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     return
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
-                self.charge_discharge_time_windows[inverter_sn][slot_num]["charge_soc"] = float(value_str)
+                self.set_slot_schedule_field(inverter_sn, slot_num, "charge_soc", float(value_str))
 
                 # Write will happen in the main loop
 
@@ -3457,12 +3468,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 amps = int(value / self.get_nominal_voltage(inverter_sn))
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
-                self.charge_discharge_time_windows[inverter_sn][slot_num]["charge_current"] = float(amps)
+                self.set_slot_schedule_field(inverter_sn, slot_num, "charge_current", float(amps))
 
                 # Write will happen in the main loop
 
@@ -3483,12 +3489,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     return
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
-                self.charge_discharge_time_windows[inverter_sn][slot_num]["discharge_soc"] = float(value_str)
+                self.set_slot_schedule_field(inverter_sn, slot_num, "discharge_soc", float(value_str))
 
                 # Write will happen in the main loop
 
@@ -3512,12 +3513,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 amps = round(float(value) / self.get_nominal_voltage(inverter_sn), 1)
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
-                self.charge_discharge_time_windows[inverter_sn][slot_num]["discharge_current"] = amps
+                self.set_slot_schedule_field(inverter_sn, slot_num, "discharge_current", amps)
 
                 # Write will happen in the main loop
 
@@ -3641,12 +3637,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     return
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
-                self.charge_discharge_time_windows[inverter_sn][slot_num]["charge_enable"] = int(value)
+                self.set_slot_schedule_field(inverter_sn, slot_num, "charge_enable", int(value))
 
                 # Write will happen in the main loop
 
@@ -3678,12 +3669,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     return
 
                 # Update charge_discharge_time_windows cache
-                if inverter_sn not in self.charge_discharge_time_windows:
-                    self.charge_discharge_time_windows[inverter_sn] = {}
-                if slot_num not in self.charge_discharge_time_windows[inverter_sn]:
-                    self.charge_discharge_time_windows[inverter_sn][slot_num] = {}
-
-                self.charge_discharge_time_windows[inverter_sn][slot_num]["discharge_enable"] = int(value)
+                self.set_slot_schedule_field(inverter_sn, slot_num, "discharge_enable", int(value))
 
                 # Write will happen in the main loop not here
 
