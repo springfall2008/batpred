@@ -334,7 +334,7 @@ Car 0 using Octopus Intelligent, no charging is planned
 
 The earlier `Cars {n} charging from battery ... smart ... max_price ...` line is **not** the IOG state. It is printed
 during configuration read, before any Octopus dispatch data is merged, and reports the Predbat-led car charging
-settings (`car_charging_plan_smart`, `car_charging_plan_max_price`). It will show `smart: False` and `max_price: 0.0p`
+settings (`car_charging_plan_smart`, `car_charging_plan_max_price`). It shows those settings as configured (for example `max_price: 0.0p`)
 even when IOG is working correctly, so do not use it to diagnose IOG linkage.
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
@@ -566,7 +566,8 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
-- Turn On **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned Off) all low-rate slots will be used in time order.
+- **switch.predbat_car_charging_plan_smart** (On by default) makes Predbat use the cheapest slots before the charge-by time.
+When disabled (turned Off) all low-rate slots will be used in time order, so the car starts charging in the first low-rate slot after it is plugged in, even when cheaper slots come later.
 Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (*expert mode*).
 By default this threshold is calculated automatically based upon future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details of configuring this threshold.
 

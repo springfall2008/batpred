@@ -926,7 +926,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",
-        "default": False,
+        "default": True,
         "enable": "num_cars",
         "enable_condition": "num_cars > 0",
     },

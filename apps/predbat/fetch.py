@@ -2631,7 +2631,7 @@ class Fetch:
             self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
 
             # Other car related configuration
-            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
+            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
