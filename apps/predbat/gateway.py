@@ -103,6 +103,7 @@ PLAN_MODE_DISCHARGE = 2
 GATEWAY_ATTRIBUTE_TABLE = {
     # Binary sensors
     "gateway_online": {"friendly_name": "Gateway Online", "device_class": "connectivity"},
+    "gateway_read_only": {"friendly_name": "Gateway Read-Only (enforced)", "icon": "mdi:lock"},
     # Timestamps
     "inverter_time": {"friendly_name": "Inverter Time", "icon": "mdi:clock", "device_class": "timestamp"},
     # Battery state
@@ -326,6 +327,9 @@ class GatewayMQTT(ComponentBase):
         # Monotonic-ish timestamp of the last set_read_only send, used to force a
         # periodic re-send so the gateway re-syncs even if a command was missed
         self._last_read_only_sent_time = 0
+        # Latch so a gateway whose reported read-only state disagrees with what PredBat
+        # requested is logged once per transition, not on every status cycle
+        self._read_only_mismatch_logged = False
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -855,12 +859,26 @@ class GatewayMQTT(ComponentBase):
         device_id = status.device_id
         firmware = status.firmware
 
+        # Read-only as the gateway actually enforces it. Absent on firmware predating
+        # the field, which is UNKNOWN and not False — publishing False there would claim
+        # the gateway is controllable when nothing has reported either way.
+        read_only = status.read_only if status.HasField("read_only") else None
+
         self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_online",
             True,
-            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware},
+            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware, "read_only": read_only},
             app="gateway",
         )
+
+        if read_only is not None:
+            self.dashboard_item(
+                f"binary_sensor.{self.prefix}_gateway_read_only",
+                read_only,
+                attributes=GATEWAY_ATTRIBUTE_TABLE.get("gateway_read_only", {}),
+                app="gateway",
+            )
+            self._check_read_only_mismatch(read_only)
 
         # Inverter time from gateway timestamp — write it under the suffix PredBat
         # actually reads (the control target), not the primary's, or the bound
@@ -1650,6 +1668,27 @@ class GatewayMQTT(ComponentBase):
         self._last_read_only = read_only
         self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
+
+    def _check_read_only_mismatch(self, reported):
+        """Warn when the gateway's enforced read-only state differs from what PredBat asked for.
+
+        Observe-only: called from the telemetry path with the value the gateway reports in
+        its status, and never sends a command. _last_read_only holds the value of the last
+        set_read_only command PredBat published, so the two are directly comparable; it is
+        None before the first send (and after a disconnect forces a re-send), in which case
+        there is nothing to compare against yet.
+
+        The status arrives every cycle, so the warning is latched and logged once per
+        transition into disagreement, and the latch is cleared as soon as the two agree
+        again — otherwise a stuck gateway would fill the log.
+        """
+        requested = self._last_read_only
+        if requested is None or reported == requested:
+            self._read_only_mismatch_logged = False
+            return
+        if not self._read_only_mismatch_logged:
+            self.log(f"Warn: GatewayMQTT: gateway reports read_only={reported} but PredBat requested {requested}")
+            self._read_only_mismatch_logged = True
 
     async def _check_inverter_resets(self):
         """Send inverter_reset for each configured inverter not yet reset in control mode.
