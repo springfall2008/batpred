@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acks
 activepower
 adata
 adbase
@@ -233,6 +234,7 @@ foxcloud
 foxess
 foxesscloud
 freephase
+fromisoformat
 fronius
 funcs
 futurerate
@@ -714,6 +716,7 @@ vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
+weakref
 weblink
 welink
 Werror
@@ -721,6 +724,7 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz

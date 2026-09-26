@@ -53,6 +53,7 @@ class MockSunsynk(SunsynkAPI):
         self._soc_floor_warned = set()
         self._stack_size_warned = set()
         self._discovery_battery_ratings = {}
+        self._discovery_sensors = {}
         # Most recent body-level API failure message (the `msg` field only, never a
         # credential) and whether the last discovery attempt actually reached the API -
         # mirrors the two attributes initialize() sets on the real component.
