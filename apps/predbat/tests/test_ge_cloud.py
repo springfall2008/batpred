@@ -73,6 +73,7 @@ class MockGECloudDirect(GECloudDirect):
         self.ems_device = None
         self.gateway_device = None
         self.ems_slot_warned = set()
+        self.validation_parse_warned = set()
         self._discovery_report = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
@@ -4064,6 +4065,28 @@ def _test_select_event_bracketed_options(my_predbat):
                 print("ERROR: Expected a warning for unparseable validation, got {}".format(ge_cloud.log_messages))
                 return 1
 
+            # An empty option list must not parse as [""] and reject every value; it falls back to 'in:' too
+            ge_cloud.settings["test123"][90] = {"value": "1", "validation": "Value must be one of: ()", "validation_rules": ["in:1,2"]}
+            await ge_cloud.select_event(entity_id, "1")
+            if write_calls != ["Export (AC3)", "2", "1"]:
+                print("ERROR: Expected empty option list to fall back to 'in:' and accept '1', got {}".format(write_calls))
+                return 1
+
+            # A non-string validation value is ignored rather than raising AttributeError
+            ge_cloud.settings["test123"][90] = {"value": "1", "validation": {"unexpected": True}, "validation_rules": ["in:1,2"]}
+            await ge_cloud.select_event(entity_id, "2")
+            if write_calls != ["Export (AC3)", "2", "1", "2"]:
+                print("ERROR: Expected non-string validation to fall back to 'in:' and accept '2', got {}".format(write_calls))
+                return 1
+
+            # Unparseable validation with no 'in:' rule has nothing to check against, so the write goes through
+            # and the GE Cloud API validates it server-side (the same as any select without option validation text)
+            ge_cloud.settings["test123"][90] = {"value": "1", "validation": "Value must be one of:", "validation_rules": []}
+            await ge_cloud.select_event(entity_id, "5")
+            if write_calls != ["Export (AC3)", "2", "1", "2", "5"]:
+                print("ERROR: Expected write without local validation when no options are known, got {}".format(write_calls))
+                return 1
+
         return 0
 
     return run_async(test())
@@ -4076,6 +4099,13 @@ def _test_parse_validation_options(my_predbat):
     cases = [
         ("Value must be one of: (00:00, 00:30, 01:00)", ["00:00", "00:30", "01:00"]),
         ("Value must be one of: (Eco (Paused), Timed Demand, Export (AC3))", ["Eco (Paused)", "Timed Demand", "Export (AC3)"]),
+        # Commas inside a label's own brackets do not split it
+        ("Value must be one of: (Eco, Pause (Battery, Grid), Export)", ["Eco", "Pause (Battery, Grid)", "Export"]),
+        ("Value must be one of: (0,1,2)", ["0", "1", "2"]),
+        # An empty option list is unparseable, not a single empty-string option
+        ("Value must be one of: ()", None),
+        ("Value must be one of: (", None),
+        ("Value must be one of: ( )", None),
         ("Value must be one of:", None),
         ("Value must be between 0 and 100", None),
         ("", None),
@@ -4332,6 +4362,14 @@ def _test_publish_registers_bracketed_options(my_predbat):
     # Registers after the problem ones must still be published
     if "switch.predbat_gecloud_test123_enable_ac_charge" not in ge_cloud.dashboard_items:
         print("ERROR: Expected later registers to still be published")
+        return 1
+
+    # A permanently unparseable register warns once, not on every settings refresh
+    run_async(ge_cloud.publish_registers("test123", registers))
+    run_async(ge_cloud.publish_registers("test123", registers))
+    warnings = [message for message in ge_cloud.log_messages if "Unable to parse options" in message]
+    if len(warnings) != 1:
+        print("ERROR: Expected exactly one unparseable-validation warning across three refreshes, got {}".format(warnings))
         return 1
 
     return 0
