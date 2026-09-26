@@ -44,6 +44,7 @@ class MockDatabaseManager:
         self.state_data = {}  # entity_id -> {"state": value, "attributes": dict, "last_changed": datetime}
         self.get_state_calls = []
         self.set_state_calls = []
+        self.delete_state_calls = []
         self.get_history_calls = []
 
     def get_state_db(self, entity_id):
@@ -73,6 +74,12 @@ class MockDatabaseManager:
     def get_all_entities_db(self):
         """Mock get_all_entities_db - returns list of entity IDs"""
         return list(self.state_data.keys())
+
+    def delete_state_db(self, entity_id):
+        """Mock delete_state_db - removes and reports a stored current state"""
+        entity_id = entity_id.lower()
+        self.delete_state_calls.append(entity_id)
+        return self.state_data.pop(entity_id, None) is not None
 
     def get_history_db(self, sensor, now, days=30):
         """Mock get_history_db - returns empty list"""
