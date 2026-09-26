@@ -59,7 +59,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode | [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
    | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-   | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis_fb00.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis_fb00.yaml) |
    | [Sunsynk Cloud](#sunsynk-cloud) | Predbat | See [apps.yaml](apps-yaml.md#sunsynk-cloud-api) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
@@ -2661,7 +2661,7 @@ To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (yo
    | `sensor.solis_rtc`           | Real Time Clock |
    | `sensor.solis_battery_power` | Battery Power   |
 
-3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system
+3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/ginlong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system
 
 4. Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
 
@@ -2684,36 +2684,31 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
 
-2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00.
+2. Ensure that you have the Solax Modbus integration running and select the inverter type **Solis FB00** (not **Solis**).
    There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
-   | Name                          | Description     |
-   |:----------------------------- |:--------------- |
-   | `sensor.solisx_rtc`           | Real Time Clock |
-   | `sensor.solisx_battery_power` | Battery Power   |
+   | Name                         | Description     |
+   |:---------------------------- |:--------------- |
+   | `sensor.solis_rtc`           | Real Time Clock |
+   | `sensor.solis_battery_power` | Battery Power   |
 
-3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system.
-   You will need to update these lines:
+3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/ginlong_solis_fb00.yaml> over the top of your `apps.yaml`, and modify it for your system:
 
-- Replace **inverter_type: "GS"** with **inverter_type: "GS_fb00"** to enable the inverter template for the newer firmware version of Solis inverters
+- Set **battery_rate_max**, **soc_max** and **inverter_limit** to match your inverter and battery
 
-- Un-comment **charge_update_button** and **discharge_update_button** and comment out **charge_discharge_update_button** to enable the two "button presses" needed for writing charge/discharge times to the inverter
+- Check that each entity name matches the ones your Solax Modbus integration created, as the prefixes depend on the name you gave the integration
 
-- Un-comment **scheduled_charge_enable** and **scheduled_discharge_enable** to enable Predbat to enable/disable the charge/discharge slots
-
-- Un-comment **charge_limit** to enable the charge limit through setting an upper SoC value
-
-- Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
+- Optionally set **grid_power** to a sensor that measures your grid connection (see the comments in the template)
 
 - Lastly you will need to comment out or delete the **template** line to enable the configuration
 
 4. Save the file as `apps.yaml` to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
 
-5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
-   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
-   In due course, these mode settings will be incorporated into the code.
+5. Leave the inverter's Energy Storage Control Switch on `Self-Use`.
+   This firmware has no separate `Timed Charge/Discharge` control mode - timed charging and exporting are turned on and off for each slot instead, and Predbat does this using the slot 1 enable switches (**scheduled_charge_enable** and **scheduled_discharge_enable** in `apps.yaml`).
+   If you use the pre-FB00 setup (`inverter_type: "GS"`) on this firmware, charging can appear to work but exports will not, and Predbat will repeatedly report control interference on the Energy Storage Control Switch.
 
-6. Note: Predbat will read the minimum SoC level set on the inverter via **sensor.solis_battery_minimum_soc** configured in `apps.yaml`.
+6. Note: Predbat will read the minimum SoC level set on the inverter via **number.solis_inverter_battery_minimum_soc** configured in `apps.yaml`.
    You must set the minimum SoC level that Predbat will set in **input_number.predbat_set_reserve_min** to at least 1% more than the inverter minimum SoC.<BR>
    So for example, if the inverter minimum SoC is set to 20%, predbat_set_reserve_min must be set to at least 21%. If this is not done then when Predbat sets the reserve SoC, the instruction will be rejected by the inverter and Predbat will error.
 

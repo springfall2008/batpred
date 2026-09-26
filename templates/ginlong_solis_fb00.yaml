@@ -20,11 +20,10 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
 
-  # For Solis inverters with firmware before FB00 (fewer than 6 charge/discharge time slots)
-  # For FB00 firmware or later use ginlong_solis_fb00.yaml instead
-  inverter_type: "GS"
-
-  solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
+  # For Solis inverters with firmware FB00 or later (6 charge/discharge time slots)
+  # Select the "Solis FB00" inverter type in the Solax Modbus integration
+  # For older firmware (fewer than 6 slots) use ginlong_solis.yaml instead
+  inverter_type: "GS_fb00"
 
   num_inverters: 1
   #
@@ -64,6 +63,14 @@ pred_bat:
   pv_power:
     - sensor.solis_pv_total_power
 
+  # Grid power in W - should be negative for import and positive for export, set grid_power_invert to true if yours is the other way around
+  # Point this at whichever sensor measures your grid connection, e.g. the Solis meter (sensor.solis_meter_active_power) or another CT clamp
+  # If no single sensor reports it in that form, create a Home Assistant template sensor that does and use that here
+  #grid_power:
+  #  - sensor.solis_meter_active_power
+  #grid_power_invert:
+  #  - true
+
   # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
   load_power:
     - sensor.solis_house_load
@@ -74,42 +81,48 @@ pred_bat:
     - sensor.solis_battery_soc
 
   reserve:
-    - number.solis_backup_mode_soc
+    - number.solis_inverter_backup_mode_soc
 
   battery_min_soc:
-    - sensor.solis_battery_minimum_soc
+    - number.solis_inverter_battery_minimum_soc
 
-  # With the Solax integration we need to press a button to send the time to the inverter
-  charge_discharge_update_button:
-    - button.solis_update_charge_discharge_times
+  # With the Solax integration we need to press a button to send the times to the inverter, one for charge and one for discharge
+  charge_update_button:
+    - button.solis_inverter_update_charge_times
+  discharge_update_button:
+    - button.solis_inverter_update_discharge_times
+
+  # Predbat turns timed charge/discharge on and off using the slot 1 enable switches
+  scheduled_charge_enable:
+    - switch.inverter_timed_charge_slot_1_enable
+  scheduled_discharge_enable:
+    - switch.inverter_timed_discharge_slot_1_enable
+
+  charge_limit:
+    - number.solis_inverter_timed_charge_soc
 
   timed_charge_current:
-    - number.solis_timed_charge_current
-  charge_start_hour:
-    - number.solis_timed_charge_start_hours
-  charge_start_minute:
-    - number.solis_timed_charge_start_minutes
-  charge_end_hour:
-    - number.solis_timed_charge_end_hours
-  charge_end_minute:
-    - number.solis_timed_charge_end_minutes
-
-
+    - number.solis_inverter_timed_charge_current
   timed_discharge_current:
-    - number.solis_timed_discharge_current
+    - number.solis_inverter_timed_discharge_current
+
+  charge_start_hour:
+    - number.solis_inverter_timed_charge_start_hours
+  charge_start_minute:
+    - number.solis_inverter_timed_charge_start_minutes
+  charge_end_hour:
+    - number.solis_inverter_timed_charge_end_hours
+  charge_end_minute:
+    - number.solis_inverter_timed_charge_end_minutes
 
   discharge_start_hour:
-    - number.solis_timed_discharge_start_hours
+    - number.solis_inverter_timed_discharge_start_hours
   discharge_start_minute:
-    - number.solis_timed_discharge_start_minutes
+    - number.solis_inverter_timed_discharge_start_minutes
   discharge_end_hour:
-    - number.solis_timed_discharge_end_hours
+    - number.solis_inverter_timed_discharge_end_hours
   discharge_end_minute:
-    - number.solis_timed_discharge_end_minutes
-
-
-  energy_control_switch:
-    - select.solis_energy_storage_control_switch
+    - number.solis_inverter_timed_discharge_end_minutes
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
