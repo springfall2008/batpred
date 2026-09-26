@@ -1119,9 +1119,21 @@ class Execute:
         self.battery_full_hysteresis_active = any(getattr(inverter, "full_hysteresis_active", False) for inverter in self.inverters)
         # Else: SoC is inside the hysteresis band - leave the existing state alone either way
 
-    def fetch_inverter_data(self, create=True):
+    def fetch_inverter_data(self, quick=False): upstream/main
         """
         Fetch data about the inverters
+
+        quick is the dashboard refresh from quick_inverter_data_update(), every
+        INVERTER_QUICK_UPDATE_SECONDS. It reads live status only: no refresh_config() and no
+        per-cycle inverter diagnostics (clock skew, soc_max, charge windows and settings). That is
+        what the quick path did before the objects persisted, and it keeps check_clock_skew()'s
+        auto-restart, the battery size tracking reads and the set_reserve_min write to once per
+        plan cycle.
+
+        Verbosity is deliberately tied to quick rather than to whether the Inverter objects were
+        just created: those objects now persist, so tying it to creation would silence the
+        diagnostics for the life of the process after the first cycle (#5126 review). That log is
+        the primary triage evidence for "the plan is wrong" and inverter-write reports.
         """
         # Find the inverters
         self.num_inverters = int(self.get_arg("num_inverters", 1))
@@ -1154,16 +1166,27 @@ class Execute:
         export_limit = 0.0
         inverter_support_feedin_first = True
 
-        # Create inverters list if needed
-        if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
+        # Create the inverters only when we don't already have the right number of them. The objects
+        # persist across cycles: rebuilding them every cycle wiped any state they accumulated, which
+        # is why the committed-schedule guard never suppressed a repeated commit (#4712).
+        #
+        # Nothing else needs to force a rebuild. refresh_config() below re-reads everything derived
+        # from config, including inverter_type and every inv_* capability flag derived from it, and
+        # re-creates the type-named dummy entities - so a component whose automatic_config() sets the
+        # type after these objects were built (a deferred AlphaESS startup, say) is absorbed by the
+        # refresh. An earlier version of this rebuilt on a same-count type change too, which threw
+        # away the commit-once state for every inverter - forcing exactly the redundant commit and
+        # button press this guard exists to prevent - to redo work the refresh had already done
+        # (#5126 review).
+        create = (not self.inverters) or (len(self.inverters) != self.num_inverters)
+        if create:
             self.inverters = []
-            create = True
 
         # For each inverter get the details
         for id in range(self.num_inverters):
             if create:
                 try:
-                    inverter = Inverter(self, id)
+                    inverter = Inverter(self, id, quiet=quick)
                 except Exception as e:
                     self.log("Error: Failed to create inverter {}: {}, your configuration may be incorrect".format(id, e))
                     self.inverters = []
@@ -1171,7 +1194,19 @@ class Execute:
                 self.inverters.append(inverter)
             else:
                 inverter = self.inverters[id]
-            inverter.update_status(self.minutes_now, quiet=not create)
+                try:
+                    if not quick:
+                        inverter.refresh_config()
+                except Exception as e:
+                    # The objects are left intact, unlike the construction path above where the list
+                    # is only half built. refresh_config() has transient ways to raise on a live
+                    # system - an entity reading back None through int(), say - and discarding every
+                    # inverter's commit-once state because one of them hiccuped forces the redundant
+                    # commit and button press this guard exists to prevent, on hardware where that is
+                    # a non-volatile write (#5126 review).
+                    self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
+                    return False
+            inverter.update_status(self.minutes_now, quiet=quick)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
@@ -1332,20 +1367,20 @@ class Execute:
         # and write the real device with no plan in place (#4965)
         if self.is_template_mode():
             # fetch_inverter_data() and the plan run never stamp this in template mode, so without
-            # a stamp here the 120s throttle in update_pred() would pass on every tick of
+            # a stamp here the quick-update throttle would pass on every tick of
             # update_time_loop instead of once per INVERTER_QUICK_UPDATE_SECONDS
             self.inverter_data_last_fetch = datetime.now()
             return False
         if self.inverters is None:
             return False
-        # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which
+        # Its own control-ledger cycle. This runs every INVERTER_QUICK_UPDATE_SECONDS and reaches update_status(), which
         # writes scheduled_charge_enable through write_and_poll_switch - so it both observes and
         # confirms. Without advancing the cycle, every observation here was unconditionally STALE
         # (cycle <= confirmed_cycle) and its confirmations collided with the plan run's. Every
         # entry point that can observe or confirm gets its own cycle.
         if self.control_ledger is not None:
             self.control_ledger.begin_cycle()
-        if self.fetch_inverter_data(create=False):
+        if self.fetch_inverter_data(quick=True):
             self.publish_inverter_data()
             self.rebalance_inverter_rates()
             return True

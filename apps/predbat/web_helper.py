@@ -940,29 +940,58 @@ function toggleValue(rowId) {
     updateChangeCounter();
 }
 
-function editValue(rowId) {
+async function revealSecretValue(row, attribute, path) {
+    // The page serves credentials masked, so a data-secret row's original is the placeholder,
+    // not the key - fetch the real value once and make it the row's original, so the input
+    // offers the real key and saving it unchanged is not seen as a change
+    try {
+        const response = await fetch('./apps_value?path=' + encodeURIComponent(path));
+        const result = await response.json();
+        if (!result.success) {
+            showMessage(result.message, 'error');
+            return false;
+        }
+        row.dataset[attribute] = result.value;
+        delete row.dataset.secret;
+        // A credential is text whatever it looks like - revealed marks the row so the editor
+        // neither offers the entity dropdown for a dotted key nor saves a digit-only one as a number
+        row.dataset.revealed = '1';
+        return true;
+    } catch (error) {
+        showMessage('Could not load the value to edit: ' + error.message, 'error');
+        return false;
+    }
+}
+
+async function editValue(rowId) {
     const row = document.getElementById('row_' + rowId);
     const valueCell = document.getElementById('value_' + rowId);
     const argName = row.dataset.argName;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'originalValue', argName))) {
+        return;
+    }
     const originalValue = row.dataset.originalValue;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[argName] ? pendingChanges[argName].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown
         showEntityDropdown(rowId, currentValue);
     } else {
         // Show regular text input for non-entity values
         valueCell.innerHTML = `
-            <input type="text" class="edit-input" id="input_${rowId}" value="${currentValue}">
+            <input type="text" class="edit-input" id="input_${rowId}">
             <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('input_' + rowId).focus();
+        // Set as a property rather than written into the markup, so a value holding a quote
+        // (ordinary in a password) cannot end the attribute early and be saved back truncated
+        const input = document.getElementById('input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -973,9 +1002,10 @@ function getDisplayValueEntity(entityId) {
         const entityState = allStates[entityId];
         const state = entityState.state || '';
         const unit = entityState.unit_of_measurement || '';
-        return `${entityId} = ${state} ${unit}`;
+        return escapeHtml(`${entityId} = ${state} ${unit}`);
     }
-    return entityId; // Fallback to just the entity ID if no state found
+    // Every caller assigns the result to innerHTML, and a revealed credential can hold < or &
+    return escapeHtml(entityId); // Fallback to just the entity ID if no state found
 }
 
 function cancelEdit(rowId) {
@@ -1047,7 +1077,7 @@ function saveValue(rowId) {
     }
 
     // Determine if this is an entity or numerical value
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1636,29 +1666,34 @@ function toggleNestedValue(rowId) {
     updateChangeCounter();
 }
 
-function editNestedValue(rowId) {
+async function editNestedValue(rowId) {
     const row = document.getElementById('nested_row_' + rowId);
     const valueCell = document.getElementById('nested_value_' + rowId);
     const nestedPath = row.dataset.nestedPath;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'nestedOriginal', nestedPath))) {
+        return;
+    }
     const originalValue = row.dataset.nestedOriginal;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[nestedPath] ? pendingChanges[nestedPath].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, currentValue);
     } else {
         // Replace the value cell content with an input field for non-entity values
         valueCell.innerHTML = `
-            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${currentValue}">
+            : <input type="text" class="edit-input" id="nested_input_${rowId}">
             <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('nested_input_' + rowId).focus();
+        // Set as a property rather than written into the markup - see editValue()
+        const input = document.getElementById('nested_input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -1692,7 +1727,7 @@ function saveNestedValue(rowId) {
     }
 
     // Determine the value type and validate accordingly
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');

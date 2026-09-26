@@ -87,6 +87,15 @@ class ActiveTestInverter:
     def find_battery_size(self):
         return self.soc_max * 0.90
 
+    def refresh_config(self, quiet=False):
+        """
+        No-op stand-in for Inverter.refresh_config().
+
+        The real one re-reads runtime config on each cycle now that the Inverter objects persist;
+        this double carries no config, so there is nothing to re-read.
+        """
+        pass
+
     def update_status(self, minutes_now, quiet=False):
         pass
 
@@ -346,7 +355,7 @@ def run_execute_test(
     my_predbat.set_export_freeze_only = my_predbat.get_arg("set_export_freeze_only")
     my_predbat.set_charge_freeze_only = set_charge_freeze_only
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
 
     if my_predbat.soc_kw != soc_kw:
         print("ERROR: Predbat level SOC should be {} got {}".format(soc_kw, my_predbat.soc_kw))
@@ -519,7 +528,7 @@ def _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors, pv_power=0):
     my_predbat.args["pv_power"] = pv_sensors
     # Set pv_power via config_index so get_ha_config returns it (args is bypassed for known config items)
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
     result = my_predbat.pv_power
 
     return result
