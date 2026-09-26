@@ -27,6 +27,7 @@ export type PlanRow = {
   load_color?: string
   clipped?: number
   extra_load?: string
+  show_limit?: string
 
   car_charging?: number
 
@@ -54,6 +55,7 @@ export type Plan = {
   soc: number
   soc_max: number
   mode: string
+  plan_debug?: boolean
   num_cars: number
   carbon_enable?: boolean
   car_charging_from_battery: boolean

@@ -5,7 +5,7 @@ import PlanTable from '../components/PlanTable'
 import PlanVisual from '../components/PlanVisual'
 
 import type { Plan, PlanOverrides } from '../types/plan'
-import { selectPlanView, type PlanView } from '../utils/plan'
+import { selectPlanView, shouldShowPlanDebug, type PlanView } from '../utils/plan'
 
 import './PlanPage.css'
 
@@ -40,6 +40,7 @@ export default function PlanPage({
   const [view, setView] = useState<PlanView>('plan')
   const selectedPlan = selectPlanView(view, plan, yesterday, baseline)
   const historical = view !== 'plan'
+  const showPlanDebug = shouldShowPlanDebug(view, plan, debugEnabled)
 
   return (
     <div className="plan-page">
@@ -78,7 +79,7 @@ export default function PlanPage({
           <PlanTable
             plan={selectedPlan}
             overrides={historical ? EMPTY_OVERRIDES : overrides}
-            debugEnabled={!historical && debugEnabled}
+            debugEnabled={showPlanDebug}
             readOnly={historical}
             onOverrideSubmitted={onOverrideSubmitted}
           />

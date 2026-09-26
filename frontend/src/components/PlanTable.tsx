@@ -406,6 +406,7 @@ function RateCell({
 type TargetCellProps = {
   row: PlanRow
   overrides: PlanOverrides
+  debugEnabled: boolean
   isPast: boolean
   open: boolean
   onToggle: () => void
@@ -416,6 +417,7 @@ type TargetCellProps = {
 function TargetCell({
   row,
   overrides,
+  debugEnabled,
   isPast,
   open,
   onToggle,
@@ -440,6 +442,7 @@ function TargetCell({
    * calculated target.
    */
   const displayedTarget = override?.target ?? plannedTarget
+  const debugLimit = row.show_limit?.match(/\(([^)]+)\)$/)?.[1]
 
   function openEditor() {
     if (isPast) {
@@ -579,6 +582,12 @@ function TargetCell({
           disabled={isPast}
         >
           <span>{displayedTarget !== null ? `${displayedTarget}%` : '—'}</span>
+
+          {debugEnabled && debugLimit && (
+            <small className="plan-debug-value" title="Internal optimiser limit">
+              ({debugLimit})
+            </small>
+          )}
 
           {override && (
             <span className="plan-target-manual-dot" title="Manual SOC target" aria-hidden="true" />
@@ -1479,6 +1488,7 @@ export default function PlanTable({
                     <TargetCell
                       row={row}
                       overrides={overrides}
+                      debugEnabled={debugEnabled}
                       isPast={isPast}
                       open={openCellEditor === `target:${row.time}`}
                       onToggle={() => {

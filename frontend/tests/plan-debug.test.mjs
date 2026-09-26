@@ -69,7 +69,8 @@ const row = {
   export_rate_adjusted: 4.25,
   rate_color_import: '#3AEE85',
   state: 'Demand',
-  state_target: '',
+  state_target: '60',
+  show_limit: '60 (55)',
   state_override: '',
   reasons: [],
   pv_forecast: 1.2,
@@ -143,6 +144,8 @@ test('debug mode exposes the diagnostic plan values supplied by Predbat', () => 
   assert.match(html, /0\.80/)
   assert.match(html, /0\.15/)
   assert.match(html, /0\.10, 0\.05/)
+  assert.match(html, /Internal optimiser limit/)
+  assert.match(html, />\(55\)</)
 })
 
 test('normal mode keeps diagnostic plan values hidden', () => {
@@ -152,6 +155,7 @@ test('normal mode keeps diagnostic plan values hidden', () => {
   assert.doesNotMatch(html, /PV \(10%\)/)
   assert.doesNotMatch(html, /12\.34c with loss/)
   assert.doesNotMatch(html, /0\.10, 0\.05/)
+  assert.doesNotMatch(html, /Internal optimiser limit/)
   assert.match(html, /plan-pv-value is-generating/)
   assert.match(html, /background-color:#3AEE85/)
   assert.match(html, /background-color:#F18261/)
@@ -193,11 +197,15 @@ test('carbon columns appear only when carbon planning is enabled', () => {
 })
 
 test('plan view selection maps history and baseline data', () => {
-  const { selectPlanView } = loadTypeScriptModule(planUtilityPath)
+  const { selectPlanView, shouldShowPlanDebug } = loadTypeScriptModule(planUtilityPath)
   const history = { rows: ['history'] }
   const baseline = { rows: ['baseline'] }
 
   assert.equal(selectPlanView('plan', plan, history, baseline), plan)
   assert.equal(selectPlanView('yesterday', plan, history, baseline), history)
   assert.equal(selectPlanView('baseline', plan, history, baseline), baseline)
+
+  assert.equal(shouldShowPlanDebug('plan', { ...plan, plan_debug: true }, false), true)
+  assert.equal(shouldShowPlanDebug('plan', plan, true), true)
+  assert.equal(shouldShowPlanDebug('yesterday', { ...plan, plan_debug: true }, true), false)
 })
