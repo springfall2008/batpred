@@ -175,6 +175,15 @@ message GatewayStatus {
   uint32 heap_internal_free     = 15;  // heap_caps_get_free_size(INTERNAL | 8BIT)
   uint32 heap_internal_largest  = 16;  // largest contiguous block — the leading indicator
   uint32 heap_internal_min_free = 17;  // low-water mark since boot
+
+  // Hub-side read-only flag (g_read_only), as actually enforced: write-class
+  // commands rejected and autonomous mode disabled. PredBat mirrors its own
+  // read-only mode here via the set_read_only command, but that is a two-hop
+  // mirror with no other feedback — the ack carries no value, and a hub that was
+  // offline at the transition only catches up on the 30-minute resend. Reporting
+  // the enforced state on every status makes "is this hub actually read-only?"
+  // answerable from the cloud instead of inferred. Absent on older firmware.
+  optional bool read_only = 18;
 }
 
 // Execution plan sent from PredBat cloud to gateway

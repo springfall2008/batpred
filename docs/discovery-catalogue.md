@@ -58,7 +58,7 @@ restart Predbat, or read a fresh debug dump, to see anything reported later than
 
 | Section | What it holds |
 | ------- | -------------- |
-| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), and - where the reporter has a table mapping Predbat's controls to its entities (GivTCP today) - those entities |
+| `inverters` | Battery inverters and PV-only devices - type, composition (direct/gateway/EMS), which functions it serves (`solar`, `battery`), its behaviour (`capabilities`), its fixed ratings under Predbat's own setting names, and every setting Predbat's automatic configuration binds for it (`entities`) |
 | `chargers` | EV chargers, cross-linked to the cars they serve |
 | `cars` | Electric vehicles, cross-linked to the charger that charges them |
 | `meters` | Electricity (and gas) supply points, each with a direction (`import`/`export`) and, where known, a nested tariff record |
@@ -70,8 +70,8 @@ their automatic configuration treats every discovered inverter as a battery inve
 records follow that configuration - `solar` and `battery` on every inverter - rather than
 evidence about the hardware, and Solis's `solar` works the same way, since every Solis inverter
 is configured as a PV source. A PV-only unit that has been configured as a battery inverter will
-usually show it in its ratings: `battery` among its functions, but no `battery_kwh` or
-`battery_capacity_ah`.
+usually show it in its record: `battery` among its functions, but no `battery_capacity_ah` rating
+and no `soc_max` entity.
 
 No reporter (GivTCP, GE Cloud, Octopus, Ohme, Solcast, Fox, AlphaESS, Solis, Deye, Sunsynk) populates `programmes` yet - it is part of
 the schema for a future Axle/VPP-style reporter - so today it is always present as an empty list
@@ -206,11 +206,12 @@ class* that value gets:
 | --------- | ------- | --------- |
 | `hardware_ids` | Short strings | Clear |
 | `info` | Short strings, no `@` | Clear |
-| `ratings` | Numbers and booleans | Clear |
+| `ratings` | Numbers and booleans, keyed by Predbat's setting name where one exists (`inverter_limit`, `export_limit`, `import_limit`, `battery_rate_max`, `soc_max`, `battery_min_soc`) | Clear |
 | `coverage` | A number/boolean, or a list of lowercase tokens | Clear |
-| `entities` | An entity descriptor (`entity_id` plus typed fields like `domain`, `unit`, `min`/`max`) | Clear |
+| `entities` | An entity descriptor: `access` (`rw` or `r`, required), exactly one of `entity_id` or a fixed `value`, and typed fields such as `domain`, `unit`, `format`, `min`/`max`, `invert` | Clear |
+| `capabilities` | `true`/`false` for the seven behaviour keys of an inverter definition (`support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`, `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`) | Clear |
 | `account_ids` | Any scalar | Pseudonymised |
-| `functions` / `capabilities` / `flags` / `effects` | Lists of short lowercase tokens | Clear |
+| `functions` / `flags` / `effects` | Lists of short lowercase tokens | Clear |
 
 A value that does not fit its container's declared type is silently **dropped**, not coerced and
 not raised as an error - a string offered to `ratings`, or free text over 64 characters offered to
@@ -219,6 +220,17 @@ rests on: it does not depend on enumerating every dangerous field name a compone
 introduce, because a container that only accepts numbers structurally cannot carry a name, an
 address or a pasted credential, however the schema grows. Choose whichever container matches the
 *kind* of fact you are reporting, not the one that happens to accept the value you have.
+
+### Inverter records and inverter definitions
+
+An inverter record holds enough to rebuild that inverter's definition - the per-type table
+(`INVERTER_DEF`) that tells Predbat how to drive it. `capabilities` carries its behaviour; whether it
+has a reserve, a target SoC, charge/discharge enable switches, idle times or a timed pause follows
+from which settings `entities` binds to a writable (`rw`) entity; and protocol detail such as the time
+format or whether the charge rate is set in watts or amps is read from those entities' descriptors.
+A setting Predbat replaces with a placeholder for this inverter type - SolisCloud's `reserve`, say - is
+left out of `entities`. See the design in
+`docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md`.
 
 ### Writing a reporter
 

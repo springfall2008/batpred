@@ -112,7 +112,7 @@ from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
-from tests.test_web_apps_edit import run_web_apps_edit_tests
+from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
 from tests.test_agent_tools import run_agent_tools_tests
@@ -275,6 +275,7 @@ from tests.test_myenergi import test_myenergi
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
+from tests.test_discovery_contract import run_discovery_contract_tests
 from tests.test_discovery_catalogue import test_discovery_catalogue_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
@@ -522,6 +523,7 @@ def main():
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
+        ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),
         ("web_debug_history_routes", test_web_debug_history_routes, "Debug-history web routes tests (#4438 review items 4, 6, 21)", False),
@@ -701,6 +703,7 @@ def main():
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
         ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
+        ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
         ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
         # Shared MockBase tests
         ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),

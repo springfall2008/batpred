@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acks
 activepower
 adata
 adbase
@@ -719,6 +720,7 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz

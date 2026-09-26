@@ -367,6 +367,49 @@ GIVTCP_AUTO_CONFIG_VOLTAGE_KEYS = [
     "battery_voltage",
 ]
 
+# The behaviour of a GivTCP-driven GivEnergy inverter, as the discovery record's capabilities: the
+# seven behaviour keys of the GE INVERTER_DEF row, stated here rather than read back from it so the
+# completeness test proves the record can stand in for the row (vocabulary spec section 1.1).
+GIVTCP_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": False,
+}
+
+# Settings automatic_config() binds that the discovery record leaves out, because inverter.py
+# replaces the binding with a dummy entity for a GE inverter: its row has has_discharge_enable_time
+# False, so inverter.py:620-622 never reads or writes the published scheduled_discharge_enable switch.
+GIVTCP_RECORD_DUMMIED_KEYS = ("scheduled_discharge_enable",)
+
+# Every setting automatic_config() can bind for one inverter, in its own key lists, less the ones
+# the record leaves out. build_discovery() keeps the ones actually published for that inverter.
+GIVTCP_RECORD_KEYS = [
+    key
+    for key in (
+        GIVTCP_AUTO_CONFIG_KEYS
+        + GIVTCP_AUTO_CONFIG_POWER_KEYS
+        + GIVTCP_AUTO_CONFIG_VOLTAGE_KEYS
+        + GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
+        + GIVTCP_AUTO_CONFIG_SCHEDULE_KEYS
+        + GIVTCP_AUTO_CONFIG_SCALING_KEYS
+        + GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS
+        + GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
+        + GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS
+        + GIVTCP_AUTO_CONFIG_PAUSE_SLOT_KEYS
+    )
+    if key not in GIVTCP_RECORD_DUMMIED_KEYS
+]
+
+# The shape of the inverter_time sensor's value: publish_data() passes GivTCP's Invertor_Time
+# through unchanged, and GivTCP reports it as ISO 8601 with an offset ("2024-12-30T13:07:22+00:00"
+# in both the v2 and v3 captures under coverage/cases). The GE row's clock_time_format stays
+# "%H:%M:%S" - it also serves installs that do not use this component (spec D13).
+GIVTCP_INVERTER_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
 
 class GivTCPComponent(ComponentBase):
     """
@@ -376,6 +419,10 @@ class GivTCPComponent(ComponentBase):
     apps.yaml arg - the same key and shape Inverter itself used to read directly, so an existing
     user's apps.yaml needs no changes to pick this component up.
     """
+
+    # The GE INVERTER_DEF row's write_and_poll_sleep: GivTCP applies a write on its own poll cycle,
+    # so inverter.py waits longer before reading a setting back than it does for a cloud API.
+    WRITE_AND_POLL_SLEEP = 10
 
     def initialize(self, rest_urls, automatic=True):
         rest_urls = rest_urls if isinstance(rest_urls, list) else [rest_urls]
@@ -958,6 +1005,37 @@ class GivTCPComponent(ComponentBase):
                 descriptor.pop("max", None)
         return descriptor
 
+    def _record_entities(self, n, max_battery_rate):
+        """
+        The discovery record's entity map for inverter n: each setting automatic_config() binds, keyed by that setting.
+
+        Walks the same key lists automatic_config() does (GIVTCP_RECORD_KEYS) and forms each entity id
+        with the same _entity_id() call, so the two cannot drift. A key is kept only when
+        publish_data() actually published its entity for this inverter (see _discovery_descriptor).
+        battery_scaling is bound to the combined battery_dod_soh sensor, exactly as automatic_config()
+        binds it, and inverter_time carries the format its value is published in.
+
+        The record describes this device alone (spec D10 and D11). automatic_config()'s fleet-wide
+        gates - a key claimed only when every discovered inverter published it or runs GivTCP v3 -
+        and the user's givtcp_rest_power_ignore opt-out are not applied here; the coordinator that
+        configures from records applies them.
+        """
+        entities = {}
+        for key in GIVTCP_RECORD_KEYS:
+            if key == "battery_scaling":
+                descriptor = self._discovery_descriptor(n, "battery_dod_soh", "sensor", "r", GIVTCP_SENSORS["battery_dod_soh"], max_battery_rate)
+            elif key in GIVTCP_CONTROLS:
+                domain, _, attrs = GIVTCP_CONTROLS[key]
+                descriptor = self._discovery_descriptor(n, key, domain, "rw", attrs, max_battery_rate)
+            else:
+                descriptor = self._discovery_descriptor(n, key, "sensor", "r", GIVTCP_SENSORS[key], max_battery_rate)
+            if descriptor is None:
+                continue
+            if key == "inverter_time":
+                descriptor["format"] = GIVTCP_INVERTER_TIME_FORMAT
+            entities[key] = descriptor
+        return entities
+
     def build_discovery(self):
         """
         Describe the discovered inverters for the discovery catalogue.
@@ -968,15 +1046,14 @@ class GivTCPComponent(ComponentBase):
         "givtcp:{rest_api}" when the inverter reports no serial - the same fallback identity
         publish_data()'s own identity entities would show as "Unknown".
 
-        Entity descriptors are built from GIVTCP_CONTROLS/GIVTCP_SENSORS, but only for an entity
-        publish_data() actually published this run (see _discovery_descriptor) - many of them are
-        conditional there on GivTCP version, register support or a non-None reading (the pause
-        entities and discharge_target_soc need rest_v3 and, for the latter, a supported model;
-        charge_limit_enable and the two scheduled_*_enable switches need their register reported at
-        all; most of the discovery/energy sensors are published only when GivTCP actually reports
-        that field), so the catalogue never lists a control or sensor as present when no such HA
-        entity exists. capabilities records the same probes automatic_config() gates its own
-        auto-configuration decisions on.
+        entities holds every setting automatic_config() binds for the inverter (_record_entities),
+        only where publish_data() actually published the entity this run, so the catalogue never
+        lists a control or sensor that does not exist in Home Assistant. capabilities is the GE
+        inverter's behaviour (GIVTCP_CAPABILITIES). flags record the per-inverter probes: rest_v3
+        (GivTCP v3, which the pause and export-target controls need) and reports_soh (battery state
+        of health reported, which battery_scaling needs). ratings use Predbat's setting names:
+        soc_max (the design capacity in kWh, only as GivTCP reports it), battery_rate_max and
+        inverter_limit (W).
 
         Reporting is independent of self.automatic: the catalogue records what hardware is
         physically there, not whether this component wired Predbat's apps.yaml to it - that
@@ -990,34 +1067,13 @@ class GivTCPComponent(ComponentBase):
             device_id = "givtcp:{}".format(known_serial or rest.inverter.rest_api)
 
             max_battery_rate = rest.max_battery_rate()
-            entities = {}
-            for name, (domain, _, attrs) in GIVTCP_CONTROLS.items():
-                descriptor = self._discovery_descriptor(n, name, domain, "rw", attrs, max_battery_rate)
-                if descriptor is not None:
-                    entities[name] = descriptor
-            for name, attrs in GIVTCP_SENSORS.items():
-                descriptor = self._discovery_descriptor(n, name, "sensor", "r", attrs, max_battery_rate)
-                if descriptor is not None:
-                    entities[name] = descriptor
+            entities = self._record_entities(n, max_battery_rate)
 
-            # Same probes automatic_config() gates its own decisions on - see
-            # GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS/PAUSE_MODE_KEYS/PAUSE_SLOT_KEYS/SCALING_KEYS/
-            # CHARGE_ENABLE_KEYS above. Recorded here regardless of self.automatic or of whether the
-            # rest of the discovered fleet also qualifies - automatic_config() requires every
-            # discovered inverter to agree before claiming a key; this reports what is true of THIS
-            # inverter alone.
-            capabilities = []
+            flags = []
             if rest.rest_v3:
-                capabilities.append("rest_v3")
-                capabilities.append("discharge_target")
-                if rest.pause_mode_supported:
-                    capabilities.append("pause_mode")
-                if rest.pause_slots_supported:
-                    capabilities.append("pause_slots")
+                flags.append("rest_v3")
             if rest.battery_soh() is not None:
-                capabilities.append("soh")
-            if rest.charge_target_enabled is not None:
-                capabilities.append("charge_enable")
+                flags.append("reports_soh")
 
             info = {}
             model = rest.inverter_type()
@@ -1028,12 +1084,18 @@ class GivTCPComponent(ComponentBase):
             if rest.givtcp_version and rest.givtcp_version != "Unknown":
                 info["givtcp_version"] = rest.givtcp_version
 
+            # Ratings are figures the device reports (spec D14). soc_max is one only when GivTCP
+            # reports Battery_Capacity_kWh itself: publish_data()'s fallback, the nominal Ah scaled by
+            # an assumed 51.2V pack voltage, is Predbat's derivation, so it stays an entity binding only.
             ratings = {}
-            design_capacity = rest.battery_capacity_kwh() or rest.nominal_capacity()
-            if design_capacity:
-                ratings["battery_kwh"] = design_capacity
+            reported_capacity = rest.battery_capacity_kwh()
+            if reported_capacity:
+                ratings["soc_max"] = reported_capacity
             if max_battery_rate:
-                ratings["max_charge_w"] = max_battery_rate
+                ratings["battery_rate_max"] = max_battery_rate
+            max_inverter_rate = rest.max_inverter_rate()
+            if max_inverter_rate:
+                ratings["inverter_limit"] = max_inverter_rate
 
             inverters.append(
                 inverter_record(
@@ -1041,7 +1103,8 @@ class GivTCPComponent(ComponentBase):
                     inverter_type="GE",
                     composition="direct",
                     functions=["solar", "battery"],
-                    capabilities=capabilities,
+                    capabilities=dict(GIVTCP_CAPABILITIES),
+                    flags=flags,
                     hardware_ids={"serial": known_serial} if known_serial else None,
                     info=info,
                     ratings=ratings,
