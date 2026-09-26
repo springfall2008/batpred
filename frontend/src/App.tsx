@@ -9,6 +9,7 @@ import DebugPanel from './components/DebugPanel'
 import MetricsPanel from './components/MetricsPanel'
 import PlanPage from './pages/PlanPage'
 import ChartsPage from './pages/ChartsPage'
+import { useStoredState } from './hooks/useStoredState'
 
 const AppsEditorPage = lazy(() => import('./pages/AppsEditorPage'))
 const DocsPage = lazy(() => import('./pages/DocsPage'))
@@ -72,6 +73,12 @@ function App() {
       // Navigation preference is non-critical.
     }
   }, [navigationCollapsed])
+
+  const [navigationLayout, setNavigationLayout] = useStoredState<'side' | 'horizontal'>(
+    'predbat-navigation-layout',
+    'side',
+    ['side', 'horizontal']
+  )
 
   /*
    * Errors from the three polling APIs.
@@ -408,10 +415,12 @@ function App() {
 
   if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
     return (
-      <div className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''}`}>
+      <div className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''}`}>
         <AppNavigation
           collapsed={navigationCollapsed}
           onCollapsedChange={setNavigationCollapsed}
+          layout={navigationLayout}
+          onLayoutChange={setNavigationLayout}
           calculating={statusData?.calculating ?? false}
           batterySoc={powerFlowData?.soc_percent ?? null}
           chatEnabled={statusData?.chat_enabled ?? false}
@@ -461,13 +470,15 @@ function App() {
   return (
     <>
       <div
-        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${statusData.calculating ? 'is-calculating' : ''}`}
+        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${statusData.calculating ? 'is-calculating' : ''}`}
         inert={statusData.calculating}
         aria-busy={statusData.calculating}
       >
         <AppNavigation
           collapsed={navigationCollapsed}
           onCollapsedChange={setNavigationCollapsed}
+          layout={navigationLayout}
+          onLayoutChange={setNavigationLayout}
           calculating={statusData.calculating}
           batterySoc={powerFlowData?.soc_percent ?? null}
           chatEnabled={statusData.chat_enabled}

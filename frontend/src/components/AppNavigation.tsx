@@ -31,6 +31,7 @@ import {
   faXmark,
   faMoon,
   faSun,
+  faTableColumns,
 } from '@fortawesome/free-solid-svg-icons'
 
 import {
@@ -47,6 +48,8 @@ import './AppNavigation.css'
 type AppNavigationProps = {
   collapsed: boolean
   onCollapsedChange: (collapsed: boolean) => void
+  layout: 'side' | 'horizontal'
+  onLayoutChange: (layout: 'side' | 'horizontal') => void
 
   calculating: boolean
   batterySoc: number | null
@@ -209,6 +212,8 @@ function getBatteryIcon(soc: number) {
 export default function AppNavigation({
   collapsed,
   onCollapsedChange,
+  layout,
+  onLayoutChange,
   calculating,
   batterySoc,
   chatEnabled,
@@ -307,7 +312,11 @@ export default function AppNavigation({
           <FontAwesomeIcon icon={faBars} />
         </button>
 
-        <strong>Predbat</strong>
+        <img
+          src={theme === 'dark' ? batLogoDark : batLogoLight}
+          alt="Predbat"
+          className="mobile-app-logo"
+        />
       </header>
 
       {/*
@@ -326,6 +335,7 @@ export default function AppNavigation({
         className={[
           'app-navigation',
           collapsed ? 'is-collapsed' : '',
+          layout === 'horizontal' ? 'is-horizontal' : '',
           mobileOpen ? 'is-mobile-open' : ''
         ]
           .filter(Boolean)
@@ -404,32 +414,34 @@ export default function AppNavigation({
 
         <nav className="navigation-menu">
           {navigationGroups.map((group) => (
-            <div className="navigation-group" key={group.label}>
-              <span className="navigation-group-label">{group.label}</span>
+            <details className="navigation-group" key={group.label} open={layout === 'side' || mobileOpen || undefined}>
+              <summary className="navigation-group-label">{group.label}</summary>
 
-              {group.items.filter((item) => item.label !== 'Chat' || chatEnabled).map((item) => {
-                const active = item.href === `./${currentPage}` || (currentPage === 'entity' && item.href.endsWith('?page=entity'))
+              <div className="navigation-group-items">
+                {group.items.filter((item) => item.label !== 'Chat' || chatEnabled).map((item) => {
+                  const active = item.href === `./${currentPage}` || (currentPage === 'entity' && item.href.endsWith('?page=entity'))
 
-                return (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    target={item.external ? '_blank' : undefined}
-                    className={['navigation-item', active ? 'is-active' : '']
-                      .filter(Boolean)
-                      .join(' ')}
-                    title={collapsed ? item.label : undefined}
-                    onClick={() => setMobileOpen(false)}
-                  >
-                    <span className="navigation-item-icon">
-                      <FontAwesomeIcon icon={item.icon} />
-                    </span>
+                  return (
+                    <a
+                      key={item.href}
+                      href={item.href}
+                      target={item.external ? '_blank' : undefined}
+                      className={['navigation-item', active ? 'is-active' : '']
+                        .filter(Boolean)
+                        .join(' ')}
+                      title={collapsed && layout === 'side' ? item.label : undefined}
+                      onClick={() => setMobileOpen(false)}
+                    >
+                      <span className="navigation-item-icon">
+                        <FontAwesomeIcon icon={item.icon} />
+                      </span>
 
-                    <span className="navigation-item-label">{item.label}</span>
-                  </a>
-                )
-              })}
-            </div>
+                      <span className="navigation-item-label">{item.label}</span>
+                    </a>
+                  )
+                })}
+              </div>
+            </details>
           ))}
         </nav>
 
@@ -438,17 +450,31 @@ export default function AppNavigation({
             {version}
           </span>
 
-          <button
-            type="button"
-            className="navigation-theme-button"
-            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-          >
-            <FontAwesomeIcon icon={theme === 'dark' ? faSun : faMoon} />
+          <div className="navigation-footer-actions">
+            <button
+              type="button"
+              className="navigation-layout-button"
+              aria-label={layout === 'side' ? 'Use top navigation' : 'Use side navigation'}
+              title={layout === 'side' ? 'Top navigation' : 'Side navigation'}
+              onClick={() => onLayoutChange(layout === 'side' ? 'horizontal' : 'side')}
+            >
+              <FontAwesomeIcon icon={layout === 'side' ? faBars : faTableColumns} />
 
-            <span className="navigation-theme-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
-          </button>
+              <span className="navigation-layout-label">{layout === 'side' ? 'Top' : 'Side'}</span>
+            </button>
+
+            <button
+              type="button"
+              className="navigation-theme-button"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            >
+              <FontAwesomeIcon icon={theme === 'dark' ? faSun : faMoon} />
+
+              <span className="navigation-theme-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
+          </div>
         </footer>
       </aside>
 
