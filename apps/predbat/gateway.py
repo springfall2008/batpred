@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 import traceback
-from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of
+from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of, parse_car_plan_windows, in_car_plan_window
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 import pytz as _pytz
 
@@ -470,41 +470,17 @@ class GatewayMQTT(ComponentBase):
         with datetime strings in ``"%m-%d %H:%M:%S"`` format (produced by output.py).
 
         Datetimes are localized using ``self.local_tz`` so comparisons respect the component
-        timezone and DST transitions.  Year boundaries are handled: if a parsed start is more
-        than 23 hours in the past (i.e. the plan was built on Dec 31 and contains Jan 1
-        windows), the year is bumped forward.  Similarly, if end falls before start after
-        localization the end year is incremented to handle windows that straddle midnight
-        on New Year's Eve.
+        timezone and DST transitions.  The plan carries no year; ``utils.parse_car_plan_windows()``
+        (shared with myenergi and GivEnergy EVC) rebuilds it around now, so a window that straddles
+        New Year is anchored correctly whichever side of midnight it is read (#269).
         """
         planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot", attribute="planned") or []
         now = datetime.datetime.now(self.local_tz)
-        current_year = now.year
-        windows = []
-        for w in planned:
-            try:
-                start_naive = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S").replace(year=current_year)
-                end_naive = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S").replace(year=current_year)
-                start_dt = self.local_tz.localize(start_naive)
-                end_dt = self.local_tz.localize(end_naive)
-                # If start is far in the past the plan crossed a year boundary (Dec 31 → Jan 1)
-                if start_dt < now - datetime.timedelta(hours=23):
-                    start_dt = start_dt.replace(year=start_dt.year + 1)
-                    end_dt = end_dt.replace(year=end_dt.year + 1)
-                elif end_dt < start_dt:
-                    # end crossed into the new year but start did not (e.g. 23:30 → 00:30)
-                    end_dt = end_dt.replace(year=end_dt.year + 1)
-                windows.append((start_dt, end_dt))
-            except (KeyError, ValueError):
-                continue
-        self._ev_windows = windows
+        self._ev_windows = parse_car_plan_windows(planned, now, self.local_tz)
 
     def _should_ev_charge_now(self):
         """Return True if the current local time falls inside any planned charge window."""
-        now = datetime.datetime.now(self.local_tz)
-        for start_dt, end_dt in self._ev_windows:
-            if start_dt <= now < end_dt:
-                return True
-        return False
+        return in_car_plan_window(self._ev_windows, datetime.datetime.now(self.local_tz))
 
     async def _apply_ev_charging_state(self):
         """Start or stop EVC charging when the window state transitions.

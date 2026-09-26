@@ -4558,25 +4558,54 @@ class TestEvControl:
         assert gw._should_ev_charge_now() is False
 
     def test_refresh_ev_windows_year_boundary(self):
-        """Windows whose parsed start would be >23 h in the past get their year bumped."""
+        """A window genuinely dated the prior calendar year (Dec 31) is anchored to it, not now.year."""
         import datetime as dt_mod
+        from unittest.mock import patch
 
         gw = self._make_gateway()
-        now = dt_mod.datetime.now(gw.local_tz)
-        # Simulate a Jan 1 window parsed with current_year when now is Dec 31
-        # by injecting a planned entry whose start, parsed with the current year, is 30 h in the past
-        stale = now - dt_mod.timedelta(hours=30)
-        future_end = stale + dt_mod.timedelta(hours=2)
-        # Format as MM-DD HH:MM:SS — these will be parsed with current year and end up in the past
-        planned = [{"start": stale.strftime("%m-%d %H:%M:%S"), "end": future_end.strftime("%m-%d %H:%M:%S"), "kwh": 5.0, "average": 20.0, "cost": 1.0}]
+        # A plan built Dec 31 that ran a window into the small hours of Jan 1, read back just after
+        # midnight on Jan 1 - now.year already sees the new year, so the Dec 31 half of the window
+        # must anchor to the *previous* year, not now.year (Copilot review on #5120: naively using
+        # now.year for both ends previously put a Dec 31 start a year in the future here).
+        fixed_now = gw.local_tz.localize(dt_mod.datetime(2027, 1, 1, 0, 15, 0))
+        planned = [{"start": "12-31 23:30:00", "end": "01-01 01:30:00", "kwh": 5.0, "average": 20.0, "cost": 1.0}]
         gw.get_state_wrapper = lambda entity, attribute=None: planned if attribute == "planned" else "on"
 
-        gw._refresh_ev_windows()
+        with patch("gateway.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = fixed_now
+            gw._refresh_ev_windows()
 
         assert len(gw._ev_windows) == 1
         start_dt, end_dt = gw._ev_windows[0]
-        # After year bump, start should be in the future (next year)
-        assert start_dt > now
+        assert start_dt.year == 2026, f"Dec 31 start should anchor to the previous year, got {start_dt}"
+        assert end_dt.year == 2027, f"Jan 1 end should anchor to the current year, got {end_dt}"
+        assert start_dt <= fixed_now < end_dt, "now (00:15 Jan 1) should fall inside the window"
+
+    def test_refresh_ev_windows_long_active_not_shifted(self):
+        """A still-active window whose start is over 23h old is not mistaken for a year rollover (#269)."""
+        import datetime as dt_mod
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        # Pinned rather than the real clock, which made this fail from 1 to 2 January (the start fell
+        # in the previous year) and around 29 February
+        now = gw.local_tz.localize(dt_mod.datetime(2026, 6, 16, 23, 5, 0))
+        # A long/flat-rate window that started well over 23h ago but has not finished yet - its
+        # end is still ahead of now, so this is a genuinely active window, not a stale one left
+        # over from a plan built before a year boundary.
+        planned = [{"start": "06-15 17:05:00", "end": "06-17 01:05:00", "kwh": 5.0, "average": 20.0, "cost": 1.0}]
+        gw.get_state_wrapper = lambda entity, attribute=None: planned if attribute == "planned" else "on"
+
+        with patch("gateway.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = now
+            gw._refresh_ev_windows()
+            charging = gw._should_ev_charge_now()
+
+        assert len(gw._ev_windows) == 1
+        start_dt, end_dt = gw._ev_windows[0]
+        # Must not be bumped a year forward, or the still-active window stops matching "now"
+        assert start_dt.year == 2026 and end_dt.year == 2026
+        assert charging is True
 
     def test_apply_sends_start_on_transition(self):
         """_apply_ev_charging_state sends SetChargingProfile then RemoteStartTransaction when entering a window."""
