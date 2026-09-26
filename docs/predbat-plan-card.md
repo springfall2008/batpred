@@ -96,6 +96,11 @@ If battery discharging is planned by Predbat for a particular slot, the export r
 discharging and force exported, or being held at the current level.<BR>
 Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC remains constant,
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
+On a Demand slot (or the part of a slot before an export starts), a car (&#128663;) replaces the arrow when the plan holds the battery for a charging car:
+Predbat controls charge windows, *switch.predbat_car_charging_from_battery* is Off, and the car either has a charging slot
+(and is below its charge limit, unless Octopus Intelligent plans it with *switch.predbat_octopus_intelligent_consider_full* Off) or is reporting *car_charging_now*.
+House load that solar does not cover then comes from the grid rather than the battery.
+In the Yesterday view the car shows where Predbat's recorded status was "Hold for car".<BR>
 If Predbat's plan has been over-ridden and the [slot has been manually controlled](customisation.md#manual-control) to be a Charging slot, Discharging or Idle,
 then alongside the State and battery SoC arrow will be an upside down 'F' (&#8526;) indicating it is a 'Forced' activity.<BR>
 The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
