@@ -385,6 +385,14 @@ class TestHAInterface:
 class TestInverter:
     def __init__(self):
         self.id = 0
+
+    def refresh_config(self, quiet=False):
+        """
+        No-op stand-in for Inverter.refresh_config().
+
+        The real one re-reads runtime config on each cycle now that the Inverter objects persist;
+        this double carries no config, so there is nothing to re-read.
+        """
         pass
 
 
@@ -565,9 +573,10 @@ class MockConfigProvider:
             "car_charging_from_battery_1": False,
         }
 
-    def get_arg(self, key, default=None, index=None, indirect=True):
+    def get_arg(self, key, default=None, index=None, indirect=True, required_unit=None):
         """
-        Mock get_arg method that returns values from config dict
+        Mock get_arg method that returns values from config dict (required_unit is accepted, as the real
+        get_arg takes it, but the mock's config values are already in the unit asked for)
         """
         return self.config.get(key, default)
 

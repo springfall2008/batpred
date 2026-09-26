@@ -461,7 +461,9 @@ def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
     car_charging_planned, so load_octopus_slots() was never called and car_charging_slots stayed
     empty - the plan/history "car" column silently showed nothing despite the car genuinely
     charging on a real (if ad-hoc) dispatch. This exercises the real fetch_sensor_data_cars() and
-    checks car_charging_slots gets populated purely off car_charging_now.
+    checks car_charging_slots gets populated from the real dispatch once car_charging_now shows the
+    car plugged in. car_charging_now adds no pretend dispatch of its own any more, so the dispatch
+    must pass the planned-dispatch gate on car_charging_now too - the slot must be the dispatch's.
     """
     failed = False
     print("**** Running Test: multi_car_iog {} ****".format(testname))
@@ -508,6 +510,9 @@ def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
 
     if not my_predbat.car_charging_slots[0]:
         print("ERROR: car_charging_slots[0] is empty - the ignore_unplugged gate blocked load_octopus_slots() despite car_charging_now being True")
+        failed = True
+    elif any(slot.get("source") == "car_charging_now" for slot in my_predbat.octopus_slots[0]) or not any(slot.get("source") == "smart-charge" for slot in my_predbat.octopus_slots[0]):
+        print("ERROR: octopus_slots[0] should hold only the real dispatch, got {}".format(my_predbat.octopus_slots[0]))
         failed = True
     else:
         print("OK: car_charging_slots[0] populated from car_charging_now alone: {}".format(my_predbat.car_charging_slots[0]))

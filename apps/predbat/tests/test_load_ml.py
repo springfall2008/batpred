@@ -2481,7 +2481,7 @@ def _test_component_publish_entity():
     print("  Testing _publish_entity:")
     mock_base = MockBase()
 
-    component = LoadMLComponent(mock_base, load_ml_enable=True)
+    component = LoadMLComponent(mock_base, load_ml_enable=True, load_ml_source=False)
 
     # Mock dashboard_item to capture calls
     def mock_dashboard_item(entity_id, state, attributes, app):
@@ -2571,6 +2571,9 @@ def _test_component_publish_entity():
     # Check status
     assert "status" in attrs2, "status should be in attributes"
     assert attrs2["status"] == "active", f"Expected status 'active', got {attrs2['status']}"
+
+    # Check load_ml_source
+    assert attrs2["load_ml_source"] is False, f"Expected load_ml_source False, got {attrs2['load_ml_source']}"
 
     # Check model_version
     assert "model_version" in attrs2, "model_version should be in attributes"

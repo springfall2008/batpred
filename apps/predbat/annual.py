@@ -745,6 +745,7 @@ def reset_sample_state(predbat):
     handled by ``configure_offline_mode()``, not per-sample leaks.
     """
     predbat.dynamic_load_baseline = {}
+    predbat.car_charging_now_slots = []
 
     predbat.soc_kw = 0.0
 

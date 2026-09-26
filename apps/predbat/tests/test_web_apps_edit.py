@@ -67,6 +67,14 @@ class FakeRequest:
         return self.postdata
 
 
+class FakeGetRequest:
+    """A minimal aiohttp-request stand-in exposing only the query string the handler reads."""
+
+    def __init__(self, query):
+        """Store the query parameters this request will hand back."""
+        self.query = query
+
+
 def _load_yaml(path="apps.yaml"):
     """Load a YAML file from the temporary working directory."""
     yaml = YAML()
@@ -500,6 +508,111 @@ def run_web_apps_edit_tests(my_predbat):
             failed += 1
         elif _load_yaml()["pred_bat"]["chat"]["providers"]["openrouter"]["api_key"] != "sk-live-rotated-key-9999":
             print("  ERROR: the rotated credential was not written")
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        # The page serving the mask meant clicking Edit on a credential filled the input with
+        # "xxx": the real key could not be seen or amended, only retyped from scratch. The page
+        # stays masked; Edit fetches the one real value through /apps_value instead.
+        print("Test: credential rows are flagged for reveal-on-edit and still served masked")
+        text = _render_apps_page(my_predbat, {"octopus_api_key": "sk-top-level-credential-0000", "chat": {"providers": {"openrouter": {"api_key": "sk-live-nested-credential-1234", "model": "some-model"}}}})
+        if "sk-top-level-credential-0000" in text or "sk-live-nested-credential-1234" in text:
+            print("  ERROR: a credential reached the rendered page in the clear")
+            failed += 1
+        if not re.search(r'<tr id="row_\d+" data-arg-name="octopus_api_key" data-original-value="xxx" data-secret="1">', text):
+            print("  ERROR: the top-level credential row should be masked and flagged data-secret")
+            failed += 1
+        if not re.search(r"data-nested-path='chat\.providers\.openrouter\.api_key' data-nested-original='xxx' data-secret='1'", text):
+            print("  ERROR: the nested credential row should be masked and flagged data-secret")
+            failed += 1
+        if re.search(r"data-nested-path='chat\.providers\.openrouter\.model'[^>]*data-secret", text):
+            print("  ERROR: a non-credential sibling must not be flagged data-secret")
+            failed += 1
+
+        print("Test: /apps_value hands back the real value of the credential being edited")
+        web_interface = _reset_fixture(my_predbat)
+        for path, expected in (("chat.providers.openrouter.api_key", "sk-live-nested-credential-1234"), ("forecast_solar[0].api_key", "fs-live-credential-5678"), ("forecast_solar[0].declination", "30")):
+            result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": path}))).text)
+            if not result.get("success") or result.get("value") != expected:
+                print("  ERROR: expected /apps_value for {} to return {}, got: {}".format(path, expected, result))
+                failed += 1
+
+        print("Test: /apps_value refuses a missing path or a whole structure")
+        for query in ({}, {"path": "chat.providers.nope"}, {"path": "chat.providers"}):
+            result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest(query))).text)
+            if result.get("success") or "value" in result:
+                print("  ERROR: expected /apps_value to refuse {}, got: {}".format(query, result))
+                failed += 1
+
+        print("Test: Edit reveals a flagged credential before opening the input")
+        for function, attribute in (("editValue", "originalValue"), ("editNestedValue", "nestedOriginal")):
+            edit_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            edit_src = edit_src[: edit_src.index("\n}\n")]
+            if "row.dataset.secret === '1'" not in edit_src or "revealSecretValue(row, '{}'".format(attribute) not in edit_src:
+                print("  ERROR: expected {} to fetch the real value of a data-secret row, got:\n{}".format(function, edit_src))
+                failed += 1
+        reveal_src = apps_js[apps_js.index("async function revealSecretValue(") :]
+        reveal_src = reveal_src[: reveal_src.index("\n}\n")]
+        if "fetch('./apps_value?path=' + encodeURIComponent(path))" not in reveal_src or "delete row.dataset.secret" not in reveal_src:
+            print("  ERROR: expected revealSecretValue to fetch /apps_value and replace the masked original, got:\n{}".format(reveal_src))
+            failed += 1
+
+        # A revealed credential is the first value that routinely holds quotes, braces or angle
+        # brackets to reach the editor - the mask "xxx" never did (#5243 review)
+        print("Test: a credential holding quote, brace and angle-bracket characters round-trips through reveal and save")
+        awkward = 'pa"ss{word<x>&{0}'
+        web_interface = _reset_fixture(my_predbat)
+        web_interface.args["chat"]["providers"]["openrouter"]["api_key"] = awkward
+        path = "chat.providers.openrouter.api_key"
+        result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": path}))).text)
+        if not result.get("success") or result.get("value") != awkward:
+            print("  ERROR: expected /apps_value to return the brace-bearing credential verbatim, got: {}".format(result))
+            failed += 1
+        else:
+            result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": awkward, "newValue": awkward + "2", "type": "string", "isNested": True, "path": path}})
+            if not result.get("success") or _load_yaml()["pred_bat"]["chat"]["providers"]["openrouter"]["api_key"] != awkward + "2":
+                print("  ERROR: the edited quote-bearing credential was not written intact, got: {}".format(result))
+                failed += 1
+
+        print("Test: a digit-only credential saved as a revealed row keeps its leading zeros")
+        web_interface = _reset_fixture(my_predbat)
+        path = "forecast_solar[0].api_key"
+        result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": "0042", "newValue": "00430", "type": "string", "isNested": True, "path": path}})
+        if not result.get("success") or str(_load_yaml()["pred_bat"]["forecast_solar"][0]["api_key"]) != "00430":
+            print("  ERROR: expected the credential to be written as the string 00430, got: {} / {}".format(result, _load_yaml()["pred_bat"]["forecast_solar"][0]["api_key"]))
+            failed += 1
+
+        print("Test: /apps_value refuses a negative index into an empty list rather than raising")
+        web_interface = _reset_fixture(my_predbat)
+        web_interface.args["forecast_solar"] = []
+        result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": "forecast_solar[-1].api_key"}))).text)
+        if result.get("success") or "value" in result:
+            print("  ERROR: expected a refusal for an index into an empty list, got: {}".format(result))
+            failed += 1
+
+        print("Test: the editor sets a revealed value as a property and treats it as plain text")
+        for function in ("editValue", "editNestedValue"):
+            edit_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            edit_src = edit_src[: edit_src.index("\n}\n")]
+            if 'value="${currentValue}"' in edit_src or "input.value = currentValue" not in edit_src:
+                print("  ERROR: expected {} to assign input.value rather than interpolate the value into markup, got:\n{}".format(function, edit_src))
+                failed += 1
+            if "row.dataset.revealed !== '1' && currentValue" not in edit_src:
+                print("  ERROR: expected {} to skip the entity dropdown for a revealed credential, got:\n{}".format(function, edit_src))
+                failed += 1
+        for function in ("saveValue", "saveNestedValue"):
+            save_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            save_src = save_src[: save_src.index("\n}\n")]
+            if "row.dataset.revealed === '1' ? 'string'" not in save_src:
+                print("  ERROR: expected {} to save a revealed credential as a string, got:\n{}".format(function, save_src))
+                failed += 1
+        if "row.dataset.revealed = '1'" not in reveal_src:
+            print("  ERROR: expected revealSecretValue to mark the row as revealed")
+            failed += 1
+        display_src = apps_js[apps_js.index("function getDisplayValueEntity(") :]
+        display_src = display_src[: display_src.index("\n}\n")]
+        if display_src.count("escapeHtml(") != 2:
+            print("  ERROR: expected getDisplayValueEntity to escape both of its returns, got:\n{}".format(display_src))
             failed += 1
 
     finally:

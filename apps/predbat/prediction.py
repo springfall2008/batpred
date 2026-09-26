@@ -92,6 +92,7 @@ class Prediction(PredictionBatch):
         clipping_buffer_kwh=0,
         clipping_buffer_start=None,
         clipping_buffer_end=None,
+        car_charging_slots=None,
     ):
         """Build a Prediction, optionally copying simulation state from a base PredBat instance.
 
@@ -100,6 +101,9 @@ class Prediction(PredictionBatch):
 
         kernel_static_cache is passed straight through to create_kernel_context, for a caller building
         several Predictions that differ only in their load forecast; see that function for the contract.
+
+        car_charging_slots, when given, replaces base.car_charging_slots - the live plan passes
+        car_charging_slots_model() so a car charging now outside its plan is modelled too.
         """
         if base:
             self.minutes_now = base.minutes_now
@@ -140,7 +144,9 @@ class Prediction(PredictionBatch):
             self.charge_low_power_margin = base.charge_low_power_margin
             self.low_power_pv_threshold_w = base.low_power_pv_threshold_w
             self.set_charge_low_power_solar_full_rate = base.set_charge_low_power_solar_full_rate
-            self.car_charging_slots = base.car_charging_slots
+            # The live plan passes car_charging_slots_model(), which adds a car charging now outside its plan;
+            # anything else - a replay of yesterday, the annual model - takes the car plan as it stands
+            self.car_charging_slots = car_charging_slots if car_charging_slots is not None else base.car_charging_slots
             # Model-facing car charge limit (#4967): fetch raises this above the real limit for cars
             # following an Octopus Intelligent dispatch plan with consider_full off, making the fill
             # clamp in predict() (and in the C++ kernel, whose context is built from this attribute)

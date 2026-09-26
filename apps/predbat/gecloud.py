@@ -390,6 +390,38 @@ def regname_to_ha(name):
     return name
 
 
+VALIDATION_OPTIONS_PREFIX = "Value must be one of:"
+
+
+def parse_validation_options(validation):
+    """
+    Return the option labels from a 'Value must be one of: (a, b, c)' validation string, or None when it cannot be parsed
+    """
+    if not isinstance(validation, str) or not validation.startswith(VALIDATION_OPTIONS_PREFIX) or "(" not in validation:
+        return None
+    # Split on the first '(' and drop only the final ')' so option labels that contain brackets survive intact
+    post = validation.split("(", 1)[1]
+    post = post.rsplit(")", 1)[0]
+    if not post.strip():
+        return None
+    # Split only on commas outside brackets so a label such as 'Pause (Battery, Grid)' stays whole
+    options = []
+    label = ""
+    depth = 0
+    for char in post:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == "," and depth == 0:
+            options.append(label)
+            label = ""
+            continue
+        label += char
+    options.append(label)
+    return [option[1:] if index > 0 and option.startswith(" ") else option for index, option in enumerate(options)]
+
+
 def normalise_register_time(value):
     """
     Return a register time value as an HH:MM string, or None when it is not a time
@@ -566,6 +598,8 @@ class GECloudDirect(ComponentBase):
         # Battery inverters already reported as overriding the EMS, so a standing misconfiguration
         # raises the Predbat status once rather than on every settings refresh
         self.ems_slot_warned = set()
+        # (device, key) registers whose option validation text could not be parsed, so the warning is logged once
+        self.validation_parse_warned = set()
         self.devices_dict = {}
         self.device_list = []
         self.ems_device = None
@@ -760,11 +794,12 @@ class GECloudDirect(ComponentBase):
                             if validation_rule.startswith("in:"):
                                 options_values = validation_rule.split(":")[1].split(",")
 
-                    if validation and validation.startswith("Value must be one of:"):
-                        pre, post = validation.split("(")
-                        post = post.replace(")", "")
-                        post = post.replace(", ", ",")
-                        options_text = post.split(",")
+                    if isinstance(validation, str) and validation.startswith(VALIDATION_OPTIONS_PREFIX):
+                        options_text = parse_validation_options(validation)
+                        if options_text is None:
+                            self.log("GECloud: Warn: Unable to parse options for setting {} {} from validation '{}'".format(device, key, validation))
+
+                    if options_text is not None:
                         if new_value not in options_text:
                             self.log("GECloud: Error: Invalid option {} for setting {} {}, valid values are {}".format(new_value, device, key, options_text))
                             return
@@ -1335,11 +1370,15 @@ class GECloudDirect(ComponentBase):
                         attributes["device_class"] = "power"
                         attributes["unit_of_measurement"] = "W"
 
-            if validation and validation.startswith("Value must be one of:"):
-                pre, post = validation.split("(")
-                post = post.replace(")", "")
-                post = post.replace(", ", ",")
-                options_text = post.split(",")
+            if isinstance(validation, str) and validation.startswith(VALIDATION_OPTIONS_PREFIX):
+                validation_options = parse_validation_options(validation)
+                if validation_options is None:
+                    # Warn once per register, this runs on every settings refresh
+                    if (device, key) not in self.validation_parse_warned:
+                        self.log("GECloud: Warn: Unable to parse options for setting {} {} from validation '{}'".format(device, key, validation))
+                        self.validation_parse_warned.add((device, key))
+                else:
+                    options_text = validation_options
 
             if is_select_time or is_select_options:
                 entity_name = f"select.{self.prefix}_gecloud_{device}"

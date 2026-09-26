@@ -455,6 +455,8 @@ ML Component: Validation MAE: 0.3245 kWh
 
 `sensor.predbat_load_ml_stats` publishes three error figures, and they measure different things:
 
+The `load_ml_source` attribute reports whether Load ML is selected as Predbat's load forecast source.
+
 | Attribute | What it measures |
 |-----------|------------------|
 | `mae_kwh` | Teacher-forced, one step ahead with real data in the lookback. Stays small even when the long-range forecast is useless, so do not read it as overall accuracy. |

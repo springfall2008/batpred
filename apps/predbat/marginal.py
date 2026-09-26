@@ -93,7 +93,7 @@ class Marginal:
 
                 # Create a fresh Prediction with the modified load.
                 # No need to include 10% extra load as we only run normal simulations.
-                pred = Prediction(self, self.pv_forecast_minute_step, self.pv_forecast_minute_step, modified_load, modified_load, kernel_static_cache=kernel_static_cache)
+                pred = Prediction(self, self.pv_forecast_minute_step, self.pv_forecast_minute_step, modified_load, modified_load, kernel_static_cache=kernel_static_cache, car_charging_slots=self.car_charging_slots_model())
 
                 # Run prediction against the current best charge/discharge plan, no save to HA
                 (new_metric, *_) = pred.run_prediction(

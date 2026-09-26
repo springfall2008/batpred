@@ -840,6 +840,107 @@ class SyncRepoTests(unittest.TestCase):
         self.assertIn(checkout_call, calls)
         self.assertLess(calls.index(checkout_call), calls.index(reset_call))
 
+    @patch("triage_daemon.subprocess.run")
+    def test_stashes_leftover_changes_before_checking_out_main(self, mock_run):
+        """The 2026-09-26 wedge: a PR #5216 cleanup exited 0 with its edits uncommitted, and
+        `git checkout main` refused to overwrite them - so every later flow failed at the
+        same step. The leftovers are stashed first, which unblocks the checkout and keeps the
+        work recoverable rather than letting reset --hard destroy it."""
+        triage_daemon.sync_repo()
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        stash_calls = [c for c in calls if c[3:5] == ["stash", "push"]]
+        checkout_call = ["git", "-C", str(triage_daemon.CLONE_DIR), "checkout", "main"]
+        self.assertEqual(len(stash_calls), 1)
+        self.assertIn("triage-daemon", stash_calls[0][stash_calls[0].index("-m") + 1])
+        self.assertLess(calls.index(stash_calls[0]), calls.index(checkout_call))
+
+
+class SetAsideLeftoversTests(DaemonPathsTestCase):
+    """set_aside_leftovers() - what sync_repo() does with a tree the previous flow left dirty."""
+
+    @patch("builtins.print")
+    @patch("triage_daemon.subprocess.run")
+    def test_reports_what_it_stashed(self, mock_run, mock_print):
+        """A stash that saved something is named in the daemon's own output, so the operator
+        knows there is work to recover and where it went."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="Saved working directory and index state On fix/x: triage-daemon\n")
+        triage_daemon.set_aside_leftovers()
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("git stash list", printed)
+
+    @patch("builtins.print")
+    @patch("triage_daemon.subprocess.run")
+    def test_is_silent_on_a_clean_tree(self, mock_run, mock_print):
+        """The normal case - nothing left behind - must not print a warning every flow."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="No local changes to save\n")
+        triage_daemon.set_aside_leftovers()
+        mock_print.assert_not_called()
+
+    @patch("builtins.print")
+    @patch("triage_daemon.subprocess.run")
+    def test_aborts_an_unfinished_merge_first(self, mock_run, mock_print):
+        """`git stash` refuses a tree with unmerged paths, and `git checkout` refuses one
+        mid-merge, so a run that stopped inside a conflicted merge would wedge the clone the
+        same way. The merge is aborted first; it can be redone from origin/main at any time."""
+        git_dir = triage_daemon.CLONE_DIR / ".git"
+        git_dir.mkdir(parents=True, exist_ok=True)
+        (git_dir / "MERGE_HEAD").write_text("abc123\n")
+        mock_run.return_value = MagicMock(returncode=0, stdout="No local changes to save\n")
+        triage_daemon.set_aside_leftovers()
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        abort_call = ["git", "-C", str(triage_daemon.CLONE_DIR), "merge", "--abort"]
+        self.assertIn(abort_call, calls)
+        self.assertLess(calls.index(abort_call), next(i for i, c in enumerate(calls) if c[3:5] == ["stash", "push"]))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_no_merge_abort_without_a_merge_in_progress(self, mock_run):
+        """Aborting only ever runs when there is a merge to abort."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="No local changes to save\n")
+        triage_daemon.set_aside_leftovers()
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertFalse(any(c[3:5] == ["merge", "--abort"] for c in calls))
+
+
+class UnfinishedCleanupReasonTests(unittest.TestCase):
+    """unfinished_cleanup_reason() - the check that a cleanup which exited 0 actually finished."""
+
+    @staticmethod
+    def _git(status="", ahead="0\n", ahead_returncode=0):
+        """Fake subprocess.run answering `git status` and `git rev-list --count` as given."""
+
+        def run(cmd, **kwargs):
+            """Answer one git call."""
+            if "status" in cmd:
+                return MagicMock(returncode=0, stdout=status)
+            return MagicMock(returncode=ahead_returncode, stdout=ahead)
+
+        return run
+
+    def test_a_clean_pushed_branch_is_finished(self):
+        """Nothing uncommitted, nothing unpushed: the run did what it said."""
+        with patch("triage_daemon.subprocess.run", side_effect=self._git()):
+            self.assertEqual(triage_daemon.unfinished_cleanup_reason(), "")
+
+    def test_uncommitted_changes_are_unfinished(self):
+        """PR #5216 on 2026-09-26: the run backgrounded its quality gate, said it would push
+        once it finished, and exited 0 - with two files edited and never committed."""
+        with patch("triage_daemon.subprocess.run", side_effect=self._git(status=" M apps/predbat/givtcp.py\n M apps/predbat/tests/test_givtcp_component.py\n")):
+            reason = triage_daemon.unfinished_cleanup_reason()
+        self.assertIn("2 file(s)", reason)
+        self.assertIn("uncommitted", reason)
+
+    def test_unpushed_commits_are_unfinished(self):
+        """The same run's local merge of origin/main was never pushed either."""
+        with patch("triage_daemon.subprocess.run", side_effect=self._git(ahead="1\n")):
+            reason = triage_daemon.unfinished_cleanup_reason()
+        self.assertIn("1 local commit(s)", reason)
+
+    def test_an_unknowable_upstream_is_unfinished(self):
+        """No upstream (detached HEAD, or the PR branch was never checked out) means the
+        push cannot be confirmed - which is not the same as confirming it happened."""
+        with patch("triage_daemon.subprocess.run", side_effect=self._git(ahead="", ahead_returncode=128)):
+            self.assertNotEqual(triage_daemon.unfinished_cleanup_reason(), "")
+
 
 class OllamaContextWindowTests(unittest.TestCase):
     """Claude Code does not recognise the Ollama model names and assumes a 200k window,
@@ -880,9 +981,8 @@ class OllamaContextWindowTests(unittest.TestCase):
         self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "250000")
 
     def test_no_window_is_set_without_an_ollama_model(self):
-        """The default Claude route inherits the daemon's environment untouched - claude_env()
-        returns None there, so there is nothing to set a window on."""
-        self.assertIsNone(triage_daemon.claude_env())
+        """The default Claude route inherits the daemon's environment, so no window is set on it."""
+        self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", triage_daemon.claude_env())
 
     def test_the_review_only_route_gets_it_too(self):
         """--ollama_review is how the daemon is actually run, so the window has to follow that
@@ -1405,10 +1505,31 @@ class ClaudeEnvTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_none_by_default(self):
-        """With no --ollama, env=None so subprocess.run() inherits the daemon's own
-        environment unchanged - no ANTHROPIC_* overrides pointing at Ollama."""
-        self.assertIsNone(triage_daemon.claude_env())
+    def test_inherits_the_daemon_environment_by_default(self):
+        """With no --ollama the subprocess gets the daemon's own environment - no ANTHROPIC_*
+        overrides pointing at Ollama - plus only the background-task switch."""
+        self.assertEqual(triage_daemon.claude_env(), {**os.environ, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"})
+
+    def test_background_tasks_are_disabled_on_every_route(self):
+        """A `claude -p` run is over when its final message is written, so a command it
+        backgrounded is killed with it and nothing ever reads the result. PR #5216's cleanup
+        backgrounded its pre-commit run, said it would push once that finished, and exited 0
+        with its fixes uncommitted. The switch removes run_in_background from the Bash tool
+        (verified against Claude Code 2.1.283), on the Claude and the Ollama routes alike."""
+        for model_name, review_only in ((None, False), ("OLLAMA_MODEL", False), ("OLLAMA_REVIEW_MODEL", True)):
+            with self.subTest(model=model_name):
+                if model_name:
+                    with patch.object(triage_daemon, model_name, "glm-5.3-flash:cloud"):
+                        env = triage_daemon.claude_env(review_only=review_only)
+                else:
+                    env = triage_daemon.claude_env()
+                self.assertEqual(env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+
+    def test_an_operator_cannot_re_enable_background_tasks(self):
+        """Unlike the context window, this is a correctness guard, not a tuning knob: a value
+        exported in the daemon's shell must not switch backgrounding back on."""
+        with patch.dict("os.environ", {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "0"}):
+            self.assertEqual(triage_daemon.claude_env()["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
 
     def test_adds_the_documented_overrides_when_configured(self):
         """--ollama sets exactly the three env vars Ollama's integration guide documents."""
@@ -1435,7 +1556,8 @@ class ClaudeEnvTests(unittest.TestCase):
         """claude_env() with no argument - the form create_pr() uses - ignores --ollama_review."""
         with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
             env = triage_daemon.claude_env()
-        self.assertIsNone(env)
+        self.assertNotIn("glm-5.3-flash:cloud", env.values())
+        self.assertEqual(env.get("ANTHROPIC_BASE_URL"), os.environ.get("ANTHROPIC_BASE_URL"))
 
 
 class ClaudeBudgetArgsTests(unittest.TestCase):
@@ -1534,7 +1656,7 @@ class TriageTests(DaemonPathsTestCase):
         triage_daemon.triage(4720)
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--model", cmd)
-        self.assertIsNone(mock_run.call_args.kwargs["env"])
+        self.assertEqual(mock_run.call_args.kwargs["env"].get("ANTHROPIC_BASE_URL"), os.environ.get("ANTHROPIC_BASE_URL"))
 
     @patch("triage_daemon.subprocess.run")
     def test_adds_the_ollama_model_flag_and_env_when_configured(self, mock_run):
@@ -1629,7 +1751,7 @@ class CreatePrTests(DaemonPathsTestCase):
         triage_daemon.create_pr(4720)
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--model", cmd)
-        self.assertIsNone(mock_run.call_args.kwargs["env"])
+        self.assertEqual(mock_run.call_args.kwargs["env"].get("ANTHROPIC_BASE_URL"), os.environ.get("ANTHROPIC_BASE_URL"))
 
     @patch("triage_daemon.subprocess.run")
     def test_budget_cap_still_applies_under_ollama_review(self, mock_run):
@@ -2179,6 +2301,18 @@ class MarkPrCleanupFailedTests(unittest.TestCase):
         )
 
 
+class MarkPrCleanupFailedReasonTests(unittest.TestCase):
+    """mark_pr_cleanup_failed() with a reason - the run exited 0, so its log looks finished."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_the_reason_reaches_the_comment(self, mock_run):
+        """ "See the logs" is poor advice when the log reads like a finished run."""
+        triage_daemon.mark_pr_cleanup_failed(5216, "Left 2 file(s) uncommitted.")
+        body = mock_run.call_args_list[0].args[0][mock_run.call_args_list[0].args[0].index("--body") + 1]
+        self.assertTrue(body.startswith("Automated"))
+        self.assertIn("Left 2 file(s) uncommitted.", body)
+
+
 class CleanupPrTests(DaemonPathsTestCase):
     """Tests for cleanup_pr(), new - runs /pr-cleanup under the write-capable cleanup permission set."""
 
@@ -2237,7 +2371,7 @@ class CleanupPrTests(DaemonPathsTestCase):
         triage_daemon.cleanup_pr(4742)
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("glm-5.3-flash:cloud", cmd)
-        self.assertIsNone(mock_run.call_args.kwargs["env"], "cleanup must inherit the daemon environment, not the Ollama overrides")
+        self.assertEqual(mock_run.call_args.kwargs["env"].get("ANTHROPIC_BASE_URL"), os.environ.get("ANTHROPIC_BASE_URL"), "cleanup must inherit the daemon environment, not the Ollama overrides")
 
 
 class PushGuardHookTests(DaemonPathsTestCase):
@@ -2394,10 +2528,12 @@ class ForkHeadSkipTests(unittest.TestCase):
     def setUp(self):
         """Patch every collaborator process_bot_cleanup_pr() calls."""
         self.patches = {}
-        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
+        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "unfinished_cleanup_reason", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
+        # A finished run by default - the tests that want an unfinished one say so
+        self.patches["unfinished_cleanup_reason"].return_value = ""
 
     def test_a_fork_head_pr_is_never_checked_out_or_cleaned(self):
         """Nothing should run against a PR whose fixes could not be pushed back anyway."""
@@ -2419,10 +2555,12 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
     def setUp(self):
         """Patch every collaborator process_bot_cleanup_pr() calls."""
         self.patches = {}
-        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
+        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "unfinished_cleanup_reason", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
+        # A finished run by default - the tests that want an unfinished one say so
+        self.patches["unfinished_cleanup_reason"].return_value = ""
 
     def test_cleans_up_then_removes_the_label(self):
         """A successful cleanup syncs, cleans up, then removes BOT_CLEANUP."""
@@ -2439,6 +2577,21 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
         triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
         self.patches["mark_pr_cleanup_failed"].assert_called_once_with(4742)
         self.patches["remove_pr_cleanup_label"].assert_not_called()
+
+    def test_a_run_that_exits_cleanly_but_leaves_work_behind_is_a_failure(self):
+        """PR #5216 on 2026-09-26: the run exited 0 with its fixes uncommitted and its merge
+        unpushed, and BOT_CLEANUP was removed as though it had finished - leaving the PR with no
+        push, no reply and nothing marking it for a retry."""
+        self.patches["unfinished_cleanup_reason"].return_value = "The run exited cleanly but left uncommitted changes."
+        triage_daemon.process_bot_cleanup_pr({"number": 5216, "title": "fix(givtcp)"})
+        self.patches["mark_pr_cleanup_failed"].assert_called_once_with(5216, "The run exited cleanly but left uncommitted changes.")
+        self.patches["remove_pr_cleanup_label"].assert_not_called()
+
+    def test_a_failed_invocation_is_not_checked_for_leftovers_too(self):
+        """A non-zero exit is already a failure; checking the tree as well would mark it twice."""
+        self.patches["cleanup_pr"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["unfinished_cleanup_reason"].assert_not_called()
 
     def test_waits_while_the_pr_still_carries_bot_review(self):
         """Cleanup acts on the review's findings, so with both labels set the review goes
