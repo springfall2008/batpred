@@ -1463,13 +1463,14 @@ def test_immediate_service_power_uses_passed_rate(test_name, my_predbat, ha, inv
     adjust_charge_immediate()/adjust_export_immediate() for the service's {power}. The passed rate
     goes through the same 5% deadband adjust_charge_rate() applies, so a small change keeps the
     stored rate - and the service payload - steady instead of re-sending a slightly different
-    power (and a fresh service call) every cycle.
+    power (and a fresh service call) every cycle. With no rate entity the deadband is measured
+    against the maximum instead, so a small change is still sent.
     """
     print("**** Running Test: {} ****".format(test_name))
     failed = False
 
     saved_args = copy.deepcopy(my_predbat.args)
-    saved = (inv.battery_rate_max_charge, inv.battery_rate_max_discharge, inv.soc_percent, ha.service_store_enable, dict(my_predbat.last_service_hash))
+    saved = (inv.battery_rate_max_charge, inv.battery_rate_max_discharge, inv.soc_percent, ha.service_store_enable, dict(my_predbat.last_service_hash), inv.battery_rate_max_raw)
     try:
         inv.battery_rate_max_charge = 3000 / MINUTE_WATT  # deadband 150W
         inv.battery_rate_max_discharge = 3000 / MINUTE_WATT
@@ -1510,10 +1511,44 @@ def test_immediate_service_power_uses_passed_rate(test_name, my_predbat, ha, inv
             if got != expected:
                 print("ERROR: {} {}: {} should be sent power {} got {}".format(test_name, name, service, expected, got))
                 failed = True
+
+        # No rate entity at all (a "power"-controlled inverter without the dummy rate entity): the
+        # stored rate always reads as the maximum, so the deadband is measured against that and a
+        # planned rate is sent as-is - including a small change from the last one sent.
+        my_predbat.args.pop("charge_rate", None)
+        my_predbat.args.pop("discharge_rate", None)
+        inv.battery_rate_max_raw = 3000
+        cases = (
+            ("charge, no entity, no rate: maximum", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100), 3000),
+            ("charge, no entity, new rate", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100, rate=1000), 1000),
+            ("charge, no entity, within deadband of maximum", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100, rate=2900), 3000),
+            ("export, no entity, no rate: maximum", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10), 3000),
+            ("export, no entity, new rate", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10, rate=1000), 1000),
+        )
+        for name, call, service, kwargs, expected in cases:
+            got = power_sent(call, service, **kwargs)
+            if got != expected:
+                print("ERROR: {} {}: {} should be sent power {} got {}".format(test_name, name, service, expected, got))
+                failed = True
+
+        # Two consecutive cycles with a small change (inside the deadband): nothing is stored to measure
+        # against, so the second is not held at the first and goes out as a fresh start call.
+        for name, call, service, kwargs in (
+            ("charge", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100)),
+            ("export", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10)),
+        ):
+            my_predbat.last_service_hash.clear()
+            ha.service_store = []
+            call(rate=1000, **kwargs)
+            call(rate=1050, **kwargs)
+            got = [data.get("power") for called, data in ha.get_service_store() if called == service]
+            if got != [1000, 1050]:
+                print("ERROR: {} {}, no entity, small change: {} should be sent power [1000, 1050] got {}".format(test_name, name, service, got))
+                failed = True
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
-        inv.battery_rate_max_charge, inv.battery_rate_max_discharge, inv.soc_percent, ha.service_store_enable, hash_saved = saved
+        inv.battery_rate_max_charge, inv.battery_rate_max_discharge, inv.soc_percent, ha.service_store_enable, hash_saved, inv.battery_rate_max_raw = saved
         my_predbat.last_service_hash.clear()
         my_predbat.last_service_hash.update(hash_saved)
         ha.service_store = []

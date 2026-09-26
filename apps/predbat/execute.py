@@ -859,8 +859,10 @@ class Execute:
             # service calls below send {power} now - so they are handed this cycle's rate rather than
             # reading back the last one (#5252). An unclaimed rate goes to maximum when rates are
             # being reset, as apply_inverter_rates() will do; otherwise the stored rate stands (None).
-            # Truncated with int() exactly as apply_inverter_rates() truncates, so the payload matches
-            # the register next cycle and the service dedup holds.
+            # Truncated with int() exactly as apply_inverter_rates() truncates. The service dedup then
+            # holds as long as the stored rate reads back as written; a rate stored as a percentage, or
+            # rounded to an entity's step, can read back slightly off (up to 1% of maximum), which costs
+            # at most one extra start call per rate change.
             charge_power = int(charge_rate) if charge_rate is not None else (int(inverter.battery_rate_max_charge * MINUTE_WATT) if reset_rates else None)
             discharge_power = int(discharge_rate) if discharge_rate is not None else (int(inverter.battery_rate_max_discharge * MINUTE_WATT) if reset_rates else None)
 

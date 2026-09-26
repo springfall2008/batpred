@@ -2046,7 +2046,8 @@ class Inverter:
     def rate_after_deadband(self, current_rate, new_rate, rate_max):
         """
         The rate adjust_charge_rate()/adjust_discharge_rate() leave in place: new_rate, or current_rate
-        when the change is within their deadband (5% of rate_max, the battery's maximum in W/minute)
+        when the change is within their deadband (5% of rate_max, the battery's maximum rate in kWh per
+        minute, so the deadband in W is rate_max * MINUTE_WATT / 20)
         """
         if abs(current_rate - new_rate) > (rate_max * MINUTE_WATT / 20):
             return new_rate
@@ -3204,6 +3205,11 @@ class Inverter:
         rate is the charge rate (W) execute_plan() intends for this cycle. Rates are written after its
         per-inverter loop, so reading the stored rate here would send the previous cycle's to the
         service as {power} (#5252). None falls back to the stored rate.
+
+        With no charge_rate entity at all (a "power"-controlled inverter without the dummy rate
+        entity), the stored rate always reads as the maximum, so the deadband is measured against
+        that rather than the last rate sent: a planned rate is sent as-is unless it is within the
+        deadband of the maximum, and each change in it sends a new start call.
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
