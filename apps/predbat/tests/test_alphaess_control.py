@@ -1525,20 +1525,16 @@ def test_alphaess_periodic_both_rates_zero_still_holds_the_battery():
 
 
 def test_alphaess_periodic_reserve_reaches_the_idle_discharge_entry():
-    """With no export window planned (demand mode, NOT a hold), the reserve must still
-    reach the inverter.
+    """With no export window planned, copy the requested reserve into the required filler.
 
     Before the fix, the idle discharge filler hard-coded chargeLimit to 10 regardless of
-    schedule["reserve"], so an entitled system's reserve never left Predbat's memory:
-    INVERTER_DEF sets has_reserve_soc True and automatic_config maps reserve, so Predbat
-    believed it set a floor the inverter never received. chargeLimit on the idle entry is
-    the only field this path has to carry a standing floor - there is no separate batUseCap
-    on the periodic pair.
+    schedule["reserve"]. The field must be present, but ctrDisCycle is disabled, so this
+    test does not claim that AlphaESS enforces it as a self-consumption reserve.
     """
     failed = False
     client = _client()
     client._periodic_ok["AL70"] = True
-    # export not enabled (demand mode): the idle filler must carry the ACTUAL reserve, not
+    # Export not enabled: the idle filler carries Predbat's requested value rather than
     # an arbitrary constant. 37 is picked specifically because it differs from the old
     # hard-coded 10, so a regression back to the constant is caught.
     schedule = _schedule(reserve=37)

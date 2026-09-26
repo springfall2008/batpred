@@ -1787,10 +1787,10 @@ class AlphaESSAPI(ComponentBase):
         Both lists must carry at least one element - an empty list is rejected with 6001
         "time list is null", and omitting the key gets 10001 - so a direction with no plan
         gets a filler period and is disabled via its cycle flag instead. The discharge
-        filler's chargeLimit is the ONLY carrier of the reserve floor on this path (there is
-        no separate standing-floor field, unlike batUseCap on the legacy pair), so it always
-        holds schedule["reserve"] rather than an arbitrary constant - see
-        build_discharge_payload for the same one-field-two-purposes rule on the legacy pair.
+        filler's chargeLimit copies schedule["reserve"] rather than an arbitrary constant,
+        because the API requires a value even when the cycle is disabled. It does not
+        establish an active self-consumption reserve while ctrDisCycle is 0. There is no
+        separate standing-floor field on this path, unlike batUseCap on the legacy pair.
         """
         if hold_charge is _HOLD_NOT_EVALUATED:
             hold_charge = self._hold_charge_window(sn, schedule)
@@ -2189,12 +2189,13 @@ class AlphaESSAPI(ComponentBase):
         return True
 
     async def apply_shutdown_self_consumption(self, sn):
-        """Disable timed charge and discharge while retaining Predbat's reserve floor.
+        """Disable timed charge and discharge on a graceful stop.
 
-        AlphaESS has no cloud working-mode endpoint. With both timed schedules disabled,
-        ctrDis is off and the inverter uses ordinary self-consumption. A shutdown write is
-        attempted once even inside the startup or local pacing interval; the cloud may
-        still reject it with 6053, so this remains a best-effort graceful-stop action.
+        AlphaESS has no cloud working-mode endpoint. The API requires a cutoff value even
+        when timed discharge is disabled, so copy Predbat's last requested reserve; that
+        does not control AlphaESS's separate self-consumption reserve. The inverter's
+        fallback behaviour varies by model. A shutdown write is attempted once even inside
+        the startup or local pacing interval; the cloud may still reject it with 6053.
         """
         current = self.local_schedule.get(sn)
         if not current:

@@ -60,8 +60,10 @@ pred_bat:
   # This is used by the periodic schedule API; the legacy API has no power field.
   #alphaess_hold_power: 100
 
-  # Optional graceful-shutdown action. self_consumption clears timed charge and
-  # discharge schedules while keeping the current reserve; none leaves them as-is.
+  # Optional graceful-shutdown action. self_consumption attempts to clear timed
+  # charge and discharge schedules; none leaves them as-is. The reserve copied into
+  # the disabled schedule does not control AlphaESS's self-consumption reserve; configure
+  # that separately in AlphaESS. Fallback behaviour can vary by inverter model.
   # This is best effort: abrupt stops have no hook, and the cloud may rate-limit a write.
   #alphaess_shutdown_mode: none
 
