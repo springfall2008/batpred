@@ -244,20 +244,47 @@ GE_SETTING_RETRY_CODES = [code for code, info in GE_SETTING_ERROR_CODES.items() 
 # The endpoints whose "value" carries a result code rather than a reading
 GE_SETTING_ENDPOINTS = [GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING]
 
-# Register-name substrings the discovery catalogue checks to decide each device's own
-# capabilities, mirroring async_automatic_config()'s own register sniffing (its
-# has_charge_rate/has_discharge_rate/has_charge_power_percent/... locals) but scoped to one
-# device's own self.settings entry rather than ORed across every battery in the fleet, and
-# consolidated onto the catalogue's five capability tokens - a capability the catalogue
-# records for a device it never actually saw on that device's own settings would misdescribe
-# hardware that was never confirmed.
-GE_CLOUD_CAPABILITY_SUBSTRINGS = (
-    ("charge_rate_power", ("battery_charge_power", "battery_discharge_power")),
-    ("charge_rate_percent", ("inverter_charge_power_percentage", "charge_power_rate", "inverter_discharge_power_percentage", "discharge_power_rate")),
-    ("pause_mode", ("pause_battery",)),
-    ("pause_slots", ("pause_battery_start_time",)),
-    ("discharge_target", ("dc_discharge_1_lower_soc_percent_limit",)),
-)
+# The behaviour of the two GE Cloud inverter types, for the discovery record's `capabilities`: the
+# seven INVERTER_DEF behaviour keys, valued as the "GEC" and "GEE" rows state them today
+# (support_feedin_first is absent from both rows and defaults to False in inverter.py). Literal on
+# purpose - reading the rows back would make the discovery completeness test prove nothing.
+GE_CLOUD_CAPABILITIES = {
+    "GEC": {
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "support_feedin_first": False,
+        "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
+        "charge_control_immediate": False,
+        "target_soc_used_for_discharge": False,
+    },
+    "GEE": {
+        "support_charge_freeze": True,
+        "support_discharge_freeze": False,
+        "support_feedin_first": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "charge_control_immediate": True,
+        "target_soc_used_for_discharge": False,
+    },
+}
+
+# Settings async_automatic_config() binds that inverter.py replaces with a dummy entity for the type
+# (the row's presence flag is False), so the discovery record leaves them out. Behind an EMS the
+# battery inverters' own charge/discharge enables, pause and eco switches are never driven.
+GE_CLOUD_DUMMIED_SETTINGS = {
+    "GEC": frozenset(),
+    "GEE": frozenset({"scheduled_charge_enable", "scheduled_discharge_enable", "pause_mode", "inverter_mode"}),
+}
+
+# publish_registers() publishes every "date_format:H:i" register as a select whose options and state
+# are HH:MM:SS
+GE_CLOUD_TIME_SELECT_FORMAT = "HH:MM:SS"
+
+# The format of the inverter_time sensor: publish_status() publishes the API's ISO timestamp
+# ("2025-02-09T15:00:03Z") unchanged. The GEC/GEE rows keep "%H:%M:%S" for installs that do not use
+# this component (spec D13), so the discovery record describes the sensor, not the row.
+GE_CLOUD_CLOCK_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
 def ge_code_message(data, code):
@@ -516,6 +543,9 @@ class GECloudDirect(ComponentBase):
     """
     GivEnergy Cloud Direct API interface
     """
+
+    # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
+    WRITE_AND_POLL_SLEEP = 10
 
     def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
         """Initialise the GE Cloud Direct component"""
@@ -1594,17 +1624,173 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Automatic configuration complete")
 
-    def _device_capabilities(self, device):
+    def _register_features(self, device):
         """
-        Vocabulary tokens for the control registers this device's own settings actually report.
+        The register features async_automatic_config() sniffs for, as this one device reports them.
 
-        Mirrors async_automatic_config()'s register-name sniffing (see
-        GE_CLOUD_CAPABILITY_SUBSTRINGS) but scoped to this one device's own self.settings entry
-        rather than ORed across every battery in the fleet, so the catalogue never claims a
-        capability for a device that was never actually seen to report the register for it.
+        The same substrings as its sniffing loop, but scoped to this device's own settings rather
+        than ORed across the fleet: automatic_config() gates pause_mode, pause_start_time/end_time,
+        discharge_target_soc and the percentage rate controls for every device on what ANY device
+        reports, while a discovery record describes only its own device (spec D10).
         """
-        names = {regname_to_ha(setting.get("name", "")) for setting in self.settings.get(device, {}).values()}
-        return [token for token, substrings in GE_CLOUD_CAPABILITY_SUBSTRINGS if any(substring in name for name in names for substring in substrings)]
+        features = {"charge_rate": False, "discharge_rate": False, "charge_power_percent": False, "discharge_power_percent": False, "pause_start_time": False, "discharge_target_soc": False, "pause_battery": False}
+        for register in self.settings.get(device, {}).values():
+            ha_name = regname_to_ha(register.get("name", ""))
+            if "battery_charge_power" in ha_name:
+                features["charge_rate"] = True
+            if "battery_discharge_power" in ha_name:
+                features["discharge_rate"] = True
+            if "inverter_charge_power_percentage" in ha_name or "charge_power_rate" in ha_name:
+                features["charge_power_percent"] = True
+            if "inverter_discharge_power_percentage" in ha_name or "discharge_power_rate" in ha_name:
+                features["discharge_power_percent"] = True
+            if "pause_battery_start_time" in ha_name:
+                features["pause_start_time"] = True
+            if "dc_discharge_1_lower_soc_percent_limit" in ha_name:
+                features["discharge_target_soc"] = True
+            if "pause_battery" in ha_name:
+                features["pause_battery"] = True
+        return features
+
+    def _first_register(self, device, candidates):
+        """The first candidate register name this device's own settings report, or None - the choice async_automatic_config()'s first_existing_entity() makes."""
+        names = {regname_to_ha(register.get("name", "")) for register in self.settings.get(device, {}).values()}
+        return next((candidate for candidate in candidates if candidate in names), None)
+
+    def _shared_ct(self, devices, batteries):
+        """
+        Whether async_automatic_config() reads grid and load from the first inverter only, as it does
+        when several inverters share one CT clamp. A copy of its detection (a duplicated meter serial)
+        and of its two override settings, split winning over shared.
+        """
+        if len(batteries) <= 1 or devices.get("ems"):
+            return False
+        battery_meters = devices.get("battery_meters") or {}
+        meter_serials = []
+        for battery in batteries:
+            meter_serials.extend(battery_meters.get(battery) or [])
+        if self.get_arg("ge_cloud_automatic_split_ct", default=False):
+            return False
+        if self.get_arg("ge_cloud_automatic_shared_ct", default=False):
+            return True
+        return len(meter_serials) != len(set(meter_serials))
+
+    def _export_limit_share(self, device):
+        """This logical inverter's equal share of the site grid export limit - the value publish_site_export_limit() publishes - or None."""
+        if self.site_export_limit is None or device not in self.site_inverters:
+            return None
+        return dp2(self.site_export_limit / len(self.site_inverters))
+
+    def _device_entities(self, devices, batteries, index, inverter_type):
+        """
+        The `entities` discovery container for logical inverter `index`: every setting
+        async_automatic_config() binds for it, keyed by Predbat setting name.
+
+        Built with the entity-name patterns and the per-device register choice async_automatic_config()
+        uses, applied in its order and with its later overrides (the shared-CT and EMS
+        reconfigurations), so each descriptor records the entity actually chosen for this device. Where
+        it binds a list shorter than the fleet (import_today on a shared CT), this device has no
+        entry; where it binds 0 in place of a sensor, the descriptor is a value stand-in.
+
+        Two deliberate differences, both spec decisions: the pause, discharge-target and percentage
+        rate controls follow this device's own registers, not automatic_config()'s "any device has it"
+        gate (D10), and load_today is carried even when the user set ge_cloud_load_today_ignore (D11).
+
+        Left out: settings inverter.py replaces with a dummy for this type
+        (GE_CLOUD_DUMMIED_SETTINGS), and those that are not facts about the inverter (inverter_type,
+        num_inverters, ge_cloud_serial, ge_cloud_data, givtcp_rest and the None resets).
+        """
+        device = batteries[index]
+        stem = "{}_gecloud_".format(self.prefix)
+        features = self._register_features(device)
+        time_select = {"domain": "select", "format": GE_CLOUD_TIME_SELECT_FORMAT}
+        entities = {}
+
+        def sensor(setting, serial, suffix, **fields):
+            """Bind a setting Predbat only reads to one of this component's sensors."""
+            entities[setting] = dict({"entity_id": "sensor.{}{}_{}".format(stem, serial, suffix), "access": "r"}, **fields)
+
+        def control(setting, platform, serial, suffix, **fields):
+            """Bind a setting Predbat writes to one of this component's register entities."""
+            entities[setting] = dict({"entity_id": "{}.{}{}_{}".format(platform, stem, serial, suffix), "access": "rw"}, **fields)
+
+        def register(setting, platform, candidates, **fields):
+            """Bind the first candidate register this device reports, as build_entities() does; nothing when it reports none."""
+            name = self._first_register(device, candidates)
+            if name is not None:
+                control(setting, platform, device, name, **fields)
+
+        register("inverter_mode", "switch", ["enable_eco_mode"], domain="switch")
+        sensor("load_today", device, "consumption_total")
+        sensor("import_today", device, "grid_import_total")
+        sensor("export_today", device, "grid_export_total")
+        register("charge_rate", "number", ["battery_charge_power"], unit="W")
+        sensor("battery_rate_max", device, "max_charge_rate")
+        register("discharge_rate", "number", ["battery_discharge_power"], unit="W")
+        sensor("battery_power", device, "battery_power")
+        sensor("load_power", device, "consumption_power")
+        sensor("grid_power", device, "grid_power")
+        sensor("soc_percent", device, "battery_percent")
+        sensor("soc_max", device, "battery_size")
+        register("reserve", "number", ["battery_reserve_percent_limit", "battery_reserve_percent"])
+        sensor("inverter_time", device, "time", format=GE_CLOUD_CLOCK_FORMAT)
+        control("charge_start_time", "select", device, "ac_charge_1_start_time", **time_select)
+        control("charge_end_time", "select", device, "ac_charge_1_end_time", **time_select)
+        register("charge_limit", "number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"])
+        register("charge_limit_enable", "switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"])
+        control("discharge_start_time", "select", device, "dc_discharge_1_start_time", **time_select)
+        control("discharge_end_time", "select", device, "dc_discharge_1_end_time", **time_select)
+        register("scheduled_charge_enable", "switch", ["enable_force_charge", "ac_charge_enable", "enable_ac_charge"])
+        register("scheduled_discharge_enable", "switch", ["enable_dc_discharge", "enable_force_discharge"])
+        sensor("battery_temperature", device, "battery_temperature")
+        sensor("battery_scaling", device, "battery_dod_soh")
+        sensor("inverter_limit", device, "max_inverter_rate")
+        if self.site_export_limit is not None:
+            sensor("export_limit", device, "export_limit")
+        sensor("pv_today", device, "solar_total")
+        sensor("pv_power", device, "solar_power")
+        if index == 0:
+            sensor("battery_temperature_history", device, "battery_temperature")
+        if features["pause_battery"]:
+            control("pause_mode", "select", device, "pause_battery", domain="select")
+            if features["pause_start_time"]:
+                control("pause_start_time", "select", device, "pause_battery_start_time", domain="select")
+                control("pause_end_time", "select", device, "pause_battery_end_time", domain="select")
+        if features["discharge_target_soc"]:
+            control("discharge_target_soc", "number", device, "dc_discharge_1_lower_soc_percent_limit")
+        if features["charge_power_percent"] and not features["charge_rate"]:
+            register("charge_rate_percent", "number", ["inverter_charge_power_percentage", "charge_power_rate"], unit="%")
+        if features["discharge_power_percent"] and not features["discharge_rate"]:
+            register("discharge_rate_percent", "number", ["inverter_discharge_power_percentage", "discharge_power_rate"], unit="%")
+
+        if self._shared_ct(devices, batteries) and index > 0:
+            entities["grid_power"] = {"value": 0, "access": "r"}
+            entities["load_power"] = {"value": 0, "access": "r"}
+            for setting in ("import_today", "export_today", "load_today"):
+                entities.pop(setting, None)
+
+        ems = devices.get("ems")
+        if ems:
+            for setting, suffix in (("load_today", "consumption_total"), ("import_today", "grid_import_total"), ("export_today", "grid_export_total"), ("pv_today", "solar_total")):
+                entities.pop(setting, None)
+                if index == 0:
+                    sensor(setting, ems, suffix)
+            control("charge_start_time", "select", ems, "charge_start_time_slot_1", **time_select)
+            control("charge_end_time", "select", ems, "charge_end_time_slot_1", **time_select)
+            control("idle_start_time", "select", ems, "discharge_start_time_slot_1", **time_select)
+            control("idle_end_time", "select", ems, "discharge_end_time_slot_1", **time_select)
+            control("charge_limit", "number", ems, "charge_soc_percent_limit_1")
+            control("discharge_start_time", "select", ems, "export_start_time_slot_1", **time_select)
+            control("discharge_end_time", "select", ems, "export_end_time_slot_1", **time_select)
+            for setting, suffix in (("battery_power", "battery_power"), ("pv_power", "solar_power"), ("load_power", "consumption_power"), ("grid_power", "grid_power")):
+                if index == 0:
+                    sensor(setting, ems, suffix)
+                else:
+                    entities[setting] = {"value": 0, "access": "r"}
+
+        for setting in GE_CLOUD_DUMMIED_SETTINGS[inverter_type]:
+            entities.pop(setting, None)
+        return entities
 
     def _device_info_and_ratings(self, device):
         """
@@ -1614,7 +1800,9 @@ class GECloudDirect(ComponentBase):
         attributes, so a fact reported here can never disagree with what was published.
         Firmware is reported there as a per-board {"ARM": n, "DSP": n} dict; the `info`
         container only accepts strings, so it is flattened into one descriptive string here
-        rather than silently dropped by the catalogue's validator.
+        rather than silently dropped by the catalogue's validator. Ratings are keyed by the
+        Predbat setting they rate: battery_rate_max (W) is the figure the max_charge_rate sensor
+        publishes, soc_max (kWh) the figure the battery_size sensor publishes.
         """
         device_info = self.info.get(device, {}) or {}
         fields = device_info.get("info", {}) or {}
@@ -1629,11 +1817,11 @@ class GECloudDirect(ComponentBase):
         ratings = {}
         max_charge_rate = fields.get("max_charge_rate")
         if isinstance(max_charge_rate, (int, float)) and not isinstance(max_charge_rate, bool):
-            ratings["max_charge_w"] = max_charge_rate
+            ratings["battery_rate_max"] = max_charge_rate
         battery = fields.get("battery", {}) or {}
         capacity, voltage = battery.get("nominal_capacity"), battery.get("nominal_voltage")
         if isinstance(capacity, (int, float)) and isinstance(voltage, (int, float)) and not isinstance(capacity, bool) and not isinstance(voltage, bool):
-            ratings["battery_kwh"] = dp2(capacity * voltage / 1000.0)
+            ratings["soc_max"] = dp2(capacity * voltage / 1000.0)
         return info, ratings
 
     def _device_meter_serial(self, devices, device):
@@ -1691,6 +1879,15 @@ class GECloudDirect(ComponentBase):
         clamp serial is not a utility supply point and does not fit that section's identity model
         (see _meter_cross_link).
 
+        Each controlled record carries the type's literal `capabilities` (GE_CLOUD_CAPABILITIES),
+        an `entities` map of every setting async_automatic_config() binds for that device (see
+        _device_entities), and `ratings` under Predbat's setting names - including export_limit,
+        this inverter's equal share of the site grid export limit (spec decision D7). PV-only
+        records carry no capabilities - Predbat drives nothing on them - but do carry their
+        generation, pv_power and pv_today, as read-only entities: the ids async_automatic_config()
+        binds for them under ge_cloud_automatic_split_pv, reported whether or not that is set
+        (spec D11, D12).
+
         Reporting is independent of self.automatic: the catalogue records what hardware GE Cloud
         found, not whether this component wired Predbat's apps.yaml to it - that distinction is
         what the report's own "automatic" flag is for.
@@ -1714,8 +1911,11 @@ class GECloudDirect(ComponentBase):
 
         inverters = []
 
-        for device in controlled:
+        for index, device in enumerate(controlled):
             info, ratings = self._device_info_and_ratings(device)
+            share = self._export_limit_share(device)
+            if share is not None:
+                ratings["export_limit"] = share
             inverters.append(
                 inverter_record(
                     "gecloud:{}".format(device),
@@ -1723,16 +1923,18 @@ class GECloudDirect(ComponentBase):
                     composition=composition,
                     measures_meter=self._meter_cross_link(devices, device),
                     functions=["solar", "battery"],
-                    capabilities=self._device_capabilities(device),
+                    capabilities=dict(GE_CLOUD_CAPABILITIES[inverter_type]),
                     hardware_ids={"serial": device},
                     serials=fronted_serials,
                     info=info,
                     ratings=ratings,
+                    entities=self._device_entities(devices, controlled, index, inverter_type),
                 )
             )
 
         for device in devices.get("pv") or []:
             info, ratings = self._device_info_and_ratings(device)
+            stem = "sensor.{}_gecloud_{}".format(self.prefix, device)
             inverters.append(
                 inverter_record(
                     "gecloud:{}".format(device),
@@ -1741,6 +1943,7 @@ class GECloudDirect(ComponentBase):
                     hardware_ids={"serial": device},
                     info=info,
                     ratings=ratings,
+                    entities={"pv_power": {"entity_id": stem + "_solar_power", "access": "r"}, "pv_today": {"entity_id": stem + "_solar_total", "access": "r"}},
                 )
             )
 

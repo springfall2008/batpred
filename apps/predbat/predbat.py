@@ -398,6 +398,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.metric_min_improvement_plan = 2.0
         self.export_more_solar = False
         self.export_more_solar_threshold = 1.0
+        self.export_more_solar_warned_reason = None
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_battery_value_export_scaling = 0.8
@@ -532,6 +533,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
+        self.octopus_intelligent_trust_slots = True
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
@@ -544,7 +546,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes_age = 0
         self.load_last_period = 0
         self.load_last_status = "baseline"
-        self.load_last_car_slot = False
+        self.dynamic_load_car_since = {}
+        self.dynamic_load_car_cancelled = {}
+        self.dynamic_load_car_warned = []
+        self.dynamic_load_car_warned_iog_off = False
+        self.dynamic_load_car_sensors = {}
+        self.dynamic_load_car_effective = {}
+        self.dynamic_load_car_stripped = 0
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -1086,6 +1094,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
             return
+        self.check_export_more_solar_effective()
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -2133,6 +2142,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.check_entity_refresh()
         self.validate_config_check_retry()
+        if not self.prediction_started:
+            # A car's charging slots cancelled or resumed by dynamic load - replan now, not in 5 minutes
+            self.dynamic_load_car_poll()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False
