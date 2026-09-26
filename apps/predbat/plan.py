@@ -284,14 +284,16 @@ class Plan:
         if self.car_energy_reported_load and not car_energy_sensor_used:
             load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
 
+        minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
+        # A car charging now outside its plan is modelled whether or not dynamic load is on: execute_plan() holds the battery for it
+        # either way, and an export window the plan picked over it would skip that hold
+        self.dynamic_load_car_charging_now(minutes_end_slot)
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
-            minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
             # When dynamic load is enabled, increase the load prediction in the current self.plan_interval_minutes minute period to match the
             # actual load (if the load is higher than expected), extending into the following period too once the load has been high for two
             # consecutive checks in a row. Cancelling the slots of a car that is not charging is done earlier in the cycle, before the rates
             # are built, by dynamic_load_car_check().
-            self.dynamic_load_car_charging_now(minutes_end_slot)
             if self.load_last_status == "high":
                 have_printed = False
                 minutes_end_baseline = minutes_end_slot
@@ -326,7 +328,8 @@ class Plan:
     def dynamic_load_car_charging_now(self, minutes_end_slot):
         """
         Model a car that reports charging now, but that no slot with energy covers, as charging at its rate
-        until minutes_end_slot - the end of the current plan interval.
+        until minutes_end_slot - the end of the current plan interval. Runs every cycle, whether or not
+        dynamic load is on, as execute_plan() holds the battery for such a car either way.
 
         The slot goes into car_charging_now_slots, never car_charging_slots: that is the published car plan,
         which drives binary_sensor.predbat_car_charging_slot and so the charger, and a slot there would keep
@@ -341,17 +344,16 @@ class Plan:
                 continue
             kwh = dp3(self.car_charging_rate[car_n] * (minutes_end_slot - self.minutes_now) / 60)
             self.car_charging_now_slots[car_n] = [{"start": self.minutes_now, "end": minutes_end_slot, "kwh": kwh, "octopus": False}]
-            self.log("Dynamic load: car {} is charging now outside its plan, modelling {}kWh until {}".format(car_n, kwh, self.time_abs_str(minutes_end_slot)))
+            self.log("Car {} is charging now outside its plan, modelling {}kWh until {}".format(car_n, kwh, self.time_abs_str(minutes_end_slot)))
 
     def car_charging_slots_model(self):
         """
         The car slots the live plan models: car_charging_slots with any car_charging_now_slots in front, so
         in_car_slot() - which stops at the first slot covering a minute - finds the charging-now slot ahead
-        of a covering slot with no energy left. Returns car_charging_slots itself when there are none.
+        of a covering slot with no energy left. The lists are new, the slot dicts are shared.
         """
         now_slots = self.car_charging_now_slots
-        if not any(now_slots):
-            return self.car_charging_slots
+        # Always a fresh list per car, so a caller that edits the model can never edit the published plan
         return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
 
     def dynamic_load_classify(self):
@@ -630,16 +632,13 @@ class Plan:
         Called from the 15 second loop between plan cycles: ask for a replan as soon as a car_charging_now
         entity flips, so "Hold for car" starts and stops with the charge rather than up to 5 minutes later.
 
-        Only when the reading changes anything - the hold applies (set_charge_window on and the car not
-        allowed to charge from the battery) or dynamic load models the car's load. A static literal in
-        apps.yaml is never polled and "unknown"/"unavailable" is no evidence (see car_charging_now_reading()).
+        A flip always changes the plan, which models a car charging now outside its plan, as well as the hold.
+        A static literal in apps.yaml is never polled and "unknown"/"unavailable" is no evidence (see
+        car_charging_now_reading()).
 
         Returns True when it set update_pending.
         """
         if not self.num_cars:
-            return False
-        hold_applies = self.set_charge_window and not self.car_charging_from_battery
-        if not hold_applies and not self.metric_dynamic_load_adjust:
             return False
 
         due = False

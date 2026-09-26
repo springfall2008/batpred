@@ -204,7 +204,7 @@ It also counts as the car being plugged in, so Predbat-led charging will plan fo
 car_charging_now never adds a charging slot of its own: slots come only from the Predbat car planner or from Octopus Intelligent dispatches.
 So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an automation that starts the charger from that sensor cannot keep a charge going through it.
 With Octopus Intelligent charging a charge outside a dispatch does not get the cheap rate either.<BR>
-With **switch.predbat_metric_dynamic_load_adjust** On, a car charging outside any charging slot is also modelled at **input_number.predbat_car_charging_rate** until the end of the current 30-minute slot - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
+A car charging outside any charging slot is also modelled in the plan at **input_number.predbat_car_charging_rate** until the end of the current plan slot (**plan_interval_minutes**, 30 minutes by default), so no export is planned over it. With **switch.predbat_metric_dynamic_load_adjust** On its load is also taken out of the recent-load estimate, so it is not counted twice - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
 Leave it commented out if you have no sensor that reports the car actually drawing power.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
@@ -448,7 +448,7 @@ To also have Predbat send the plan to the charger (so the EVC charges according 
 
 When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
 
-`car_charging_now` is wired to the charger's session-active sensor, so Predbat holds the house battery for the car during a session. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
+`car_charging_now` is wired to the charger's charging sensor, which is on while the car is drawing power (OCPP status `Charging`), so Predbat holds the house battery for the car while it charges. A car that stays connected once it is full or paused (`SuspendedEV`) does not hold the battery. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
 
 ## Car Charging Planning
 

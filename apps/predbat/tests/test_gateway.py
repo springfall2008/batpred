@@ -4091,6 +4091,29 @@ class TestEvTelemetry:
         # Derived charge-rate capability in kW: 32 A × 240 V / 1000
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.68)
 
+    def test_ev_charging_follows_the_charger_status(self):
+        """binary_sensor.<pfx>_charging - what car_charging_now is wired to - is the car actually drawing power.
+
+        session_active stays true in SuspendedEV (the car is full, or paused, and draws nothing), and
+        car_charging_now holds the house battery for the car, so wiring it to session_active pinned the
+        battery for as long as a full car stayed connected (#5245 review). Charging is the OCPP status
+        for energy flowing; firmware that sends no status falls back to an active session with power.
+        """
+        base = "predbat_gateway_ev_3xb749"
+        cases = [
+            ({"status": "Charging"}, True),
+            ({"status": "SuspendedEV", "power_w": 0}, False),
+            ({"status": "SuspendedEVSE", "power_w": 0}, False),
+            ({"status": "Finishing", "power_w": 0}, False),
+            ({"status": "", "session_active": True, "power_w": 7200}, True),
+            ({"status": "", "session_active": True, "power_w": 0}, False),
+            ({"status": "", "session_active": False, "power_w": 7200}, False),
+        ]
+        for fields, expected in cases:
+            gw = self._make_gateway()
+            gw._inject_ev_entities(self._status_with_ev(**fields))
+            assert gw._dashboard_calls[f"binary_sensor.{base}_charging"][0] is expected, fields
+
     def test_ev_suffix_is_stable_regardless_of_charger_count(self):
         """A charger keeps the same entity ids whether or not others are present.
 
@@ -4135,6 +4158,7 @@ class TestEvTelemetry:
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
         # Stale live-session values must be suppressed, not republished
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is False
+        assert gw._dashboard_calls[f"binary_sensor.{base}_charging"][0] is False
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 0
         assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == 0
 
@@ -4301,7 +4325,7 @@ class TestEvAutoConfig:
 
         assert gw._args["num_cars"] == 1
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_charging"]
         assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
         # car_charging_rate is a UI config item — set via expose_config, not set_arg
         assert "car_charging_rate" not in gw._args
@@ -4331,7 +4355,7 @@ class TestEvAutoConfig:
         """car_charging_now is wired to session_active when gateway_evc_control is False."""
         gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=False)
         gw._register_ev_car(self._status_with_ev())
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_charging"]
 
     def test_car_charging_now_set_when_controlling(self):
         """car_charging_now is wired to session_active when gateway_evc_control is True too.
@@ -4341,7 +4365,7 @@ class TestEvAutoConfig:
         """
         gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=True)
         gw._register_ev_car(self._status_with_ev())
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_charging"]
 
     def test_charge_rate_falls_back_to_7_4_when_capability_unknown(self):
         """car_charging_rate expose_config uses 7.4kW fallback when max_current_a is 0."""

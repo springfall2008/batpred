@@ -195,7 +195,7 @@ Slots Predbat plans itself (Predbat-led charging) are never cancelled, as Predba
 Whether the car is charging is taken from **car_charging_now** when it is set to a real Home Assistant entity, after 2 minutes of it reporting not charging.
 Without that sensor, if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load** On), the house load is used instead, after 10 minutes of load too low for a car to be charging.
 The slots come back as soon as the car starts charging again or the current slot ends.
-If **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it.
+Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.
 This is used only for the plan; it is never added as a car charging slot, so it does not turn on **binary_sensor.predbat_car_charging_slot**.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.

@@ -1616,9 +1616,14 @@ class Fetch:
         # (which also releases the battery discharge hold once the modelled car "fills"). The real
         # car_charging_limit is left untouched - execute.py's "car is full" decision, the
         # plan_car_charging path and load_octopus_slots all still need it. None means no override.
-        if iog_slot_cars and not self.octopus_intelligent_consider_full:
+        # A car reporting car_charging_now is drawing power whatever its modelled SoC says, so it is uncapped
+        # too - execute_plan() holds the battery for it on the sensor alone, and a fill clamp zeroing its load
+        # would leave the plan assuming the battery can discharge while execute holds it (#5245 review).
+        uncapped_cars = set(iog_slot_cars) if not self.octopus_intelligent_consider_full else set()
+        uncapped_cars.update(car_n for car_n in range(self.num_cars) if car_n < len(self.car_charging_now) and self.car_charging_now[car_n])
+        if uncapped_cars:
             self.car_charging_limit_model = self.car_charging_limit[:]
-            for car_n in iog_slot_cars:
+            for car_n in uncapped_cars:
                 self.car_charging_limit_model[car_n] = CAR_CHARGING_LIMIT_UNCAPPED
         else:
             self.car_charging_limit_model = None

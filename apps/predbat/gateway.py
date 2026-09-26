@@ -161,6 +161,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     "ev_online": {"friendly_name": "EV Charger Online", "icon": "mdi:ev-station", "device_class": "connectivity"},
     "ev_connected": {"friendly_name": "EV Car Connected", "icon": "mdi:car-electric", "device_class": "plug"},
     "ev_session_active": {"friendly_name": "EV Charging Active", "icon": "mdi:ev-station", "device_class": "battery_charging"},
+    "ev_charging": {"friendly_name": "EV Drawing Power", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_status": {"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"},
     "ev_power": {"friendly_name": "EV Charge Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     "ev_session_energy": {"friendly_name": "EV Session Energy", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
@@ -1107,14 +1108,23 @@ class GatewayMQTT(ComponentBase):
             # Live-session fields are only meaningful while the charger is connected.
             # The gateway now reports known-but-offline chargers instead of omitting
             # them, and older firmware can leave session_active/power/energy at their
-            # last values. car_charging_now is wired to session_active and PredBat
-            # holds the battery for the car whenever it is true, so an offline charger
-            # with a stale session_active would hold it for a charger that is not
+            # last values. car_charging_now is wired to the charging sensor below and
+            # PredBat holds the battery for the car whenever it is true, so an offline
+            # charger with a stale session would hold it for a charger that is not
             # there. Force them to their idle values rather than trusting the payload.
             session_active = ev.connected and ev.session_active
             power_w = ev.power_w if ev.connected else 0
             session_energy_wh = ev.session_energy_wh if ev.connected else 0
+            # Whether the car is actually drawing power, which is what car_charging_now needs. session_active
+            # stays true in SuspendedEV (the car is full, or paused, and draws nothing), so it would hold the
+            # battery for as long as a full car stayed connected. "Charging" is the OCPP status for energy
+            # flowing; firmware that sends no status falls back to an active session with power.
+            if ev.status:
+                ev_charging = ev.connected and ev.status == "Charging"
+            else:
+                ev_charging = bool(session_active and power_w > 0)
             self.dashboard_item(f"binary_sensor.{pfx}_session_active", session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
+            self.dashboard_item(f"binary_sensor.{pfx}_charging", ev_charging, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_charging", {}), app="gateway")
             if ev.status:
                 self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_power", power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
@@ -1447,12 +1457,12 @@ class GatewayMQTT(ComponentBase):
         # Battery size and target limit are deliberately left to the existing
         # car_charging_battery_size / car_charging_limit settings — the charger cannot
         # report them, so overwriting them here would only swap one default for another.
-        # "Planned" derives from the connected binary sensor and "now" from session_active;
-        # many OCPP cars do not report SoC, so the manual-SoC path supplies a starting value.
+        # "Planned" derives from the connected binary sensor and "now" from the charging sensor (the car
+        # drawing power); many OCPP cars do not report SoC, so the manual-SoC path supplies a starting value.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
-        # Holds the battery for the car while a session is active; it never adds a charging slot, so it
-        # cannot keep a session going through gateway_evc_control's window start/stop
-        self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
+        # Holds the battery for the car while it draws power; it never adds a charging slot, so it cannot
+        # keep a session going through gateway_evc_control's window start/stop
+        self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_charging"])
         self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram

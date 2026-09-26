@@ -18,7 +18,7 @@ which an automation uses to start the charger, so the charge kept itself going i
 """
 import copy
 
-from const import PREDICT_STEP
+from const import CAR_CHARGING_LIMIT_UNCAPPED, PREDICT_STEP
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -142,6 +142,19 @@ def _run_iog(my_predbat):
     my_predbat.fetch_sensor_data_cars(save=False)
     failed |= _check("t17 no dispatch", my_predbat.octopus_slots == [[]], "octopus_slots {}".format(my_predbat.octopus_slots))
     failed |= _check("t17 no car slot", my_predbat.car_charging_slots == [[]], "slots {}".format(my_predbat.car_charging_slots))
+
+    # The sensor says the car is drawing power, which outranks a modelled SoC saying it is full - as it
+    # does for execute_plan()'s hold - so the prediction's fill clamp is lifted for that car and the
+    # hold is modelled too (#5245 review)
+    print("Test 18: a car charging now is not treated as full by the prediction")
+    failed |= _check("t18 uncapped", my_predbat.car_charging_limit_model == [CAR_CHARGING_LIMIT_UNCAPPED], "model {}".format(my_predbat.car_charging_limit_model))
+    _car(my_predbat, False)
+    my_predbat.octopus_slots = [[]]
+    my_predbat.car_charging_manual_soc = [False]
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.dispatch_timeline_pending = []
+    my_predbat.fetch_sensor_data_cars(save=False)
+    failed |= _check("t18 not charging, real limit", my_predbat.car_charging_limit_model is None, "model {}".format(my_predbat.car_charging_limit_model))
     return failed
 
 
@@ -176,18 +189,14 @@ def _run_poll(my_predbat):
     due = my_predbat.car_charging_now_poll()
     failed |= _check("t6 not due", (not due) and not my_predbat.update_pending, "due {}".format(due))
 
-    print("Test 7: no poll when the car may charge from the battery - there is no hold to apply")
+    # The plan models a car charging now whether or not there is a hold to apply, so a flip always
+    # changes the plan (#5245 review)
+    print("Test 7: the poll replans even when the car may charge from the battery - the plan models the car")
     _sensor(my_predbat, "off")
     my_predbat.car_charging_from_battery = True
     my_predbat.update_pending = False
     due = my_predbat.car_charging_now_poll()
-    failed |= _check("t7 not due", (not due) and not my_predbat.update_pending, "due {}".format(due))
-
-    print("Test 7b: ...unless dynamic load models the car's load")
-    my_predbat.metric_dynamic_load_adjust = True
-    due = my_predbat.car_charging_now_poll()
-    failed |= _check("t7b due", due and my_predbat.update_pending, "due {}".format(due))
-    my_predbat.metric_dynamic_load_adjust = False
+    failed |= _check("t7 due", due and my_predbat.update_pending, "due {}".format(due))
     my_predbat.car_charging_from_battery = False
 
     print("Test 8: no poll without a real entity")
@@ -239,6 +248,17 @@ def _run_dynamic(my_predbat):
     model = my_predbat.car_charging_slots_model()
     failed |= _check("t9 model includes it", len(model[0]) == 1 and model[0][0]["start"] == now, "model {}".format(model))
 
+    # The model is always a fresh outer list, with or without charging-now slots, so a caller that
+    # edits it can never edit the published car plan (#5245 review)
+    print("Test 9b: the model never hands back the published car plan's own list")
+    saved_now_slots = my_predbat.car_charging_now_slots
+    my_predbat.car_charging_now_slots = [[]]
+    model_empty = my_predbat.car_charging_slots_model()
+    failed |= _check("t9b copy without now-slots", model_empty is not my_predbat.car_charging_slots and model_empty == my_predbat.car_charging_slots, "model {}".format(model_empty))
+    model_empty[0].append({"start": 0, "end": 30, "kwh": 1.0})
+    failed |= _check("t9b editing it leaves the plan alone", my_predbat.car_charging_slots == [[]], "slots {}".format(my_predbat.car_charging_slots))
+    my_predbat.car_charging_now_slots = saved_now_slots
+
     print("Test 10: an export window over the charging car is blocked, a later one is not")
     failed |= _check("t10 hit", my_predbat.hit_car_window(now, end + 30), "")
     failed |= _check("t10 miss", not my_predbat.hit_car_window(end + 60, end + 90), "")
@@ -256,11 +276,15 @@ def _run_dynamic(my_predbat):
     _dynamic(my_predbat, False)
     failed |= _check("t12 none", my_predbat.car_charging_now_slots == [[]], "slots {}".format(my_predbat.car_charging_now_slots))
 
-    print("Test 13: dynamic load off, nothing modelled")
+    # The plan models the car whether or not dynamic load is on: execute_plan() holds the battery for
+    # it either way, and an export window the plan picked over it would skip that hold (#5245 review).
+    # Only the high-load baseline - a dynamic load feature - is left alone.
+    print("Test 13: dynamic load off still models the car and blocks export over it, but sets no baseline")
     my_predbat.metric_dynamic_load_adjust = False
-    _dynamic(my_predbat, True)
-    failed |= _check("t13 none", my_predbat.car_charging_now_slots == [[]], "slots {}".format(my_predbat.car_charging_now_slots))
-    failed |= _check("t13 no export block", not my_predbat.hit_car_window(now, end + 30), "")
+    _dynamic(my_predbat, True, load_kw=12.0)
+    failed |= _check("t13 modelled", len(my_predbat.car_charging_now_slots[0]) == 1, "slots {}".format(my_predbat.car_charging_now_slots))
+    failed |= _check("t13 export blocked", my_predbat.hit_car_window(now, end + 30), "")
+    failed |= _check("t13 no baseline", not my_predbat.dynamic_load_baseline, "baseline {}".format(my_predbat.dynamic_load_baseline))
     my_predbat.metric_dynamic_load_adjust = True
 
     print("Test 14: a planned slot already covering now models the car, so nothing is added")
