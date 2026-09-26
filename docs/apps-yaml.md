@@ -2067,7 +2067,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
-- **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car
+- **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
 - **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to

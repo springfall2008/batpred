@@ -198,6 +198,7 @@ The template `apps.yaml` comes with a set of pre-defined sensor values that shou
 Customise for your car charger sensor if it sets sensor values that are not in the list.
 
 - **car_charging_now** - Optional, can be set to a Home Assistant sensor that tells Predbat the car is charging right now (e.g. from your car charger integration).
+This can be an on/off sensor, matched against **car_charging_now_response**, or - for chargers that have no "charging" sensor - a charging power sensor in W or kW, where 200W or more counts as charging (e.g. `sensor.wallbox_portal_charging_power` for a Wallbox).<BR>
 While it reports the car charging, Predbat holds the house battery for the car ("Hold for car") so the battery does not discharge into it, unless **switch.predbat_car_charging_from_battery** is On.
 The hold starts and stops within about 15 seconds of the sensor changing, rather than at the next 5-minute plan update.
 It also counts as the car being plugged in, so Predbat-led charging will plan for the car.<BR>

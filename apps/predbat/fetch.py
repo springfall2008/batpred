@@ -32,6 +32,7 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -2572,6 +2573,28 @@ class Fetch:
             return None
         return self.car_charging_now[car_n]
 
+    def car_charging_now_value(self, raw):
+        """
+        Interpret a car_charging_now reading: True (charging), False (not charging) or None (no evidence -
+        unset, "unknown" or "unavailable").
+
+        It can be an on/off sensor, matched against car_charging_now_response, or - for chargers with no
+        "charging" sensor, e.g. Wallbox - a charging power sensor. A number is a power in watts (callers
+        read it with required_unit="W", which converts kW from the entity's unit), and it is charging from
+        CAR_CHARGING_NOW_POWER_W.
+        """
+        if raw is None or isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return raw >= CAR_CHARGING_NOW_POWER_W
+        text = str(raw).strip().lower()
+        if text in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(text) >= CAR_CHARGING_NOW_POWER_W
+        except ValueError:
+            return text in self.car_charging_now_response
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -2604,16 +2627,8 @@ class Fetch:
                 planned = False
             self.car_charging_planned[car_n] = planned
 
-            # Car is charging now sensor
-            charging_now = self.get_arg("car_charging_now", "no", index=car_n)
-            if isinstance(charging_now, str):
-                if charging_now.lower() in self.car_charging_now_response:
-                    charging_now = True
-                else:
-                    charging_now = False
-            elif not isinstance(charging_now, bool):
-                charging_now = False
-            self.car_charging_now[car_n] = charging_now
+            # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
+            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)

@@ -59,6 +59,11 @@ STATE_FIELDS = (
     "car_charging_limit_model",
     "car_charging_soc_next",
     "dispatch_timeline_pending",
+    "car_charging_exclusive",
+    "car_charging_planned_response",
+    "car_charging_now_response",
+    "car_charging_plan_smart",
+    "car_charging_battery_size",
 )
 IOG_SENSOR = "binary_sensor.octopus_intelligent_slot_test"
 
@@ -303,6 +308,75 @@ def _run_dynamic(my_predbat):
     return failed
 
 
+POWER_SENSOR = "sensor.car_charging_power_test"
+
+
+def _power(my_predbat, state, unit="kW"):
+    """
+    Point car_charging_now at a charging power sensor reporting state in unit.
+    """
+    my_predbat.args["car_charging_now"] = POWER_SENSOR
+    item = {"state": state}
+    if unit:
+        item["unit_of_measurement"] = unit
+    my_predbat.ha_interface.dummy_items[POWER_SENSOR] = item
+    my_predbat.dynamic_load_car_refresh_sensors()
+
+
+def _run_power(my_predbat):
+    """
+    car_charging_now can be a charging power sensor (some chargers, e.g. Wallbox, have no "charging"
+    sensor): a number is a power, converted to watts from its unit, and 200W or more is charging.
+    """
+    failed = False
+    print("Test 19: the car_charging_now parser")
+    my_predbat.car_charging_now_response = ["yes", "on", "enable", "true"]
+    cases = [
+        (True, True),
+        (False, False),
+        ("on", True),
+        ("off", False),
+        ("Charging", False),
+        (250.0, True),
+        (150.0, False),
+        ("7200", True),
+        ("0", False),
+        (None, None),
+        ("unavailable", None),
+        ("unknown", None),
+    ]
+    for raw, expected in cases:
+        value = my_predbat.car_charging_now_value(raw)
+        failed |= _check("t19 {!r}".format(raw), value is expected, "got {!r}".format(value))
+
+    print("Test 20: a kW power sensor is read in watts, every cycle and live")
+    _car(my_predbat, False)
+    _power(my_predbat, "7.2")
+    my_predbat.get_car_charging_planned()
+    failed |= _check("t20 cycle charging", my_predbat.car_charging_now == [True], "now {}".format(my_predbat.car_charging_now))
+    failed |= _check("t20 live charging", my_predbat.car_charging_now_reading(0) is True, "")
+    _power(my_predbat, "0.1")
+    my_predbat.get_car_charging_planned()
+    failed |= _check("t20 cycle 100W is not charging", my_predbat.car_charging_now == [False], "now {}".format(my_predbat.car_charging_now))
+    failed |= _check("t20 live 100W is not charging", my_predbat.car_charging_now_reading(0) is False, "")
+
+    print("Test 21: a power sensor with no unit is taken as watts")
+    _power(my_predbat, "250", unit=None)
+    failed |= _check("t21 250W", my_predbat.car_charging_now_reading(0) is True, "")
+    _power(my_predbat, "150", unit=None)
+    failed |= _check("t21 150W", my_predbat.car_charging_now_reading(0) is False, "")
+
+    print("Test 22: the poll replans when the power crosses the threshold, not when it just moves")
+    _car(my_predbat, True)
+    my_predbat.update_pending = False
+    _power(my_predbat, "6.8")
+    failed |= _check("t22 still charging", not my_predbat.car_charging_now_poll(), "")
+    _power(my_predbat, "0.05")
+    failed |= _check("t22 stopped", my_predbat.car_charging_now_poll(), "")
+    my_predbat.ha_interface.dummy_items.pop(POWER_SENSOR, None)
+    return failed
+
+
 def test_car_charging_now(my_predbat):
     """
     car_charging_now holds the battery and feeds the model, but never adds a car slot.
@@ -315,6 +389,7 @@ def test_car_charging_now(my_predbat):
         failed |= _run_poll(my_predbat)
         failed |= _run_dynamic(my_predbat)
         failed |= _run_iog(my_predbat)
+        failed |= _run_power(my_predbat)
     finally:
         for field, value in saved_state.items():
             setattr(my_predbat, field, value)
@@ -325,6 +400,7 @@ def test_car_charging_now(my_predbat):
                 my_predbat.args.pop(key, None)
         my_predbat.ha_interface.dummy_items.pop(SENSOR, None)
         my_predbat.ha_interface.dummy_items.pop(IOG_SENSOR, None)
+        my_predbat.ha_interface.dummy_items.pop(POWER_SENSOR, None)
         my_predbat.dynamic_load_car_refresh_sensors()
     print("*** car_charging_now test {}".format("FAILED" if failed else "PASSED"))
     return failed

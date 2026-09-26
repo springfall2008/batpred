@@ -413,12 +413,8 @@ class Plan:
         entity_id = self.dynamic_load_car_sensors.get(car_n)
         if not entity_id:
             return None
-        raw = self.resolve_arg("car_charging_now", entity_id, default=None)
-        if raw is None or (isinstance(raw, str) and raw.lower() in ("unknown", "unavailable")):
-            return None
-        if isinstance(raw, str):
-            return raw.lower() in self.car_charging_now_response
-        return bool(raw)
+        # required_unit: a charging power sensor is compared in watts (see car_charging_now_value())
+        return self.car_charging_now_value(self.resolve_arg("car_charging_now", entity_id, default=None, required_unit="W"))
 
     def dynamic_load_car_in_slot(self, car_n, minute):
         """
