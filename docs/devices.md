@@ -168,7 +168,7 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 
 **Determine if the car is charging now**
 
-Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat
+Holds the house battery for the car while it charges, including ad-hoc charging not planned via Predbat
 
 ```yaml
   car_charging_now:

@@ -431,6 +431,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_free_slots = []
         self.octopus_saving_slots = []
         self.car_charging_slots = []
+        self.car_charging_now_slots = []
         self.reserve = 0
         self.reserve_percent = 0.0
         self.reserve_current = 0
@@ -2145,6 +2146,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if not self.prediction_started:
             # A car's charging slots cancelled or resumed by dynamic load - replan now, not in 5 minutes
             self.dynamic_load_car_poll()
+            # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes
+            self.car_charging_now_poll()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False

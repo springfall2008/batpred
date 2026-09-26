@@ -4120,9 +4120,9 @@ class TestEvTelemetry:
         freezing at their last values (which is how a 2-day EV outage went unseen).
 
         Critically this asserts the LIVE-SESSION fields too, not just online/connected:
-        car_charging_now is wired to session_active and PredBat plans a charging slot
-        whenever it is true, so a disconnected charger carrying a stale
-        session_active would schedule charging for a charger that is not there.
+        car_charging_now is wired to session_active and PredBat holds the battery for
+        the car whenever it is true, so a disconnected charger carrying a stale
+        session_active would hold the battery for a charger that is not there.
         The fixture deliberately supplies session_active=True, power_w=7200 and
         session_energy_wh=12400 alongside connected=False — the inconsistent payload
         older firmware can emit.
@@ -4333,11 +4333,15 @@ class TestEvAutoConfig:
         gw._register_ev_car(self._status_with_ev())
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
 
-    def test_car_charging_now_omitted_when_controlling(self):
-        """car_charging_now is not set when gateway_evc_control is True to prevent feedback loop."""
+    def test_car_charging_now_set_when_controlling(self):
+        """car_charging_now is wired to session_active when gateway_evc_control is True too.
+
+        It only holds the battery for the car now, never adds a charging slot, so the gateway's own
+        start/stop control cannot keep a session going through it.
+        """
         gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=True)
         gw._register_ev_car(self._status_with_ev())
-        assert "car_charging_now" not in gw._args
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
 
     def test_charge_rate_falls_back_to_7_4_when_capability_unknown(self):
         """car_charging_rate expose_config uses 7.4kW fallback when max_current_a is 0."""

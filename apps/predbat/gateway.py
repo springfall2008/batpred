@@ -220,8 +220,7 @@ class GatewayMQTT(ComponentBase):
                 unaffected. Set to ``true`` in apps.yaml to enable.
             gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
                 the current time falls inside a planned car-charging window and send RemoteStartTransaction
-                plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit. When
-                enabled, car_charging_now is omitted from auto-config to prevent a feedback loop.
+                plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
@@ -1109,8 +1108,8 @@ class GatewayMQTT(ComponentBase):
             # The gateway now reports known-but-offline chargers instead of omitting
             # them, and older firmware can leave session_active/power/energy at their
             # last values. car_charging_now is wired to session_active and PredBat
-            # plans whenever it is true, so an offline charger with a stale
-            # session_active would create a charging slot for a charger that is not
+            # holds the battery for the car whenever it is true, so an offline charger
+            # with a stale session_active would hold it for a charger that is not
             # there. Force them to their idle values rather than trusting the payload.
             session_active = ev.connected and ev.session_active
             power_w = ev.power_w if ev.connected else 0
@@ -1448,11 +1447,12 @@ class GatewayMQTT(ComponentBase):
         # Battery size and target limit are deliberately left to the existing
         # car_charging_battery_size / car_charging_limit settings — the charger cannot
         # report them, so overwriting them here would only swap one default for another.
-        # "Planned"/"now" both derive from the connected binary sensor; many OCPP cars do
-        # not report SoC, so the manual-SoC path supplies a starting value.
+        # "Planned" derives from the connected binary sensor and "now" from session_active;
+        # many OCPP cars do not report SoC, so the manual-SoC path supplies a starting value.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
-        if not self.gateway_evc_control:
-            self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
+        # Holds the battery for the car while a session is active; it never adds a charging slot, so it
+        # cannot keep a session going through gateway_evc_control's window start/stop
+        self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
         self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
         # Live charge power - display only, for the web power flow diagram

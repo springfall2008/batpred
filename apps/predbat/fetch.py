@@ -1507,8 +1507,9 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
-                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
+                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
+                    # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned
 
                 # Extract vehicle data if we can get it
@@ -1585,7 +1586,8 @@ class Fetch:
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
                 for car_n in range(min(len(entity_id_list), self.num_cars)):
-                    self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
+                    # car_charging_now adds no dispatch of its own: only Octopus's slots give the car a slot
+                    # and the house its cheap rate
                     if not entity_id_list[car_n]:
                         continue
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:

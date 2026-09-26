@@ -197,14 +197,15 @@ If you have a [different type of EV charger](devices.md) you will need to config
 The template `apps.yaml` comes with a set of pre-defined sensor values that should match most EV chargers.
 Customise for your car charger sensor if it sets sensor values that are not in the list.
 
-- **car_charging_now** - For some cases finding details of planned car charging is difficult.<BR>
-The car_charging_now configuration item (disabled by default in `apps.yaml`) can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
-Predbat will then assume this slot is used for charging regardless of the plan.<BR>
-If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.<BR>
-WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
-It is therefore recommended that you do NOT set car_charging_now unless you have problems with the Octopus Intelligent slots, and car_charging_now should be commented out in `apps.yaml`.
-
-**CAUTION:** It is strongly recommended to not use car_charging_now with Predbat-led charging unless you can't make it work any other way as Predbat will assume all car charging is at a low rate.
+- **car_charging_now** - Optional, can be set to a Home Assistant sensor that tells Predbat the car is charging right now (e.g. from your car charger integration).
+While it reports the car charging, Predbat holds the house battery for the car ("Hold for car") so the battery does not discharge into it, unless **switch.predbat_car_charging_from_battery** is On.
+The hold starts and stops within about 15 seconds of the sensor changing, rather than at the next 5-minute plan update.
+It also counts as the car being plugged in, so Predbat-led charging will plan for the car.<BR>
+car_charging_now never adds a charging slot of its own: slots come only from the Predbat car planner or from Octopus Intelligent dispatches.
+So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an automation that starts the charger from that sensor cannot keep a charge going through it.
+With Octopus Intelligent charging a charge outside a dispatch does not get the cheap rate either.<BR>
+With **switch.predbat_metric_dynamic_load_adjust** On, a car charging outside any charging slot is also modelled at **input_number.predbat_car_charging_rate** until the end of the current 30-minute slot - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
+Leave it commented out if you have no sensor that reports the car actually drawing power.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
 
@@ -447,7 +448,7 @@ To also have Predbat send the plan to the charger (so the EVC charges according 
 
 When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
 
-`car_charging_now` is omitted from the auto-config when `gateway_evc_control=True` to prevent a feedback loop (an active EVC session would otherwise force an extra slot at the current time, conflicting with the boundaries Predbat is trying to enforce).
+`car_charging_now` is wired to the charger's session-active sensor, so Predbat holds the house battery for the car during a session. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
 
 ## Car Charging Planning
 
@@ -468,7 +469,8 @@ If you don't set this Predbat will default to 100%.
 These retrieve details of the charge limit and when the car will finish charging from your Octopus app settings.
 Again, if you are using the Octopus Energy direct method for Predbat then these configuration lines are not required and should be commented out of `apps.yaml`.
 
-- You can configure **car_charging_now** in `apps.yaml` to point a Home Assistant sensor that indicates that the car is currently charging as a workaround to indicate your car is charging, but the Intelligent API hasn't reported it.
+- You can configure **car_charging_now** in `apps.yaml` to point to a Home Assistant sensor that indicates that the car is currently charging, so Predbat holds the house battery for the car while it charges.
+It does not add an Intelligent slot or its cheap rate for a charge the Intelligent API hasn't reported - those come only from Octopus's dispatches.
 
 - The switch **switch.predbat_octopus_intelligent_consider_full** (*expert mode*)
 (default is Off) when turned On will cause Predbat to predict when your car battery is full and assume no further charging will occur.
@@ -571,7 +573,8 @@ By default this threshold is calculated automatically based upon future import r
 If you set this to zero, this feature is disabled, and all low-rate slots will be used.
 This may mean you need to use expert mode and change your low-rate threshold (**input_number.predbat_rate_low_threshold**) to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
 
-- *WARNING:* Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency.
+- You can set **car_charging_now** in `apps.yaml` to a sensor that reports the car charging, so Predbat holds the house battery while it charges - including a charge you start by hand.
+It never adds a charging slot, so it cannot keep **binary_sensor.predbat_car_charging_slot** (and your automation) on.
 
 - Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based upon this sensor to control when your car charges.
 
@@ -707,7 +710,7 @@ And add your custom car charging energy sensor in `apps.yaml` in place of the te
   car_charging_energy: 'sensor.car_energy_used'
 ```
 
-**car_charging_now** must be commented out (hashed out) in `apps.yaml`:
+**car_charging_now** is optional: point it at a sensor that reports the car charging for Predbat to hold the house battery while it does, or leave it commented out (hashed out) in `apps.yaml`:
 
 ```yaml
   #car_charging_now:
