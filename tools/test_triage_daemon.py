@@ -623,6 +623,13 @@ class PermissionModelTests(unittest.TestCase):
                     self.assertNotIn("DELETE", entry)
                     self.assertNotIn("PUT", entry)
 
+    def test_comment_posting_flows_may_pipe_printf_into_gh_api(self):
+        """PR #5250's review wrote every comment as `printf '%s' '<json>' | gh api repos/.../comments
+        --input -`. Under dontAsk each command in a pipeline must match a rule, so the scoped gh api
+        grant alone was not enough and every comment was denied while `claude -p` still exited 0."""
+        for flow in [triage_daemon.ALLOWED_TOOLS_REVIEW, triage_daemon.ALLOWED_TOOLS_CLEANUP]:
+            self.assertIn("Bash(printf *)", flow.split(","))
+
     def test_cleanup_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
         """The BOT_CLEANUP flow keeps every dangerous gh subcommand denied."""
         still_denied = [
