@@ -91,7 +91,7 @@ from utils import (
     predbat_log_file_prev,
     is_secret_key,
 )
-from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -514,6 +514,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/apps", self.html_apps)
         app.router.add_post("/apps", self.html_apps_post)
+        app.router.add_get("/apps_value", self.html_apps_value)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
@@ -2986,9 +2987,10 @@ chart.render();
                     actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
+                secret_attr = self.secret_row_attr(key, nested_value, "'")
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'{secret_attr}><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
@@ -3912,6 +3914,47 @@ chart.render();
             return len(value) > 0 and any(self.is_editable_value(item) for item in value)
         return False
 
+    def secret_row_attr(self, key, value, quote):
+        """
+        Return the data-secret attribute for a row whose value html_apps() served masked, else "".
+
+        The page holds SECRET_MASK for a credential rather than the credential itself, so the
+        browser's Edit has to fetch the real value (/apps_value) before it can offer it - this flag
+        is how it knows to. mask_secret_args() replaces a secret key's whole value, list or dict
+        included, so a credential container (e.g. redact_strings) is also one masked row and is
+        flagged too; /apps_value refuses to hand a container back, so its Edit ends in that
+        refusal rather than letting the editor overwrite the whole list with a single string.
+        """
+        if value == SECRET_MASK and is_secret_key(key):
+            return " data-secret={}1{}".format(quote, quote)
+        return ""
+
+    async def html_apps_value(self, request):
+        """
+        Return the real value of one apps.yaml setting, for the /apps editor's Edit on a credential.
+
+        html_apps() serves credentials masked, so without this Edit could only offer "xxx" - the
+        user could neither see nor amend the key, and saving it back unchanged is refused. Only
+        the one path asked for is returned, and only when it is a single value, so the page itself
+        still never carries credentials and a whole container cannot be pulled in the clear. The
+        unmasked /debug_apps download already exposes the same values behind the same access.
+
+        The value is returned as stored, not passed through resolve_value_raw(): a credential is
+        literal text, and one holding a brace ("abc{def", "{0}") makes str.format() in
+        resolve_arg() raise ValueError/IndexError, which would surface as a 500 here.
+        """
+        path = request.query.get("path", "")
+        if not path:
+            return web.json_response({"success": False, "message": "No path given"})
+        try:
+            value = resolve_nested_yaml_value(self.args, path)
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            # IndexError: a negative index into an empty list gets past the lookup's range check
+            return web.json_response({"success": False, "message": f"Path {path} not found: {str(e)}"})
+        if not self.is_editable_value(value) or isinstance(value, list):
+            return web.json_response({"success": False, "message": f"{path} is not a single value that can be edited here - edit apps.yaml directly"})
+        return web.json_response({"success": True, "value": str(value)})
+
     def resolve_value_raw(self, arg, value):
         if isinstance(value, str) and "{" in value:
             text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
@@ -4030,8 +4073,8 @@ chart.render();
                         # For numerical values, show edit button
                         actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
 
-                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
-                    row_id, arg_attr, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"{}><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg_attr, html_module.escape(str(raw_value)), self.secret_row_attr(arg, value, '"'), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
                 )
             row_id += 1
 

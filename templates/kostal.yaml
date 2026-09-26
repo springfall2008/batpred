@@ -235,7 +235,9 @@ pred_bat:
   #- 'true'
   #- 'connected'
 
-  #car_charging_now_response:
+  # car_charging_now holds the house battery for the car while it charges - an on/off sensor,
+  # or a charging power sensor in W or kW where 200W or more counts as charging
+  #car_charging_now:
   #- sensor.evcc_garage_charge_power
 
   #car_charging_limit:

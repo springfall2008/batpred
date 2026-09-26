@@ -778,40 +778,49 @@ class Execute:
             carHolding = False
             if self.set_charge_window and not self.car_charging_from_battery:
                 for car_n in range(self.num_cars):
-                    if self.car_charging_slots[car_n]:
+                    car_hold = False
+                    if car_n < len(self.car_charging_now) and self.car_charging_now[car_n]:
+                        # The car is drawing power now, in a slot or not. car_charging_now adds no slot (a slot drives the
+                        # charger, so it kept the charge going), so it holds here directly - and ahead of the modelled
+                        # car SoC, which a sensor reporting the car charging outranks.
+                        self.log("Car charging from battery is off, car {} is charging now".format(car_n))
+                        car_hold = True
+                    elif self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
                         if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
                             self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                         elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                            # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
-                            # from draining the battery
-                            if not isExporting:
-                                if inverter.inv_has_timed_pause:
-                                    if resetPause:
-                                        inverter.adjust_pause_mode(pause_discharge=True)
-                                        pause_discharge_requested = True
-                                        resetPause = False
+                            car_hold = True
+                    if car_hold:
+                        # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
+                        # from draining the battery
+                        if not isExporting:
+                            if inverter.inv_has_timed_pause:
+                                if resetPause:
+                                    inverter.adjust_pause_mode(pause_discharge=True)
+                                    pause_discharge_requested = True
+                                    resetPause = False
+                            else:
+                                if discharge_rate is None:
+                                    discharge_rate = 0
+                                # Not while actually charging: the battery is being filled from the grid, so it
+                                # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
+                                # write for every 1% of the climb (#3899). Left to reset below for the duration,
+                                # and latched at the SoC reached once charging stops - which is the point the
+                                # inverter returns to demand and the hold starts to mean something. The sibling
+                                # iBoost hold below already sits out a charge for the same reason.
+                                if self.set_reserve_enable and status != "Charging":
+                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    resetReserve = False
+                            carHolding = True
+                            self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
+                            if ("Hold for car" not in status) and (status_hold_car == ""):
+                                if status == "Demand":
+                                    status = "Hold for car"
                                 else:
-                                    if discharge_rate is None:
-                                        discharge_rate = 0
-                                    # Not while actually charging: the battery is being filled from the grid, so it
-                                    # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
-                                    # write for every 1% of the climb (#3899). Left to reset below for the duration,
-                                    # and latched at the SoC reached once charging stops - which is the point the
-                                    # inverter returns to demand and the hold starts to mean something. The sibling
-                                    # iBoost hold below already sits out a charge for the same reason.
-                                    if self.set_reserve_enable and status != "Charging":
-                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
-                                        resetReserve = False
-                                carHolding = True
-                                self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
-                                if ("Hold for car" not in status) and (status_hold_car == ""):
-                                    if status == "Demand":
-                                        status = "Hold for car"
-                                    else:
-                                        status_hold_car = ", Hold for car"
-                            break
+                                    status_hold_car = ", Hold for car"
+                        break
 
             # iBoost running?
             boostHolding = False
@@ -1114,9 +1123,21 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
-    def fetch_inverter_data(self, create=True):
+    def fetch_inverter_data(self, quick=False):
         """
         Fetch data about the inverters
+
+        quick is the dashboard refresh from quick_inverter_data_update(), every
+        INVERTER_QUICK_UPDATE_SECONDS. It reads live status only: no refresh_config() and no
+        per-cycle inverter diagnostics (clock skew, soc_max, charge windows and settings). That is
+        what the quick path did before the objects persisted, and it keeps check_clock_skew()'s
+        auto-restart, the battery size tracking reads and the set_reserve_min write to once per
+        plan cycle.
+
+        Verbosity is deliberately tied to quick rather than to whether the Inverter objects were
+        just created: those objects now persist, so tying it to creation would silence the
+        diagnostics for the life of the process after the first cycle (#5126 review). That log is
+        the primary triage evidence for "the plan is wrong" and inverter-write reports.
         """
         # Find the inverters
         self.num_inverters = int(self.get_arg("num_inverters", 1))
@@ -1149,16 +1170,27 @@ class Execute:
         export_limit = 0.0
         inverter_support_feedin_first = True
 
-        # Create inverters list if needed
-        if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
+        # Create the inverters only when we don't already have the right number of them. The objects
+        # persist across cycles: rebuilding them every cycle wiped any state they accumulated, which
+        # is why the committed-schedule guard never suppressed a repeated commit (#4712).
+        #
+        # Nothing else needs to force a rebuild. refresh_config() below re-reads everything derived
+        # from config, including inverter_type and every inv_* capability flag derived from it, and
+        # re-creates the type-named dummy entities - so a component whose automatic_config() sets the
+        # type after these objects were built (a deferred AlphaESS startup, say) is absorbed by the
+        # refresh. An earlier version of this rebuilt on a same-count type change too, which threw
+        # away the commit-once state for every inverter - forcing exactly the redundant commit and
+        # button press this guard exists to prevent - to redo work the refresh had already done
+        # (#5126 review).
+        create = (not self.inverters) or (len(self.inverters) != self.num_inverters)
+        if create:
             self.inverters = []
-            create = True
 
         # For each inverter get the details
         for id in range(self.num_inverters):
             if create:
                 try:
-                    inverter = Inverter(self, id)
+                    inverter = Inverter(self, id, quiet=quick)
                 except Exception as e:
                     self.log("Error: Failed to create inverter {}: {}, your configuration may be incorrect".format(id, e))
                     self.inverters = []
@@ -1166,7 +1198,19 @@ class Execute:
                 self.inverters.append(inverter)
             else:
                 inverter = self.inverters[id]
-            inverter.update_status(self.minutes_now, quiet=not create)
+                try:
+                    if not quick:
+                        inverter.refresh_config()
+                except Exception as e:
+                    # The objects are left intact, unlike the construction path above where the list
+                    # is only half built. refresh_config() has transient ways to raise on a live
+                    # system - an entity reading back None through int(), say - and discarding every
+                    # inverter's commit-once state because one of them hiccuped forces the redundant
+                    # commit and button press this guard exists to prevent, on hardware where that is
+                    # a non-volatile write (#5126 review).
+                    self.log("Error: Failed to refresh inverter {}: {}, your configuration may be incorrect".format(id, e))
+                    return False
+            inverter.update_status(self.minutes_now, quiet=quick)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
@@ -1326,20 +1370,20 @@ class Execute:
         # and write the real device with no plan in place (#4965)
         if self.is_template_mode():
             # fetch_inverter_data() and the plan run never stamp this in template mode, so without
-            # a stamp here the 120s throttle in update_pred() would pass on every tick of
+            # a stamp here the quick-update throttle would pass on every tick of
             # update_time_loop instead of once per INVERTER_QUICK_UPDATE_SECONDS
             self.inverter_data_last_fetch = datetime.now()
             return False
         if self.inverters is None:
             return False
-        # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which
+        # Its own control-ledger cycle. This runs every INVERTER_QUICK_UPDATE_SECONDS and reaches update_status(), which
         # writes scheduled_charge_enable through write_and_poll_switch - so it both observes and
         # confirms. Without advancing the cycle, every observation here was unconditionally STALE
         # (cycle <= confirmed_cycle) and its confirmations collided with the plan run's. Every
         # entry point that can observe or confirm gets its own cycle.
         if self.control_ledger is not None:
             self.control_ledger.begin_cycle()
-        if self.fetch_inverter_data(create=False):
+        if self.fetch_inverter_data(quick=True):
             self.publish_inverter_data()
             self.rebalance_inverter_rates()
             return True

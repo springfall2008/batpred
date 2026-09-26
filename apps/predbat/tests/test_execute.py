@@ -87,6 +87,15 @@ class ActiveTestInverter:
     def find_battery_size(self):
         return self.soc_max * 0.90
 
+    def refresh_config(self, quiet=False):
+        """
+        No-op stand-in for Inverter.refresh_config().
+
+        The real one re-reads runtime config on each cycle now that the Inverter objects persist;
+        this double carries no config, so there is nothing to re-read.
+        """
+        pass
+
     def update_status(self, minutes_now, quiet=False):
         pass
 
@@ -168,6 +177,7 @@ def run_execute_test(
     export_window_best=None,
     export_limits_best=None,
     car_slot=None,
+    car_charging_now=False,
     soc_kw=0,
     soc_max=10,
     soc_max_array=None,
@@ -255,6 +265,7 @@ def run_execute_test(
     my_predbat.set_read_only = read_only
     my_predbat.set_read_only_axle = set_read_only_axle
     my_predbat.car_charging_slots = [car_slot]
+    my_predbat.car_charging_now = [car_charging_now]
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
     my_predbat.set_charge_low_power = set_charge_low_power
@@ -346,7 +357,7 @@ def run_execute_test(
     my_predbat.set_export_freeze_only = my_predbat.get_arg("set_export_freeze_only")
     my_predbat.set_charge_freeze_only = set_charge_freeze_only
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
 
     if my_predbat.soc_kw != soc_kw:
         print("ERROR: Predbat level SOC should be {} got {}".format(soc_kw, my_predbat.soc_kw))
@@ -519,7 +530,7 @@ def _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors, pv_power=0):
     my_predbat.args["pv_power"] = pv_sensors
     # Set pv_power via config_index so get_ha_config returns it (args is bypassed for known config items)
 
-    my_predbat.fetch_inverter_data(create=False)
+    my_predbat.fetch_inverter_data()
     result = my_predbat.pv_power
 
     return result
@@ -3259,6 +3270,71 @@ def run_execute_tests(my_predbat):
         car_slot=charge_window_best_no_slot,
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    # car_charging_now holds the battery on its own, with no car slot: the car is drawing power, so
+    # the battery must not feed it whatever the plan says. Only the slot route checks the modelled
+    # car SoC - a sensor reporting the car charging outranks a model saying it is full.
+    failed |= run_execute_test(
+        my_predbat,
+        "car_now_hold",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_charging_now=True,
+        assert_immediate_soc_target=100,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_now_hold_car_full",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_charging_now=True,
+        car_soc=100,
+        assert_immediate_soc_target=100,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_now_from_battery",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_charging_now=True,
+        car_charging_from_battery=True,
+        assert_immediate_soc_target=100,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_now_exporting",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Exporting",
+        car_charging_now=True,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_immediate_soc_target=0,
     )
     if failed:
         return failed

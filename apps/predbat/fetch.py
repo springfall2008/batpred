@@ -32,6 +32,7 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -1512,8 +1513,9 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
-                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
+                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
+                    # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned
 
                 # Extract vehicle data if we can get it
@@ -1590,7 +1592,8 @@ class Fetch:
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
                 for car_n in range(min(len(entity_id_list), self.num_cars)):
-                    self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
+                    # car_charging_now adds no dispatch of its own: only Octopus's slots give the car a slot
+                    # and the house its cheap rate
                     if not entity_id_list[car_n]:
                         continue
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
@@ -1619,9 +1622,14 @@ class Fetch:
         # (which also releases the battery discharge hold once the modelled car "fills"). The real
         # car_charging_limit is left untouched - execute.py's "car is full" decision, the
         # plan_car_charging path and load_octopus_slots all still need it. None means no override.
-        if iog_slot_cars and not self.octopus_intelligent_consider_full:
+        # A car reporting car_charging_now is drawing power whatever its modelled SoC says, so it is uncapped
+        # too - execute_plan() holds the battery for it on the sensor alone, and a fill clamp zeroing its load
+        # would leave the plan assuming the battery can discharge while execute holds it (#5245 review).
+        uncapped_cars = set(iog_slot_cars) if not self.octopus_intelligent_consider_full else set()
+        uncapped_cars.update(car_n for car_n in range(self.num_cars) if car_n < len(self.car_charging_now) and self.car_charging_now[car_n])
+        if uncapped_cars:
             self.car_charging_limit_model = self.car_charging_limit[:]
-            for car_n in iog_slot_cars:
+            for car_n in uncapped_cars:
                 self.car_charging_limit_model[car_n] = CAR_CHARGING_LIMIT_UNCAPPED
         else:
             self.car_charging_limit_model = None
@@ -2602,6 +2610,28 @@ class Fetch:
             return None
         return self.car_charging_now[car_n]
 
+    def car_charging_now_value(self, raw):
+        """
+        Interpret a car_charging_now reading: True (charging), False (not charging) or None (no evidence -
+        unset, "unknown" or "unavailable").
+
+        It can be an on/off sensor, matched against car_charging_now_response, or - for chargers with no
+        "charging" sensor, e.g. Wallbox - a charging power sensor. A number is a power in watts (callers
+        read it with required_unit="W", which converts kW from the entity's unit), and it is charging from
+        CAR_CHARGING_NOW_POWER_W.
+        """
+        if raw is None or isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return raw >= CAR_CHARGING_NOW_POWER_W
+        text = str(raw).strip().lower()
+        if text in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(text) >= CAR_CHARGING_NOW_POWER_W
+        except ValueError:
+            return text in self.car_charging_now_response
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -2634,16 +2664,8 @@ class Fetch:
                 planned = False
             self.car_charging_planned[car_n] = planned
 
-            # Car is charging now sensor
-            charging_now = self.get_arg("car_charging_now", "no", index=car_n)
-            if isinstance(charging_now, str):
-                if charging_now.lower() in self.car_charging_now_response:
-                    charging_now = True
-                else:
-                    charging_now = False
-            elif not isinstance(charging_now, bool):
-                charging_now = False
-            self.car_charging_now[car_n] = charging_now
+            # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
+            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
