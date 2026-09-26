@@ -111,6 +111,7 @@ creds
 crosscharge
 ctrdis
 ctypes
+cubone
 customauthorizer
 customisation
 Customise
@@ -205,6 +206,7 @@ etok
 euids
 EVAC
 EVDC
+evenodd
 evergen
 evilspringfall
 evse
@@ -344,6 +346,8 @@ libc
 libyaml
 LIFEPO
 linebreak
+linecap
+linejoin
 linestyle
 loadml
 loadmlpower
@@ -434,6 +438,7 @@ notgithub
 notsn
 nrgheat
 numpy
+nums
 OCPP
 octo
 octoplus
@@ -727,6 +732,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+Xmark
 xrtkq
 xticks
 xxabcdefyy

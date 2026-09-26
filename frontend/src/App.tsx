@@ -22,6 +22,7 @@ const AnnualPage = lazy(() => import('./pages/AnnualPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const AppsPage = lazy(() => import('./pages/AppsPage'))
 const EntitiesPage = lazy(() => import('./pages/EntitiesPage'))
+const DiscoveryPage = lazy(() => import('./pages/DiscoveryPage'))
 
 import type { PlanData } from './types/plan'
 import type { PredbatStatus } from './types/status'
@@ -405,7 +406,7 @@ function App() {
   const apiWarning =
     controlError ?? apiErrors.plan ?? apiErrors.status ?? apiErrors.powerFlow ?? null
 
-  if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
+  if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
     return (
       <div className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''}`}>
         <AppNavigation
@@ -419,7 +420,7 @@ function App() {
         <div className="app-content">
           <main>
             <Suspense fallback={<div>Loading…</div>}>
-              {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
+              {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'discovery' ? <DiscoveryPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
             </Suspense>
           </main>
         </div>

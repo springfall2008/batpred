@@ -25,6 +25,7 @@ import {
   faMicrochip,
   faRightLeft,
   faScroll,
+  faSitemap,
   faServer,
   faSliders,
   faXmark,
@@ -153,6 +154,11 @@ const navigationGroups: NavigationGroup[] = [
         label: 'Browse',
         href: './browse',
         icon: faFileCode
+      },
+      {
+        label: 'Discovery',
+        href: './discovery',
+        icon: faSitemap
       },
       {
         label: 'Internals',

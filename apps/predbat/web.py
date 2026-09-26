@@ -639,6 +639,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/legacy_plan", self.html_plan_legacy)
         app.router.add_get("/components", self.html_modern_ui if modern_ui else self.html_components)
         app.router.add_get("/discovery", self.html_modern_ui if modern_ui else self.html_discovery)
+        app.router.add_get("/api/discovery", self.html_api_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -5830,6 +5831,19 @@ chart.render();
         """Return the discovery coordinator, or None when there is no component registry."""
         components = getattr(self.base, "components", None)
         return getattr(components, "coordinator", None) if components else None
+
+    async def html_api_discovery(self, request):
+        """Return the redacted discovery catalogue, or raw values when explicitly requested."""
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return web.json_response({"error": "The discovery catalogue is not available yet."}, status=503)
+
+        raw = str(request.query.get("raw", "")).lower() in ("1", "true", "yes", "on")
+        try:
+            return web.json_response(coordinator.catalogue_raw() if raw else coordinator.catalogue())
+        except Exception as e:
+            self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+            return web.json_response({"error": "Unable to read the discovery catalogue."}, status=500)
 
     def _discovery_value_html(self, value):
         """Render one catalogue value - a scalar, a list or a nested container - as HTML.
