@@ -2451,12 +2451,13 @@ class Fetch:
         otherwise-flat tariff, pushing the automatic threshold above every rate).
 
         Falls back to the plain (unfiltered) min/max/average when rate_base is empty/unavailable, so
-        the fallback is exact rather than approximate. compare.py/annual.py take that path on every
-        call: both run after a live fetch cycle has already populated the snapshot, then simulate a
-        different tariff on top, so they clear the snapshot AND saving_minutes together alongside the
-        rates they replace. Either reset alone would be enough today - an empty dict short-circuits
-        here, and an empty set means no minute is ever looked up - but they describe the same tariff
-        and are kept in step so a future caller cannot end up with one without the other.
+        the fallback is exact rather than approximate. annual.py always installs a different tariff, and
+        compare.py does whenever a tariff supplies its own rates for a side; both clear that side's
+        snapshot AND saving_minutes together, since offsets into the live tables would map unrelated
+        minutes of the new tariff. A compare tariff that reuses the live rates keeps the live sets, which
+        still describe them. Either reset alone would be enough today - an empty dict short-circuits here,
+        and an empty set means no minute is ever looked up - but they describe the same tariff and are
+        kept in step so a future caller cannot end up with one without the other.
         """
         if not rate_base:
             return self.rate_minmax(rates)[:3]
@@ -2558,8 +2559,16 @@ class Fetch:
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
         car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
-        rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_saving_minutes, self.rate_import_pre_saving)
-        rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_saving_minutes, self.rate_export_pre_saving)
+        # An empty table has nothing to filter, so keep the stored stats for that side as before - scanning
+        # it would return the (99999, 0, 0) placeholder and push the threshold to 99998.9 (#5163 review)
+        if self.rate_import:
+            rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_saving_minutes, self.rate_import_pre_saving)
+        else:
+            rate_min, rate_max, rate_average = self.rate_min, self.rate_max, self.rate_average
+        if self.rate_export:
+            rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_saving_minutes, self.rate_export_pre_saving)
+        else:
+            rate_export_min, rate_export_max, rate_export_average = self.rate_export_min, self.rate_export_max, self.rate_export_average
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)

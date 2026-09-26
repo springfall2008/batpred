@@ -23,8 +23,8 @@ maps each minute in rate_import_saving_minutes/rate_export_saving_minutes - a fr
 "saving"-tagged minutes taken right after the saving/free/Axle loaders run and before any override
 (rates_import_override, manual rates) can overwrite that same minute's rate_import_replicated/
 rate_export_replicated tag with its own "increment"/"user" tag - back to its own pre-event base
-rate (rate_import_base/rate_export_base, already built on every fetch cycle) rather than excluding
-it outright. self.rate_max/rate_min/rate_average (and the export equivalents) are deliberately left
+rate (rate_import_pre_saving/rate_export_pre_saving: the tariff snapshotted after the IOG dispatch
+overlay and before the session loaders) rather than excluding it outright. self.rate_max/rate_min/rate_average (and the export equivalents) are deliberately left
 untouched - they feed dashboard sensors, graph scaling, and plan.py pricing, where the real boosted
 price is what should be shown.
 """
@@ -263,6 +263,10 @@ def test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predb
     my_predbat.rate_export_base = rate_export_base
     my_predbat.rate_export_replicated = rate_export_replicated
     my_predbat.rate_export_saving_minutes = rate_export_saving_minutes
+    # Set the snapshots set_rate_thresholds() actually reads, so this cannot pass on whatever an
+    # earlier test left on the shared fixture (#5163 review, #5079 class of bug)
+    my_predbat.rate_import_pre_saving = rate_import.copy()
+    my_predbat.rate_export_pre_saving = rate_export_base.copy()
     my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
     my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
     my_predbat.rate_low_threshold = 0
@@ -411,6 +415,93 @@ def test_saving_minute_capped_against_post_io_rates(my_predbat):
     return failed
 
 
+def _setup_export_event(my_predbat, export_boost=50.0):
+    """Flat 15p export tariff with a boosted, "saving"-tagged export event 10:00-12:00, and a two-rate import tariff (20p night, 30p day)."""
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+
+    rate_import = {minute: (30.0 if 6 <= (minute // 60) % 24 < 22 else 20.0) for minute in range(0, 48 * 60)}
+    rate_export_base = {minute: 15.0 for minute in range(0, 48 * 60)}
+    rate_export = rate_export_base.copy()
+    for minute in range(600, 720):
+        rate_export[minute] += export_boost
+
+    my_predbat.rate_import = rate_import
+    my_predbat.rate_import_base = rate_import.copy()
+    my_predbat.rate_import_pre_saving = rate_import.copy()
+    my_predbat.rate_import_replicated = {}
+    my_predbat.rate_import_saving_minutes = set()
+    my_predbat.rate_export = rate_export
+    my_predbat.rate_export_base = rate_export_base
+    my_predbat.rate_export_pre_saving = rate_export_base.copy()
+    my_predbat.rate_export_replicated = {minute: "saving" for minute in range(600, 720)}
+    my_predbat.rate_export_saving_minutes = set(range(600, 720))
+    my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
+    my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
+    my_predbat.rate_low_threshold = 0
+    my_predbat.rate_high_threshold = 0
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.num_cars = 0
+
+
+def test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_predbat):
+    """Automatic export mode (rate_high_threshold=0) must derive its threshold from the underlying export tariff.
+
+    A +50p event on a flat 15p export tariff gives a boosted export max of 65p. On the unfiltered
+    stats that changes both automatic branches: export max != min, so export takes min + 0.5 (15.5)
+    instead of the flat-tariff min - 0.1 (14.9); and 65p > the 30p import max takes the "export beats
+    import" branch, so import takes max + 0.1 (30.1) instead of max - 0.5 (29.5). The clean stats
+    must give 14.9 and 29.5 (#5163 review).
+    """
+    print("**** test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    if my_predbat.rate_export_max != 65.0:
+        print("ERROR: test setup sanity check failed - contaminated rate_export_max should be 65.0, got {}".format(my_predbat.rate_export_max))
+        failed = True
+
+    my_predbat.set_rate_thresholds()
+
+    if abs(my_predbat.rate_export_cost_threshold - 14.9) > 0.01:
+        print("ERROR: automatic export threshold should be 14.9 (flat clean export tariff: min - 0.1), got {} - the export boost leaked into the automatic export branch".format(my_predbat.rate_export_cost_threshold))
+        failed = True
+    if abs(my_predbat.rate_import_cost_threshold - 29.5) > 0.01:
+        print("ERROR: import threshold should be 29.5 (clean import max 30 - 0.5), got {} - the export boost leaked into the export-beats-import branch".format(my_predbat.rate_import_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table(my_predbat):
+    """An empty rate table must keep that side's stored stats, as before the fix.
+
+    rate_minmax() over an empty table returns the (99999, 0, 0) placeholder, which pushed the
+    automatic export threshold to 99998.9 where main gave -0.1 (#5163 review).
+    """
+    print("**** test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    my_predbat.rate_export = {}
+    my_predbat.rate_export_pre_saving = {}
+    my_predbat.rate_export_saving_minutes = set()
+    my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average = 0, 0, 0
+
+    my_predbat.set_rate_thresholds()
+
+    if abs(my_predbat.rate_export_cost_threshold - (-0.1)) > 0.01:
+        print("ERROR: empty export table should give the stored-stats threshold -0.1, got {}".format(my_predbat.rate_export_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     """Pin where fetch_sensor_data() takes each snapshot, since nothing else does.
 
@@ -439,6 +530,7 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     lines = [line.strip() for line in source.splitlines()]
 
     def find(needle, label):
+        """Return the index of the first source line containing needle, or None if it is missing."""
         for index, line in enumerate(lines):
             if needle in line:
                 return index
@@ -448,15 +540,30 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     io_loop = find("import_rates = self.rate_add_io_slots(car_n", "the IOG slot loop")
     pre_saving = find("self.rate_import_pre_saving = import_rates.copy()", "the rate_import_pre_saving snapshot")
     saving_slot = find("self.load_saving_slot(self.octopus_saving_slots, import_rates", "load_saving_slot() for import")
+    free_slot = find("self.load_free_slot(self.octopus_free_slots, import_rates", "load_free_slot() for import")
     axle_slot = find("load_axle_slot(self, self.axle_sessions, import_rates", "load_axle_slot() for import")
     saving_minutes = find("self.rate_import_saving_minutes = {minute for minute, tag", "the rate_import_saving_minutes snapshot")
     basic = find('import_rates = self.basic_rates(self.get_arg("rates_import_override"', "basic_rates() for import")
 
-    if None in (io_loop, pre_saving, saving_slot, axle_slot, saving_minutes, basic):
+    export_pre_saving = find("self.rate_export_pre_saving = self.rate_export_base.copy()", "the rate_export_pre_saving snapshot")
+    export_saving_slot = find("self.load_saving_slot(self.octopus_saving_slots, export_rates", "load_saving_slot() for export")
+    export_axle_slot = find("load_axle_slot(self, self.axle_sessions, export_rates", "load_axle_slot() for export")
+    export_saving_minutes = find("self.rate_export_saving_minutes = {minute for minute, tag", "the rate_export_saving_minutes snapshot")
+    export_basic = find('export_rates = self.basic_rates(self.get_arg("rates_export_override"', "basic_rates() for export")
+
+    if None in (io_loop, pre_saving, saving_slot, free_slot, axle_slot, saving_minutes, basic, export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic):
         return True
 
     if not io_loop < pre_saving < saving_slot:
         print("ERROR: rate_import_pre_saving must be snapshotted after the IOG loop and before load_saving_slot() - got IOG at {}, snapshot at {}, saving slot at {}".format(io_loop, pre_saving, saving_slot))
+        failed = True
+
+    if not saving_slot < free_slot < axle_slot:
+        print("ERROR: load_free_slot() must sit between load_saving_slot() and load_axle_slot(), before the saving-minutes snapshot - got saving {}, free {}, axle {}".format(saving_slot, free_slot, axle_slot))
+        failed = True
+
+    if not export_pre_saving < export_saving_slot < export_axle_slot < export_saving_minutes < export_basic:
+        print("ERROR: export snapshots out of order - pre_saving {}, saving slot {}, axle {}, saving minutes {}, basic_rates {}".format(export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic))
         failed = True
 
     if not axle_slot < saving_minutes < basic:
@@ -473,10 +580,12 @@ def test_compare_and_annual_clear_stale_saving_minutes(my_predbat):
 
     rate_import_saving_minutes/rate_export_saving_minutes are only ever populated in
     fetch_sensor_data(), and they hold absolute minute offsets into the live tariff's rate tables.
-    compare.py's fetch_rates() and annual.py's _apply_rates() both replace rate_import/rate_export
-    with a simulated tariff and then call set_rate_thresholds() - so after a live cycle containing a
-    saving session, those stale offsets would map whatever unrelated minutes happen to sit at the
-    same positions in the simulated tariff back to a "base" rate that has nothing to do with them.
+    annual.py's _apply_rates() and a compare.py tariff that brings its own rates both replace
+    rate_import/rate_export with a different tariff and then call set_rate_thresholds() - so after a
+    live cycle containing a saving session, those stale offsets would map whatever unrelated minutes
+    happen to sit at the same positions in the new tariff back to a "base" rate that has nothing to do
+    with them. (A compare tariff that reuses the live rates keeps the live sets - see
+    test_compare_reused_live_rates_keep_saving_minutes.)
 
     Exercises both paths for real and asserts the sets are empty *at the moment
     set_rate_thresholds() runs, not merely by the time the function returns - a reset that ran
@@ -491,6 +600,7 @@ def test_compare_and_annual_clear_stale_saving_minutes(my_predbat):
     stale = {10, 20, 30}
 
     def seed_stale():
+        """Put live-cycle saving minutes and snapshots on the fixture, as a real cycle with a session would leave them."""
         my_predbat.rate_import_saving_minutes = set(stale)
         my_predbat.rate_export_saving_minutes = set(stale)
         # The snapshots the sets index into must be cleared with them, or the two describe
@@ -502,6 +612,7 @@ def test_compare_and_annual_clear_stale_saving_minutes(my_predbat):
     real_set_rate_thresholds = my_predbat.set_rate_thresholds
 
     def spy():
+        """Record the saving sets and snapshots as they stand when set_rate_thresholds() runs, then run it."""
         # Capture what the sets and their snapshots looked like when the thresholds were computed
         observed["import"] = set(my_predbat.rate_import_saving_minutes)
         observed["export"] = set(my_predbat.rate_export_saving_minutes)
@@ -527,14 +638,20 @@ def test_compare_and_annual_clear_stale_saving_minutes(my_predbat):
             print("ERROR: annual._apply_rates() left rate_{}_pre_saving populated when set_rate_thresholds() ran - it describes the live tariff, not the simulated one".format(direction))
             failed = True
 
-    # compare.fetch_rates() - drive the same assertion through the real method. A tariff with no
-    # rate sources leaves the copied base rates in place, which is all this assertion needs.
+    # compare.fetch_rates() with a tariff that supplies its own rates on both sides - drive the same
+    # assertion through the real method, with the live state run_all() would have captured
     observed.clear()
     seed_stale()
     compare = Compare(my_predbat)
+    compare.live_saving_state = {
+        "import_minutes": set(stale),
+        "export_minutes": set(stale),
+        "import_pre_saving": {minute: 99.0 for minute in stale},
+        "export_pre_saving": {minute: 99.0 for minute in stale},
+    }
     my_predbat.set_rate_thresholds = spy
     try:
-        compare.fetch_rates({"id": "test", "name": "test"}, dict(rates), dict(rates))
+        compare.fetch_rates({"id": "test", "name": "test", "rates_import": [{"rate": 25.0}], "rates_export": [{"rate": 5.0}]}, dict(rates), dict(rates))
     except Exception as error:  # pragma: no cover - surfaced as a test failure below
         print("ERROR: compare.fetch_rates() raised {}".format(error))
         failed = True
@@ -551,6 +668,77 @@ def test_compare_and_annual_clear_stale_saving_minutes(my_predbat):
                 failed = True
     else:
         print("ERROR: compare.fetch_rates() never called set_rate_thresholds() - the reset assertion did not run")
+        failed = True
+
+    # compare.fetch_rates() replacing one side only - the other side reuses the live rates, so it
+    # must keep its live sets. Each side is decided on its own (#5163 review).
+    for replaced, reused, tariff_rates in (("import", "export", {"rates_import": [{"rate": 25.0}]}), ("export", "import", {"rates_export": [{"rate": 5.0}]})):
+        observed.clear()
+        seed_stale()
+        compare.live_saving_state = {
+            "import_minutes": set(stale),
+            "export_minutes": set(stale),
+            "import_pre_saving": {minute: 99.0 for minute in stale},
+            "export_pre_saving": {minute: 99.0 for minute in stale},
+        }
+        tariff = {"id": "test", "name": "test"}
+        tariff.update(tariff_rates)
+        my_predbat.set_rate_thresholds = spy
+        try:
+            compare.fetch_rates(tariff, dict(rates), dict(rates))
+        finally:
+            del my_predbat.set_rate_thresholds
+        if observed.get(replaced) != set() or observed.get(replaced + "_snapshot") != {}:
+            print("ERROR: compare.fetch_rates() replacing {} only should clear its saving minutes and snapshot, got {} / {}".format(replaced, observed.get(replaced), observed.get(replaced + "_snapshot")))
+            failed = True
+        if observed.get(reused) != stale or not observed.get(reused + "_snapshot"):
+            print("ERROR: compare.fetch_rates() replacing {} only should keep the live {} saving minutes, got {}".format(replaced, reused, observed.get(reused)))
+            failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_compare_reused_live_rates_keep_saving_minutes(my_predbat):
+    """A compare tariff with no rate sources reuses the live, already-boosted rates, so it must keep the live saving minutes.
+
+    Clearing them there brought #5050 back inside compare: with 7p/30p import and a +300p session,
+    the whole 30p day read as low rate (#5163 review).
+    """
+    print("**** test_compare_reused_live_rates_keep_saving_minutes ****")
+    failed = False
+
+    from compare import Compare
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    rate_import_pre_saving = {minute: (30.0 if 6 <= (minute // 60) % 24 < 22 else 7.0) for minute in range(0, 48 * 60)}
+    rate_import_live = rate_import_pre_saving.copy()
+    session = set(range(17 * 60, 18 * 60))
+    for minute in session:
+        rate_import_live[minute] += 300.0
+    rate_export_live = {minute: 15.0 for minute in range(0, 48 * 60)}
+
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.num_cars = 0
+
+    compare = Compare(my_predbat)
+    compare.live_saving_state = {
+        "import_minutes": set(session),
+        "export_minutes": set(),
+        "import_pre_saving": rate_import_pre_saving,
+        "export_pre_saving": dict(rate_export_live),
+    }
+    compare.fetch_rates({"id": "test", "name": "test"}, rate_import_live, rate_export_live)
+
+    if my_predbat.rate_import_saving_minutes != session:
+        print("ERROR: reused live rates should keep the live saving minutes, got {} minutes".format(len(my_predbat.rate_import_saving_minutes)))
+        failed = True
+    window_averages = sorted(set(window["average"] for window in my_predbat.low_rates))
+    if window_averages != [7.0]:
+        print("ERROR: only the 7p night rate should be low rate on reused live rates, got window averages {} (#5050 inside compare)".format(window_averages))
         failed = True
 
     if not failed:
@@ -577,6 +765,11 @@ _SNAPSHOT_FIELDS = (
     "rate_export_min",
     "rate_export_max",
     "rate_export_average",
+    # Set by rate_scan()/rate_scan_export(), which Compare.fetch_rates() runs on its tariff
+    "rate_min_minute",
+    "rate_max_minute",
+    "rate_export_min_minute",
+    "rate_export_max_minute",
     "rate_import_cost_threshold",
     "rate_export_cost_threshold",
     # test_compare_and_annual_clear_stale_saving_minutes drives the real scan pipeline through
@@ -614,10 +807,13 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
+        failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_predbat)
+        failed |= test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table(my_predbat)
         failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)
         failed |= test_saving_minute_capped_against_post_io_rates(my_predbat)
         failed |= test_fetch_snapshots_are_taken_in_the_right_order(my_predbat)
         failed |= test_compare_and_annual_clear_stale_saving_minutes(my_predbat)
+        failed |= test_compare_reused_live_rates_keep_saving_minutes(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():
