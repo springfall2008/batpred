@@ -38,6 +38,8 @@ class Compare:
     def __init__(self, my_predbat):
         self.pb = my_predbat
         self.log = self.pb.log
+        # Live cycle's saving-minute sets and pre-saving snapshots, captured by run_all() with the base rates
+        self.live_saving_state = None
         self.config_root = self.pb.config_root
         self.dashboard_item = self.pb.dashboard_item
         self.currency_symbols = self.pb.currency_symbols
@@ -69,14 +71,17 @@ class Compare:
         # Reset rates to base
         pb.rate_import = copy.deepcopy(rate_import_base)
         pb.rate_export = copy.deepcopy(rate_export_base)
+        import_reused = pb.rate_import
+        export_reused = pb.rate_export
 
-        # A prior live cycle's saving-session minutes are absolute offsets into that cycle's own
-        # rate tables - stale and meaningless against this simulated tariff, and set_rate_thresholds()
-        # would otherwise exclude whatever unrelated minutes happen to sit at the same positions here.
-        pb.rate_import_saving_minutes = set()
-        pb.rate_export_saving_minutes = set()
-        pb.rate_import_pre_saving = {}
-        pb.rate_export_pre_saving = {}
+        # The base rates are the live cycle's, so the live saving-minute sets and pre-saving snapshots
+        # captured by run_all() still describe them (same cycle, same minute offsets). Start from those;
+        # a side whose rates this tariff replaces has them cleared below (#5163 review).
+        live_saving = self.live_saving_state or {}
+        pb.rate_import_saving_minutes = set(live_saving.get("import_minutes", set()))
+        pb.rate_export_saving_minutes = set(live_saving.get("export_minutes", set()))
+        pb.rate_import_pre_saving = dict(live_saving.get("import_pre_saving", {}))
+        pb.rate_export_pre_saving = dict(live_saving.get("export_pre_saving", {}))
 
         # Fetch rates from Octopus Energy API
         if "rates_import_octopus_url" in tariff:
@@ -139,6 +144,16 @@ class Compare:
             pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export", include_manual_api=False)
         else:
             self.log("Using existing rate export data")
+
+        # A tariff that supplied its own rates for a side makes the live saving minutes for that side
+        # stale: they are offsets into the live tables, and would map unrelated minutes of the new tariff
+        # back to live "base" rates. A side left on the live rates keeps them.
+        if pb.rate_import is not import_reused:
+            pb.rate_import_saving_minutes = set()
+            pb.rate_import_pre_saving = {}
+        if pb.rate_export is not export_reused:
+            pb.rate_export_saving_minutes = set()
+            pb.rate_export_pre_saving = {}
 
         if pb.rate_import:
             pb.rate_scan(pb.rate_import, print=False)
@@ -609,6 +624,12 @@ class Compare:
         # Save baseline rates
         rate_import_base = copy.deepcopy(self.pb.rate_import)
         rate_export_base = copy.deepcopy(self.pb.rate_export)
+        self.live_saving_state = {
+            "import_minutes": set(self.pb.rate_import_saving_minutes),
+            "export_minutes": set(self.pb.rate_export_saving_minutes),
+            "import_pre_saving": dict(self.pb.rate_import_pre_saving),
+            "export_pre_saving": dict(self.pb.rate_export_pre_saving),
+        }
 
         # Midnight SOC fallback for tariffs with no prior result
         soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_now, my_predbat.soc_kw)

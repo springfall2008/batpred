@@ -423,6 +423,11 @@ If rate_high_threshold is set to a non-zero value this will set the threshold ab
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
 
+Both thresholds, automatic or set by you, ignore an event price that is above the tariff's own rate (an Octopus saving session
+or Axle event reward): those slots count at the tariff's own rate when the thresholds are worked out, so the event does not
+stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot.
+The event rates themselves are still used when planning.
+
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
