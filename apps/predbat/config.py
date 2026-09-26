@@ -1960,7 +1960,8 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 4,
         "has_time_window": True,
-        "support_charge_freeze": False,
+        # Freeze charge keeps the charge slot and turns grid charging off on the Energy Storage Control Switch
+        "support_charge_freeze": True,
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": False,

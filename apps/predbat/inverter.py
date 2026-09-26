@@ -2164,12 +2164,6 @@ class Inverter:
         # SoC has no decimal places and clamp in min
         soc = int(max(soc, self.reserve_percent))
 
-        # A Solis with a target SoC (FB00) still needs its Energy Storage Control Switch managed - the
-        # target SoC does not bring it through mimic_target_soc below, and a switch left without its
-        # grid charging bit (a SolisCloud session leaves it that way) holds the battery through a charge slot
-        if self.inv_has_target_soc and self.inv_has_solis_energy_control:
-            self.alt_charge_discharge_enable("charge" if isCharging else "discharge" if isExporting else "eco", True)
-
         if isExporting and self.inv_has_target_soc and not self.inv_target_soc_used_for_discharge:
             self.log("Inverter {} Exporting, not adjusting SoC target".format(self.id))
             return
@@ -3033,9 +3027,10 @@ class Inverter:
             else:
                 if self.inv_has_charge_enable_time:
                     # FB00 firmware: the slot enables turn timed charge and export on and off, so the switch
-                    # only has to stay on Self-Use - without its grid charging bit a charge slot cannot charge
+                    # stays on Self-Use - without its grid charging bit a charge slot cannot charge. A charge
+                    # disable (freeze or hold) is the one time that is wanted: Self-Use - No Grid Charging
                     solax_modes = SOLAX_SOLIS_MODES_FB00
-                    new_switch = 33
+                    new_switch = 33 if enable else 1
                 else:
                     # Older firmware: the switch's Timed Charge/Discharge bit is the enable itself
                     solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
@@ -3194,6 +3189,12 @@ class Inverter:
         """
         Adjust from charging or not charging based on passed target soc
         """
+        # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here, which execute
+        # calls every cycle: grid charging allowed to charge or idle, and switched off for a freeze or hold, where
+        # a charge slot with no grid charging holds the battery. GS drives it from mimic_target_soc instead.
+        if self.inv_has_target_soc and self.inv_has_solis_energy_control:
+            self.alt_charge_discharge_enable("charge" if target_soc > 0 else "eco", not freeze)
+
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
