@@ -3357,6 +3357,11 @@ class Inverter:
         rate is the charge rate (W) execute_plan() intends for this cycle. Rates are written after its
         per-inverter loop, so reading the stored rate here would send the previous cycle's to the
         service as {power} (#5252). None falls back to the stored rate.
+
+        With no charge_rate entity at all (a "power"-controlled inverter without the dummy rate
+        entity), the stored rate always reads as the maximum, so the deadband is measured against
+        that rather than the last rate sent: a planned rate is sent as-is unless it is within the
+        deadband of the maximum, and each change in it sends a new start call.
         """
         # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
         # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
