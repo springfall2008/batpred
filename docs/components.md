@@ -1442,6 +1442,9 @@ A schedule is committed in stages (window, then enable, then target SoC), so a s
 | `battery_rate_max` | Float | No | - | `alphaess_battery_rate_max` | Override, in Watts, for the battery's maximum charge/discharge rate. The API does not report one, so Predbat otherwise estimates it from the inverter's nominal power |
 | `api_delay` | Float | No | 2 | `alphaess_api_delay` | Seconds to wait between API calls. AlphaESS advise a minimum 10-second polling interval |
 | `min_write_interval` | Integer | No | 300 | `alphaess_min_write_interval` | Minimum spacing, in seconds, between writes to the same inverter and direction |
+| `startup_write_delay` | Integer | No | 300 | `alphaess_startup_write_delay` | Seconds after the AlphaESS component starts or restarts during which schedule writes are deferred. Set to 0 to disable the delay; monitoring continues and the latest schedule is applied on the next eligible cycle |
+| `hold_power` | Integer | No | 100 | `alphaess_hold_power` | Power in Watts for the synthetic 10% hold charge profile on systems entitled to the periodic schedule API. Below 10% SoC the battery may charge at this power until it reaches 10%; increase it if your inverter rejects 100 W. The legacy charge endpoint has no power field |
+| `shutdown_mode` | String | No | none | `alphaess_shutdown_mode` | `none` leaves settings in place. `self_consumption` disables timed charge and discharge schedules while retaining the reserve on a graceful shutdown. This is a best-effort API write; abrupt stops and cloud rate limiting can prevent it |
 
 See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI and how to bind or unbind a system.
 

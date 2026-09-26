@@ -53,6 +53,17 @@ pred_bat:
   # endpoints are documented as writable once per 24 hours.
   #alphaess_api_delay: 2
   #alphaess_min_write_interval: 300
+  #alphaess_startup_write_delay: 300
+
+  # Optional power in Watts for the synthetic 10% hold charge profile. Below 10% SoC
+  # the battery may charge at this power; increase it if your inverter rejects 100 W.
+  # This is used by the periodic schedule API; the legacy API has no power field.
+  #alphaess_hold_power: 100
+
+  # Optional graceful-shutdown action. self_consumption clears timed charge and
+  # discharge schedules while keeping the current reserve; none leaves them as-is.
+  # This is best effort: abrupt stops have no hook, and the cloud may rate-limit a write.
+  #alphaess_shutdown_mode: none
 
   # REQUIRED: the API does not report a grid export limit. If your grid connection is
   # capped below the inverter rating (G98/G99), set it here or Predbat will plan exports

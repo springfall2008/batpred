@@ -9,7 +9,7 @@
 """Tests for the AlphaESS control entities, payload derivation and write gating."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from tests.test_alphaess_api import MockAlphaESS, _envelope
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 from alphaess_const import ALPHAESS_SETTLE_POLLS, ALPHAESS_WRITE_SETTLE_SECONDS, ALPHAESS_WRITE_BURST_MAX
@@ -992,6 +992,56 @@ def test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it(
     assert not failed, "test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it"
 
 
+def test_alphaess_startup_delay_defers_legacy_and_periodic_writes():
+    """Startup holds all schedule POSTs, then reconciles the latest plan on expiry."""
+    failed = False
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    for periodic in (False, True):
+        client = MockAlphaESS(startup_write_delay=300)
+        client.device_list = ["AL70"]
+        client.control_active.add("AL70")
+        client._periodic_ok["AL70"] = periodic
+        client.min_write_interval = 0
+        client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 80, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)) as session:
+            run_async_local(client._reconcile_control("AL70"))
+            run_async_local(client.apply_schedule("AL70", force=True))
+            if session.return_value.post.call_count or client.last_write_time:
+                print(f"ERROR: {'periodic' if periodic else 'legacy'} schedule wrote during startup")
+                failed = True
+
+            client.local_schedule["AL70"]["charge"]["soc"] = 90
+            client.startup_write_ready_at = 0
+            run_async_local(client._reconcile_control("AL70"))
+            expected_writes = 1 if periodic else 2
+            if session.return_value.post.call_count != expected_writes:
+                print(f"ERROR: {'periodic' if periodic else 'legacy'} sent {session.return_value.post.call_count} POSTs after startup, expected {expected_writes}")
+                failed = True
+            payload = client.applied_payload.get("AL70", {}).get("periodic" if periodic else "charge", {})
+            target = payload.get("chargeTimeList", [{}])[0].get("chargeLimit") if periodic else payload.get("batHighCap")
+            if target != 90:
+                print(f"ERROR: {'periodic' if periodic else 'legacy'} applied stale target {target} instead of latest 90")
+                failed = True
+    assert not failed, "test_alphaess_startup_delay_defers_legacy_and_periodic_writes"
+
+
+def test_alphaess_hold_power_is_configurable_for_periodic_schedules():
+    """The hold power option reaches the periodic API without changing its 10% target."""
+    failed = False
+    client = MockAlphaESS(hold_power=500)
+    schedule = _schedule(export_power=0)
+    periodic = client.build_periodic_payload("AL70", schedule)
+    charge = periodic.get("chargeTimeList", [{}])[0]
+    if charge.get("chargeLimit") != 10 or charge.get("chargePower") != 500:
+        print(f"ERROR: configured hold power did not reach periodic schedule: {charge}")
+        failed = True
+    legacy = client.build_charge_payload("AL70", schedule)
+    if "chargePower" in legacy or legacy.get("batHighCap") != 10:
+        print(f"ERROR: legacy hold payload changed unexpectedly: {legacy}")
+        failed = True
+    assert not failed, "test_alphaess_hold_power_is_configurable_for_periodic_schedules"
+
+
 def test_alphaess_6053_backs_off_rather_than_counting_as_a_failure():
     """Too-fast is a pacing signal, not a broken component - it must not be logged as a
     fault (Warn) either, or the pacing intent this test name asserts is contradicted."""
@@ -1849,6 +1899,88 @@ def test_alphaess_unbind_is_not_gated_by_read_only():
     assert not failed, "test_alphaess_unbind_is_not_gated_by_read_only"
 
 
+def test_alphaess_shutdown_clears_periodic_schedule_during_startup_delay():
+    """An opted-in graceful stop clears both periodic directions despite write gates."""
+    client = _writable()
+    client.shutdown_mode = "self_consumption"
+    client._periodic_ok["AL70"] = True
+    client.local_schedule["AL70"] = _schedule(
+        reserve=18,
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"},
+        export={"enable": True, "soc": 20, "power": 2000, "start": "16:00:00", "end": "18:00:00"},
+    )
+    client.startup_write_ready_at = float("inf")
+    client.last_write_time[("AL70", "periodic")] = float("inf")
+    client._post = AsyncMock(return_value=(200, None))
+    run_async_local(client.final())
+    assert client._post.await_count == 1
+    (endpoint,) = client._post.await_args.args
+    payload = client._post.await_args.kwargs["body"]
+    assert endpoint == "set_time_charge"
+    assert payload["gridChargeCycle"] == 0 and payload["ctrDisCycle"] == 0
+    assert payload["chargeTimeList"][0].get("chargePower", 0) == 0
+    assert payload["dischargeTimeList"][0]["chargeLimit"] == 18
+
+
+def test_alphaess_shutdown_clears_legacy_schedule_and_keeps_reserve():
+    """Legacy shutdown disables both schedules without creating a synthetic hold."""
+    client = _writable()
+    client.shutdown_mode = "self_consumption"
+    client.local_schedule["AL70"] = _schedule(
+        reserve=22,
+        charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "04:00:00"},
+        export={"enable": True, "soc": 30, "power": 3000, "start": "17:00:00", "end": "19:00:00"},
+    )
+    client.startup_write_ready_at = float("inf")
+    client.last_write_time[("AL70", "charge")] = float("inf")
+    client.last_write_time[("AL70", "discharge")] = float("inf")
+    client._post = AsyncMock(return_value=(200, None))
+    run_async_local(client.final())
+    assert client._post.await_count == 2
+    charge, discharge = client._post.await_args_list
+    assert charge.args == ("update_charge_config",)
+    assert charge.kwargs["body"]["gridCharge"] == 0
+    assert charge.kwargs["body"]["timeChaf1"] == "00:00"
+    assert discharge.args == ("update_discharge_config",)
+    assert discharge.kwargs["body"]["ctrDis"] == 0
+    assert discharge.kwargs["body"]["batUseCap"] == 22
+
+
+def test_alphaess_shutdown_mode_is_optional_and_respects_control_guards():
+    """Only an opted-in, writable, controlled system receives shutdown writes."""
+    for mode, control_enable, read_only, active, expected in [
+        ("none", True, False, True, 0),
+        ("self_consumption", False, False, True, 0),
+        ("self_consumption", True, True, True, 0),
+        ("self_consumption", True, False, False, 0),
+        ("self_consumption", True, False, True, 1),
+    ]:
+        client = _client()
+        client.shutdown_mode = mode
+        client.control_enable = control_enable
+        client.state["switch.predbat_set_read_only"] = "on" if read_only else "off"
+        client.local_schedule["AL70"] = _schedule(reserve=12)
+        client._periodic_ok["AL70"] = True
+        if active:
+            client.control_active.add("AL70")
+        client._post = AsyncMock(return_value=(200, None))
+        run_async_local(client.final())
+        assert client._post.await_count == expected, (mode, control_enable, read_only, active)
+
+
+def test_alphaess_shutdown_rate_limit_is_reported_without_retry():
+    """A cloud pacing rejection leaves shutdown best effort and does not start a retry loop."""
+    client = _writable()
+    client.shutdown_mode = "self_consumption"
+    client._periodic_ok["AL70"] = True
+    client.local_schedule["AL70"] = _schedule(reserve=15)
+    client._post = AsyncMock(return_value=(6053, None))
+    run_async_local(client.final())
+    assert client._post.await_count == 1
+    assert client.applied_payload.get("AL70", {}).get("periodic") is None
+    assert any("could not clear" in message for message in client.log_messages)
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -1867,6 +1999,7 @@ def run_alphaess_control_tests(my_predbat):
         ("disabled_planned_hold_recovers_window", test_alphaess_disabled_planned_hold_recovers_the_charge_window),
         ("planned_hold_releases_at_window_end", test_alphaess_planned_hold_releases_when_its_window_ends),
         ("hold_profile_constant", test_alphaess_hold_profile_is_constant_while_soc_changes),
+        ("hold_power_configurable", test_alphaess_hold_power_is_configurable_for_periodic_schedules),
         ("real_charge_survives_hold", test_alphaess_real_charge_survives_a_simultaneous_discharge_hold),
         ("future_charge_does_not_satisfy_hold", test_alphaess_future_charge_does_not_satisfy_a_current_discharge_hold),
         ("snap_inward", test_alphaess_times_snap_inward_to_the_15_minute_grid),
@@ -1891,6 +2024,7 @@ def run_alphaess_control_tests(my_predbat):
         ("control_enable_gate", test_alphaess_reconcile_is_gated_on_control_enable),
         ("undriven_serial_skipped", test_alphaess_reconcile_skips_a_serial_predbat_has_not_been_asked_to_drive),
         ("min_write_interval", test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it),
+        ("startup_write_delay", test_alphaess_startup_delay_defers_legacy_and_periodic_writes),
         ("6053_backoff", test_alphaess_6053_backs_off_rather_than_counting_as_a_failure),
         ("6053_paces_the_retry", test_alphaess_6053_backs_off_the_retry_via_min_write_interval),
         ("persistent_rejection_paced", test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick),
@@ -1923,6 +2057,10 @@ def run_alphaess_control_tests(my_predbat):
         ("unbind_toggle_off", test_alphaess_unbind_toggle_off_clears_the_latch),
         ("unbind_toggle_off_skips_save_when_unlatched", test_alphaess_unbind_toggle_off_skips_save_when_never_latched),
         ("unbind_not_read_only_gated", test_alphaess_unbind_is_not_gated_by_read_only),
+        ("shutdown_periodic", test_alphaess_shutdown_clears_periodic_schedule_during_startup_delay),
+        ("shutdown_legacy", test_alphaess_shutdown_clears_legacy_schedule_and_keeps_reserve),
+        ("shutdown_guards", test_alphaess_shutdown_mode_is_optional_and_respects_control_guards),
+        ("shutdown_rate_limit", test_alphaess_shutdown_rate_limit_is_reported_without_retry),
     ]:
         try:
             if fn():
