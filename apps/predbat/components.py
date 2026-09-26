@@ -716,6 +716,22 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "ocpp_charger": {
+        "class": "ocpp_charger.OCPPCharger",
+        "name": "OCPP Virtual Charger",
+        "args": {
+            "charge_point_id": {"required": True, "secret": True, "config": "ocpp_charger_id"},
+            "password": {"required": True, "secret": True, "config": "ocpp_charger_password"},
+            "url": {"required": False, "config": "ocpp_charger_url", "default": "wss://ocpp.octopus.energy"},
+            "power_sensor": {"required": True, "config": "ocpp_charger_power"},
+            "energy_sensor": {"required": False, "config": "ocpp_charger_energy"},
+            "plugged_sensor": {"required": False, "config": "ocpp_charger_plugged"},
+            "soc_sensor": {"required": False, "config": "ocpp_charger_soc"},
+            "voltage": {"required": False, "config": "ocpp_charger_voltage", "default": 230},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
 }
 
 

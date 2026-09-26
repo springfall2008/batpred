@@ -451,6 +451,78 @@ When `gateway_evc_control` is enabled, Predbat checks once per minute whether th
 
 `car_charging_now` is wired to the charger's charging sensor, which is on while the car is drawing power (OCPP status `Charging`), so Predbat holds the house battery for the car while it charges. A car that stays connected once it is full or paused (`SuspendedEV`) does not hold the battery. It never adds a charging slot, so it cannot hold a session open against the window boundaries `gateway_evc_control` enforces.
 
+## OCPP virtual charger
+
+Some energy suppliers smart-charge an EV by connecting to the charger over OCPP (Open Charge Point Protocol) - Intelligent Octopus Go does this for OCPP chargers, using `wss://ocpp.octopus.energy`.
+Predbat can take the charger's place on that connection: it connects to the supplier as if it were the charger, and turns the supplier's start, stop and current-limit commands into Home Assistant service calls that control your real charger.
+It reports your real charger's power and energy back to the supplier in return.
+
+This lets the supplier's smart-charging schedule drive a charger that it cannot talk to directly, or one whose own OCPP connection you would rather point elsewhere.
+Predbat still sees the supplier's planned slots in the usual way (for Octopus, through the Octopus API), so its battery plan continues to account for them.
+
+The meter readings sent to the supplier are always your charger's real readings, taken from the sensors below.
+Octopus only records a planned slot as a completed smart charge - the slots billed at the off-peak rate - when metered energy backs it, so the power sensor must be the charger's own measurement.
+
+### Setting up the OCPP virtual charger
+
+1. In your supplier's charger settings, find the OCPP connection details. For Octopus these are the charge point **Id**, the **URL** (`wss://ocpp.octopus.energy`) and a **Password**.
+2. Turn off your real charger's own OCPP connection to the supplier. Only one charge point can be connected under an Id at a time.
+3. Add the configuration below to `apps.yaml`, with your own entity names.
+
+```yaml
+  ocpp_charger_id: !secret ocpp_charger_id
+  ocpp_charger_password: !secret ocpp_charger_password
+  # Optional, defaults to Octopus
+  ocpp_charger_url: 'wss://ocpp.octopus.energy'
+
+  # The real charger's live charging power (W or kW) - required
+  ocpp_charger_power: sensor.wallbox_portal_charging_power
+  # The real charger's energy counter (kWh or Wh) - optional, but more accurate than integrating power.
+  # A per-session counter that resets for each session is fine.
+  ocpp_charger_energy: sensor.wallbox_portal_added_energy
+  # Whether a car is plugged in - optional, defaults to car_charging_planned for your first car
+  ocpp_charger_plugged: sensor.wallbox_portal_status_description
+  # States of ocpp_charger_plugged that mean plugged in - optional, defaults to car_charging_planned_response
+  # For a Wallbox, plain 'Locked' and 'Ready' mean no car is connected
+  ocpp_charger_plugged_response:
+    - 'charging'
+    - 'paused'
+    - 'scheduled'
+    - 'waiting'
+    - 'waiting for car demand'
+    - 'locked, car connected'
+  # The car's battery SoC (%) if you have it - optional, passed to the supplier with the meter readings
+  ocpp_charger_soc: sensor.my_car_battery_level
+
+  # How to start and stop the real charger. {current} is the current limit in amps from the supplier,
+  # {power} is the same limit in watts (current x ocpp_charger_voltage, default 230)
+  ocpp_charger_start_service:
+    - service: number.set_value
+      entity_id: number.wallbox_portal_max_charging_current
+      value: '{current}'
+    - service: switch.turn_on
+      entity_id: switch.wallbox_portal_pause_resume
+  ocpp_charger_stop_service:
+    service: switch.turn_off
+    entity_id: switch.wallbox_portal_pause_resume
+```
+
+The entity names above are examples for a Wallbox charger - use the ones your charger's Home Assistant integration provides.
+Each service setting takes a service name on its own, a service with its data (as above), or a list of them to call in turn.
+
+### How the OCPP virtual charger behaves
+
+- While a car is plugged in, Predbat reports it to the supplier and keeps the real charger stopped until the supplier starts a charging session.
+- When the supplier starts a session (`RemoteStartTransaction`), Predbat calls `ocpp_charger_start_service` with the supplier's current limit. If the supplier later limits the current to 0 A, or ends the session (`RemoteStopTransaction`), Predbat calls `ocpp_charger_stop_service`.
+- Unplugging the car ends the session.
+- Every minute (or at whatever interval the supplier asks for), Predbat sends the charger's power, energy and, if configured, the car's SoC.
+- In read-only mode Predbat still reports to the supplier but does not start or stop the real charger.
+- The energy total and any open session are saved, so a Predbat restart neither loses the session nor winds the meter back.
+
+`sensor.predbat_ocpp_charger_status` shows the OCPP status Predbat last reported (`Available`, `Preparing`, `Charging`, `SuspendedEV`, `SuspendedEVSE`, `Finishing`, or `Disconnected` when there is no connection to the supplier). Its attributes show the open session, the current limit, whether the charger is enabled, and the energy total reported.
+
+Turning the virtual charger off (removing `ocpp_charger_id`) leaves the supplier with no charger connected; turn your real charger's own OCPP connection back on if you want the supplier to manage it directly again.
+
 ## Car Charging Planning
 
 There are two ways that Predbat can plan the slots for charging your car:

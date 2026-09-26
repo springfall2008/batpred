@@ -2859,6 +2859,17 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "ocpp_charger_id": {"type": "string", "empty": False},
+    "ocpp_charger_password": {"type": "string", "empty": False},
+    "ocpp_charger_url": {"type": "string", "empty": False},
+    "ocpp_charger_power": {"type": "sensor", "sensor_type": "float", "transient_ok": True},
+    "ocpp_charger_energy": {"type": "sensor", "sensor_type": "float", "transient_ok": True},
+    "ocpp_charger_plugged": {"type": "sensor", "sensor_type": "string|boolean"},
+    "ocpp_charger_plugged_response": {"type": "string_list"},
+    "ocpp_charger_soc": {"type": "sensor", "sensor_type": "float", "transient_ok": True},
+    "ocpp_charger_voltage": {"type": "float"},
+    "ocpp_charger_start_service": {"type": "dict_list|string"},
+    "ocpp_charger_stop_service": {"type": "dict_list|string"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA
