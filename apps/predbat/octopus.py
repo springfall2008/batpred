@@ -2553,6 +2553,13 @@ class OctopusAPI(ComponentBase):
                                         break
                                 if not found:
                                     completed.append(dispatch)
+                        else:
+                            # The dispatch query failed (e.g. rate limited). Keep the last known planned dispatches,
+                            # as a failed settings query keeps its settings: publishing an empty list dropped the car's
+                            # slots and dispatch rates until the next poll, and the change requested a replan without them.
+                            planned = list(self.intelligent_devices.get(IntelligentdeviceID, {}).get("planned_dispatches", []))
+                            if planned:
+                                self.log("Warn: OctopusAPI: Dispatch fetch failed for intelligent device {}, reusing the last known planned dispatches".format(IntelligentdeviceID))
 
                         # Sort by start time
                         planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
@@ -2576,6 +2583,8 @@ class OctopusAPI(ComponentBase):
         """
         intelligent_devices = self.get_intelligent_devices()
         if not intelligent_devices:
+            # The last car going removes its dispatches, which the plan must pick up
+            self.intelligent_dispatch_replan_check([])
             return
 
         dispatch_slots = []
@@ -2616,10 +2625,31 @@ class OctopusAPI(ComponentBase):
             )
             self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc", index=device_index), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
 
-        # Nothing else starts a plan cycle when the dispatches change - fetch only compares them once a
-        # cycle is already running, so a new or withdrawn dispatch waited up to 5 minutes (or relied on the
-        # entity being on the watch list). The first poll after startup is not compared: that cycle runs anyway.
-        signature = dispatch_slots_signature(dispatch_slots, self.now_utc_exact)
+        self.intelligent_dispatch_replan_check(dispatch_slots)
+
+    def intelligent_dispatch_replan_check(self, dispatch_slots):
+        """
+        Request a replan when the dispatches, one list per device, differ from the last poll's.
+
+        Nothing else starts a plan cycle when they change - fetch only compares them once a cycle is already
+        running, so a new or withdrawn dispatch waited up to 5 minutes (or relied on the entity being on the
+        watch list). Only dispatches still to end count: completed records arriving, up to an hour after a
+        dispatch, and the 5-day prune cannot change the plan ahead. The first poll after startup is not
+        compared, as that cycle runs anyway.
+        """
+        now = self.now_utc_exact
+        upcoming = []
+        for slots in dispatch_slots:
+            device_slots = []
+            for slot in slots:
+                try:
+                    ended = parse_date_time(slot.get("end")) <= now
+                except (ValueError, TypeError, AttributeError):
+                    ended = False
+                if not ended:
+                    device_slots.append(slot)
+            upcoming.append(device_slots)
+        signature = dispatch_slots_signature(upcoming, now)
         if self.intelligent_dispatch_signature is not None and signature != self.intelligent_dispatch_signature:
             self.request_replan("Octopus Intelligent dispatches changed")
         self.intelligent_dispatch_signature = signature
