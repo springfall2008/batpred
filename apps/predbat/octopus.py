@@ -356,6 +356,58 @@ intelligent_settings_mutation_schedule = """{{
 }}"""
 
 
+def dispatch_slots_signature(octopus_slots, now_utc):
+    """
+    Build a single change-detection signature value for Octopus Intelligent dispatch slots, grouped per car.
+
+    Returns an opaque tuple intended only to be compared for equality against another signature - callers
+    should not index into it. Per-car grouping is preserved inside so a slot moving between cars still
+    registers as a change. Timestamps are normalised to the parsed instant so equivalent values in different
+    formats (+0000 vs +00:00 vs Z) do not register as a change; an unparseable value falls back to its raw
+    string (and never raises) so a genuine change is still detected without breaking the update cycle.
+
+    An in-progress dispatch has its start advanced to now and its charge_in_kwh scaled to the remaining time
+    on every component refresh (see async_get_intelligent_devices). Comparing the raw slots would therefore
+    report a change on every poll throughout an active charging window. For a slot active at now_utc the
+    signature keeps only the stable fields (window end, source, location); genuine changes - new/removed
+    slots, a moved window end, a revised future slot, a future slot becoming active - still alter it.
+
+    Shared by Octopus.octopus_slots_signature() (fetch's replan check) and OctopusAPI (its dispatch-change
+    replan request), so the two agree on what counts as a change.
+    """
+
+    def parse(value):
+        """Parse a slot timestamp, or None if empty or unparseable."""
+        if not value:
+            return None
+        try:
+            return str2time(value)
+        except (ValueError, TypeError):
+            return None
+
+    signature = []
+    for car_slots in octopus_slots:
+        car_signature = []
+        for slot in car_slots:
+            start = slot.get("start")
+            end = slot.get("end")
+            source = slot.get("source")
+            location = slot.get("location")
+            start_dt = parse(start)
+            end_dt = parse(end)
+            # Normalise to the parsed instant where possible, else keep the raw string
+            start_key = start_dt if start_dt is not None else start
+            end_key = end_dt if end_dt is not None else end
+            in_progress = start_dt is not None and end_dt is not None and start_dt <= now_utc < end_dt
+            if in_progress:
+                # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
+                car_signature.append(("active", end_key, source, location))
+            else:
+                car_signature.append((start_key, end_key, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
+        signature.append(tuple(car_signature))
+    return tuple(signature)
+
+
 class OctopusEnergyApiClient:
     """Low-level async HTTP client for Octopus Energy REST and GraphQL APIs.
 
@@ -558,6 +610,8 @@ class OctopusAPI(ComponentBase):
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        # Signature of the dispatches last published, so a poll that changes them can request a replan
+        self.intelligent_dispatch_signature = None
         # Active device IDs automatic_config() last wired the car slots to - None until it has run.
         # run() compares this against the live set so a device appearing, disappearing or being
         # suspended re-wires the slots without waiting for a restart (issue #4648).
@@ -2521,7 +2575,8 @@ class OctopusAPI(ComponentBase):
         if not intelligent_devices:
             return
 
-        for device_id in intelligent_devices:
+        dispatch_slots = []
+        for device_id in sorted(intelligent_devices):
             device = intelligent_devices[device_id]
             device_index = self.device_id_to_index_suffix(device_id)
             planned = device.get("planned_dispatches", [])
@@ -2538,6 +2593,7 @@ class OctopusAPI(ComponentBase):
                         active_event = True
             dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **device}
             self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=device_index), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+            dispatch_slots.append(planned + completed)
 
             weekday_target_time = device.get("weekday_target_time", None)
             weekday_target_soc = device.get("weekday_target_soc", None)
@@ -2556,6 +2612,14 @@ class OctopusAPI(ComponentBase):
                 self.get_entity_name("select", "intelligent_target_time", index=device_index), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus"
             )
             self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc", index=device_index), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
+
+        # Nothing else starts a plan cycle when the dispatches change - fetch only compares them once a
+        # cycle is already running, so a new or withdrawn dispatch waited up to 5 minutes (or relied on the
+        # entity being on the watch list). The first poll after startup is not compared: that cycle runs anyway.
+        signature = dispatch_slots_signature(dispatch_slots, self.now_utc_exact)
+        if self.intelligent_dispatch_signature is not None and signature != self.intelligent_dispatch_signature:
+            self.request_replan("Octopus Intelligent dispatches changed")
+        self.intelligent_dispatch_signature = signature
 
     async def async_get_account(self, account_id):
         """
@@ -2956,36 +3020,7 @@ class Octopus:
         the stable fields (window end, source, location); genuine changes - new/removed slots, a
         moved window end, a revised future slot, a future slot becoming active - still alter it.
         """
-        signature = []
-        for car_slots in octopus_slots:
-            car_signature = []
-            for slot in car_slots:
-                start = slot.get("start")
-                end = slot.get("end")
-                source = slot.get("source")
-                location = slot.get("location")
-                start_dt = self._parse_slot_time(start)
-                end_dt = self._parse_slot_time(end)
-                # Normalise to the parsed instant where possible, else keep the raw string
-                start_key = start_dt if start_dt is not None else start
-                end_key = end_dt if end_dt is not None else end
-                in_progress = start_dt is not None and end_dt is not None and start_dt <= self.now_utc < end_dt
-                if in_progress:
-                    # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
-                    car_signature.append(("active", end_key, source, location))
-                else:
-                    car_signature.append((start_key, end_key, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
-            signature.append(tuple(car_signature))
-        return tuple(signature)
-
-    def _parse_slot_time(self, value):
-        """Parse a slot timestamp string into a datetime, returning None if empty or unparseable."""
-        if not value:
-            return None
-        try:
-            return str2time(value)
-        except (ValueError, TypeError):
-            return None
+        return dispatch_slots_signature(octopus_slots, self.now_utc)
 
     def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
         """
