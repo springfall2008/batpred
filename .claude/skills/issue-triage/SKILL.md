@@ -18,6 +18,8 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note a
 
 From the issue text alone, decide whether a proper analysis would need a `predbat.log`, a `predbat_debug.yaml`, or other evidence, and whether the reporter has already attached it. Typical cases that need it: a plan that looks wrong, unexpected charging/exporting, an inverter not doing what Predbat asked, an error or crash, wrong rates or forecasts. Typical cases that don't: a pure question, a feature request, a docs error, or a report whose cause is fully visible in the text or a pasted traceback.
 
+Evidence counts as present when it is on another ticket this one points to, not only when it is attached here. Examples: an issue spun out of another issue or PR (`split from #N`, `see #N`, a link to a specific comment) where the source already has the logs or debug yaml, or a report that already carries the analysis (a quoted log excerpt, a `file:line` pointer, a replay result). Check the referenced issue with `gh issue view <N> --json body,comments` for attachments. If it has what is needed, don't ask again: carry on with step 2 and fetch the files from the source ticket, saying in the comment which ticket they came from. Only fall into the gate below if neither this ticket nor its source has the evidence.
+
 If the needed evidence is missing, **stop here** and take the short path instead of steps 2–8:
 
 - Do **not** investigate the code, run tests, read the debug journal, or offer any theory, hypothesis, likely cause or workaround — not even a hedged one. A guess made without the evidence anchors everyone on it.

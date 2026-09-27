@@ -20,7 +20,7 @@ If the previous bot comment was an evidence request (`/issue-triage` step 1a) an
 
 ## 2. Fetch any new attachments
 
-Same as `/issue-triage` step 2: if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.
+Same as `/issue-triage` step 2 (including files on a source ticket this one was spun out of): if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.
 
 ## 3. Re-investigate against current main
 
