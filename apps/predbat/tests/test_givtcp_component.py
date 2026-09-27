@@ -11,8 +11,9 @@ import json
 from unittest.mock import MagicMock
 
 from tests.test_infra import run_async
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from mock_base import MockBase
-from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS, GIVTCP_REDISCOVER_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS, GIVTCP_CONTROLS, GIVTCP_SENSORS, GIVTCP_FRIENDLY_NAMES
+from givtcp import GivTCPComponent, GIVTCP_CAPABILITIES, GIVTCP_INVERTER_TIME_FORMAT, GIVTCP_POLL_SECONDS, GIVTCP_REDISCOVER_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS, GIVTCP_CONTROLS, GIVTCP_SENSORS, GIVTCP_FRIENDLY_NAMES
 
 
 def _rest_data_blob(
@@ -735,25 +736,27 @@ def test_automatic_config_counts_discovered_inverters_not_configured_urls(my_pre
     return 0
 
 
-def test_automatic_config_maps_predbat_inverter_to_the_live_endpoint(my_predbat=None):
+def test_automatic_config_keeps_the_live_endpoint_in_its_own_slot(my_predbat=None):
     """
-    When an earlier endpoint is dead, the surviving one still drives Predbat inverter 0.
+    When an earlier endpoint is dead, the surviving one still drives its own Predbat inverter.
 
-    Entity ids stay pinned to the REST endpoint index because _parse_entity feeds self.rest[n] on
-    every write - renumbering them would route inverter 0's writes at the dead client.
+    A dead endpoint at startup cannot be told apart from a placeholder URL, and moving the live
+    endpoint down into slot 0 leaves every per-inverter setting that is not auto-configured
+    (inverter_limit_charge and the like) applying to the wrong inverter (#5209). Entity ids stay
+    pinned to the REST endpoint index too, because _parse_entity feeds self.rest[n] on every write.
     """
     base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
     component.rest[0].read_data = MagicMock(return_value=None)
     component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
 
     run_async(component.run(seconds=0, first=True))
-    assert base.args["num_inverters"] == 1, f"Expected num_inverters 1, got {base.args.get('num_inverters')}"
-    assert base.args["charge_rate"] == ["number.predbat_givtcp_1_charge_rate"], f"Expected the live endpoint's own index, got {base.args.get('charge_rate')}"
+    assert base.args["num_inverters"] == 2, f"Expected num_inverters 2, got {base.args.get('num_inverters')}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected each slot to carry its own endpoint's index, got {base.args.get('charge_rate')}"
 
-    # and that entity must still route a write back to the live client
-    n, control = component._parse_entity(base.args["charge_rate"][0])
-    assert component.rest[n] is component.rest[1], "Predbat inverter 0's entity must address the live REST client"
-    print("PASS: a dead leading endpoint leaves the live one driving Predbat inverter 0")
+    # and inverter 1's entity must route a write to the live client
+    n, control = component._parse_entity(base.args["charge_rate"][1])
+    assert component.rest[n] is component.rest[1], "Predbat inverter 1's entity must address the live REST client"
+    print("PASS: a dead leading endpoint leaves the live one driving its own Predbat inverter")
     return 0
 
 
@@ -832,17 +835,21 @@ def test_rediscovery_picks_up_an_inverter_that_was_down_at_startup(my_predbat=No
     assert component.discovered == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
     assert base.args["num_inverters"] == 2, f"Expected automatic_config re-run for 2 inverters, got {base.args.get('num_inverters')}"
     assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"]
+    # Discovery keys are gated on every inverter having published them, so the adopted inverter has
+    # to be published before the re-run - otherwise the gate fails and the key is handed back
+    assert base.args.get("battery_calibration") == ["sensor.predbat_givtcp_0_battery_calibration", "sensor.predbat_givtcp_1_battery_calibration"], f"Expected battery_calibration claimed for both, got {base.args.get('battery_calibration')}"
     print("PASS: an inverter that was down at startup is adopted on re-probe")
     return 0
 
 
-def test_rediscovery_appends_so_running_inverters_keep_their_identity(my_predbat=None):
+def test_rediscovery_keeps_inverter_identity_by_endpoint(my_predbat=None):
     """
-    A late arrival is appended, never inserted.
+    Predbat inverter n is REST endpoint n, however late endpoint n answers.
 
-    self.discovered's order *is* Predbat's inverter numbering. Inserting endpoint 0 ahead of the
-    endpoint already running as inverter 0 would silently repoint inverter 0 at different physical
-    hardware - its SoC, rates and charge windows would start following the wrong battery.
+    The order the endpoints answered in used to be Predbat's inverter numbering, so an endpoint
+    down at startup shifted endpoint 1 into slot 0, and adopting endpoint 0 later appended it as
+    inverter 1 - a permanent rotation. Every per-inverter setting that is not auto-configured
+    (inverter_limit_charge and the like) then applied to the wrong physical inverter (#5209).
     """
     base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
     component.rest[0].read_data = MagicMock(return_value=None)
@@ -850,17 +857,148 @@ def test_rediscovery_appends_so_running_inverters_keep_their_identity(my_predbat
 
     run_async(component.run(seconds=0, first=True))
     assert component.discovered == [1], f"Expected only endpoint 1 discovered, got {component.discovered}"
-    first_inverter_entity = base.args["charge_rate"][0]
+    # Endpoint 1 stays in slot 1; slot 0 is endpoint 0's own, waiting for it to answer
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected slot n to be endpoint n at startup, got {base.args.get('charge_rate')}"
+    assert base.args["num_inverters"] == 2
 
     component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
     run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
 
-    assert component.discovered == [1, 0], f"Expected the late endpoint appended, got {component.discovered}"
-    assert base.args["charge_rate"][0] == first_inverter_entity, "Predbat inverter 0 must keep addressing the same physical inverter"
-    assert base.args["charge_rate"] == ["number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_0_charge_rate"]
+    assert sorted(component.discovered) == [0, 1], f"Expected both endpoints discovered, got {component.discovered}"
+    assert base.args["charge_rate"] == ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"], f"Expected slot n to stay endpoint n after re-probe, got {base.args.get('charge_rate')}"
     assert base.args["num_inverters"] == 2
-    print("PASS: a late inverter is appended, leaving running inverter identities untouched")
+    print("PASS: a late inverter takes its own slot, leaving running inverter identities untouched")
     return 0
+
+
+def test_leading_endpoint_down_does_not_shift_the_fleet(my_predbat=None):
+    """
+    GH#5209: three GivTCP inverters, endpoint 0 down while Predbat starts.
+
+    Positional slot filling put endpoints 1 and 2 into slots 0 and 1 and kept only slot 2 from
+    apps.yaml, so Predbat inverter 1 wrote its 2600W limit to the AC3 on endpoint 2 while inverter
+    2 wrote 3000W back to it every cycle. Slot n must be endpoint n: the down endpoint's slot keeps
+    what apps.yaml configured for it, and a claimed key the user never configured still comes out
+    one entry per inverter rather than short (the reporter's "battery_calibration expected 3").
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345", "http://givtcp2:6345"])
+    apps_yaml = {
+        "num_inverters": 3,
+        "charge_rate": ["number.inv0_charge_rate", "number.inv1_charge_rate", "number.inv2_charge_rate"],
+    }
+    base.args_from_apps_yaml = dict(apps_yaml)
+    base.apps_yaml_override_warned = set()
+    base.args.update(apps_yaml)
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+    component.rest[2].read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+
+    if base.args.get("num_inverters") != 3:
+        print("ERROR: expected num_inverters 3, got {}".format(base.args.get("num_inverters")))
+        failed = True
+    if base.args.get("charge_rate") != ["number.inv0_charge_rate", "number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_2_charge_rate"]:
+        print("ERROR: expected slot n to be endpoint n with slot 0 left as configured, got {}".format(base.args.get("charge_rate")))
+        failed = True
+    if base.args.get("battery_calibration") != ["sensor.predbat_givtcp_0_battery_calibration", "sensor.predbat_givtcp_1_battery_calibration", "sensor.predbat_givtcp_2_battery_calibration"]:
+        print("ERROR: expected an unconfigured claimed key to cover all three slots by endpoint, got {}".format(base.args.get("battery_calibration")))
+        failed = True
+    if base.args.get("inverter_type") != ["GE", "GE", "GE"]:
+        print("ERROR: expected inverter_type ['GE', 'GE', 'GE'], got {}".format(base.args.get("inverter_type")))
+        failed = True
+
+    # Endpoint 0 comes back and is adopted on the hourly re-probe - nothing rotates
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob())
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate", "number.predbat_givtcp_2_charge_rate"]:
+        print("ERROR: expected slot n to be endpoint n after recovery, got {}".format(base.args.get("charge_rate")))
+        failed = True
+
+    if not failed:
+        print("PASS: a leading endpoint that is down at startup leaves every other inverter in its own slot")
+    return 1 if failed else 0
+
+
+def test_gated_claim_is_handed_back_when_a_late_endpoint_lacks_the_capability(my_predbat=None):
+    """
+    A capability-gated claim made while a gap endpoint was down is undone if that endpoint lacks it.
+
+    At startup only v3 endpoint 1 answered, so pause_mode and discharge_target_soc pass their
+    all-v3 gates and gap slot 0 is bound to endpoint 0's own entities. When endpoint 0 is adopted
+    on re-probe and turns out to be v2, those entities will never be published, so the keys have
+    to go back to what apps.yaml had for them rather than keep pointing slot 0 at nothing.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    apps_yaml = {"discharge_target_soc": ["number.inv0_discharge_target", "number.inv1_discharge_target"]}
+    base.args_from_apps_yaml = dict(apps_yaml)
+    base.apps_yaml_override_warned = set()
+    base.args.update(apps_yaml)
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob(version="3.0.4"))
+
+    run_async(component.run(seconds=0, first=True))
+    if base.args.get("pause_mode") != ["select.predbat_givtcp_0_pause_mode", "select.predbat_givtcp_1_pause_mode"]:
+        print("ERROR: expected pause_mode claimed for both slots at startup, got {}".format(base.args.get("pause_mode")))
+        failed = True
+    if base.args.get("discharge_target_soc") != ["number.inv0_discharge_target", "number.predbat_givtcp_1_discharge_target_soc"]:
+        print("ERROR: expected discharge_target_soc claimed for endpoint 1 only, got {}".format(base.args.get("discharge_target_soc")))
+        failed = True
+
+    # Endpoint 0 answers on re-probe, but runs GivTCP v2
+    component.rest[0].read_data = MagicMock(return_value=_rest_data_blob(version="2.4.0"))
+    run_async(component.run(seconds=GIVTCP_REDISCOVER_SECONDS, first=False))
+
+    if sorted(component.discovered) != [0, 1]:
+        print("ERROR: expected both endpoints discovered, got {}".format(component.discovered))
+        failed = True
+    if "pause_mode" in base.args:
+        print("ERROR: expected pause_mode handed back (nothing configured), got {}".format(base.args.get("pause_mode")))
+        failed = True
+    if base.args.get("discharge_target_soc") != apps_yaml["discharge_target_soc"]:
+        print("ERROR: expected discharge_target_soc handed back to apps.yaml, got {}".format(base.args.get("discharge_target_soc")))
+        failed = True
+    if base.args.get("charge_rate") != ["number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_1_charge_rate"]:
+        print("ERROR: expected the always-claimed keys to stay claimed, got {}".format(base.args.get("charge_rate")))
+        failed = True
+
+    if not failed:
+        print("PASS: a gated claim is handed back when a late endpoint lacks the capability")
+    return 1 if failed else 0
+
+
+def test_gap_and_tail_slots_are_logged_separately(my_predbat=None):
+    """
+    A gap slot is reported as bound to its own endpoint, a slot past the last endpoint as left alone.
+
+    The two are handled differently by _per_endpoint_values(), and one combined "leaving inverter(s)
+    ... as configured" line misdescribed the gap slots, which get their endpoint's own entities.
+    """
+    failed = False
+    base, component = _make_component(rest_urls=["http://dead:6345", "http://givtcp1:6345"])
+    base.args["num_inverters"] = 3
+    messages = []
+    component.log = lambda message, quiet=True: messages.append(str(message))
+    component.rest[0].read_data = MagicMock(return_value=None)
+    component.rest[1].read_data = MagicMock(return_value=_rest_data_blob())
+
+    run_async(component.run(seconds=0, first=True))
+
+    gap =[m for m in messages if m.startswith("Warn: GivTCP: no inverter has answered yet")]
+    tail = [m for m in messages if "leaving inverter(s)" in m]
+    if len(gap) != 1 or "http://dead:6345" not in gap[0] or "inverter(s) 0 keep their own slot" not in gap[0]:
+        print("ERROR: expected one warning naming gap slot 0 and its URL, got {}".format(gap))
+        failed = True
+    if len(tail) != 1 or not tail[0].endswith("leaving inverter(s) 2 as configured"):
+        print("ERROR: expected the tail line to name only inverter 2, got {}".format(tail))
+        failed = True
+
+    if not failed:
+        print("PASS: gap and tail slots are logged separately")
+    return 1 if failed else 0
 
 
 def test_rediscovery_never_drops_an_inverter_that_stops_answering(my_predbat=None):
@@ -2104,7 +2242,7 @@ def test_automatic_config_keeps_a_manually_configured_inverter(my_predbat=None):
     # A scalar apps.yaml value applies to every inverter, so it fills the tail rather than vanishing
     # (battery_scaling is only claimed when every inverter reports a design capacity, so the tail
     # handling is checked directly rather than through a key this fixture may not claim)
-    scaled = component._keep_configured_tail("battery_scaling", ["sensor.predbat_givtcp_0_battery_dod_soh"], 2)
+    scaled = component._per_endpoint_values("battery_scaling", lambda n: "sensor.predbat_givtcp_{}_battery_dod_soh".format(n), 2)
     if scaled != ["sensor.predbat_givtcp_0_battery_dod_soh", 1.0]:
         print("ERROR: expected the user's scalar battery_scaling to fill the tail, got {}".format(scaled))
         failed = True
@@ -2395,39 +2533,37 @@ def test_build_discovery_falls_back_to_rest_api_without_a_serial(my_predbat=None
     return 0
 
 
-def test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config(my_predbat=None):
-    """v3 capabilities appear only when GivTCP itself is v3, matching automatic_config()'s own gating."""
+def test_build_discovery_flags_follow_the_same_probes_as_automatic_config(my_predbat=None):
+    """rest_v3 and reports_soh are flags now, set per device from the same probes automatic_config() gates on; capabilities is the constant either way."""
     base, component = _make_component(rest_urls=["http://a:6345"])
     component.rest[0].inverter.rest_data = _rest_data_blob(version="2.4.0")
     _mark_discovered(component)
     run_async(component.publish_data())
-    v2_capabilities = component.build_discovery()["inverters"][0]["capabilities"]
-    assert "rest_v3" not in v2_capabilities
-    assert "pause_mode" not in v2_capabilities
-    assert "discharge_target" not in v2_capabilities
+    v2_record = component.build_discovery()["inverters"][0]
+    assert "rest_v3" not in v2_record.get("flags", [])
+    assert v2_record["capabilities"] == GIVTCP_CAPABILITIES
+    for name in ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"):
+        assert name not in v2_record["entities"], "{} is v3 only".format(name)
 
     component.rest[0].inverter.rest_data = _rest_data_blob(version="3.0.4")
     run_async(component.publish_data())
-    v3_capabilities = component.build_discovery()["inverters"][0]["capabilities"]
-    assert "rest_v3" in v3_capabilities
-    assert "pause_mode" in v3_capabilities
-    assert "discharge_target" in v3_capabilities
-    print("PASS: capabilities mirror automatic_config()'s own v3/register probes")
+    v3_record = component.build_discovery()["inverters"][0]
+    assert "rest_v3" in v3_record["flags"]
+    assert v3_record["capabilities"] == GIVTCP_CAPABILITIES
+    for name in ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc"):
+        assert v3_record["entities"][name]["access"] == "rw", "{} should be an rw control on v3".format(name)
+    print("PASS: rest_v3 is a flag, and the v3-only controls are entities")
     return 0
 
 
-def test_build_discovery_omits_capabilities_when_no_probe_applies(my_predbat=None):
+def test_build_discovery_capabilities_are_the_constant_even_without_probes(my_predbat=None):
     """
-    An inverter to which no capability probe applies carries no capabilities key - raw or in the catalogue.
+    A device none of the probes applies to still states all seven capabilities; only its empty flags container is omitted.
 
-    This is the one raw-report change moving GivTCP onto inverter_record() made (ruling R1 in the
-    rollout plan's Amendments): the hand-built record always wrote "capabilities": capabilities,
-    even when the list was empty, whereas the builder omits an empty container. validate_report()
-    already dropped an empty container, so the catalogue never carried one either way. Every
-    other fixture here fills capabilities, so without this test neither half would be pinned.
-
-    A v2 GivTCP with no battery module details (so no soh) and no Enable_Charge_Target register
-    (so no charge_enable) trips none of build_discovery()'s probes.
+    capabilities describes the GE inverter's behaviour (its INVERTER_DEF row), not what GivTCP
+    reported this poll, so it no longer shrinks to nothing on a v2 GivTCP with no battery module
+    details and no Enable_Charge_Target register. The flags container is still omitted when empty,
+    raw and in the catalogue.
     """
     from coordinator import validate_report
 
@@ -2436,16 +2572,18 @@ def test_build_discovery_omits_capabilities_when_no_probe_applies(my_predbat=Non
     _mark_discovered(component)
     run_async(component.publish_data())
     rest = component.rest[0]
-    assert not rest.rest_v3 and rest.battery_soh() is None and rest.charge_target_enabled is None, "the fixture must leave every capability probe false"
+    assert not rest.rest_v3 and rest.battery_soh() is None and rest.charge_target_enabled is None, "the fixture must leave every probe false"
 
     report = component.build_discovery()
     record = report["inverters"][0]
-    assert "capabilities" not in record, "an empty capabilities list is omitted from the raw record, got {}".format(record.get("capabilities"))
-    assert "entities" in record, "the record itself is still there - only the empty container is gone"
+    assert record["capabilities"] == GIVTCP_CAPABILITIES, record.get("capabilities")
+    assert "flags" not in record, "an empty flags list is omitted from the raw record, got {}".format(record.get("flags"))
+    assert "charge_limit_enable" not in record["entities"], "no Enable_Charge_Target register, no charge_limit_enable entity"
 
     cleaned = validate_report(report, "givtcp", print)["inverters"][0]
-    assert "capabilities" not in cleaned, "no capabilities key may reach the catalogue, got {}".format(cleaned.get("capabilities"))
-    print("PASS: an inverter with no capabilities carries no capabilities key, raw or in the catalogue")
+    assert cleaned["capabilities"] == GIVTCP_CAPABILITIES
+    assert "flags" not in cleaned
+    print("PASS: capabilities always carries the seven keys; empty flags omitted, raw and in the catalogue")
     return 0
 
 
@@ -2509,12 +2647,13 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     assert record["inverter_type"] == "GE"
     assert record["composition"] == "direct"
     assert set(record["functions"]) == {"solar", "battery"}
-    assert set(record["capabilities"]) == set(original["capabilities"]) == {"rest_v3", "discharge_target", "pause_mode", "pause_slots", "soh", "charge_enable"}
+    assert record["capabilities"] == original["capabilities"] == GIVTCP_CAPABILITIES
+    assert set(record["flags"]) == set(original["flags"]) == {"rest_v3", "reports_soh"}
     assert record["hardware_ids"] == {"serial": "EA2303G082"}
     assert record["info"]["model"] == "Gen2 Hybrid"
     assert record["info"]["firmware"] == "D0.913-A0.913"
-    assert record["ratings"]["battery_kwh"] == 9.52
-    assert record["ratings"]["max_charge_w"] == 3600
+    assert record["ratings"] == {"soc_max": 9.52, "battery_rate_max": 3600, "inverter_limit": 3600}
+    assert "battery_kwh" not in record["ratings"] and "max_charge_w" not in record["ratings"]
     assert len(record["entities"]) == len(original["entities"])
     for name, descriptor in original["entities"].items():
         assert record["entities"][name]["entity_id"] == descriptor["entity_id"]
@@ -2523,6 +2662,172 @@ def test_build_discovery_round_trips_through_the_coordinator(my_predbat=None):
     assert record["entities"]["charge_start_time"]["format"] == "HH:MM:SS"
     assert "options" not in record["entities"]["charge_start_time"]
     print("PASS: build_discovery() round-trips through the real Coordinator with nothing dropped")
+    return 0
+
+
+def _v3_capture_record():
+    """The real rest_v3.json capture published by a component, and the one validated inverter record build_discovery() makes of it."""
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    records = validated_inverters(component.build_discovery())
+    assert len(records) == 1, records
+    return component, records[0]
+
+
+def test_build_discovery_record_rebuilds_the_ge_row(my_predbat=None):
+    """
+    Completeness: the record alone rebuilds INVERTER_DEF["GE"], with clock_time_format the one named exception.
+
+    Spec D13: GivTCP publishes Invertor_Time as ISO 8601 with an offset ("2024-12-30T13:07:22+00:00"
+    in both captures), so the inverter_time descriptor states that format. The GE row keeps
+    "%H:%M:%S" because it also serves installs that do not use this component, where it is the
+    last-resort parse.
+    """
+    component, record = _v3_capture_record()
+    assert record["entities"]["inverter_time"]["format"] == GIVTCP_INVERTER_TIME_FORMAT == "%Y-%m-%dT%H:%M:%S%z"
+    assert_definition_complete(record, GivTCPComponent.WRITE_AND_POLL_SLEEP, except_fields=("clock_time_format",))
+    print("PASS: GivTCP record rebuilds the GE row")
+    return 0
+
+
+def test_build_discovery_record_agrees_with_automatic_config(my_predbat=None):
+    """Agreement: every setting automatic_config() binds for the device is in the record, bound to the same entity."""
+    component, record = _v3_capture_record()
+    captured = capture_automatic_config(component)
+    # automatic_config() still claims it, but the GE row dummies it (has_discharge_enable_time False)
+    assert "scheduled_discharge_enable" in captured and "scheduled_discharge_enable" not in record["entities"]
+    assert_record_agrees(record, captured, index=0)
+    assert_record_binds_nothing_extra(record, captured, index=0)
+    print("PASS: GivTCP record agrees with automatic_config()")
+    return 0
+
+
+def test_build_discovery_two_inverters_get_their_own_entities(my_predbat=None):
+    """Two discovered endpoints give two records whose entity ids differ, each agreeing with automatic_config() at its own index."""
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    for rest in component.rest:
+        rest.inverter.rest_data = _rest_data_blob(version="3.0.4")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    records = validated_inverters(component.build_discovery())
+    assert len(records) == 2, records
+    first, second = records[0]["entities"], records[1]["entities"]
+    assert first and set(first) == set(second), (sorted(first), sorted(second))
+    for name in first:
+        assert first[name]["entity_id"] != second[name]["entity_id"], name
+    captured = capture_automatic_config(component)
+    for index, record in enumerate(records):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    print("PASS: two inverters, two records, distinct entity ids")
+    return 0
+
+
+def test_build_discovery_entities_are_only_what_automatic_config_binds(my_predbat=None):
+    """
+    Published sensors automatic_config() does not bind stay out of entities, keyed as they are by Predbat setting name.
+
+    soc_percent matters most: Inverter prefers soc_percent over soc_kw when both are set, and GivTCP
+    binds soc_kw deliberately for its precision (see GIVTCP_AUTO_CONFIG_KEYS), so a coordinator
+    that bound every entity in the record would lose it. battery_scaling is bound to the combined
+    depth-of-discharge x health sensor, as automatic_config() binds it.
+    """
+    component, record = _v3_capture_record()
+    entities = record["entities"]
+    for name in ("soc_percent", "battery_rate_max", "battery_soh", "battery_dod", "battery_dod_soh", "load_total", "battery_charge_today", "givtcp_version", "serial_number", "scheduled_discharge_enable"):
+        assert name not in entities, "{} is published but not bound by automatic_config()".format(name)
+    assert entities["battery_scaling"] == {"entity_id": "sensor.predbat_givtcp_0_battery_dod_soh", "domain": "sensor", "access": "r"}, entities["battery_scaling"]
+    assert entities["soc_kw"]["access"] == "r" and entities["charge_limit_enable"]["access"] == "rw"
+    assert entities["inverter_mode"]["domain"] == "select" and entities["charge_start_time"]["domain"] == "select"
+    print("PASS: entities hold only what automatic_config() binds")
+    return 0
+
+
+def test_build_discovery_power_ignore_keeps_the_power_entities(my_predbat=None):
+    """
+    Spec D11: givtcp_rest_power_ignore is the user's opt-out, not a fact about the device.
+
+    automatic_config() leaves the power and voltage keys to the user's apps.yaml, but the record
+    still describes the device's power sensors; piece 3's coordinator applies the opt-out.
+    """
+    power_keys = ("battery_power", "pv_power", "grid_power", "load_power", "battery_voltage")
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    base.args["givtcp_rest_power_ignore"] = True
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    record = validated_inverters(component.build_discovery())[0]
+    for name in power_keys:
+        assert record["entities"][name]["entity_id"] == "sensor.predbat_givtcp_0_{}".format(name), name
+    captured = capture_automatic_config(component)
+    assert not any(name in captured for name in power_keys), sorted(captured)
+    assert_record_agrees(record, captured, index=0)
+    assert_record_binds_nothing_extra(record, captured, index=0, allowed_extra=power_keys)
+    print("PASS: power_ignore leaves the power entities in the record")
+    return 0
+
+
+def test_build_discovery_mixed_fleet_is_described_per_device(my_predbat=None):
+    """
+    Spec D10: a v3 inverter's record carries its pause and export-target controls even when a v2 neighbour withholds them fleet-wide.
+
+    automatic_config() claims those keys only when every discovered inverter is v3, so on a v3 + v2
+    fleet it binds none of them. The v3 record still lists them (allowed as extra), and the v2
+    record - which has none - binds nothing automatic_config() did not.
+    """
+    v3_only = ("pause_mode", "pause_start_time", "pause_end_time", "discharge_target_soc")
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob(version="3.0.4")
+    component.rest[1].inverter.rest_data = _rest_data_blob(version="2.4.0")
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    v3_record, v2_record = validated_inverters(component.build_discovery())
+    captured = capture_automatic_config(component)
+    assert not any(name in captured for name in v3_only), sorted(captured)
+    for name in v3_only:
+        assert v3_record["entities"][name]["entity_id"] == "{}.predbat_givtcp_0_{}".format(GIVTCP_CONTROLS[name][0], name), name
+        assert name not in v2_record["entities"], name
+    assert "rest_v3" in v3_record["flags"] and "rest_v3" not in v2_record.get("flags", [])
+    assert_record_agrees(v3_record, captured, index=0)
+    assert_record_agrees(v2_record, captured, index=1)
+    assert_record_binds_nothing_extra(v3_record, captured, index=0, allowed_extra=v3_only)
+    assert_record_binds_nothing_extra(v2_record, captured, index=1)
+    print("PASS: mixed v3/v2 fleet described per device")
+    return 0
+
+
+def test_build_discovery_soc_max_rating_only_when_givtcp_reports_it(my_predbat=None):
+    """
+    Spec D14: soc_max is a rating only when GivTCP reports Battery_Capacity_kWh itself.
+
+    Without it, publish_data() falls back to the nominal Ah scaled by an assumed 51.2V pack voltage
+    (GivTCPRest.nominal_capacity()). That figure is Predbat's derivation, not the device's, so the
+    record keeps the soc_max entity binding but gives no soc_max rating.
+    """
+    base, component = _make_component()
+    blob = _rest_data_blob()
+    blob["raw"] = {"invertor": {"battery_nominal_capacity": 186}}
+    component.rest[0].inverter.rest_data = blob
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    assert component.rest[0].battery_capacity_kwh() is None
+    assert base.entities["sensor.predbat_givtcp_0_soc_max"]["state"] == 186 / 19.53125, "the derived capacity is still published"
+    record = validated_inverters(component.build_discovery())[0]
+    assert record["entities"]["soc_max"]["entity_id"] == "sensor.predbat_givtcp_0_soc_max"
+    assert "soc_max" not in record.get("ratings", {}), record.get("ratings")
+    assert_record_agrees(record, capture_automatic_config(component), index=0)
+
+    blob["Invertor_Details"] = {"Battery_Capacity_kWh": 9.52}
+    run_async(component.publish_data())
+    assert validated_inverters(component.build_discovery())[0]["ratings"]["soc_max"] == 9.52
+    print("PASS: soc_max rating only from GivTCP's own Battery_Capacity_kWh")
+    return 0
+
+
+def test_givtcp_write_and_poll_sleep_matches_the_ge_row(my_predbat=None):
+    """The component owns its write/poll timing: 10s, the GE row's figure, not ComponentBase's 2."""
+    assert GivTCPComponent.WRITE_AND_POLL_SLEEP == 10
+    print("PASS: GivTCP write_and_poll_sleep is 10")
     return 0
 
 
@@ -2714,12 +3019,15 @@ def test_givtcp_component(my_predbat=None):
         ("soc_kw_binding", test_automatic_config_uses_soc_kw_not_percent, "automatic_config binds soc_kw"),
         ("write_exception", test_write_event_exception_does_not_propagate, "write exception contained"),
         ("discovered_count", test_automatic_config_counts_discovered_inverters_not_configured_urls, "num_inverters counts discovered inverters"),
-        ("discovered_mapping", test_automatic_config_maps_predbat_inverter_to_the_live_endpoint, "live endpoint drives inverter 0"),
+        ("discovered_mapping", test_automatic_config_keeps_the_live_endpoint_in_its_own_slot, "live endpoint keeps its own slot"),
         ("discovered_none", test_automatic_config_skipped_when_nothing_was_discovered, "no config when nothing discovered"),
         ("discovery_drops_dead", test_dead_endpoint_is_not_polled_after_discovery, "dead endpoint dropped after discovery"),
         ("discovered_pause_gate", test_pause_keys_gated_on_discovered_inverters_only, "pause gate ignores undiscovered endpoints"),
         ("rediscover_late", test_rediscovery_picks_up_an_inverter_that_was_down_at_startup, "late inverter adopted on re-probe"),
-        ("rediscover_append", test_rediscovery_appends_so_running_inverters_keep_their_identity, "re-probe appends, preserving identity"),
+        ("rediscover_append", test_rediscovery_keeps_inverter_identity_by_endpoint, "re-probe keeps slot n on endpoint n"),
+        ("leading_endpoint_down", test_leading_endpoint_down_does_not_shift_the_fleet, "leading endpoint down does not shift the fleet (#5209)"),
+        ("gated_claim_handed_back", test_gated_claim_is_handed_back_when_a_late_endpoint_lacks_the_capability, "gated claim handed back when a late endpoint lacks the capability"),
+        ("gap_and_tail_logged", test_gap_and_tail_slots_are_logged_separately, "gap and tail slots logged separately"),
         ("rediscover_no_shrink", test_rediscovery_never_drops_an_inverter_that_stops_answering, "discovered inverters are never dropped"),
         ("rediscover_cheap", test_rediscovery_uses_a_cheap_single_probe, "re-probe uses a single cheap GET"),
         ("rediscover_complete", test_rediscovery_skipped_once_every_endpoint_is_discovered, "no re-probe when fleet is complete"),
@@ -2760,11 +3068,19 @@ def test_givtcp_component(my_predbat=None):
         ("discovery_only_discovered", test_build_discovery_only_discovered_endpoints, "build_discovery reports only discovered endpoints"),
         ("discovery_regardless_of_automatic", test_build_discovery_reports_regardless_of_automatic, "build_discovery reports with automatic off"),
         ("discovery_serial_fallback", test_build_discovery_falls_back_to_rest_api_without_a_serial, "device_id falls back to the REST URL"),
-        ("discovery_capabilities", test_build_discovery_capabilities_follow_the_same_probes_as_automatic_config, "capabilities follow automatic_config()'s own probes"),
-        ("discovery_no_capabilities", test_build_discovery_omits_capabilities_when_no_probe_applies, "no capabilities key when no probe applies, raw or in the catalogue"),
+        ("discovery_flags", test_build_discovery_flags_follow_the_same_probes_as_automatic_config, "rest_v3/reports_soh flags follow automatic_config()'s own probes"),
+        ("discovery_capabilities_constant", test_build_discovery_capabilities_are_the_constant_even_without_probes, "capabilities always carries the seven keys; empty flags omitted"),
         ("discovery_entities_v2_omit", test_build_discovery_entities_omit_what_v2_never_publishes, "v2 catalogue omits entities never published"),
         ("discovery_entities_v3_include", test_build_discovery_entities_include_what_v3_actually_publishes, "v3 catalogue includes entities actually published"),
         ("discovery_round_trip", test_build_discovery_round_trips_through_the_coordinator, "build_discovery round-trips through the real Coordinator"),
+        ("discovery_completeness", test_build_discovery_record_rebuilds_the_ge_row, "record rebuilds the GE row"),
+        ("discovery_agreement", test_build_discovery_record_agrees_with_automatic_config, "record agrees with automatic_config()"),
+        ("discovery_two_inverters", test_build_discovery_two_inverters_get_their_own_entities, "two inverters, two records, distinct entity ids"),
+        ("discovery_bound_only", test_build_discovery_entities_are_only_what_automatic_config_binds, "entities hold only what automatic_config() binds"),
+        ("discovery_power_ignore", test_build_discovery_power_ignore_keeps_the_power_entities, "power_ignore leaves the power entities in the record"),
+        ("discovery_mixed_fleet", test_build_discovery_mixed_fleet_is_described_per_device, "mixed v3/v2 fleet described per device"),
+        ("discovery_soc_max_rating", test_build_discovery_soc_max_rating_only_when_givtcp_reports_it, "soc_max rating only from GivTCP's own Battery_Capacity_kWh"),
+        ("discovery_write_and_poll_sleep", test_givtcp_write_and_poll_sleep_matches_the_ge_row, "write_and_poll_sleep is the GE row's 10"),
         ("discovery_report_failure_contained", test_report_discovery_failure_does_not_degrade_component_health, "a build_discovery failure is contained, not left to degrade health"),
         ("discovery_rediscovery_ordering", test_rediscovered_inverter_is_reported_only_once_its_entities_exist, "rediscovered inverter reported only once its entities exist"),
         ("discovery_partial_replaced", test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in, "a partial first report is replaced, an unchanged one is not re-filed"),

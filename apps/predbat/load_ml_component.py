@@ -1152,6 +1152,7 @@ class LoadMLComponent(ComponentBase):
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours is not None else None,
                 "training_days": self.load_data_age_days,
                 "status": self.model_status,
+                "load_ml_source": self.ml_source,
                 "model_version": MODEL_VERSION,
                 "epochs_trained": self.predictor.epochs_trained if self.predictor else 0,
                 "friendly_name": "ML Load Stats",

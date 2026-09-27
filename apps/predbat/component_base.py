@@ -58,6 +58,11 @@ class ComponentBase(ABC):
             the registry (the standalone CLI harnesses), so report_discovery() always has a name.
     """
 
+    # Seconds inverter.py waits between writing a setting and reading it back. The component owns the
+    # entities, so it owns this timing; INVERTER_DEF's write_and_poll_sleep is 2 for every cloud type and
+    # 10 for the GivEnergy types (GivTCP and GE Cloud override it). See coordinator.inverter_definition().
+    WRITE_AND_POLL_SLEEP = 2
+
     # Declared on the class, not only assigned in __init__, so they exist even on a component built
     # without it - the test harnesses construct components with Cls.__new__(Cls) to exercise one
     # method in isolation. refresh_discovery() must not be able to raise on such an instance: an
@@ -103,6 +108,17 @@ class ComponentBase(ABC):
         Create a dashboard item representation.
         """
         return self.base.dashboard_item(entity, state, attributes, app=app)
+
+    def request_replan(self, reason):
+        """
+        Ask for the plan to be recomputed on the next 15 second tick, for a component whose data has just
+        changed in a way the plan depends on - rather than waiting for the next scheduled cycle.
+
+        Sets only update_pending, not plan_valid, so the recompute still weighs the current plan against the
+        new one (metric_min_improvement_plan). Components call this rather than setting base.update_pending.
+        """
+        self.log("{}: {}, requesting a replan".format(self.component_name, reason))
+        self.base.update_pending = True
 
     def get_ha_config(self, name, default):
         """

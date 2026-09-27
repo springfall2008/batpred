@@ -50,6 +50,8 @@ from web_helper import (
     get_apps_css,
     get_html_config_css,
     get_apps_js,
+    get_apps_filter_js,
+    get_filter_css,
     get_components_css,
     get_discovery_css,
     get_entity_modal_css,
@@ -89,7 +91,7 @@ from utils import (
     predbat_log_file_prev,
     is_secret_key,
 )
-from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
+from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -512,6 +514,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/apps", self.html_apps)
         app.router.add_post("/apps", self.html_apps_post)
+        app.router.add_get("/apps_value", self.html_apps_value)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
@@ -2878,6 +2881,10 @@ chart.render();
             text += "<table>"
             for idx, item in enumerate(value):
                 nested_path = f"{list_path}[{idx}]"
+                # An apps.yaml key can hold any character, including the quotes the attributes
+                # below are delimited with - escape once here so a key such as "it's" cannot
+                # truncate data-nested-path/data-path and hand the browser a wrong path
+                nested_path_attr = html_module.escape(nested_path, quote=True)
 
                 # Check if this list item is editable
                 can_edit = self.is_editable_value(item)
@@ -2891,9 +2898,9 @@ chart.render();
                     if can_edit:
                         if isinstance(item, bool):
                             toggle_class = "toggle-button active" if item else "toggle-button"
-                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path_attr}"></button>'
                         else:
-                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
                         # Store the nested value info for later processing
                         if not hasattr(self, "_nested_values"):
@@ -2906,7 +2913,7 @@ chart.render();
                 raw_value = self.resolve_value_raw(arg, item)
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{nested_row_id}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
             text += self.render_add_row("addListItem", [list_path, arg], "Add item", row_counter)
@@ -2916,6 +2923,7 @@ chart.render();
             text += "<table>"
             for key in value:
                 nested_path = f"{dict_path}.{key}"
+                nested_path_attr = html_module.escape(nested_path, quote=True)
                 nested_value = value[key]
 
                 # Check if this nested value is editable
@@ -2930,9 +2938,9 @@ chart.render();
                     if can_edit:
                         if isinstance(nested_value, bool):
                             toggle_class = "toggle-button active" if nested_value else "toggle-button"
-                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                            actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path_attr}"></button>'
                         else:
-                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+                            actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path_attr}">Edit</button>'
 
                         # Store the nested value info for later processing
                         if not hasattr(self, "_nested_values"):
@@ -2943,9 +2951,10 @@ chart.render();
                     actions_cell += self.render_delete_button(nested_row_id)
 
                 raw_value = self.resolve_value_raw(key, nested_value)
+                secret_attr = self.secret_row_attr(key, nested_value, "'")
 
                 if nested_row_id is not None:
-                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{nested_row_id}' data-nested-path='{nested_path_attr}' data-nested-original='{html_module.escape(str(raw_value))}'{secret_attr}><td><b>{key}: </b></td><td id='nested_value_{nested_row_id}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += self.render_add_row("addDictKey", [dict_path], "Add setting", row_counter)
@@ -3745,6 +3754,47 @@ chart.render();
             return len(value) > 0 and any(self.is_editable_value(item) for item in value)
         return False
 
+    def secret_row_attr(self, key, value, quote):
+        """
+        Return the data-secret attribute for a row whose value html_apps() served masked, else "".
+
+        The page holds SECRET_MASK for a credential rather than the credential itself, so the
+        browser's Edit has to fetch the real value (/apps_value) before it can offer it - this flag
+        is how it knows to. mask_secret_args() replaces a secret key's whole value, list or dict
+        included, so a credential container (e.g. redact_strings) is also one masked row and is
+        flagged too; /apps_value refuses to hand a container back, so its Edit ends in that
+        refusal rather than letting the editor overwrite the whole list with a single string.
+        """
+        if value == SECRET_MASK and is_secret_key(key):
+            return " data-secret={}1{}".format(quote, quote)
+        return ""
+
+    async def html_apps_value(self, request):
+        """
+        Return the real value of one apps.yaml setting, for the /apps editor's Edit on a credential.
+
+        html_apps() serves credentials masked, so without this Edit could only offer "xxx" - the
+        user could neither see nor amend the key, and saving it back unchanged is refused. Only
+        the one path asked for is returned, and only when it is a single value, so the page itself
+        still never carries credentials and a whole container cannot be pulled in the clear. The
+        unmasked /debug_apps download already exposes the same values behind the same access.
+
+        The value is returned as stored, not passed through resolve_value_raw(): a credential is
+        literal text, and one holding a brace ("abc{def", "{0}") makes str.format() in
+        resolve_arg() raise ValueError/IndexError, which would surface as a 500 here.
+        """
+        path = request.query.get("path", "")
+        if not path:
+            return web.json_response({"success": False, "message": "No path given"})
+        try:
+            value = resolve_nested_yaml_value(self.args, path)
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            # IndexError: a negative index into an empty list gets past the lookup's range check
+            return web.json_response({"success": False, "message": f"Path {path} not found: {str(e)}"})
+        if not self.is_editable_value(value) or isinstance(value, list):
+            return web.json_response({"success": False, "message": f"{path} is not a single value that can be edited here - edit apps.yaml directly"})
+        return web.json_response({"success": True, "value": str(value)})
+
     def resolve_value_raw(self, arg, value):
         if isinstance(value, str) and "{" in value:
             text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
@@ -3778,12 +3828,16 @@ chart.render();
             self.log(f"Error serializing all_states for web interface: {e}")
             all_states_json = "{}"
 
-        # Add CSS styles for edit functionality
+        # Add CSS styles for edit functionality and for the filter box
         text += get_apps_css()
+        text += get_filter_css()
         text += "<body>\n"
 
         # JavaScript for edit functionality
         text += get_apps_js(all_states_json)
+
+        # JavaScript for the filter box
+        text += get_apps_filter_js()
 
         # Add message container
         text += '<div id="messageContainer" class="message-container"></div>\n'
@@ -3796,6 +3850,15 @@ chart.render();
     </div>
     <button id="saveAllButton" class="save-all-button" onclick="saveAllChanges()" disabled>Save All Changes</button>
     <button id="discardAllButton" class="discard-all-button" onclick="discardAllChanges()" disabled>Discard Changes</button>
+</div>
+"""
+
+        # Filter box, matching the one on the Config page (issue #5210)
+        text += """
+<div class="filter-container">
+    <label for="appsFilter"><strong>Filter settings:</strong></label>
+    <input type="text" id="appsFilter" class="filter-input" placeholder="Type to filter settings..." oninput="filterApps()" />
+    <button type="button" style="margin-left: 10px; padding: 8px 12px;" onclick="document.getElementById('appsFilter').value=''; filterApps();">Clear</button>
 </div>
 """
 
@@ -3827,6 +3890,9 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             arg_errors = self.base.arg_errors.get(arg, "")
+            # The filter box and the editor both read the row back through data-arg-name, so an
+            # apps.yaml key holding a quote must not be able to truncate the attribute
+            arg_attr = html_module.escape(str(arg), quote=True)
 
             # Determine if this value can be edited
             # Lists should not be editable at the top level - only their individual items
@@ -3834,7 +3900,7 @@ chart.render();
 
             if arg_errors:
                 text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
+                    row_id, arg_attr, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
                 )
             else:
                 actions_cell = ""
@@ -3847,8 +3913,8 @@ chart.render();
                         # For numerical values, show edit button
                         actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
 
-                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"{}><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg_attr, html_module.escape(str(raw_value)), self.secret_row_attr(arg, value, '"'), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
                 )
             row_id += 1
 
@@ -3857,7 +3923,7 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
-                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
+                row_id, html_module.escape(str(arg), quote=True), html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
             )
             row_id += 1
 

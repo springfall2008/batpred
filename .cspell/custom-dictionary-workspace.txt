@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acks
 activepower
 adata
 adbase
@@ -164,6 +165,7 @@ dnoregion
 docstrings
 dstamp
 dstart
+dtype
 dwindow
 eauth
 echargingpile
@@ -232,6 +234,7 @@ foxcloud
 foxess
 foxesscloud
 freephase
+fromisoformat
 fronius
 funcs
 futurerate
@@ -252,6 +255,7 @@ gitnexus
 giv
 GivEnergy
 givtcp
+gmtime
 gnueabihf
 GOELEC
 goldens
@@ -287,6 +291,7 @@ holdout
 homeassistant
 houseb
 htmlcov
+hultenvp
 husforbrukning
 hypervolt
 iboost
@@ -332,6 +337,7 @@ Krakenflex
 Kuzu
 kvar
 kvarh
+kwarg
 kwargs
 kwhb
 labelcolor
@@ -406,6 +412,7 @@ mpxn
 mqtt
 mtok
 mult
+multiarray
 myaccount
 myenergi
 mypy
@@ -570,6 +577,7 @@ sess
 setattr
 setdefault
 setpoints
+setstate
 SFMB
 sg05lp1
 SIGALRM
@@ -712,6 +720,7 @@ vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
+weakref
 weblink
 welink
 Werror
@@ -719,6 +728,7 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+worktree
 writeonly
 wrongsha
 wwxxabcdefyyzz
