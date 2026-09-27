@@ -7448,12 +7448,12 @@ def get_plan_renderer_js():
                 return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
             });
         });
-        // A split cell's first half is always a demand_before_export_* code paired with the export
+        // A split cell's first half is always a demand_before_export_* or hold_for_car_before_export code paired with the export
         // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
         // instead of two disconnected sentences. Length is >= 2 rather than == 2 because a history
         // slot that held more than one state appends a mixed_slot_states note after the pair, and
         // that must not cost the narrative its "Then".
-        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && (reasons[0].code.indexOf('demand_before_export_') === 0 || reasons[0].code === 'hold_for_car_before_export')) {
             rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
         }
         return rendered.filter(Boolean).join(' ');
