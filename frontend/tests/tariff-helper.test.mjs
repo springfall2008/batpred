@@ -43,3 +43,20 @@ test('tariff helper does not make export suggestions without export-rate data', 
 
   assert.deepEqual(Array.from(analysis.suggestions, ({ name }) => name), [])
 })
+
+test('tariff helper carries a flat export rate into the analysis window', () => {
+  const analysis = module.exports.analyseTariff(settings, {
+    generated_at: '2026-09-27T08:55:00+01:00',
+    currency_unit: 'p',
+    series: {
+      import: { '2026-09-27T08:30:00+01:00': 32.32 },
+      export: {
+        '2026-09-26T00:00:00+01:00': 7.64,
+        '2026-09-30T08:30:00+01:00': 7.64
+      }
+    }
+  })
+
+  assert.equal(analysis.exportMin, 7.64)
+  assert.equal(analysis.exportMax, 7.64)
+})

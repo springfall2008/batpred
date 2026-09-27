@@ -24,10 +24,12 @@ type Setting = { name: string, value: ConfigValue }
 function futureValues(series: Record<string, number>, generatedAt: string): number[] {
   const start = Date.parse(generatedAt) - 30 * 60 * 1000
   const end = start + 48 * 60 * 60 * 1000
-  return Object.entries(series)
-    .filter(([timestamp]) => Date.parse(timestamp) >= start && Date.parse(timestamp) <= end)
-    .map(([, value]) => Number(value))
-    .filter(Number.isFinite)
+  const entries = Object.entries(series)
+    .map(([timestamp, value]) => [Date.parse(timestamp), Number(value)] as const)
+    .filter(([timestamp, value]) => Number.isFinite(timestamp) && Number.isFinite(value))
+    .sort(([left], [right]) => left - right)
+  const previous = entries.filter(([timestamp]) => timestamp < start).at(-1)
+  return [...(previous ? [previous[1]] : []), ...entries.filter(([timestamp]) => timestamp >= start && timestamp <= end).map(([, value]) => value)]
 }
 
 /** Classify the active tariff and return reviewable changes to existing controls. */
