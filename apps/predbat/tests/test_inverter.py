@@ -73,9 +73,11 @@ def test_solis_energy_control(test_name, my_predbat, ha, inverter_type, switch_s
 
     GS has no target SoC, so adjust_battery_target reaches the switch through mimic_target_soc and
     uses its Timed Charge/Discharge bit as the charge enable (35). GS_fb00 has a target SoC and slot
-    enables, so adjust_charge_immediate - which execute calls every cycle - keeps the switch on Self-Use
-    (33) with grid charging allowed, except in a freeze or hold, where Self-Use - No Grid Charging (1)
-    stops a charge slot charging from the grid. Each type has exactly one writer, so the two never fight.
+    enables, so adjust_charge_immediate - which execute calls every cycle - keeps the switch on
+    Backup/Reserve (49): Self-Use with the Battery Reserve bit, so the reserve Predbat writes (the
+    Reserved SOC) is a real discharge floor, and grid charging allowed. A freeze or hold turns grid
+    charging off, Backup/Reserve - No Grid Charging (17), so the inverter cannot import to reach a reserve
+    raised to SoC + 1. Each type has exactly one writer, so the two never fight.
     """
     failed = False
     print("Test: {}".format(test_name))
@@ -5000,16 +5002,17 @@ def run_inverter_tests(my_predbat_dummy):
     export = lambda inv: inv.adjust_export_immediate(10)
     export_freeze = lambda inv: inv.adjust_export_immediate(50, freeze=True)
     export_idle = lambda inv: inv.adjust_export_immediate(100)
-    failed |= test_solis_energy_control("solis_fb00_charge_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_idle_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", idle, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_already_self_use", my_predbat, ha, "GS_fb00", "Self-Use", charge, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", charge, "Self-Use")
+    failed |= test_solis_energy_control("solis_fb00_charge_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_charge_from_self_use", my_predbat, ha, "GS_fb00", "Self-Use", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_idle_allows_grid", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", idle, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_already_backup_reserve", my_predbat, ha, "GS_fb00", "Backup/Reserve", charge, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", charge, "Backup/Reserve")
     failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use - No Grid Charging", configured=False)
-    failed |= test_solis_energy_control("solis_fb00_freeze_blocks_grid", my_predbat, ha, "GS_fb00", "Self-Use", freeze, "Self-Use - No Grid Charging")
-    failed |= test_solis_energy_control("solis_fb00_freeze_already_blocked", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", freeze, "Self-Use - No Grid Charging")
-    failed |= test_solis_energy_control("solis_fb00_freeze_export_feed_in", my_predbat, ha, "GS_fb00", "Self-Use", export_freeze, "Feed-in priority - No Grid Charging")
-    failed |= test_solis_energy_control("solis_fb00_export_restores_self_use", my_predbat, ha, "GS_fb00", "Feed-in priority - No Grid Charging", export, "Self-Use")
-    failed |= test_solis_energy_control("solis_fb00_export_idle_leaves_switch", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", export_idle, "Self-Use - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_freeze_blocks_grid", my_predbat, ha, "GS_fb00", "Backup/Reserve", freeze, "Backup/Reserve - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_freeze_already_blocked", my_predbat, ha, "GS_fb00", "Backup/Reserve - No Grid Charging", freeze, "Backup/Reserve - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_freeze_export_feed_in", my_predbat, ha, "GS_fb00", "Backup/Reserve", export_freeze, "Feed-in priority - No Grid Charging")
+    failed |= test_solis_energy_control("solis_fb00_export_restores_backup_reserve", my_predbat, ha, "GS_fb00", "Feed-in priority - No Grid Charging", export, "Backup/Reserve")
+    failed |= test_solis_energy_control("solis_fb00_export_idle_leaves_switch", my_predbat, ha, "GS_fb00", "Backup/Reserve - No Grid Charging", export_idle, "Backup/Reserve - No Grid Charging")
     failed |= test_solis_energy_control("solis_fb00_battery_target_leaves_switch", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", target, "Self-Use - No Grid Charging")
     failed |= test_solis_energy_control("solis_gs_charge_timed", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", target, "Self-Use")
     failed |= test_solis_energy_control("solis_gs_already_timed", my_predbat, ha, "GS", "Self-Use", target, "Self-Use")

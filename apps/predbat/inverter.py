@@ -3194,12 +3194,14 @@ class Inverter:
         Adjust from charging or not charging based on passed target soc
         """
         # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
-        # that is not exporting: Self-Use (grid charging allowed) to charge or idle, and Self-Use - No Grid Charging
-        # for a freeze or hold, where a charge slot with no grid charging holds the battery. Exporting cycles drive
-        # it from adjust_export_immediate, and GS drives it from mimic_target_soc instead.
+        # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
+        # reserve Predbat writes (the Reserved SOC) a real discharge floor, so the existing reserve holds work.
+        # A freeze or hold (car, iBoost, hold on reserve) also turns grid charging off - Backup/Reserve - No Grid
+        # Charging - or the inverter would import to reach a reserve raised to SoC + 1, and again each cycle as it
+        # is raised. Exporting cycles drive it from adjust_export_immediate, and GS from mimic_target_soc instead.
         if self.inv_has_target_soc and self.inv_has_solis_energy_control:
-            reason = "freeze charge" if freeze else "charge" if target_soc > 0 else "idle"
-            self.write_solis_energy_control(1 if freeze else 33, SOLAX_SOLIS_MODES_FB00, reason, warn_missing=(target_soc > 0 and not freeze))
+            reason = "freeze or hold" if freeze else "charge" if target_soc > 0 else "idle"
+            self.write_solis_energy_control(17 if freeze else 49, SOLAX_SOLIS_MODES_FB00, reason, warn_missing=(target_soc > 0 and not freeze))
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
@@ -3241,10 +3243,12 @@ class Inverter:
         Adjust from exporting or not exporting based on passed target soc
         """
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
-        # export (PV goes to the load then the grid ahead of the battery, which still covers the load), Self-Use for a
-        # real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate, which owns it then.
+        # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
+        # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and
+        # Backup/Reserve for a real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate,
+        # which owns it then.
         if self.inv_has_target_soc and self.inv_has_solis_energy_control and target_soc < 100:
-            self.write_solis_energy_control(64 if freeze else 33, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
+            self.write_solis_energy_control(64 if freeze else 49, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}

@@ -1960,7 +1960,8 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 4,
         "has_time_window": True,
-        # Freeze charge keeps the charge slot and turns grid charging off on the Energy Storage Control Switch
+        # Freeze charge and holds turn grid charging off on the Energy Storage Control Switch (Backup/Reserve - No Grid
+        # Charging): the charge slot or the Reserved SOC holds the battery (inverter.py adjust_charge_immediate)
         "support_charge_freeze": True,
         # Freeze Export selects Feed-in priority on the Energy Storage Control Switch (inverter.py adjust_export_immediate),
         # which exports PV ahead of charging the battery - so PV past the export limit still reaches the battery
