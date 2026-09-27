@@ -19,6 +19,7 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from component_base import ComponentBase
 from ohme import (
     CAR_DISCOVERY_ENTITY_SPEC,
     CHARGER_DISCOVERY_ENTITY_SPEC,
@@ -292,6 +293,7 @@ def test_ohme(my_predbat=None):
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
+        ("auto_config_keeps_now", _test_ohme_auto_config_keeps_user_car_charging_now, "auto config keeps the user's car_charging_now"),
         ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
         ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
         ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
@@ -1648,9 +1650,9 @@ class MockOhmeAPI(OhmeAPI):
         """Mock set_arg writing to the stub args"""
         self.args[arg] = value
 
-    def set_arg_auto(self, arg, value):
-        """Mock set_arg_auto - the real one logs then delegates to set_arg"""
-        self.set_arg(arg, value)
+    def set_arg_auto(self, arg, value, overwrite=True):
+        """The real set_arg_auto, which reads base.args_from_apps_yaml and delegates to set_arg"""
+        return ComponentBase.set_arg_auto(self, arg, value, overwrite=overwrite)
 
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """Mock state read, serving whatever the test staged"""
@@ -2314,11 +2316,31 @@ def _test_ohme_auto_config_wires_car_charging_energy(my_predbat=None):
     assert api.args.get("num_cars") == 1, f"Expected num_cars 1, got {api.args.get('num_cars')}"
     assert api.args.get("car_charging_planned") == ["binary_sensor.predbat_ohme_connected"], f"Expected connected sensor, got {api.args.get('car_charging_planned')}"
     assert api.args.get("car_charging_soc") == ["sensor.predbat_ohme_battery_percent"], f"Expected battery percent sensor, got {api.args.get('car_charging_soc')}"
+    assert api.args.get("car_charging_now") == [POWER_WATTS_ENTITY], f"Expected the power sensor, got {api.args.get('car_charging_now')}"
 
     # ...but the Octopus Intelligent args are left to the separate method
     assert api.args.get("octopus_intelligent_slot") is None, f"Expected no slot wiring from car registration, got {api.args.get('octopus_intelligent_slot')}"
 
     print("PASS: auto config wired car_charging_energy")
+    return 0
+
+
+def _test_ohme_auto_config_keeps_user_car_charging_now(my_predbat=None):
+    """Test auto config keeps a car_charging_now sensor the user set in apps.yaml"""
+    print("**** Running test_ohme_auto_config_keeps_user_car_charging_now ****")
+
+    # The car's own charging sensor, set by hand, is the user's choice - only its live state is read,
+    # so there is no history to protect, but it may well report faster than Ohme's cloud poll
+    api = MockOhmeAPI()
+    api.base.args_from_apps_yaml = {"car_charging_now": "binary_sensor.my_car_charging"}
+    api.base.apps_yaml_override_warned = set()
+    api.args["car_charging_now"] = "binary_sensor.my_car_charging"
+    run_async(api.automatic_config())
+
+    assert api.args.get("car_charging_now") == "binary_sensor.my_car_charging", f"Expected the user's sensor to be kept, got {api.args.get('car_charging_now')}"
+    assert any("keeping your apps.yaml setting" in msg for msg in api.log_messages), f"Expected a note about keeping it, got {api.log_messages}"
+
+    print("PASS: auto config kept the user's car_charging_now sensor")
     return 0
 
 
@@ -2353,6 +2375,8 @@ def _test_ohme_auto_config_wires_car_charging_power(my_predbat=None):
     api.args["car_charging_energy"] = "sensor.myenergi_zappi_1234_charge_added_session"
     run_async(api.automatic_config())
     assert api.args.get("car_charging_power") is None, f"Expected no power wiring when another charger owns the energy sensor, got {api.args.get('car_charging_power')}"
+    # ...while car_charging_now still is: it is the Ohme charger drawing the power whoever measures the energy
+    assert api.args.get("car_charging_now") == [POWER_WATTS_ENTITY], f"Expected car_charging_now wired regardless, got {api.args.get('car_charging_now')}"
 
     # ...but Ohme's own energy entity, set explicitly in apps.yaml or left behind by an earlier
     # run, is still Ohme's charger, so the power sensor belongs with it (#4715 review)
