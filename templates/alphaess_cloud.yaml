@@ -53,18 +53,23 @@ pred_bat:
   # endpoints are documented as writable once per 24 hours.
   #alphaess_api_delay: 2
   #alphaess_min_write_interval: 300
+  # Wait 5 minutes after Predbat starts before sending schedules. Monitoring continues.
+  # Set to 0 to send without this delay.
   #alphaess_startup_write_delay: 300
 
-  # Optional power in Watts for the synthetic 10% hold charge profile. Below 10% SoC
-  # the battery may charge at this power; increase it if your inverter rejects 100 W.
-  # This is used by the periodic schedule API; the legacy API has no power field.
+  # When Predbat needs to stop battery discharge, it requests a 10% charge target.
+  # Below 10%, the battery may charge at this power (Watts). Increase it if your
+  # inverter rejects 100 W. Only works if your system lets Predbat set charging
+  # power through the cloud.
   #alphaess_hold_power: 100
 
-  # Optional graceful-shutdown action. self_consumption attempts to clear timed
-  # charge and discharge schedules; none leaves them as-is. The reserve copied into
-  # the disabled schedule does not control AlphaESS's self-consumption reserve; configure
-  # that separately in AlphaESS. Fallback behaviour can vary by inverter model.
-  # This is best effort: abrupt stops have no hook, and the cloud may rate-limit a write.
+  # On a normal stop, none leaves timed schedules in place. self_consumption tries
+  # to remove them but respects alphaess_min_write_interval (5 minutes by default).
+  # Use self_consumption_force to try even during that wait; AlphaESS may reject it,
+  # or an accepted write may limit writes after a restart. This only runs when
+  # inverter control is enabled and Predbat is not read-only. Neither option sets
+  # the inverter's working mode or its separate minimum battery level for powering
+  # your home; set that level in AlphaESS. Behaviour varies by inverter model.
   #alphaess_shutdown_mode: none
 
   # REQUIRED: the API does not report a grid export limit. If your grid connection is

@@ -1896,9 +1896,9 @@ def test_alphaess_unbind_is_not_gated_by_read_only():
 
 
 def test_alphaess_shutdown_clears_periodic_schedule_during_startup_delay():
-    """An opted-in graceful stop clears both periodic directions despite write gates."""
+    """Force mode clears both periodic directions despite startup and write gates."""
     client = _writable()
-    client.shutdown_mode = "self_consumption"
+    client.shutdown_mode = "self_consumption_force"
     client._periodic_ok["AL70"] = True
     client.local_schedule["AL70"] = _schedule(
         reserve=18,
@@ -1919,9 +1919,9 @@ def test_alphaess_shutdown_clears_periodic_schedule_during_startup_delay():
 
 
 def test_alphaess_shutdown_clears_legacy_schedule_and_keeps_reserve():
-    """Legacy shutdown disables both schedules without creating a synthetic hold."""
+    """Forced legacy shutdown disables both schedules without creating a hold."""
     client = _writable()
-    client.shutdown_mode = "self_consumption"
+    client.shutdown_mode = "self_consumption_force"
     client.local_schedule["AL70"] = _schedule(
         reserve=22,
         charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "04:00:00"},
@@ -1950,6 +1950,10 @@ def test_alphaess_shutdown_mode_is_optional_and_respects_control_guards():
         ("self_consumption", True, True, True, 0),
         ("self_consumption", True, False, False, 0),
         ("self_consumption", True, False, True, 1),
+        ("self_consumption_force", False, False, True, 0),
+        ("self_consumption_force", True, True, True, 0),
+        ("self_consumption_force", True, False, False, 0),
+        ("self_consumption_force", True, False, True, 1),
     ]:
         client = _client()
         client.shutdown_mode = mode
@@ -1967,7 +1971,7 @@ def test_alphaess_shutdown_mode_is_optional_and_respects_control_guards():
 def test_alphaess_shutdown_rate_limit_is_reported_without_retry():
     """A cloud pacing rejection leaves shutdown best effort and does not start a retry loop."""
     client = _writable()
-    client.shutdown_mode = "self_consumption"
+    client.shutdown_mode = "self_consumption_force"
     client._periodic_ok["AL70"] = True
     client.local_schedule["AL70"] = _schedule(reserve=15)
     client._post = AsyncMock(return_value=(6053, None))
@@ -1975,6 +1979,47 @@ def test_alphaess_shutdown_rate_limit_is_reported_without_retry():
     assert client._post.await_count == 1
     assert client.applied_payload.get("AL70", {}).get("periodic") is None
     assert any("could not clear" in message for message in client.log_messages)
+
+
+def test_alphaess_shutdown_self_consumption_respects_write_interval():
+    """An ordinary shutdown clear waits out the full interval, even inside a settle burst."""
+    client = _writable()
+    client.shutdown_mode = "self_consumption"
+    client._periodic_ok["AL70"] = True
+    client.local_schedule["AL70"] = _schedule(reserve=18, charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    client.startup_write_ready_at = float("inf")
+    client.last_write_time[("AL70", "periodic")] = 1000.0
+    client.write_burst_start[("AL70", "periodic")] = 1000.0
+    client.write_burst_writes[("AL70", "periodic")] = 1
+    client._post = AsyncMock(return_value=(200, None))
+    with patch("alphaess.time.time", return_value=1020.0):
+        run_async_local(client.final())
+    assert client._post.await_count == 0
+    assert any("could not be cleared on shutdown" in message for message in client.log_messages)
+    with patch("alphaess.time.time", return_value=1300.0):
+        run_async_local(client.final())
+    assert client._post.await_count == 1
+
+
+def test_alphaess_shutdown_force_skips_an_already_cleared_schedule():
+    """Force mode bypasses pacing, but does not repeat a matching clear write."""
+    client = _writable()
+    client.shutdown_mode = "self_consumption_force"
+    client._periodic_ok["AL70"] = True
+    client.local_schedule["AL70"] = _schedule(reserve=18)
+    cleared = client._empty_schedule()
+    cleared["reserve"] = 18
+    client.applied_payload["AL70"] = {"periodic": client.build_periodic_payload("AL70", cleared, hold_charge=None)}
+    client.last_write_time[("AL70", "periodic")] = float("inf")
+    client._post = AsyncMock(return_value=(200, None))
+    run_async_local(client.final())
+    assert client._post.await_count == 0
+
+
+def test_alphaess_shutdown_force_mode_is_accepted():
+    """The force value survives component configuration validation."""
+    client = MockAlphaESS(shutdown_mode="self_consumption_force")
+    assert client.shutdown_mode == "self_consumption_force"
 
 
 def run_alphaess_control_tests(my_predbat):
@@ -2057,6 +2102,9 @@ def run_alphaess_control_tests(my_predbat):
         ("shutdown_legacy", test_alphaess_shutdown_clears_legacy_schedule_and_keeps_reserve),
         ("shutdown_guards", test_alphaess_shutdown_mode_is_optional_and_respects_control_guards),
         ("shutdown_rate_limit", test_alphaess_shutdown_rate_limit_is_reported_without_retry),
+        ("shutdown_respects_write_interval", test_alphaess_shutdown_self_consumption_respects_write_interval),
+        ("shutdown_force_skips_matching_clear", test_alphaess_shutdown_force_skips_an_already_cleared_schedule),
+        ("shutdown_force_mode", test_alphaess_shutdown_force_mode_is_accepted),
     ]:
         try:
             if fn():
