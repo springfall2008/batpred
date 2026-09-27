@@ -1,5 +1,7 @@
 .app-content > main:has(> .plan-page) {
   max-width: none;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
 }
 
 .plan-page {
