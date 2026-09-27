@@ -959,7 +959,7 @@ def test_compare(my_predbat):
         "manual_freeze_export_times", "manual_demand_times", "manual_all_times", "charge_window_best", "export_window_best", "export_limits_best",
         "charge_limit_best", "cost_today_sofar", "carbon_today_sofar", "iboost_today", "iboost_plan", "import_today_now", "export_today_now",
         "octopus_intelligent_charging", "car_charging_plan_smart", "car_charging_limit", "car_charging_limit_model", "car_charging_soc",
-        "car_charging_battery_size", "car_charging_slots",
+        "car_charging_battery_size", "car_charging_slots", "car_charging_now_slots",
     ]:
         setattr(pb, name, None)
     pb.minutes_now = 0
