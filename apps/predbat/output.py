@@ -33,7 +33,7 @@ REASON_TEMPLATES = {
     "demand_rising": "Demand — battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
     "demand_falling": "Demand — the battery is expected to discharge to cover house load; no charging or exporting is scheduled this slot.",
     "demand_steady": "Demand — battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
-    "hold_for_car": "Hold for car — the battery is prevented from discharging while the car charges; house load beyond what solar covers comes from the grid instead.",
+    "hold_for_car": "Hold for car — for at least half of this slot the battery is prevented from discharging while the car charges; house load beyond what solar covers then comes from the grid.",
     # First half of a split slot held for a car - worded like the demand_before_export_* codes below
     "hold_for_car_before_export": "Until {split_time}, the battery is prevented from discharging while the car charges.",
     # Used for the first half of a split slot where the export window only starts partway through -
@@ -1328,8 +1328,9 @@ class Output:
                 soc_sym = "&searr;"
 
             # The discharge hold for a charging car, so the row explains a held SoC with the same "Hold for
-            # car" execute.py shows live
-            holding_for_car = self.plan_row_holding_for_car(minute_start, minute_end, car_hold_minutes)
+            # car" execute.py shows live. A charge or export row replaces this state and reason below (a split
+            # row checks its own pre-export segment), so only a Demand row needs it.
+            holding_for_car = charge_window_n < 0 and export_window_n < 0 and self.plan_row_holding_for_car(minute_start, minute_end, car_hold_minutes)
 
             state = "&#128663;" if holding_for_car else soc_sym
             state_color = "#FFFFFF"

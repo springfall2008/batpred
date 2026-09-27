@@ -259,8 +259,8 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
     if row is None or _codes(row) != ["hold_for_car"]:
         print("ERROR: car-held demand reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "Hold for car" not in _render(row, templates):
-        print("ERROR: car-held demand rendered text unexpected: {}".format(_render(row, templates)))
+    elif "Hold for car" not in _render(row, templates) or "at least half of this slot" not in _render(row, templates):
+        print("ERROR: car-held demand rendered text should say the hold covers at least half the slot: {}".format(_render(row, templates)))
         failed = True
     elif row["state_html"] != "&#128663;":
         print("ERROR: car-held demand state cell should show the car icon in place of the arrow, got: {}".format(row["state_html"]))
@@ -679,7 +679,7 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: flat pre-export tooltip unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    car_state = {field: getattr(my_predbat, field, None) for field in _CAR_HOLD_FIELDS}
+    car_state = {field: getattr(my_predbat, field) for field in _CAR_HOLD_FIELDS}
     try:
         failed |= _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now)
         failed |= _run_car_hold_render_tests(my_predbat, render, templates, minutes_now)
