@@ -140,6 +140,21 @@ def test_record_status_under_warning(my_predbat):
         else:
             print("OK: state recorded in front of the warning, debug and error_count kept")
 
+        # The next run raises the same warning mid-run: the state stays in front of it, so the sensor
+        # doesn't flip to the bare warning and back every cycle
+        my_predbat.had_errors = False
+        my_predbat.status_warning = None
+        my_predbat.record_status(warning, had_errors=True)
+        if my_predbat.dashboard_values[status_entity]["state"] != "Exporting, " + warning:
+            print("ERROR: a repeated warning should keep the state in front of it, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
+            failed = 1
+
+        # A different warning or error - e.g. a run bailing out without executing - is shown bare
+        my_predbat.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+        if my_predbat.dashboard_values[status_entity]["state"] != "Error: Failed to fetch inverter data, not able to execute the plan":
+            print("ERROR: a different error should be shown bare, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
+            failed = 1
+
         # had_errors set by a component thread with no warning recorded, right after a restart
         my_predbat.dashboard_values[status_entity] = {"state": "Demand", "attributes": {}}
         my_predbat.current_status = None

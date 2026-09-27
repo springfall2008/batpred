@@ -88,7 +88,7 @@ def split_status_warning(status):
     component_suffix = " with component errors"
     if lowered.startswith(component_prefix) and component_suffix in lowered:
         return status[len(component_prefix) : lowered.index(component_suffix)].strip(), status
-    if lowered.startswith("warn:") or lowered.startswith("error:"):
+    if lowered.startswith("warn:") or lowered.startswith("warn -") or lowered.startswith("error:"):
         return "", status
     for marker in (", warn:", ", error:"):
         index = lowered.find(marker)
@@ -2753,7 +2753,16 @@ class Output:
         if not extra:
             extra = ""
 
-        self.current_status = message + extra
+        # A warning that repeats the one already shown behind the previous run's state keeps that
+        # state in front of it, rather than flipping the sensor back to the bare warning for the few
+        # seconds until this run's own state is put back - two state changes every cycle for as long
+        # as the warning recurs. Any different warning or error, including the ones a run records
+        # when it bails out without executing, is shown bare.
+        state_message = message
+        if had_errors and self.current_status and self.current_status != message and self.current_status.endswith(", " + message):
+            state_message = self.current_status
+
+        self.current_status = state_message + extra
         if notify and self.previous_status != message and self.set_status_notify:
             if self.had_errors and had_errors:
                 # Already in error state, do not notify second error in a single run (spam)
@@ -2779,7 +2788,7 @@ class Output:
         # exactly the cycles the warning matters.
         self.dashboard_item(
             self.prefix + ".status",
-            state=message[:255],
+            state=state_message[:255],
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,

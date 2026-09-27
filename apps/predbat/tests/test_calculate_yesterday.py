@@ -2244,6 +2244,7 @@ def _test_yesterday_status_core(my_predbat, failed):
         ("Error: Complete run status Hold charging with component errors: fox", "Hold charging"),
         ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Exporting"),
         ("Freeze exporting, Hold for car, Error: Inverter 0 unable to read Export window", "Freeze exporting, Hold for car"),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature", ""),
     ]
     for status, expected in cases:
         result = yesterday_status_core(status)
@@ -2347,6 +2348,12 @@ def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
         failed = True
     if not captured.get("status_warnings") or set(captured["status_warnings"].values()) != {warning}:
         print("ERROR: the warning should be passed on to flag the slots, got {}".format(captured.get("status_warnings") and set(captured["status_warnings"].values())))
+        failed = True
+
+    # The real sequence in a cycle: the bare warning mid-run, then the state put in front of it
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning), (8, "Exporting, " + warning)])
+    if captured.get("charge_window_best") or not captured.get("export_window_best"):
+        print("ERROR: a bare warning followed by 'Exporting, Warn: ...' should rebuild exports only, got {} charge and {} export windows".format(len(captured.get("charge_window_best") or []), len(captured.get("export_window_best") or [])))
         failed = True
 
     # A freeze export under a warning stays a freeze - the exact state survives, not just its side
