@@ -155,7 +155,9 @@ test('normal mode keeps diagnostic plan values hidden', () => {
   const html = renderPlanTable(false)
 
   assert.doesNotMatch(html, /Debug details are enabled/)
-  assert.doesNotMatch(html, /Plan colour display/)
+  assert.match(html, /Plan colour display/)
+  assert.match(html, />Dots</)
+  assert.match(html, />Cells</)
   assert.doesNotMatch(html, /PV \(10%\)/)
   assert.doesNotMatch(html, /12\.34c with loss/)
   assert.doesNotMatch(html, /0\.10, 0\.05/)

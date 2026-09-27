@@ -44,6 +44,7 @@ import batLogoLight from '../assets/bat_logo_light.png'
 import batLogoDark from '../assets/bat_logo_dark.png'
 
 import './AppNavigation.css'
+import { MODERN_UI_VERSION } from '../version'
 
 type AppNavigationProps = {
   collapsed: boolean
@@ -451,10 +452,6 @@ export default function AppNavigation({
         </nav>
 
         <footer className="navigation-footer">
-          <span className="navigation-version" title={`Predbat ${version}`}>
-            {version}
-          </span>
-
           <div className="navigation-footer-actions">
             <button
               type="button"
@@ -480,6 +477,10 @@ export default function AppNavigation({
               <span className="navigation-theme-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
             </button>
           </div>
+
+          <span className="navigation-version" title={`Predbat ${version} · Modern UI ${MODERN_UI_VERSION}`}>
+            {version} · UI {MODERN_UI_VERSION}
+          </span>
         </footer>
       </aside>
 

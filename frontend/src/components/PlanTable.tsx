@@ -999,7 +999,7 @@ export default function PlanTable({
     }
   })
 
-  const colourCells = debugEnabled && colourStyle === 'cells'
+  const colourCells = colourStyle === 'cells'
 
   useEffect(() => {
     try {
@@ -1092,6 +1092,11 @@ export default function PlanTable({
 
           <p>Forecast actions and energy use for each plan slot.</p>
         </div>
+
+        <div className="plan-colour-style" role="group" aria-label="Plan colour display">
+          <button type="button" className={colourStyle === 'dots' ? 'is-active' : ''} aria-pressed={colourStyle === 'dots'} onClick={() => setColourStyle('dots')}>Dots</button>
+          <button type="button" className={colourStyle === 'cells' ? 'is-active' : ''} aria-pressed={colourStyle === 'cells'} onClick={() => setColourStyle('cells')}>Cells</button>
+        </div>
       </header>
 
       {debugEnabled && (
@@ -1101,10 +1106,6 @@ export default function PlanTable({
             rates include conversion losses and battery cycling.
           </span>
 
-          <div className="plan-colour-style" role="group" aria-label="Plan colour display">
-            <button type="button" className={colourStyle === 'dots' ? 'is-active' : ''} aria-pressed={colourStyle === 'dots'} onClick={() => setColourStyle('dots')}>Dots</button>
-            <button type="button" className={colourStyle === 'cells' ? 'is-active' : ''} aria-pressed={colourStyle === 'cells'} onClick={() => setColourStyle('cells')}>Cells</button>
-          </div>
         </div>
       )}
 

@@ -936,10 +936,6 @@
     border-left: 1px solid var(--color-border);
   }
 
-  .app-navigation.is-horizontal .navigation-version {
-    display: none;
-  }
-
   .app-navigation.is-horizontal .navigation-footer-actions,
   .app-navigation.is-horizontal.is-collapsed .navigation-footer-actions {
     flex-direction: row;
