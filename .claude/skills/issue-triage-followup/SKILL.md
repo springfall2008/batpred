@@ -16,6 +16,8 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. Find t
 
 If there's nothing posted since the last bot comment, say so plainly in your follow-up comment rather than inventing a reason to change anything.
 
+If the previous bot comment was an evidence request (`/issue-triage` step 1a) and nothing was ever investigated, there is no earlier assessment to revise. If the requested files have now arrived, do the full first-pass work from `/issue-triage` steps 2–8 (attachments, classification, duplicates, investigation, labels, priority), and remove `waiting_for_user` if the bot applied it. If they still haven't arrived, don't investigate or give a theory. Just repeat what is still missing.
+
 ## 2. Fetch any new attachments
 
 Same as `/issue-triage` step 2: if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.

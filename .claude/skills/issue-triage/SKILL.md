@@ -14,6 +14,23 @@ Arguments: `<issue-number> [scratch=<dir>]`. The scratch directory is a writable
 
 Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note any labels already applied — never remove a label a human added.
 
+## 1a. Evidence gate — ask for files before investigating
+
+From the issue text alone, decide whether a proper analysis would need a `predbat.log`, a `predbat_debug.yaml`, or other evidence, and whether the reporter has already attached it. Typical cases that need it: a plan that looks wrong, unexpected charging/exporting, an inverter not doing what Predbat asked, an error or crash, wrong rates or forecasts. Typical cases that don't: a pure question, a feature request, a docs error, or a report whose cause is fully visible in the text or a pasted traceback.
+
+If the needed evidence is missing, **stop here** and take the short path instead of steps 2–8:
+
+- Do **not** investigate the code, run tests, read the debug journal, or offer any theory, hypothesis, likely cause or workaround — not even a hedged one. A guess made without the evidence anchors everyone on it.
+- Apply `waiting_for_user`, plus a type label (step 3) only if it is obvious from the text, else `unclear`. Apply a component label (step 6) only if the issue names one. No priority, no duplicate search.
+- Post the one comment (step 9), opening with the automated first-pass triage disclosure line, saying that detailed triage is on hold until the files below are attached, and asking for exactly what is missing:
+    - **If the problem is happening now or will happen again:** a `predbat_debug.yaml` and `predbat.log` captured while it is happening — both from the **Debug** panel on Predbat's web interface. The debug file downloads as `predbat_debug.yaml.txt` and can be attached as-is.
+    - **If the incident is over:** the debug snapshot for that time, from the **Debug** column on the plan's **History** view (Predbat web interface → Plan → History), next to the time slot when the problem happened. With default settings only around the last 48 hours are kept, so ask them to grab it soon. Also ask for a `predbat.log` covering that period, if they still have one.
+    - **Other evidence, only where it fits the report:** logs from the integration involved (e.g. GivTCP, Solis/Solax/Fox, the Octopus integration, the HA core log), their `apps.yaml` renamed to `apps.txt`, screenshots of the plan or HA history graphs of the relevant entities, and when it happened (date, time, timezone).
+    - Link the [debug history docs](https://springfall2008.github.io/batpred/customisation/#debug-history) for the snapshot details.
+- Apply `BOT_TRIAGED` as usual (end of step 9). When the reporter attaches the files, a `BOT_REVIEW` re-review runs `/issue-triage-followup`, which does the full investigation.
+
+If the evidence is already attached, or the issue doesn't need any, carry on with step 2.
+
 ## 2. Fetch attachments
 
 If the body links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory rather than pulling it through WebFetch — a `predbat.log` is routinely tens of MB, well past what WebFetch will return.
