@@ -390,6 +390,15 @@ def regname_to_ha(name):
     return name
 
 
+def register_switch_on(value):
+    """
+    Is a switch register value on, read the same way publish_registers() reads it for the HA entity
+    """
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value in ["on", "true", "True"]
+
+
 VALIDATION_OPTIONS_PREFIX = "Value must be one of:"
 
 
@@ -736,8 +745,64 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         setting["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
+                        # Starting a force charge only imports if the AC charge gate is also on (GH#5269)
+                        if new_value is True and regname_to_ha(setting.get("name", "")) == "enable_force_charge":
+                            await self.ensure_ac_charge_gate(device)
                     else:
                         self.log("GECloud: Warn: Failed to write setting {} {} to {}".format(device, key, new_value))
+
+    def ac_charge_gate_keys(self, device):
+        """
+        Return the enable_ac_charge register keys that gate grid charging alongside enable_force_charge.
+
+        Only a device that also exposes enable_force_charge has the two-switch gate (GH#5040); on any
+        other device enable_ac_charge is itself the scheduled charge control, so an empty list is
+        returned. The AC charge upper limit switches share the prefix but are a different control, so
+        they are excluded as enable_default_options() does.
+        """
+        registers = self.settings.get(device, {})
+        ha_names = {key: regname_to_ha(registers[key].get("name", "")) for key in registers}
+        if "enable_force_charge" not in ha_names.values():
+            return []
+        return [key for key, ha_name in ha_names.items() if ("enable_ac_charge" in ha_name) and ("limit" not in ha_name)]
+
+    def force_charge_on(self, device):
+        """
+        Is the device's enable_force_charge register on in the cached settings
+        """
+        registers = self.settings.get(device, {})
+        return any(regname_to_ha(register.get("name", "")) == "enable_force_charge" and register_switch_on(register.get("value", None)) for register in registers.values())
+
+    async def ensure_ac_charge_gate(self, device):
+        """
+        Turn the AC charge gate back on for a device that is force charging, if something else turned it off.
+
+        enable_default_options() holds the gate on only once every 24 hours, so an Axle event, the
+        GivEnergy app or another integration clearing it in between left every planned grid charge
+        importing nothing (GH#5269). Reads the cached settings, so costs no API call when the gate is
+        already on. Returns True if a write was made.
+
+        Uses the live read only attribute, not just the switch, because an active Axle VPP event
+        forces read only through the attribute alone and the gate must be left to Axle then.
+        """
+        if self.read_only_now():
+            return False
+        registers = self.settings.get(device, {})
+        changed = False
+        for key in self.ac_charge_gate_keys(device):
+            value = registers[key].get("value", None)
+            if register_switch_on(value):
+                continue
+            ha_name = regname_to_ha(registers[key].get("name", ""))
+            self.log("GECloud: Warn: {} is off for {} while force charge is on, so grid charging would import nothing - turning it back on".format(ha_name, device))
+            result = await self.async_write_inverter_setting(device, key, True)
+            if result and ("value" in result):
+                registers[key]["value"] = result["value"]
+                await self.publish_registers(device, registers, select_key=key)
+                changed = True
+            else:
+                self.log("GECloud: Warn: Failed to enable AC charge for {}".format(device))
+        return changed
 
     async def number_event(self, entity_id, value):
         """
@@ -2016,7 +2081,7 @@ class GECloudDirect(ComponentBase):
             if not self.evc_control_enabled:
                 self.log("GECloud: EV charger control is switched off from the last session")
 
-    def evc_read_only_now(self):
+    def read_only_now(self):
         """Is Predbat in read only mode - the live attribute rather than just the config arg.
 
         Other components force read only by setting the attribute without touching the arg,
@@ -2069,7 +2134,7 @@ class GECloudDirect(ComponentBase):
         if not self.evc_control_active:
             return
         reason = None
-        if self.evc_read_only_now():
+        if self.read_only_now():
             reason = "Predbat is in read only mode"
         elif not self.evc_control_enabled:
             reason = "the EV charger control switch is off"
@@ -2333,6 +2398,13 @@ class GECloudDirect(ComponentBase):
                 self.default_options_stamp = now_utc
                 for device in self.device_list:
                     await self.enable_default_options(device, self.settings[device])
+
+            # The 24 hour pass above is only a backstop for the AC charge gate: while a force charge is
+            # running, re-assert it on every settings refresh in case it was cleared mid-charge (GH#5269).
+            # Nothing is written while Predbat is not force charging, so an external controller is not fought.
+            for device in self.device_list:
+                if self.force_charge_on(device):
+                    await self.ensure_ac_charge_gate(device)
 
         # Clear pending writes
         for device in self.device_list:
