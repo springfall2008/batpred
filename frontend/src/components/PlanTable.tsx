@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, useRef } from 'react'
+import { Fragment, useEffect, useState, useRef, type CSSProperties } from 'react'
 
 import {
   FontAwesomeIcon,
@@ -38,6 +38,10 @@ type PlanTableProps = {
 }
 
 type PlanRow = Plan['rows'][number]
+
+function cellColour(colour?: string): CSSProperties | undefined {
+  return colour ? { '--plan-cell-colour': colour } as CSSProperties : undefined
+}
 
 type ActionType =
   | 'charge'
@@ -309,10 +313,8 @@ function RateCell({
 
   return (
     <td
-      className="
-                plan-number
-                plan-rate-cell
-            "
+      className={['plan-number', 'plan-rate-cell', type === 'import' && row.rate_color_import ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+      style={cellColour(type === 'import' ? row.rate_color_import : undefined)}
     >
       <div ref={controlRef} className="plan-rate-control">
         <button
@@ -989,6 +991,24 @@ export default function PlanTable({
 
   const [openCellEditor, setOpenCellEditor] = useState<string | null>(null)
 
+  const [colourStyle, setColourStyle] = useState<'dots' | 'cells'>(() => {
+    try {
+      return localStorage.getItem('predbat-plan-colour-style') === 'cells' ? 'cells' : 'dots'
+    } catch {
+      return 'dots'
+    }
+  })
+
+  const colourCells = debugEnabled && colourStyle === 'cells'
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('predbat-plan-colour-style', colourStyle)
+    } catch {
+      // Browsers may disable storage; the in-memory preference still works.
+    }
+  }, [colourStyle])
+
   useEffect(() => {
     function closeMenu() {
       setOpenOverrideTime(null)
@@ -1076,13 +1096,20 @@ export default function PlanTable({
 
       {debugEnabled && (
         <div className="plan-debug-notice" role="status">
-          Debug details are enabled: bracketed forecasts show the 10% confidence case, and adjusted
-          rates include conversion losses and battery cycling.
+          <span>
+            Debug details are enabled: bracketed forecasts show the 10% confidence case, and adjusted
+            rates include conversion losses and battery cycling.
+          </span>
+
+          <div className="plan-colour-style" role="group" aria-label="Plan colour display">
+            <button type="button" className={colourStyle === 'dots' ? 'is-active' : ''} aria-pressed={colourStyle === 'dots'} onClick={() => setColourStyle('dots')}>Dots</button>
+            <button type="button" className={colourStyle === 'cells' ? 'is-active' : ''} aria-pressed={colourStyle === 'cells'} onClick={() => setColourStyle('cells')}>Cells</button>
+          </div>
         </div>
       )}
 
       <div className="plan-table-scroll">
-        <table className={`plan-table ${debugEnabled ? 'is-debug' : ''}`}>
+        <table className={['plan-table', debugEnabled ? 'is-debug' : '', colourCells ? 'is-cell-colours' : ''].filter(Boolean).join(' ')}>
           <thead>
             <tr>
               <th>
@@ -1435,7 +1462,10 @@ export default function PlanTable({
                       )}
                     </td>
 
-                    <td className="plan-number">
+                    <td
+                      className={['plan-number', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+                      style={cellColour(row.load_color)}
+                    >
                       <span className="plan-value-with-indicator">
                         {row.load_forecast > 0 && row.load_color && (
                           <span
@@ -1504,7 +1534,10 @@ export default function PlanTable({
 
                     <td className="plan-number plan-soc">{row.soc_percent}%</td>
 
-                    <td className="plan-number">
+                    <td
+                      className={['plan-number', Math.abs(row.cost_change) >= 0.005 && row.cost_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+                      style={cellColour(Math.abs(row.cost_change) >= 0.005 ? row.cost_color : undefined)}
+                    >
                       <span className="plan-value-with-indicator">
                         {Math.abs(row.cost_change) >= 0.005 && row.cost_color && (
                           <span
@@ -1524,7 +1557,10 @@ export default function PlanTable({
 
                     {showCarbon && (
                       <>
-                        <td className="plan-number">
+                        <td
+                          className={['plan-number', row.carbon_intensity_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+                          style={cellColour(row.carbon_intensity_color)}
+                        >
                           <span className="plan-value-with-indicator">
                             {row.carbon_intensity_color && (
                               <span
@@ -1537,7 +1573,10 @@ export default function PlanTable({
                           </span>
                         </td>
 
-                        <td className="plan-number">
+                        <td
+                          className={['plan-number', Math.abs(row.carbon_change ?? 0) >= 10 && row.carbon_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+                          style={cellColour(Math.abs(row.carbon_change ?? 0) >= 10 ? row.carbon_color : undefined)}
+                        >
                           <span className="plan-value-with-indicator">
                             {Math.abs(row.carbon_change ?? 0) >= 10 && row.carbon_color && (
                               <span

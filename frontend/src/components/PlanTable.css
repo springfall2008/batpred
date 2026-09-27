@@ -40,12 +40,42 @@
 }
 
 .plan-debug-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   padding: 0.55rem 1rem;
   border-bottom: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-current) 8%, var(--color-surface));
   color: var(--color-text-secondary);
   font-size: 0.68rem;
   line-height: 1.4;
+}
+
+.plan-colour-style {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 0.12rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+}
+
+.plan-colour-style button {
+  padding: 0.25rem 0.45rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.plan-colour-style button.is-active {
+  background: var(--color-current);
+  color: white;
 }
 
 .plan-table thead th {
@@ -153,6 +183,14 @@
   flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--color-text) 18%, transparent);
   border-radius: 50%;
+}
+
+.plan-table.is-cell-colours .plan-value-indicator {
+  display: none;
+}
+
+.plan-table.is-cell-colours td.has-plan-cell-colour {
+  background: color-mix(in srgb, var(--plan-cell-colour) 24%, var(--color-surface));
 }
 
 .plan-totals-row td {
