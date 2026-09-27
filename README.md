@@ -4,6 +4,21 @@
 ![image](https://github.com/springfall2008/batpred/actions/workflows/publish-docs.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/pages/pages-build-deployment/badge.svg)
 
+## Test UI
+
+It's possible to replace the existing ui in Predbat with this test version. Disable auto updated then edit apps.yaml as follows
+
+```
+pred_bat:
+
+  web_ui: modern
+  auto_update: false
+  predbat_repository: calvind80/predbat-modern-ui-test
+
+```
+
+Once predbat restarts, choose the main version and once updated the new ui should appear. To remove it and go back to standard delete the predbat_repository line from apps.yaml and choose an official version.
+
 ## Introduction
 
 Home battery prediction and automatic charging for Home Assistant supporting multiple inverters, including GivEnergy, Solis, Huawei, SolarEdge, SigEnergy, FoxESS, Sofar, Tesla Powerwall and many more.
