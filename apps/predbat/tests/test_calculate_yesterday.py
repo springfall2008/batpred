@@ -1524,6 +1524,64 @@ def _test_slot_status_read_at_the_right_minute(my_predbat, failed):
     return failed
 
 
+def _test_recorded_hold_for_car_minutes(my_predbat, failed):
+    """The actual-history table's car icon comes from the recorded "Hold for car" status (#5147 review).
+
+    That table shows measured SoC, so the car icon must follow what happened rather than the model.
+    calculate_yesterday() passes publish_html_plan() the plan minutes whose status was "Hold for car",
+    mapped from minutes-ago the same way as the charge/export reconstruction: plan-minute m is
+    (1800 - m) minutes ago here. Holds for plan-minutes 1205-1209, deliberately off-centre in its slot.
+    """
+    print("calculate_yesterday: Test - recorded Hold for car minutes are passed to the actual-history table (#5147)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    start = now_utc - timedelta(minutes=1800)
+    status_points = []
+    for step in range(0, 1800, 5):
+        stamp = start + timedelta(minutes=step)
+        status_points.append({"state": "Hold for car" if 1205 <= step < 1210 else "Demand", "last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"), "attributes": {"p/kWh": "0.0"}})
+    status_hist = [status_points]
+
+    def _history_with_one_hold(entity_id, days=30, required=True, tracked=True):
+        """Return the recorded history calculate_yesterday() asks for, with one short Hold for car."""
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        """Record the car_hold_minutes the actual-history table is rendered with."""
+        captured["car_hold_minutes"] = kwargs.get("car_hold_minutes")
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_one_hold
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    hold = captured.get("car_hold_minutes")
+    if hold is None:
+        print("ERROR: the actual-history table was rendered without car_hold_minutes")
+        failed = True
+    elif hold != set(range(1205, 1210)):
+        print("ERROR: recorded Hold for car at plan-minutes 1205-1209 mapped to {}".format(sorted(hold)[:10]))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 def _test_more_active_slot_status(my_predbat, failed):
     """Unit tests for the slot-status collapse rule (#4843).
 
@@ -2194,6 +2252,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
     failed = _test_slot_status_read_at_the_right_minute(my_predbat, failed)
+    failed = _test_recorded_hold_for_car_minutes(my_predbat, failed)
     failed = _test_mixed_slot_keeps_most_active_state(my_predbat, failed)
     failed = _test_more_active_slot_status(my_predbat, failed)
     failed = _test_short_export_inside_a_freeze_slot(my_predbat, failed)

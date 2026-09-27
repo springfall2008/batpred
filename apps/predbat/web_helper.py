@@ -940,29 +940,58 @@ function toggleValue(rowId) {
     updateChangeCounter();
 }
 
-function editValue(rowId) {
+async function revealSecretValue(row, attribute, path) {
+    // The page serves credentials masked, so a data-secret row's original is the placeholder,
+    // not the key - fetch the real value once and make it the row's original, so the input
+    // offers the real key and saving it unchanged is not seen as a change
+    try {
+        const response = await fetch('./apps_value?path=' + encodeURIComponent(path));
+        const result = await response.json();
+        if (!result.success) {
+            showMessage(result.message, 'error');
+            return false;
+        }
+        row.dataset[attribute] = result.value;
+        delete row.dataset.secret;
+        // A credential is text whatever it looks like - revealed marks the row so the editor
+        // neither offers the entity dropdown for a dotted key nor saves a digit-only one as a number
+        row.dataset.revealed = '1';
+        return true;
+    } catch (error) {
+        showMessage('Could not load the value to edit: ' + error.message, 'error');
+        return false;
+    }
+}
+
+async function editValue(rowId) {
     const row = document.getElementById('row_' + rowId);
     const valueCell = document.getElementById('value_' + rowId);
     const argName = row.dataset.argName;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'originalValue', argName))) {
+        return;
+    }
     const originalValue = row.dataset.originalValue;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[argName] ? pendingChanges[argName].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown
         showEntityDropdown(rowId, currentValue);
     } else {
         // Show regular text input for non-entity values
         valueCell.innerHTML = `
-            <input type="text" class="edit-input" id="input_${rowId}" value="${currentValue}">
+            <input type="text" class="edit-input" id="input_${rowId}">
             <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('input_' + rowId).focus();
+        // Set as a property rather than written into the markup, so a value holding a quote
+        // (ordinary in a password) cannot end the attribute early and be saved back truncated
+        const input = document.getElementById('input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -973,9 +1002,10 @@ function getDisplayValueEntity(entityId) {
         const entityState = allStates[entityId];
         const state = entityState.state || '';
         const unit = entityState.unit_of_measurement || '';
-        return `${entityId} = ${state} ${unit}`;
+        return escapeHtml(`${entityId} = ${state} ${unit}`);
     }
-    return entityId; // Fallback to just the entity ID if no state found
+    // Every caller assigns the result to innerHTML, and a revealed credential can hold < or &
+    return escapeHtml(entityId); // Fallback to just the entity ID if no state found
 }
 
 function cancelEdit(rowId) {
@@ -1047,7 +1077,7 @@ function saveValue(rowId) {
     }
 
     // Determine if this is an entity or numerical value
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1636,29 +1666,34 @@ function toggleNestedValue(rowId) {
     updateChangeCounter();
 }
 
-function editNestedValue(rowId) {
+async function editNestedValue(rowId) {
     const row = document.getElementById('nested_row_' + rowId);
     const valueCell = document.getElementById('nested_value_' + rowId);
     const nestedPath = row.dataset.nestedPath;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'nestedOriginal', nestedPath))) {
+        return;
+    }
     const originalValue = row.dataset.nestedOriginal;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[nestedPath] ? pendingChanges[nestedPath].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, currentValue);
     } else {
         // Replace the value cell content with an input field for non-entity values
         valueCell.innerHTML = `
-            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${currentValue}">
+            : <input type="text" class="edit-input" id="nested_input_${rowId}">
             <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('nested_input_' + rowId).focus();
+        // Set as a property rather than written into the markup - see editValue()
+        const input = document.getElementById('nested_input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -1692,7 +1727,7 @@ function saveNestedValue(rowId) {
     }
 
     // Determine the value type and validate accordingly
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1993,7 +2028,10 @@ function discardAllChanges() {
     return text
 
 
-def get_html_config_css():
+def get_filter_css():
+    """
+    Return the CSS for the filter box, shared by the Config and Apps pages
+    """
     text = """
         <style>
         .filter-container {
@@ -2015,6 +2053,13 @@ def get_html_config_css():
             border-color: #555;
         }
         </style>
+    """
+    return text
+
+
+def get_html_config_css():
+    text = get_filter_css()
+    text += """
         <script>
         // Save and restore filter value between page loads
         function saveFilterValue() {
@@ -2057,6 +2102,69 @@ def get_html_config_css():
 
         // Register event to restore filter value after page load
         document.addEventListener('DOMContentLoaded', restoreFilterValue);
+        </script>
+    """
+    return text
+
+
+def get_apps_filter_js():
+    """
+    Return the client-side row filter for the apps.yaml page filter box
+    """
+    text = """
+        <script>
+        // Save and restore the filter value between page loads, as the apps page auto-refreshes
+        function saveAppsFilterValue() {
+            localStorage.setItem('appsFilterValue', document.getElementById('appsFilter').value);
+        }
+
+        function restoreAppsFilterValue() {
+            const savedFilter = localStorage.getItem('appsFilterValue');
+            if (savedFilter) {
+                document.getElementById('appsFilter').value = savedFilter;
+                filterApps();
+            }
+        }
+
+        function filterApps() {
+            const filterValue = document.getElementById('appsFilter').value.toLowerCase();
+            const rows = document.querySelectorAll('tr[data-arg-name], tr[data-nested-path]');
+
+            // Save filter value for persistence
+            saveAppsFilterValue();
+
+            rows.forEach(function(row) {
+                // A nested row's path starts with the name of the setting it sits under, so a
+                // match on a setting keeps everything nested below it visible with no extra work
+                const path = (row.getAttribute('data-nested-path') || row.getAttribute('data-arg-name') || '').toLowerCase();
+                let matched = path.includes(filterValue);
+                if (!matched) {
+                    // Only match the value of a leaf row - a parent's value cell holds the text of
+                    // every row nested below it, so matching it would show the whole subtree
+                    const valueCell = row.children[1];
+                    if (valueCell && !valueCell.querySelector('tr')) {
+                        matched = valueCell.textContent.toLowerCase().includes(filterValue);
+                    }
+                }
+                row.style.display = matched ? '' : 'none';
+            });
+
+            // Re-show the parents of every row left visible, so a match nested inside a setting
+            // whose own name does not match is still reachable
+            rows.forEach(function(row) {
+                if (row.style.display === 'none') {
+                    return;
+                }
+                let parent = row.parentElement ? row.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                while (parent) {
+                    parent.style.display = '';
+                    parent = parent.parentElement ? parent.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                }
+            });
+        }
+
+        // Register event to restore filter value after page load
+        document.addEventListener('DOMContentLoaded', restoreAppsFilterValue);
         </script>
     """
     return text
@@ -3116,6 +3224,211 @@ body.dark-mode .edit-button:hover {
     .args-table th,
     .args-table td {
         padding: 6px;
+    }
+}
+</style>
+"""
+    return text
+
+
+def get_discovery_css():
+    """
+    Return CSS for the discovery catalogue page
+    """
+    text = """
+<style>
+.discovery-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 12px 0 20px 0;
+}
+
+.discovery-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.discovery-count {
+    background: #eceff1;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+body.dark-mode .discovery-count {
+    background: #37474f;
+    color: #eee;
+}
+
+.discovery-toggle {
+    margin-left: auto;
+    padding: 6px 14px;
+    border-radius: 4px;
+    text-decoration: none;
+    background: #1976D2;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.discovery-toggle:hover {
+    background: #1565C0;
+}
+
+.discovery-warning {
+    border-left: 5px solid #d32f2f;
+    background: #ffebee;
+    color: #b71c1c;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-warning {
+    background: #4a1c1c;
+    color: #ffcdd2;
+}
+
+.discovery-conflicts {
+    border-left: 5px solid #f57c00;
+    background: #fff8e1;
+    color: #6d4c00;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-conflicts {
+    background: #4a3c1c;
+    color: #ffe082;
+}
+
+.discovery-clear {
+    border-left: 5px solid #4CAF50;
+    background: #e8f5e9;
+    color: #1b5e20;
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 18px;
+}
+
+body.dark-mode .discovery-clear {
+    background: #1b3a1e;
+    color: #c8e6c9;
+}
+
+.discovery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 18px;
+    margin-bottom: 26px;
+}
+
+.discovery-card {
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fff;
+    color: #333;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+}
+
+body.dark-mode .discovery-card {
+    background: #2c2c2c;
+    color: #eee;
+    border-color: #555;
+}
+
+.discovery-card-title {
+    font-weight: bold;
+    font-size: 1.05em;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.discovery-source {
+    background: #1976D2;
+    color: #fff;
+    border-radius: 10px;
+    padding: 2px 9px;
+    font-size: 0.75em;
+    font-weight: normal;
+}
+
+.discovery-field {
+    margin: 3px 0;
+    line-height: 1.45;
+}
+
+.discovery-key {
+    color: #555;
+    font-weight: 600;
+}
+
+body.dark-mode .discovery-key {
+    color: #bbb;
+}
+
+.discovery-nested {
+    margin-left: 16px;
+    border-left: 2px solid #e0e0e0;
+    padding-left: 10px;
+}
+
+body.dark-mode .discovery-nested {
+    border-left-color: #555;
+}
+
+.discovery-token {
+    font-family: monospace;
+    background: #f1f1f1;
+    border-radius: 3px;
+    padding: 0 4px;
+}
+
+body.dark-mode .discovery-token {
+    background: #3a3a3a;
+}
+
+.discovery-raw {
+    background: #f6f6f6;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    white-space: pre;
+}
+
+body.dark-mode .discovery-raw {
+    background: #1e1e1e;
+    color: #ddd;
+    border-color: #555;
+}
+
+.discovery-empty {
+    padding: 20px;
+    background: #f5f5f5;
+    border-radius: 6px;
+    color: #555;
+}
+
+body.dark-mode .discovery-empty {
+    background: #333;
+    color: #ccc;
+}
+
+@media (max-width: 768px) {
+    .discovery-grid {
+        grid-template-columns: 1fr;
     }
 }
 </style>
@@ -6924,7 +7237,9 @@ def get_plan_renderer_js():
 
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
-                    const carVal = row.car_charging > 0 ? row.car_charging : '&#9866;';
+                    // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
+                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '';
+                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging} +${carCancelled}` : row.car_charging) : (carCancelled || '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 
@@ -7133,12 +7448,12 @@ def get_plan_renderer_js():
                 return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
             });
         });
-        // A split cell's first half is always a demand_before_export_* code paired with the export
+        // A split cell's first half is always a demand_before_export_* or hold_for_car_before_export code paired with the export
         // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
         // instead of two disconnected sentences. Length is >= 2 rather than == 2 because a history
         // slot that held more than one state appends a mixed_slot_states note after the pair, and
         // that must not cost the narrative its "Then".
-        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && (reasons[0].code.indexOf('demand_before_export_') === 0 || reasons[0].code === 'hold_for_car_before_export')) {
             rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
         }
         return rendered.filter(Boolean).join(' ');
@@ -8627,6 +8942,7 @@ setTimeout(function() {
         + config_warning
         + """</a>
 <a href='./components'>Components</a>
+<a href='./discovery'>Discovery</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./browse'>Browse</a>
 <a href='./internals'>Internals</a>

@@ -19,7 +19,7 @@ from unittest.mock import patch, MagicMock
 import pytz
 import aiohttp
 
-from solcast import SolarAPI
+from solcast import SolarAPI, FORECAST_ENTITY_ARGS, SOLCAST_DISCOVERY_COVERAGE
 from solar_model import convert_azimuth
 from storage import StorageLocalFiles
 from const import TIME_FORMAT
@@ -5499,6 +5499,912 @@ def test_pv_calibration_all_days_down(my_predbat):
 
 
 # ============================================================================
+# Discovery Catalogue Tests
+# ============================================================================
+
+
+def test_build_discovery_solcast_sites(my_predbat):
+    """
+    build_discovery() reports one forecasts record per Solcast resource id already discovered,
+    with the resource id pseudonymised via account_ids rather than published in the clear via info.
+    """
+    print("  - test_build_discovery_solcast_sites")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one", "site-two"]
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        for resource_id in ("site-one", "site-two"):
+            device_id = "solcast:{}".format(resource_id)
+            record = by_device.get(device_id)
+            if record is None:
+                print(f"ERROR: expected a forecasts record for {device_id}, got {list(by_device)}")
+                failed = True
+                continue
+            if record.get("kind") != "solar":
+                print(f"ERROR: expected kind 'solar' for {device_id}, got {record.get('kind')}")
+                failed = True
+            if record.get("account_ids", {}).get("site_id") != resource_id:
+                print(f"ERROR: expected account_ids.site_id {resource_id!r} for {device_id}, got {record.get('account_ids')}")
+                failed = True
+            if resource_id in record.get("info", {}).values():
+                print(f"ERROR: resource id {resource_id!r} must not appear in the clear 'info' container: {record.get('info')}")
+                failed = True
+            if record.get("info", {}).get("vendor") != "Solcast":
+                print(f"ERROR: expected info.vendor 'Solcast' for {device_id}, got {record.get('info')}")
+                failed = True
+            if record.get("coverage") != dict(SOLCAST_DISCOVERY_COVERAGE):
+                print(f"ERROR: expected coverage {SOLCAST_DISCOVERY_COVERAGE} for {device_id}, got {record.get('coverage')}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_never_reports_user_authored_site_name(my_predbat):
+    """
+    A Solcast site's own "name" is user-chosen free text and must never enter the catalogue -
+    proven end-to-end through the real site-discovery loop (download_solcast_data()), not just by
+    inspecting what build_discovery() itself chooses to read.
+    """
+    print("  - test_build_discovery_never_reports_user_authored_site_name")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.solcast_host = "https://api.solcast.com.au"
+        solar.solcast_api_key = "test_key"
+        solar.solcast_sites = None  # force the auto-discovery /rooftop_sites path, whose site objects carry a "name"
+
+        site_name = "My Roof - 123 Fake Street"
+        # Registered in this order so the more specific "forecasts" substring is checked first -
+        # the per-site forecast URL contains BOTH substrings ("…/rooftop_sites/site-abc/forecasts"),
+        # and mock_aiohttp_session() returns the first substring match it finds.
+        test_api.set_mock_response("forecasts", {"forecasts": []}, 200)
+        test_api.set_mock_response("rooftop_sites", {"sites": [{"resource_id": "site-abc", "name": site_name}]}, 200)
+
+        def create_mock_session(*args, **kwargs):
+            """Return the test harness's mocked aiohttp session, ignoring the real constructor args."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.download_solcast_data())
+
+        if solar.discovered_sites != ["site-abc"]:
+            print(f"ERROR: expected discovered_sites == ['site-abc'], got {solar.discovered_sites}")
+            failed = True
+
+        report = solar.build_discovery()
+        if site_name in str(report):
+            print(f"ERROR: the user-authored site name {site_name!r} leaked into build_discovery()'s output: {report}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_forecast_solar_alongside_solcast(my_predbat):
+    """
+    forecast.solar produces its own forecasts record, reported "when enabled" - independently of,
+    and alongside, any Solcast records already discovered - rather than only when it happens to win
+    fetch_pv_forecast()'s own fallback precedence this particular cycle.
+    """
+    print("  - test_build_discovery_forecast_solar_alongside_solcast")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        if "solcast:site-one" not in by_device:
+            print(f"ERROR: expected the Solcast record to still be present alongside forecast_solar, got {list(by_device)}")
+            failed = True
+        record = by_device.get("forecast_solar")
+        if record is None:
+            print(f"ERROR: expected a forecast_solar record when forecast_solar is configured, got {list(by_device)}")
+            failed = True
+        else:
+            if record.get("kind") != "solar":
+                print(f"ERROR: expected kind 'solar' for forecast_solar, got {record.get('kind')}")
+                failed = True
+            expected_coverage = {"horizon_hours": solar.forecast_days * 24, "resolution_minutes": solar.plan_interval_minutes}
+            if record.get("coverage") != expected_coverage:
+                print(f"ERROR: expected coverage {expected_coverage} for forecast_solar, got {record.get('coverage')}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_open_meteo_enabled(my_predbat):
+    """
+    Open-Meteo produces its own forecasts record, with a fixed 60-minute resolution matching its
+    documented hourly API - see fetch_pv_forecast()'s own comment on this.
+    """
+    print("  - test_build_discovery_open_meteo_enabled")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        record = by_device.get("open_meteo")
+        if record is None:
+            print(f"ERROR: expected an open_meteo record when open_meteo_forecast is configured, got {list(by_device)}")
+            failed = True
+        else:
+            if record.get("kind") != "solar":
+                print(f"ERROR: expected kind 'solar' for open_meteo, got {record.get('kind')}")
+                failed = True
+            expected_coverage = {"horizon_hours": solar.forecast_days * 24, "resolution_minutes": 60}
+            if record.get("coverage") != expected_coverage:
+                print(f"ERROR: expected coverage {expected_coverage} for open_meteo, got {record.get('coverage')}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_ha_sensor_entities_only_when_exist(my_predbat):
+    """
+    Requirement 2: pv_forecast_* are user-configured apps.yaml values pointing at entities an
+    EXTERNAL integration publishes, not ones this component writes itself - but "exists in the
+    state store" is still checked exactly the same way every other reporter checks it, so a
+    configured-but-never-seen entity must not be claimed as discovered.
+    """
+    print("  - test_build_discovery_ha_sensor_entities_only_when_exist")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+        solar.pv_forecast_tomorrow = "sensor.solcast_pv_forecast_tomorrow"  # configured, never published
+        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", "5.5")
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+        ha_record = by_device.get("ha_sensors")
+
+        if ha_record is None:
+            print(f"ERROR: expected an ha_sensors record, got {list(by_device)}")
+            failed = True
+        else:
+            entities = ha_record.get("entities", {})
+            if set(entities) != {"pv_forecast_today"}:
+                print(f"ERROR: expected only pv_forecast_today to be reported (the one that actually exists), got {set(entities)}")
+                failed = True
+            elif entities["pv_forecast_today"].get("entity_id") != "sensor.solcast_pv_forecast_today":
+                print(f"ERROR: unexpected entity descriptor: {entities['pv_forecast_today']}")
+                failed = True
+            elif entities["pv_forecast_today"].get("domain") != "sensor":
+                print(f"ERROR: expected domain 'sensor', got {entities['pv_forecast_today'].get('domain')}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_ha_sensors_all_four_entities(my_predbat):
+    """
+    All four of FORECAST_ENTITY_ARGS are reported together when every one is both configured and
+    actually published.
+    """
+    print("  - test_build_discovery_ha_sensors_all_four_entities")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        for name in FORECAST_ENTITY_ARGS:
+            entity_id = "sensor.solcast_{}".format(name)
+            setattr(solar, name, entity_id)
+            test_api.set_mock_ha_state(entity_id, "1.0")
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+        entities = by_device.get("ha_sensors", {}).get("entities", {})
+
+        if set(entities) != set(FORECAST_ENTITY_ARGS):
+            print(f"ERROR: expected all of {FORECAST_ENTITY_ARGS}, got {set(entities)}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_no_ha_sensors_record_when_nothing_exists(my_predbat):
+    """
+    No forecasts record is invented for the HA-sensor path when none of pv_forecast_* are both
+    configured and actually published - an absent fact stays absent rather than becoming an
+    empty record.
+    """
+    print("  - test_build_discovery_no_ha_sensors_record_when_nothing_exists")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"  # configured, never published
+
+        report = solar.build_discovery()
+        if report["forecasts"]:
+            print(f"ERROR: expected no forecasts records when nothing is configured/exists, got {report['forecasts']}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo(my_predbat):
+    """
+    Requirement 6 revisited (task 9 review, finding 1): never invent a fact - but also never
+    withhold a genuinely known one. forecast.solar and Open-Meteo carry a real, already-configured
+    kwp per plane (the same field annual.py/web_annual.py read), so their records DO carry
+    ratings.capacity_kw. Solcast has no such source anywhere in this component's own site or
+    forecast payloads, and ha_sensors describes an external integration whose panel size Predbat
+    was never told, so neither carries a ratings container at all here (no active_forecast_source
+    is set in this test, so coverage.active plays no part either - see the dedicated active-marker
+    tests below).
+    """
+    print("  - test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", "5.5")
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        if "ratings" in by_device.get("solcast:site-one", {}):
+            print(f"ERROR: the Solcast record carries a ratings container that was never genuinely known: {by_device['solcast:site-one'].get('ratings')}")
+            failed = True
+        if "ratings" in by_device.get("ha_sensors", {}):
+            print(f"ERROR: the ha_sensors record carries a ratings container that was never genuinely known: {by_device['ha_sensors'].get('ratings')}")
+            failed = True
+        if by_device.get("forecast_solar", {}).get("ratings") != {"capacity_kw": 4.0}:
+            print(f"ERROR: expected forecast_solar ratings == {{'capacity_kw': 4.0}}, got {by_device.get('forecast_solar', {}).get('ratings')}")
+            failed = True
+        if by_device.get("open_meteo", {}).get("ratings") != {"capacity_kw": 4.0}:
+            print(f"ERROR: expected open_meteo ratings == {{'capacity_kw': 4.0}}, got {by_device.get('open_meteo', {}).get('ratings')}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_capacity_kw_sums_across_planes(my_predbat):
+    """
+    ratings.capacity_kw is the sum of every configured plane's own kwp, defaulting a plane with no
+    kwp given to 3.0 - the same default download_forecast_solar_data()/download_open_meteo_data()
+    themselves fall back to, so the reported figure matches what a real fetch would use.
+    """
+    print("  - test_build_discovery_capacity_kw_sums_across_planes")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}, {"latitude": 51.6, "longitude": -0.2}]  # second plane has no kwp - defaults to 3.0
+
+        report = solar.build_discovery()
+        by_device = {record["device_id"]: record for record in report["forecasts"]}
+
+        expected = 4.0 + 3.0
+        actual = by_device.get("forecast_solar", {}).get("ratings", {}).get("capacity_kw")
+        if actual != expected:
+            print(f"ERROR: expected summed capacity_kw {expected}, got {actual}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_active_marks_the_serving_provider(my_predbat):
+    """
+    Task 9 review, finding 2: coverage.active: True marks whichever record's provider actually
+    served the most recent successful fetch (self.active_forecast_source), answering the design
+    spec's own stated reason for this section - "it is invisible which one actually fed the plan
+    when several are configured". With two providers configured, exactly one record is marked
+    active, and it is the one fetch_pv_forecast()'s own precedence actually selects. Carried in
+    coverage rather than ratings (final review: ratings is specced for physical quantities, and a
+    status flag does not fit that).
+    """
+    print("  - test_build_discovery_active_marks_the_serving_provider")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]  # leftover Solcast discovery, not this cycle's source
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        # forecast_solar wins fetch_pv_forecast()'s own if/elif precedence over open_meteo_forecast
+        # and solcast_host/api_key whenever it is configured - see that method's own branch order.
+        solar.active_forecast_source = "forecast_solar"
+
+        report = solar.build_discovery()
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True]
+
+        if active_devices != ["forecast_solar"]:
+            print(f"ERROR: expected exactly ['forecast_solar'] marked active, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_active_marks_every_solcast_site(my_predbat):
+    """
+    A Solcast fetch aggregates every discovered site in one cycle, so there is no finer-grained
+    "which site actually served the fetch" answer - every solcast:* record is marked active
+    together when self.active_forecast_source is "solcast".
+    """
+    print("  - test_build_discovery_active_marks_every_solcast_site")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one", "site-two"]
+        solar.active_forecast_source = "solcast"
+
+        report = solar.build_discovery()
+        active_devices = sorted(record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True)
+
+        if active_devices != ["solcast:site-one", "solcast:site-two"]:
+            print(f"ERROR: expected both Solcast records marked active, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_no_active_marker_before_first_successful_fetch(my_predbat):
+    """
+    Before fetch_pv_forecast() has ever succeeded, self.active_forecast_source is None (its
+    initialize()-time default), so no record is marked active - the catalogue must never guess.
+    """
+    print("  - test_build_discovery_no_active_marker_before_first_successful_fetch")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+
+        report = solar.build_discovery()
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True]
+
+        if active_devices:
+            print(f"ERROR: expected no record marked active before any successful fetch, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predbat):
+    """
+    fetch_pv_forecast() itself sets self.active_forecast_source, and only on the branch where data
+    was actually returned - a failed/empty fetch must leave the last known-good answer alone rather
+    than clearing it, since "no data this cycle" is not evidence that the provider stopped serving
+    the plan.
+    """
+    print("  - test_fetch_pv_forecast_sets_active_forecast_source_only_on_success")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0, "efficiency": 0.9}]
+
+        forecast_response = {
+            "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+        }
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            """Return the test harness's mocked aiohttp session, ignoring the real constructor args."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.fetch_pv_forecast())
+
+        if solar.active_forecast_source != "forecast_solar":
+            print(f"ERROR: expected active_forecast_source 'forecast_solar' after a successful fetch, got {solar.active_forecast_source}")
+            failed = True
+
+        # A second, failing fetch (no mock response registered this time) must not clear it.
+        test_api.mock_responses.clear()
+        run_async(solar.fetch_pv_forecast())
+
+        if solar.active_forecast_source != "forecast_solar":
+            print(f"ERROR: a failed fetch must not overwrite the last known-good active_forecast_source, got {solar.active_forecast_source}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary(my_predbat):
+    """
+    Task 9 review, second follow-up: when forecast.solar (the primary) returns no data and
+    forecast_solar_open_meteo_backup is configured, Open-Meteo is what actually serves the fetch -
+    active_forecast_source must name the fallback that served the data, not the primary that
+    failed, even though fetch_pv_forecast()'s own configured_source local (used only for
+    log_source_change()'s unrelated settling-period message - a separate, pre-existing concern
+    this task does not touch) keeps naming the primary throughout. Reuses the exact mocked-fetch
+    fixture from test_fetch_pv_forecast_forecast_solar_open_meteo_backup_on_failure, which already
+    proves the fallback itself fires; this test adds the active_forecast_source assertion.
+    """
+    print("  - test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        solar.forecast_solar_open_meteo_backup = True
+        # Configured separately from forecast_solar (real usage: a user who wants automatic backup
+        # sets both) - required for build_discovery() to have an "open_meteo" record to mark active
+        # at all under its own "when enabled" (self.open_meteo_forecast truthy) rule; without this
+        # the backup call still borrows forecast_solar's own coordinates internally (see
+        # fetch_pv_forecast()'s backup_configs fallback), which is a real, narrower case noted in
+        # the task report rather than asserted on here.
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 3.0}]
+        solar.open_meteo_forecast_max_age = 1.0
+        # forecast.solar (the primary) fails outright - download_forecast_solar_data returns ([], 0)
+        test_api.set_mock_response("forecast.solar", {"error": "server error"}, 500)
+        # Open-Meteo (the fallback) returns valid hourly data and is what actually serves the fetch
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance": [500.0, 600.0, 550.0],
+                    "temperature_2m": [25.0, 25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {"hourly": {"time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"], "global_tilted_irradiance_member01": [400.0, 480.0, 440.0]}},
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Return the test harness's mocked aiohttp session, ignoring the real constructor args."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.fetch_pv_forecast())
+
+        if solar.active_forecast_source != "open_meteo":
+            print(f"ERROR: expected active_forecast_source 'open_meteo' (the fallback that actually served the data), got {solar.active_forecast_source!r}")
+            failed = True
+
+        # Consuming this via build_discovery() should mark the open_meteo record active, not
+        # forecast_solar, even though both are configured.
+        report = solar.build_discovery()
+        active_devices = [record["device_id"] for record in report["forecasts"] if record.get("coverage", {}).get("active") is True]
+        if active_devices != ["open_meteo"]:
+            print(f"ERROR: expected build_discovery() to mark only open_meteo active after the fallback served the fetch, got {active_devices}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_discovered_sites_append_only_and_deduplicated(my_predbat):
+    """
+    self.discovered_sites accumulates across repeated site-fetch cycles without duplicating an
+    already-seen resource id, and preserves first-seen order.
+    """
+    print("  - test_discovered_sites_append_only_and_deduplicated")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.solcast_host = "https://api.solcast.com.au"
+        solar.solcast_api_key = "test_key"
+        solar.solcast_sites = ["site1", "site2"]
+
+        forecast_response = {"forecasts": [{"period_end": "2025-06-15T12:30:00.0000000Z", "period": "PT30M", "pv_estimate": 1.0}]}
+        test_api.set_mock_response("forecasts", forecast_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            """Return the test harness's mocked aiohttp session, ignoring the real constructor args."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(solar.download_solcast_data())
+            if solar.discovered_sites != ["site1", "site2"]:
+                print(f"ERROR: expected ['site1', 'site2'] after the first cycle, got {solar.discovered_sites}")
+                failed = True
+
+            # A second cycle sees the same two sites plus one new one - the first two must not be
+            # duplicated, and the new one is appended in the order it was walked.
+            solar.solcast_sites = ["site1", "site2", "site3"]
+            run_async(solar.download_solcast_data())
+            if solar.discovered_sites != ["site1", "site2", "site3"]:
+                print(f"ERROR: expected ['site1', 'site2', 'site3'] after the second cycle, got {solar.discovered_sites}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_refresh_discovery_skips_repeat_calls_when_unchanged(my_predbat):
+    """
+    refresh_discovery() is a no-op once the discovered set has not moved on from the last
+    successful, complete report - matching the brief's "only when the discovered set has changed".
+    """
+    print("  - test_refresh_discovery_skips_repeat_calls_when_unchanged")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        reports = []
+        solar.report_discovery = lambda report: reports.append(report)
+
+        solar.refresh_discovery()
+        solar.refresh_discovery()
+
+        if len(reports) != 1:
+            print(f"ERROR: expected exactly 1 report when nothing changed between calls, got {len(reports)}")
+            failed = True
+        if solar._discovery_report is None:
+            print("ERROR: the marker should have advanced after a complete, successful report")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_refresh_discovery_failure_contained_and_retried(my_predbat):
+    """
+    Requirement 5: a build_discovery() failure is swallowed and logged, the marker is left
+    unmoved so the very next call retries, and the component's own health is not degraded by a
+    broken observer - matching every other discovery reporter's own contract. "Not degraded"
+    includes base.had_errors: that flag makes update_pred() skip record_status() and suppress the
+    run notification, so a bug in this purely observational side channel must be visible only in
+    the log, never by changing Predbat's own reported status.
+    """
+    print("  - test_refresh_discovery_failure_contained_and_retried")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        reports = []
+        solar.report_discovery = lambda report: reports.append(report)
+
+        call_count = [0]
+        real_build_discovery = solar.build_discovery
+
+        def failing_then_succeeding_build_discovery():
+            """Raise on the first call, then delegate to the real build_discovery() on every later call."""
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise ValueError("simulated build_discovery failure")
+            return real_build_discovery()
+
+        solar.build_discovery = failing_then_succeeding_build_discovery
+
+        solar.refresh_discovery()  # cycle 1: raises
+        if solar._discovery_report is not None:
+            print("ERROR: the marker must not advance after a build_discovery() failure")
+            failed = True
+        if reports:
+            print(f"ERROR: no report should reach the coordinator on a failed cycle, got {reports}")
+            failed = True
+        if getattr(test_api.mock_base, "had_errors", False):
+            print("ERROR: a failed discovery report must not degrade Predbat's own status - see update_pred()'s had_errors branch")
+            failed = True
+
+        solar.refresh_discovery()  # cycle 2: succeeds, retried
+        if solar._discovery_report is None:
+            print("ERROR: the marker should advance once build_discovery() succeeds on retry")
+            failed = True
+        if len(reports) != 1:
+            print(f"ERROR: expected exactly 1 successful report after the retry, got {len(reports)}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_refresh_discovery_retried_via_unconditional_run_call(my_predbat):
+    """
+    Requirement 4: the marker is compared OUTSIDE any one-shot "first" gate. Reproduces the exact
+    failure mode GE Cloud and Octopus both shipped and had to fix: a build_discovery() failure on
+    the very first cycle must not be lost for the life of the process just because "first" only
+    ever equals True once. Also proves refresh_discovery() runs even on a cycle where
+    neither of run()'s own fetch conditions fires - the common steady-state case.
+    """
+    print("  - test_refresh_discovery_retried_via_unconditional_run_call")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.discovered_sites = ["site-one"]
+        reports = []
+        solar.report_discovery = lambda report: reports.append(report)
+
+        async def no_op_fetch():
+            """Stand in for fetch_pv_forecast() so run() never makes a real network call."""
+            return None
+
+        solar.fetch_pv_forecast = no_op_fetch
+
+        call_count = [0]
+        real_build_discovery = solar.build_discovery
+
+        def failing_then_succeeding_build_discovery():
+            """Raise on the first call, then delegate to the real build_discovery() on every later call."""
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise ValueError("simulated failure on the first cycle")
+            return real_build_discovery()
+
+        solar.build_discovery = failing_then_succeeding_build_discovery
+
+        with test_api.patch_now_utc_exact():
+            # Same day, just fetched - neither of run()'s two fetch conditions fires this cycle.
+            solar.last_fetched_timestamp = test_api.mock_base.now_utc_exact
+
+            run_async(solar.run(seconds=150, first=True))  # the one-shot "first" cycle - build_discovery raises
+            if solar._discovery_report is not None:
+                print("ERROR: the marker must not advance on the failing first cycle")
+                failed = True
+
+            run_async(solar.run(seconds=150, first=False))  # a later, non-"first" cycle - must still retry
+            if solar._discovery_report is None:
+                print("ERROR: a later run() cycle must retry and succeed even though 'first' is now False")
+                failed = True
+            if len(reports) != 1:
+                print(f"ERROR: expected exactly 1 successful report reaching the coordinator, got {len(reports)}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_refresh_discovery_incomplete_ha_sensors_not_advanced(my_predbat):
+    """
+    Requirement 3: an incomplete ha_sensors record is replaced once the missing entity appears.
+
+    One configured pv_forecast_* entity not yet visible in the state store is still worth
+    reporting, but the catalogue must never be STUCK describing the incomplete source.
+    refresh_discovery() compares the whole report, so the completed one differs from the partial
+    one and replaces it - and an unchanged cycle files nothing.
+    """
+    print("  - test_refresh_discovery_incomplete_ha_sensors_not_advanced")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+        solar.pv_forecast_tomorrow = "sensor.solcast_pv_forecast_tomorrow"
+        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", "5.5")  # only one of the two exists yet
+
+        reports = []
+        solar.report_discovery = lambda report: reports.append(report)
+
+        solar.refresh_discovery()
+        if not reports:
+            print("ERROR: an incomplete report should still reach the coordinator (partial data is still useful) - it should just not be marked done")
+            failed = True
+
+        # The second entity now appears - the retry (driven by the unchanged marker) completes it.
+        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_tomorrow", "6.0")
+        solar.refresh_discovery()
+        if solar._discovery_report is None:
+            print("ERROR: the marker should advance once every configured pv_forecast_* entity exists")
+            failed = True
+        if len(reports) != 2:
+            print(f"ERROR: expected 2 reports (one incomplete, one complete), got {len(reports)}")
+            failed = True
+        reported_entities = [record.get("entities", {}) for report in reports for record in report["forecasts"] if record["device_id"] == "ha_sensors"]
+        if len(reported_entities[0]) != 1 or len(reported_entities[-1]) != 2:
+            print(f"ERROR: expected the partial report to carry 1 entity and the replacement 2, got {[len(e) for e in reported_entities]}")
+            failed = True
+
+        # An unchanged cycle must file nothing, or every install churns the catalogue every minute.
+        solar.refresh_discovery()
+        if len(reports) != 2:
+            print(f"ERROR: an unchanged cycle must not re-file the report, got {len(reports)}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat):
+    """
+    Feed build_discovery()'s output through the real Coordinator.report()/assemble() and then
+    through the real Redactor, exactly as it will be at runtime.
+
+    This is the first discovery reporter to exercise the redactor's case-folded/separator-swapped
+    identifier variant matching (_identifier_variants) for a site id specifically - a real HACS
+    Solcast integration slugifies a site's resource id (lower-cased, "-" swapped for "_") into its
+    own entity ids, so the resource id can appear in a DIFFERENT, transformed form inside a
+    pv_forecast_* entity_id the user configured, not just in its own raw form inside account_ids.
+    The Octopus reporter leaked exactly this shape of value once, before the redactor grew this
+    mechanism (get_entity_name() lower-cases and swaps "-" for "_") - this proves the mechanism
+    catches it for a site id too, rather than assuming it does.
+    """
+    print("  - test_build_discovery_round_trips_through_coordinator_and_redaction")
+
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        resource_id = "AbCd-1234-EfGh"
+        solar.discovered_sites = [resource_id]
+        solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "kwp": 4.0}]
+        # Shaped exactly like a real HACS Solcast integration's own slugified entity id for this
+        # site: lower-cased, "-" swapped for "_" - see the docstring above.
+        solar.pv_forecast_today = "sensor.solcast_forecast_abcd_1234_efgh_today"
+        test_api.set_mock_ha_state(solar.pv_forecast_today, "5.5")
+        # Task 9 review, finding 2: proves coverage.active and ratings.capacity_kw (both added by
+        # the same review; final review moved active from ratings into coverage) survive the
+        # round-trip alongside everything checked before.
+        solar.active_forecast_source = "forecast_solar"
+
+        report = solar.build_discovery()
+
+        coordinator = Coordinator(SharedMockBase())
+        coordinator.report("solar", report)
+        cleaned = coordinator.reports["solar"]
+
+        def check(condition, message):
+            """Record one failed assertion, printing its message, without aborting the remaining checks."""
+            nonlocal failed
+            if not condition:
+                print("ERROR: " + message)
+                failed = True
+
+        # Nothing intended for a typed container was silently dropped by validation.
+        by_device = {record["device_id"]: record for record in cleaned.get("forecasts", [])}
+        solcast_record = by_device.get("solcast:{}".format(resource_id))
+        check(solcast_record is not None, "the Solcast forecasts record was dropped by validation entirely")
+        if solcast_record:
+            check(solcast_record.get("account_ids", {}).get("site_id") == resource_id, "site_id dropped or altered by validation: {}".format(solcast_record.get("account_ids")))
+            check(solcast_record.get("info", {}).get("vendor") == "Solcast", "vendor dropped by validation: {}".format(solcast_record.get("info")))
+            check(solcast_record.get("coverage", {}).get("horizon_hours") == 168, "horizon_hours dropped or altered by validation: {}".format(solcast_record.get("coverage")))
+            check(solcast_record.get("coverage", {}).get("resolution_minutes") == 30, "resolution_minutes dropped or altered by validation: {}".format(solcast_record.get("coverage")))
+            check(
+                solcast_record.get("coverage", {}).get("variants") == ["pv10", "pv50", "pv90"],
+                "the coverage variants list (the numbers/booleans/vocabulary-token widening) did not survive validation: {}".format(solcast_record.get("coverage")),
+            )
+
+        fs_record = by_device.get("forecast_solar")
+        check(fs_record is not None, "the forecast_solar record was dropped by validation")
+        if fs_record:
+            check(fs_record.get("ratings", {}).get("capacity_kw") == 4.0, "capacity_kw dropped or altered by validation: {}".format(fs_record.get("ratings")))
+            check(fs_record.get("coverage", {}).get("active") is True, "coverage.active dropped or altered by validation: {}".format(fs_record.get("coverage")))
+        om_record = by_device.get("open_meteo")
+        check(om_record is not None, "the open_meteo record was dropped by validation")
+        if om_record:
+            check(om_record.get("ratings", {}).get("capacity_kw") == 4.0, "open_meteo capacity_kw dropped or altered by validation: {}".format(om_record.get("ratings")))
+            check("active" not in om_record.get("coverage", {}), "open_meteo must not be marked active when forecast_solar is the one serving the fetch: {}".format(om_record.get("coverage")))
+        ha_record = by_device.get("ha_sensors")
+        check(ha_record is not None, "the ha_sensors record was dropped by validation")
+        if ha_record:
+            check(
+                ha_record.get("entities", {}).get("pv_forecast_today", {}).get("entity_id") == solar.pv_forecast_today,
+                "the pv_forecast_today entity descriptor was dropped or altered by validation: {}".format(ha_record.get("entities")),
+            )
+
+        coordinator.assemble()
+        catalogue = coordinator.catalogue()
+        catalogue_text = str(catalogue)
+
+        check(resource_id not in catalogue_text, "the raw Solcast resource id appears in the clear in the redacted catalogue")
+        # The transformed form a real HACS Solcast integration would fold into its own entity id -
+        # lower-cased, "-" swapped for "_" - embedded above inside the externally-configured
+        # pv_forecast_today entity_id. Checking only the raw string (as above) would miss this.
+        transformed = resource_id.lower().replace("-", "_")
+        check(transformed not in catalogue_text, "the case-folded, separator-swapped resource id form appears in the clear in the redacted catalogue")
+        check("Solcast" in catalogue_text, "the vendor should survive in the clear, but is missing from the redacted catalogue")
+        check("forecast_solar" in catalogue_text, "the forecast_solar device id should survive in the clear, but is missing from the redacted catalogue")
+        check("pv10" in catalogue_text and "pv90" in catalogue_text, "the coverage variants should survive redaction in the clear, but are missing from the redacted catalogue")
+
+        # ratings.capacity_kw and coverage.active (task 9 review, finding 1/2; final review moved
+        # active from ratings into coverage) are plain numbers and booleans - not identifier-shaped
+        # - so they must survive redaction completely untouched, checked structurally here rather
+        # than as text (a bare "True"/"4.0" substring check would be too fragile to mean anything).
+        redacted_by_device = {record["device_id"]: record for record in catalogue.get("forecasts", [])}
+        redacted_fs = redacted_by_device.get("forecast_solar", {})
+        check(redacted_fs.get("ratings", {}).get("capacity_kw") == 4.0, "capacity_kw did not survive redaction unchanged: {}".format(redacted_fs.get("ratings")))
+        check(redacted_fs.get("coverage", {}).get("active") is True, "coverage.active did not survive redaction unchanged: {}".format(redacted_fs.get("coverage")))
+
+        if failed:
+            print("FAIL: build_discovery round-trip through the real Coordinator and Redactor found problems above")
+        else:
+            print("PASS: build_discovery round-trips through the real Coordinator and Redactor - nothing intended was dropped, and the resource id never leaked, raw or transformed")
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Main Test Runner
 # ============================================================================
 
@@ -5613,5 +6519,27 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_15min_period(my_predbat)
     failed |= test_pv_calibration_skips_system_down_days(my_predbat)
     failed |= test_pv_calibration_all_days_down(my_predbat)
+
+    # Discovery catalogue tests
+    failed |= test_build_discovery_solcast_sites(my_predbat)
+    failed |= test_build_discovery_never_reports_user_authored_site_name(my_predbat)
+    failed |= test_build_discovery_forecast_solar_alongside_solcast(my_predbat)
+    failed |= test_build_discovery_open_meteo_enabled(my_predbat)
+    failed |= test_build_discovery_ha_sensor_entities_only_when_exist(my_predbat)
+    failed |= test_build_discovery_ha_sensors_all_four_entities(my_predbat)
+    failed |= test_build_discovery_no_ha_sensors_record_when_nothing_exists(my_predbat)
+    failed |= test_build_discovery_capacity_kw_only_for_forecast_solar_and_open_meteo(my_predbat)
+    failed |= test_build_discovery_capacity_kw_sums_across_planes(my_predbat)
+    failed |= test_build_discovery_active_marks_the_serving_provider(my_predbat)
+    failed |= test_build_discovery_active_marks_every_solcast_site(my_predbat)
+    failed |= test_build_discovery_no_active_marker_before_first_successful_fetch(my_predbat)
+    failed |= test_fetch_pv_forecast_sets_active_forecast_source_only_on_success(my_predbat)
+    failed |= test_fetch_pv_forecast_active_forecast_source_follows_the_fallback_not_the_primary(my_predbat)
+    failed |= test_discovered_sites_append_only_and_deduplicated(my_predbat)
+    failed |= test_refresh_discovery_skips_repeat_calls_when_unchanged(my_predbat)
+    failed |= test_refresh_discovery_failure_contained_and_retried(my_predbat)
+    failed |= test_refresh_discovery_retried_via_unconditional_run_call(my_predbat)
+    failed |= test_refresh_discovery_incomplete_ha_sensors_not_advanced(my_predbat)
+    failed |= test_build_discovery_round_trips_through_coordinator_and_redaction(my_predbat)
 
     return failed

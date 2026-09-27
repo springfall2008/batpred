@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acks
 activepower
 adata
 adbase
@@ -164,11 +165,13 @@ dnoregion
 docstrings
 dstamp
 dstart
+dtype
 dwindow
 eauth
 echargingpile
 Eddi
 eddis
+efgh
 elif
 elinter
 eload
@@ -231,6 +234,7 @@ foxcloud
 foxess
 foxesscloud
 freephase
+fromisoformat
 fronius
 funcs
 futurerate
@@ -251,6 +255,7 @@ gitnexus
 giv
 GivEnergy
 givtcp
+gmtime
 gnueabihf
 GOELEC
 goldens
@@ -286,6 +291,7 @@ holdout
 homeassistant
 houseb
 htmlcov
+hultenvp
 husforbrukning
 hypervolt
 iboost
@@ -331,6 +337,7 @@ Krakenflex
 Kuzu
 kvar
 kvarh
+kwarg
 kwargs
 kwhb
 labelcolor
@@ -405,6 +412,7 @@ mpxn
 mqtt
 mtok
 mult
+multiarray
 myaccount
 myenergi
 mypy
@@ -420,6 +428,7 @@ newtok
 njpwerner
 nobat
 nocharge
+NODETAIL
 nodischarge
 nohup
 noopener
@@ -495,12 +504,17 @@ preseed
 preseeded
 prevs
 protobuf
+pseudonymisation
+pseudonymise
+pseudonymised
+pseudonymises
 psum
 pthread
 pvbat
 pvenergytotal
 pvlib
 pvlimit
+PVONLY
 pvpower
 pvwatts
 pwindow
@@ -563,6 +577,7 @@ sess
 setattr
 setdefault
 setpoints
+setstate
 SFMB
 sg05lp1
 SIGALRM
@@ -668,6 +683,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable
@@ -700,9 +716,11 @@ varh
 venv
 Victron
 visibilitychange
+vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
+weakref
 weblink
 welink
 Werror
@@ -710,8 +728,10 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+worktree
 writeonly
 wrongsha
+wwxxabcdefyyzz
 xaxis
 xaxistooltip
 xlabel
@@ -719,6 +739,7 @@ xlim
 xload
 xrtkq
 xticks
+xxabcdefyy
 yaxis
 yaxistooltip
 yday

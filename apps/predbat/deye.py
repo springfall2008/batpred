@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 from component_base import ComponentBase
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from tou_schedule import TouScheduleMixin
@@ -64,6 +65,24 @@ from deye_const import (
     DEYE_CACHE_RATINGS,
     DEYE_CACHE_CONTROL,
 )
+
+# How every DeyeCloud inverter behaves, as the INVERTER_DEF keys a discovery record may override
+# (coordinator.CAPABILITY_KEYS). A literal, never read back from INVERTER_DEF: the discovery
+# completeness test proves the record rebuilds the row, which it could not if the record copied it.
+DEYE_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    # Freeze Export selects SELLING_FIRST: PV goes to load, then grid, then the battery
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
+# The format publish_schedule_settings_ha() publishes the schedule time selects in, and so the one
+# Predbat must write them in
+DEYE_SCHEDULE_TIME_FORMAT = "HH:MM:SS"
 
 
 class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
@@ -1216,6 +1235,129 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    def _discovery_entities(self, sn):
+        """The entity map for one inverter: every setting automatic_config() binds, as this device has it.
+
+        Entity ids come from the same _sensor_name()/_control_name() calls automatic_config() makes,
+        so the two cannot drift. access is "rw" for the schedule controls Predbat writes and "r" for
+        the telemetry and rating sensors it only reads. The *_power_invert settings are all False
+        (publish_data() already emits Predbat's sign conventions), so no descriptor carries invert.
+
+        Each conditional sensor is listed when THIS inverter publishes it - the same per-device test
+        publish_data() uses - not behind automatic_config()'s fleet-wide "every inverter has it" gate
+        (spec D10). pv_power and pv_today are listed whatever automatic_ignore_pv says: that is the
+        user's opt-out, not a fact about the device (D11).
+        """
+        entities = {
+            "soc_percent": {"entity_id": self._sensor_name(sn, "soc"), "access": "r", "unit": "%"},
+            "battery_power": {"entity_id": self._sensor_name(sn, "battery_power"), "access": "r"},
+            "grid_power": {"entity_id": self._sensor_name(sn, "grid_power"), "access": "r"},
+            "load_power": {"entity_id": self._sensor_name(sn, "load_power"), "access": "r"},
+            "pv_power": {"entity_id": self._sensor_name(sn, "pv_power"), "access": "r"},
+            "battery_temperature": {"entity_id": self._sensor_name(sn, "temperature"), "access": "r"},
+        }
+        for leaf in DEYE_ENERGY_KEYS:
+            if leaf in self.device_energy.get(sn, {}):
+                entities[leaf] = {"entity_id": self._sensor_name(sn, leaf), "access": "r"}
+        published = {
+            "soc_max": ("battery_capacity", self.battery_capacity(sn) > 0),
+            "battery_min_soc": ("battery_reserve_min", sn in self.device_battery_config),
+            "battery_rate_max": ("battery_rate_max", self.battery_rate_max(sn) > 0),
+            "inverter_limit": ("inverter_limit", self.device_rated_power.get(sn, 0.0) > 0),
+        }
+        for setting, (leaf, present) in published.items():
+            if present:
+                entities[setting] = {"entity_id": self._sensor_name(sn, leaf), "access": "r"}
+        entities["reserve"] = {"entity_id": self._control_name("number", sn, "battery_schedule_reserve"), "access": "rw"}
+        for prefix, direction in (("charge", "charge"), ("discharge", "export")):
+            entities[prefix + "_start_time"] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_start_time".format(direction)), "access": "rw", "domain": "select", "format": DEYE_SCHEDULE_TIME_FORMAT}
+            entities[prefix + "_end_time"] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_end_time".format(direction)), "access": "rw", "domain": "select", "format": DEYE_SCHEDULE_TIME_FORMAT}
+            entities["scheduled_{}_enable".format(prefix)] = {"entity_id": self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)), "access": "rw"}
+        entities["charge_limit"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_soc"), "access": "rw"}
+        entities["charge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_power"), "access": "rw", "unit": "W"}
+        entities["discharge_target_soc"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_soc"), "access": "rw"}
+        entities["discharge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_power"), "access": "rw", "unit": "W"}
+        entities["schedule_write_button"] = {"entity_id": self._control_name("switch", sn, "battery_schedule_charge_write"), "access": "rw"}
+        return entities
+
+    def _discovery_ratings(self, sn):
+        """One inverter's device-reported ratings, keyed by Predbat setting name in its units, plus the raw Ah capacity.
+
+        A rating is a figure the device reports (spec D14). inverter_limit is device/latest's
+        RatedPower (W); battery_min_soc is config/battery's battLowCapacity (%), the floor the
+        installer set on the inverter. battery_capacity_ah is config/battery's raw battCapacity.
+        soc_max and battery_rate_max are left to their entities: both are Predbat derivations (an Ah
+        or amp figure scaled by a pack voltage Predbat infers from the BMS charge request), not
+        figures Deye reports. Deye holds no grid export or import cap, so there is no export_limit
+        or import_limit.
+        """
+        ratings = {}
+        rated_w = self._as_float(self.device_rated_power.get(sn), 0.0)
+        if rated_w > 0:
+            ratings["inverter_limit"] = rated_w
+        reserve_min = self.battery_reserve_min(sn)
+        if reserve_min > 0:
+            ratings["battery_min_soc"] = reserve_min
+        configured_ah = self._battery_config_value(sn, "capacity")
+        if configured_ah > 0:
+            ratings["battery_capacity_ah"] = configured_ah
+        return ratings
+
+    def build_discovery(self):
+        """
+        Describe the discovered Deye inverters for the discovery catalogue.
+
+        Reads only state the component already holds - device_list, station_ids,
+        device_rated_power, device_energy and the battery accessors - so this adds no API calls and
+        cannot change what Deye does. Reporting is independent of self.automatic.
+
+        automatic_config() registers every serial in device_list (already filtered to deviceType
+        "INVERTER") as "DeyeCloud" with no further test, and binds both PV and battery entities for
+        each. Deye's API offers no way to tell a PV-only unit from a hybrid, so neither can this:
+        every record carries inverter_type "DeyeCloud" and functions solar and battery, mirroring
+        automatic_config() as the source of truth. That is exactly what Predbat believes about the
+        device - and the fact a maintainer needs when a PV-only unit has been configured as a
+        battery inverter.
+
+        capabilities is the literal DEYE_CAPABILITIES; entities is every setting automatic_config()
+        binds, as this device has it (_discovery_entities); ratings are the figures the device itself
+        reports (_discovery_ratings). derive_battery_capacity() is never called here: it logs and
+        writes device_pack_voltage/device_capacity, whereas battery_capacity() and battery_rate_max()
+        only read them.
+
+        station_ids goes in account_ids only when the account has exactly one station:
+        get_device_list() queries every station at once and flattens the result, so which device
+        belongs to which station is not held, and attributing one of several would be a guess.
+
+        Deliberately not reported: model and firmware (not held - device/measurePoints and
+        station/latest are fetched for debug logging and discarded, and reading them would be a
+        new API dependency).
+
+        Returns None when no inverter has been discovered yet.
+        """
+        if not self.device_list:
+            return None
+
+        account_ids = {"station_id": self.station_ids[0]} if len(self.station_ids) == 1 else None
+
+        inverters = []
+        for sn in self.device_list:
+            inverters.append(
+                inverter_record(
+                    "deye:{}".format(sn),
+                    inverter_type="DeyeCloud",
+                    composition="direct",
+                    functions=["solar", "battery"],
+                    capabilities=dict(DEYE_CAPABILITIES),
+                    hardware_ids={"serial": sn},
+                    account_ids=account_ids,
+                    ratings=self._discovery_ratings(sn),
+                    entities=self._discovery_entities(sn),
+                )
+            )
+
+        return {"automatic": self.automatic, "inverters": inverters}
+
     @staticmethod
     def _age_text(age):
         """Render a cache age in minutes for logging, tolerating an unknown age."""
@@ -1528,6 +1670,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         await self.publish_data()
         for sn in self.device_list:
             await self.publish_schedule_settings_ha(sn)
+
+        # Filed right after this cycle's publish and BEFORE `if first and not live_ok:` below:
+        # that branch returns False to defer startup when the first live poll fails, and
+        # automatic_config() follows it, so a report filed any later would never be filed on
+        # exactly the installs whose dump most needs to say what hardware was found. (Deye's
+        # automatic_config() does not raise - the early return is the reason.) refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
 
         # Drain any control orders left pending by apply_dynamic_control() every cycle (not
         # just on first run) so a write that is HTTP-accepted but then fails to apply on the

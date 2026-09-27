@@ -32,6 +32,7 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -1184,6 +1185,9 @@ class Fetch:
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
         self.dispatch_timeline_pending = []
         self.fetch_sensor_data_cars(save=save)
+        # Dynamic load: cancel the Octopus Intelligent slots of a car that is in one but not charging -
+        # before the rates are built, so a cancelled dispatch never gets its cheap rate
+        dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1237,6 +1241,7 @@ class Fetch:
         if import_rates:
             self.rate_scan(import_rates, print=False)
             self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -1367,7 +1372,7 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = False
+        force_replan = dynamic_load_car_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do
@@ -1503,8 +1508,9 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
-                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
+                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
+                    # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned
 
                 # Extract vehicle data if we can get it
@@ -1581,7 +1587,8 @@ class Fetch:
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
                 for car_n in range(min(len(entity_id_list), self.num_cars)):
-                    self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
+                    # car_charging_now adds no dispatch of its own: only Octopus's slots give the car a slot
+                    # and the house its cheap rate
                     if not entity_id_list[car_n]:
                         continue
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
@@ -1610,9 +1617,14 @@ class Fetch:
         # (which also releases the battery discharge hold once the modelled car "fills"). The real
         # car_charging_limit is left untouched - execute.py's "car is full" decision, the
         # plan_car_charging path and load_octopus_slots all still need it. None means no override.
-        if iog_slot_cars and not self.octopus_intelligent_consider_full:
+        # A car reporting car_charging_now is drawing power whatever its modelled SoC says, so it is uncapped
+        # too - execute_plan() holds the battery for it on the sensor alone, and a fill clamp zeroing its load
+        # would leave the plan assuming the battery can discharge while execute holds it (#5245 review).
+        uncapped_cars = set(iog_slot_cars) if not self.octopus_intelligent_consider_full else set()
+        uncapped_cars.update(car_n for car_n in range(self.num_cars) if car_n < len(self.car_charging_now) and self.car_charging_now[car_n])
+        if uncapped_cars:
             self.car_charging_limit_model = self.car_charging_limit[:]
-            for car_n in iog_slot_cars:
+            for car_n in uncapped_cars:
                 self.car_charging_limit_model[car_n] = CAR_CHARGING_LIMIT_UNCAPPED
         else:
             self.car_charging_limit_model = None
@@ -2123,8 +2135,9 @@ class Fetch:
 
     def basic_rates(self, info, rtype, prev=None, rate_replicate=None, include_manual_api=True):
         """
-        Work out the energy rates based on user supplied time periods
-        works on a 24-hour period only and then gets replicated later for future days
+        Work out the energy rates based on user supplied time periods. Weekly rules on the base
+        tariff are stamped across the whole horizon, each day against its own day_of_week; any
+        minute no rule claims is left for rate_replicate() to fill later
 
         include_manual_api should be False for callers (e.g. tariff comparison, annual replay)
         that simulate a tariff other than the live one - the live system's manual API overrides
@@ -2286,6 +2299,17 @@ class Fetch:
 
                 day_of_week_midnight = self.midnight_utc.weekday()
 
+                # A weekly rule on the base tariff is stamped over the whole horizon rate_replicate()
+                # goes on to cover, not just the days modelled above, so every day is filtered against
+                # its own weekday. rate_replicate() fills a missing minute from the same time of day 24
+                # hours earlier and knows nothing about day_of_week, so a day left to it takes the
+                # previous day's pattern - a weekend rule flattening the weekday peaks (batpred#5168).
+                # Overrides (prev) already span the replicated horizon via max_minute.
+                if not date and not prev:
+                    stamp_end = max(max_minute + 24 * 60, self.forecast_minutes + 48 * 60)
+                else:
+                    stamp_end = max_minute
+
                 # Store rates against range
                 if end_minutes >= (-48 * 60) and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
@@ -2293,9 +2317,10 @@ class Fetch:
                         if (not date) or (minute >= (-24 * 60) and minute < max_minute):
                             minute_index = minute_mod - 24 * 60
                             # For incremental adjustments we have to loop over 24-hour periods
-                            while minute_index < max_minute:
+                            while minute_index < stamp_end:
                                 if not date or (minute_index >= start_minutes and minute_index < end_minutes):
-                                    current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
+                                    # Floor division, so yesterday's minutes are checked against yesterday's weekday
+                                    current_day_of_week = (day_of_week_midnight + minute_index // (24 * 60)) % 7
                                     if not day_of_week or (current_day_of_week in day_of_week):
                                         if rate_increment:
                                             rates[minute_index] = rates.get(minute_index, 0.0) + rate
@@ -2308,10 +2333,6 @@ class Fetch:
                                         if date:
                                             break
                                 minute_index += 24 * 60
-                            if not date and not prev:
-                                rates[minute_mod + max_minute] = rate
-                                if load_scaling is not None:
-                                    self.load_scaling_dynamic[minute_mod + max_minute] = load_scaling
             else:
                 self.log("Warn: Bad rate data provided in energy rates type {} {}".format(rtype, this_rate))
 
@@ -2552,6 +2573,28 @@ class Fetch:
             return None
         return self.car_charging_now[car_n]
 
+    def car_charging_now_value(self, raw):
+        """
+        Interpret a car_charging_now reading: True (charging), False (not charging) or None (no evidence -
+        unset, "unknown" or "unavailable").
+
+        It can be an on/off sensor, matched against car_charging_now_response, or - for chargers with no
+        "charging" sensor, e.g. Wallbox - a charging power sensor. A number is a power in watts (callers
+        read it with required_unit="W", which converts kW from the entity's unit), and it is charging from
+        CAR_CHARGING_NOW_POWER_W.
+        """
+        if raw is None or isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return raw >= CAR_CHARGING_NOW_POWER_W
+        text = str(raw).strip().lower()
+        if text in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(text) >= CAR_CHARGING_NOW_POWER_W
+        except ValueError:
+            return text in self.car_charging_now_response
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -2584,19 +2627,11 @@ class Fetch:
                 planned = False
             self.car_charging_planned[car_n] = planned
 
-            # Car is charging now sensor
-            charging_now = self.get_arg("car_charging_now", "no", index=car_n)
-            if isinstance(charging_now, str):
-                if charging_now.lower() in self.car_charging_now_response:
-                    charging_now = True
-                else:
-                    charging_now = False
-            elif not isinstance(charging_now, bool):
-                charging_now = False
-            self.car_charging_now[car_n] = charging_now
+            # Car is charging now sensor - an on/off sensor, or a charging power sensor read in watts
+            self.car_charging_now[car_n] = bool(self.car_charging_now_value(self.get_arg("car_charging_now", "no", index=car_n, required_unit="W")))
 
             # Other car related configuration
-            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
+            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", True)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
@@ -3012,6 +3047,36 @@ class Fetch:
 
         return validated_curve
 
+    def check_export_more_solar_effective(self):
+        """
+        Warn when export_more_solar is on but cannot have any effect.
+
+        export_more_solar works by enabling Freeze Export on idle solar slots, and optimise_solar() returns
+        immediately unless export windows are being calculated and set_export_freeze is on. Otherwise the
+        switch is on but does nothing, with no indication anywhere (#4865). Must run after
+        fetch_inverter_data(), which forces set_export_freeze off for an inverter without freeze support,
+        so the value read in fetch_config_options() is not yet the one the plan will use.
+
+        Warns once per incident rather than every cycle, as the combination may be deliberate, but again
+        whenever the reason changes - otherwise fixing one cause would silently leave the next one in place.
+        Re-arms once export_more_solar is effective so a later recurrence is reported.
+        """
+        reason = None
+        if self.export_more_solar:
+            if not self.calculate_best_export:
+                reason = "Predbat mode is not Control charge & discharge, so export slots are not planned. Change the mode, or turn export_more_solar off."
+            elif not self.set_export_freeze:
+                # Ask the inverter rather than the switch: an unsupported inverter forces set_export_freeze off
+                # whatever the switch says, so advising the user to turn the switch on would change nothing.
+                if self.inverters and not self.inverters[0].inv_support_discharge_freeze:
+                    reason = "the inverter does not support Freeze Export. Turn export_more_solar off."
+                else:
+                    reason = "set_export_freeze is off. Enable set_export_freeze, or turn export_more_solar off."
+
+        if reason and reason != self.export_more_solar_warned_reason:
+            self.log("Warn: export_more_solar is enabled but has no effect, as it works by enabling Freeze Export on idle solar slots and " + reason)
+        self.export_more_solar_warned_reason = reason
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -3177,8 +3242,11 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.octopus_intelligent_trust_slots = self.get_arg("octopus_intelligent_trust_slots")
+        self.octopus_intelligent_dynamic = self.get_arg("octopus_intelligent_dynamic")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
+        self.dynamic_load_car_check_config()
         self.load_inday_adjustment = 1.0
 
         self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
