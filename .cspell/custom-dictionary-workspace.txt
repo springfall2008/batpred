@@ -165,6 +165,7 @@ dnoregion
 docstrings
 dstamp
 dstart
+dtype
 dwindow
 eauth
 echargingpile
@@ -253,6 +254,7 @@ gitnexus
 giv
 GivEnergy
 givtcp
+gmtime
 gnueabihf
 GOELEC
 goldens
@@ -288,6 +290,7 @@ holdout
 homeassistant
 houseb
 htmlcov
+hultenvp
 husforbrukning
 hypervolt
 iboost
@@ -333,6 +336,7 @@ Krakenflex
 Kuzu
 kvar
 kvarh
+kwarg
 kwargs
 kwhb
 labelcolor
@@ -407,6 +411,7 @@ mpxn
 mqtt
 mtok
 mult
+multiarray
 myaccount
 myenergi
 mypy
@@ -571,6 +576,7 @@ sess
 setattr
 setdefault
 setpoints
+setstate
 SFMB
 sg05lp1
 SIGALRM

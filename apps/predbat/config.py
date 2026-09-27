@@ -916,6 +916,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_dynamic",
+        "friendly_name": "Confirm Intelligent slots against the car charging",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_intelligent_trust_slots",
         "friendly_name": "Trust Intelligent slots before the car is seen charging",
         "type": "switch",
@@ -926,7 +933,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",
-        "default": False,
+        "default": True,
         "enable": "num_cars",
         "enable_condition": "num_cars > 0",
     },
@@ -1916,6 +1923,7 @@ INVERTER_DEF = {
     },
     "GS": {
         "name": "Ginlong Solis",
+        "has_solis_energy_control": True,
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "current",
@@ -1944,6 +1952,7 @@ INVERTER_DEF = {
     },
     "GS_fb00": {
         "name": "Ginlong Solis (FB00)",
+        "has_solis_energy_control": True,
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "current",
@@ -1963,8 +1972,13 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 4,
         "has_time_window": True,
-        "support_charge_freeze": False,
-        "support_discharge_freeze": False,
+        # Freeze charge and holds turn grid charging off on the Energy Storage Control Switch (Backup/Reserve - No Grid
+        # Charging): the charge slot or the Reserved SOC holds the battery (inverter.py adjust_charge_immediate)
+        "support_charge_freeze": True,
+        # Freeze Export selects Feed-in priority on the Energy Storage Control Switch (inverter.py adjust_export_immediate),
+        # which exports PV ahead of charging the battery - so PV past the export limit still reaches the battery
+        "support_feedin_first": True,
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -2458,7 +2472,8 @@ INVERTER_DEF = {
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
         "has_target_soc": True,
-        "has_reserve_soc": False,
+        # The Battery Reserve SOC (CID 157), a floor while the component keeps the Battery Reserve bit on
+        "has_reserve_soc": True,
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
@@ -2569,6 +2584,18 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority - No Timed Charge/Discharge": 96,
     "Feed-in priority": 98,
+}
+# FB00 firmware (Solax Modbus "Solis FB00" plugin) has no Timed Charge/Discharge bit in the switch -
+# slot enables replaced it - so its option names differ: "Self-Use" is 33 here, not 35
+SOLAX_SOLIS_MODES_FB00 = {
+    "Self-Use - No Grid Charging": 1,
+    "Backup/Reserve - No Grid Charging": 17,
+    "Self-Use": 33,
+    "Off-Grid Mode": 37,
+    "Battery Awaken": 41,
+    "Backup/Reserve": 49,
+    "Feed-in priority - No Grid Charging": 64,
+    "Feed-in priority": 96,
 }
 
 # Apps.yaml validation schema

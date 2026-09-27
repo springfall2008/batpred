@@ -635,6 +635,44 @@ def test_compare(my_predbat):
     else:
         print("PASS T23: non-finite override values are skipped")
 
+    # ------------------------------------------------------------------
+    # T24: recompute_car_charging() drops the live cycle's modelled
+    #      car_charging_now slots - the compared tariff's car plan is rebuilt
+    #      from scratch, so a charging-now slot judged against the live plan
+    #      must not be layered on top of it (#5245 review)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.num_cars = 1
+    pb.car_charging_slots = [[]]
+    pb.car_charging_now_slots = [[{"start": 730, "end": 750, "kwh": 2.4, "octopus": False}]]
+    pb.car_charging_planned = [False]
+    pb.car_charging_now = [False]
+    pb.car_charging_soc = [0.0]
+    pb.car_charging_limit = [50.0]
+    pb.car_charging_battery_size = [100.0]
+    pb.car_charging_exclusive = [False]
+    cmp.recompute_car_charging([[]])
+    if pb.car_charging_now_slots != [[]]:
+        print("ERROR T24: recompute_car_charging() should clear car_charging_now_slots, got {}".format(pb.car_charging_now_slots))
+        failed += 1
+    else:
+        print("PASS T24: recompute_car_charging() clears the live car_charging_now slots")
+
+    # ------------------------------------------------------------------
+    # T25: run_all() snapshots car_charging_now_slots before the tariff loop and
+    #      restores it after it, as it does car_charging_slots, so the live plan
+    #      gets its modelled slots back after a comparison (#5245 review)
+    # ------------------------------------------------------------------
+    snapshot_idx = run_all_source.find("save_car_charging_now_slots = copy.deepcopy(my_predbat.car_charging_now_slots)")
+    if snapshot_idx < 0 or not (snapshot_idx < loop_idx):
+        print("ERROR T25: car_charging_now_slots must be snapshotted before the tariff loop in run_all()")
+        failed += 1
+    elif run_all_source.find("my_predbat.car_charging_now_slots = save_car_charging_now_slots") < loop_idx:
+        print("ERROR T25: run_all() must restore car_charging_now_slots after the tariff loop")
+        failed += 1
+    else:
+        print("PASS T25: run_all() snapshots and restores car_charging_now_slots")
+
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
     else:
