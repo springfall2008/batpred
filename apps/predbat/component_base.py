@@ -109,6 +109,17 @@ class ComponentBase(ABC):
         """
         return self.base.dashboard_item(entity, state, attributes, app=app)
 
+    def request_replan(self, reason):
+        """
+        Ask for the plan to be recomputed on the next 15 second tick, for a component whose data has just
+        changed in a way the plan depends on - rather than waiting for the next scheduled cycle.
+
+        Sets only update_pending, not plan_valid, so the recompute still weighs the current plan against the
+        new one (metric_min_improvement_plan). Components call this rather than setting base.update_pending.
+        """
+        self.log("{}: {}, requesting a replan".format(self.component_name, reason))
+        self.base.update_pending = True
+
     def get_ha_config(self, name, default):
         """
         Retrieve a Home Assistant configuration value from the base system.

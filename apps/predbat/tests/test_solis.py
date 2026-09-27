@@ -24,7 +24,7 @@ from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_C
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
-from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
+from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, ENUM_SELF_USE_HOLD
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_OFF_GRID
 from solis import SOLIS_CID_MAX_EXPORT_POWER, SOLIS_CLOUD_CAPABILITIES
 from coordinator import inverter_definition, validate_report
@@ -36,12 +36,13 @@ class MockBase:
 
     def __init__(self, prefix="predbat"):
         self.prefix = prefix
+        self.args = {}
 
-    def get_arg(self, key, default=None):
-        """Mock get_arg method"""
+    def get_arg(self, key, default=None, **kwargs):
+        """Mock get_arg method - prefix, then anything a test put in args, else the default"""
         if key == "prefix":
             return self.prefix
-        return default
+        return self.args.get(key, default)
 
 
 class MockSolisAPI(SolisAPI):
@@ -63,6 +64,7 @@ class MockSolisAPI(SolisAPI):
         # Entity callbacks queue here for the component loop to drain; the real
         # __init__ (skipped above) sets this.
         self.queued_events = []
+        self.charge_slot_holding = {}
         # Guards the slot schedule, which slot events change from the caller's loop; the real __init__ sets both
         self.schedule_lock = threading.Lock()
         self.schedules_loaded = set()
@@ -1502,27 +1504,28 @@ def test_solis_catalogue_two_inverters_get_their_own_entities():
     return False
 
 
-def test_solis_catalogue_reports_battery_min_soc_not_reserve():
-    """Spec D9: the record carries battery_min_soc (read-only entity plus rating) and no reserve.
+def test_solis_catalogue_reports_reserve_soc_and_battery_min_soc():
+    """The record carries reserve as the Battery Reserve SOC (CID 157, written) and battery_min_soc as the over-discharge SOC (read-only).
 
-    automatic_config() binds reserve and battery_min_soc to the same over_discharge_soc number, and
-    inverter.py dummies the reserve binding because the SolisCloud row has has_reserve_soc False -
-    so the record leaves reserve out and the derived has_reserve_soc is False. Also pins the row's
-    time_button_press False (no schedule_write_button is bound) and battery_power_invert's string
-    "True" becoming invert on battery_power.
+    Superseding spec D9: the reserve Predbat writes is the Reserved SOC, which the inverter holds as a
+    discharge floor while the Battery Reserve bit of CID 636 is on (set_storage_mode_if_needed keeps it on
+    while set_reserve_enable is). The over-discharge SOC stays the hard minimum it only reads. Also pins
+    the row's time_button_press False (no schedule_write_button is bound) and battery_power_invert's
+    string "True" becoming invert on battery_power.
     """
     api = _solis_fleet()
     api.cached_values["BAT001"][SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC] = "20"
     record = validated_inverters(api.build_discovery())[0]
     entities = record["entities"]
-    assert "reserve" not in entities, entities.get("reserve")
+    assert entities["reserve"] == {"entity_id": "number.predbat_solis_bat001_reserve_soc", "access": "rw", "unit": "%"}, entities.get("reserve")
     assert entities["battery_min_soc"] == {"entity_id": "number.predbat_solis_bat001_over_discharge_soc", "access": "r", "unit": "%"}, entities["battery_min_soc"]
     assert record["ratings"]["battery_min_soc"] == 20, record["ratings"]
     captured = capture_automatic_config(api)
-    assert captured["reserve"] == captured["battery_min_soc"], "automatic_config() binds both to over_discharge_soc"
+    assert captured["reserve"] == ["number.predbat_solis_bat001_reserve_soc"], captured["reserve"]
+    assert captured["battery_min_soc"] == ["number.predbat_solis_bat001_over_discharge_soc"], captured["battery_min_soc"]
     definition, gaps, _ = inverter_definition(record, SolisAPI.WRITE_AND_POLL_SLEEP)
     assert not gaps, gaps
-    assert definition["has_reserve_soc"] is False
+    assert definition["has_reserve_soc"] is True
     assert "schedule_write_button" not in entities and "schedule_write_button" not in captured
     assert definition["time_button_press"] is False
     assert captured["battery_power_invert"] == ["True"] and entities["battery_power"]["invert"] is True, entities["battery_power"]
@@ -1902,7 +1905,7 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_catalogue_mixed_fleet_matches_each_list_by_position()
         failed |= test_solis_catalogue_pv_load_ignore_keeps_the_entities()
         failed |= test_solis_catalogue_two_inverters_get_their_own_entities()
-        failed |= test_solis_catalogue_reports_battery_min_soc_not_reserve()
+        failed |= test_solis_catalogue_reports_reserve_soc_and_battery_min_soc()
         failed |= test_solis_catalogue_export_limit_is_the_configured_register()
         failed |= asyncio.run(test_solis_catalogue_filed_even_when_automatic_config_configures_nothing())
         failed |= asyncio.run(test_solis_catalogue_filed_when_automatic_config_gate_is_closed())
@@ -1933,6 +1936,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
         failed |= asyncio.run(test_recovery_soc_polled_outside_batch())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
+        failed |= asyncio.run(test_write_time_windows_hold_in_charge_slot())
+        failed |= asyncio.run(test_compute_solis_mode_value_hold_and_reserve())
+        failed |= asyncio.run(test_storage_mode_always_sets_battery_reserve())
+        failed |= asyncio.run(test_number_event_soc_limit_shows_at_once())
+        failed |= asyncio.run(test_warns_when_reserve_is_the_over_discharge_soc())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_local_time_not_utc())
@@ -3541,6 +3549,214 @@ async def test_write_time_windows_zero_charge_current():
     return False
 
 
+def _hold_slot_api(v2, battery_soc, charge_soc, charge_current=50, now="03:00", real_mode=False):
+    """A MockSolisAPI at 03:00 inside charge slot 1 (02:00-05:00) with the battery at battery_soc.
+
+    Args:
+        v2: True for TOU V2 firmware (per-slot registers), False for V1 (CID 103)
+        battery_soc: batteryCapacitySoc the inverter reports
+        charge_soc: Slot 1's charge target SOC
+        charge_current: Slot 1's charge current in amps
+        now: Local time the slot is checked at, "HH:MM"
+        real_mode: Drive the real set_storage_mode_if_needed, so the CID 636 value written is recorded
+
+    Returns: (api, inverter_sn)
+    """
+    api = MockSolisAPI()
+    api._test_v2_mode = v2
+    api._mock_storage_mode = not real_mode
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+    empty = {"charge_start_time": "00:00", "charge_end_time": "00:00", "charge_soc": 100, "charge_current": 0, "discharge_start_time": "00:00", "discharge_end_time": "00:00", "discharge_soc": 10, "discharge_current": 0}
+    slot1 = {
+        "charge_enable": 1,
+        "charge_start_time": "02:00",
+        "charge_end_time": "05:00",
+        "charge_soc": charge_soc,
+        "charge_current": charge_current,
+        "discharge_enable": 0,
+        "discharge_start_time": "00:00",
+        "discharge_end_time": "00:00",
+        "discharge_soc": 10,
+        "discharge_current": 30,
+    }
+    if v2:
+        api.charge_discharge_time_windows[inverter_sn] = {1: slot1}
+    else:
+        api.charge_discharge_time_windows[inverter_sn] = {1: dict(slot1, field_length=18), 2: dict(empty, field_length=18), 3: dict(empty, field_length=18)}
+    api.cached_values[inverter_sn] = {}
+    api.inverter_details[inverter_sn] = {"batteryCapacitySoc": battery_soc}
+    mock_now = MagicMock()
+    mock_now.strftime.return_value = now
+    api._test_now_utc_exact = mock_now
+    return api, inverter_sn
+
+
+async def test_write_time_windows_hold_in_charge_slot():
+    """In an active charge slot with the battery at or above its target, grid charging goes off.
+
+    That is what a freeze charge looks like here - Predbat keeps the charge window with the target at the
+    current SoC - and a hold at the end of a charge: the slot keeps the battery from discharging, and
+    without grid charging it cannot import to top up to the target, while PV can still charge it. It
+    takes precedence over the 0A -> Feed-in priority rule, which would export PV during a freeze charge.
+    Below the target it is an ordinary charge and grid charging stays on.
+    """
+    print("\n=== Test: write_time_windows_if_changed hold in charge slot ===")
+    cases = [
+        # (v2, battery_soc, charge_soc, charge_current, expected mode)
+        (True, 60, 60, 50, "Self-Use - No Grid Charging"),
+        (True, 61, 60, 50, "Self-Use - No Grid Charging"),
+        (True, 60, 60, 0, "Self-Use - No Grid Charging"),
+        (True, 40, 60, 50, "Self-Use"),
+        (False, 60, 60, 50, "Self-Use - No Grid Charging"),
+        (False, 40, 60, 50, "Self-Use"),
+    ]
+    for v2, battery_soc, charge_soc, charge_current, expected in cases:
+        api, inverter_sn = _hold_slot_api(v2, battery_soc, charge_soc, charge_current)
+        result = await api.write_time_windows_if_changed(inverter_sn)
+        assert result is True, "write_time_windows_if_changed should return True"
+        modes = [call["mode"] for call in api.set_storage_mode_calls]
+        assert modes == [expected], "v2={} soc={} target={} current={}A: expected [{}], got {}".format(v2, battery_soc, charge_soc, charge_current, expected, modes)
+
+    # Hysteresis: once holding, a dip of 1% stays in the hold rather than re-importing it; more than that
+    # charges again. Without a hold to stay in, 1% below the target is an ordinary charge that finishes.
+    api, inverter_sn = _hold_slot_api(True, 60, 60)
+    for battery_soc, expected in [(60, "Self-Use - No Grid Charging"), (59, "Self-Use - No Grid Charging"), (58, "Self-Use"), (59, "Self-Use"), (60, "Self-Use - No Grid Charging")]:
+        api.inverter_details[inverter_sn]["batteryCapacitySoc"] = battery_soc
+        api.set_storage_mode_calls = []
+        await api.write_time_windows_if_changed(inverter_sn)
+        modes = [call["mode"] for call in api.set_storage_mode_calls]
+        assert modes == [expected], "hysteresis at soc {}: expected [{}], got {}".format(battery_soc, expected, modes)
+
+    # The hold written for real carries the Battery Reserve bit: 19 on V1 (TOU bit kept), 17 on V2
+    for v2, expected_value in [(False, "19"), (True, "17")]:
+        api, inverter_sn = _hold_slot_api(v2, 60, 60, real_mode=True)
+        await api.write_time_windows_if_changed(inverter_sn)
+        values = [call["value"] for call in api.read_and_write_cid_calls if call["cid"] == SOLIS_CID_STORAGE_MODE]
+        assert values == [expected_value], "v2={}: expected CID 636 write [{}], got {}".format(v2, expected_value, values)
+
+    # Outside the slot's window the hold ends even though the slot is still programmed
+    for v2, expected in [(True, "Self-Use"), (False, "Self-Use - No Timed Charge/Discharge")]:
+        api, inverter_sn = _hold_slot_api(v2, 60, 60, now="06:00")
+        await api.write_time_windows_if_changed(inverter_sn)
+        modes = [call["mode"] for call in api.set_storage_mode_calls]
+        assert modes == [expected], "v2={} after the slot: expected [{}], got {}".format(v2, expected, modes)
+
+    print("PASSED: charge slot at target holds without grid charging")
+    return False
+
+
+async def test_compute_solis_mode_value_hold_and_reserve():
+    """The hold mode keeps the TOU bit only where it is the slot enable, and battery_reserve sets bit 4.
+
+    Self-Use - No Grid Charging is Self-Use with timed charge/discharge on but grid charging off: 3 on V1
+    firmware, where bit 1 enables the slots, and 1 on TOU V2, where the per-slot registers do. The existing
+    Self-Use - No Timed Charge/Discharge (1) would switch the V1 slots off and lose the hold.
+    battery_reserve=True sets the Battery Reserve bit so the Reserved SOC is a discharge floor; left at None
+    the bit is kept as it was, so a Battery Reserve the user turned on is not cleared.
+    """
+    print("\n=== Test: compute_solis_mode_value hold and battery reserve ===")
+    assert compute_solis_mode_value(ENUM_SELF_USE_HOLD, 0) == 3
+    assert compute_solis_mode_value(ENUM_SELF_USE_HOLD, 0, drop_tou_bit=True) == 1
+    assert compute_solis_mode_value(ENUM_SELF_USE_HOLD, 35) == 3, "grid charging and nothing else cleared from Self-Use"
+    assert get_solis_mode_enum(3) == (ENUM_SELF_USE_HOLD, "Self-Use - No Grid Charging")
+    assert get_solis_mode_enum(1) == (ENUM_SELF_USE_NO_GRID_CHARGING, "Self-Use - No Timed Charge/Discharge")
+
+    backup = 1 << SOLIS_BIT_BACKUP_MODE
+    assert compute_solis_mode_value(ENUM_SELF_USE, 0, battery_reserve=True) == 35 | backup
+    assert compute_solis_mode_value(ENUM_SELF_USE, 0, drop_tou_bit=True, battery_reserve=True) == 49
+    assert compute_solis_mode_value(ENUM_SELF_USE_NO_GRID_CHARGING, 0, battery_reserve=True) == 17
+    assert compute_solis_mode_value(ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, 0, battery_reserve=True) == 80
+    assert compute_solis_mode_value(ENUM_SELF_USE, backup) == 35 | backup, "bit 4 is kept when battery_reserve is not asked for"
+    assert compute_solis_mode_value(ENUM_SELF_USE, 0) == 35, "and not added"
+    assert get_solis_mode_enum(49) == (ENUM_SELF_USE, "Self-Use")
+    assert get_solis_mode_enum(80) == (ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, "Feed-in priority - No Timed Charge/Discharge")
+
+    print("PASSED: hold mode and battery reserve bit")
+    return False
+
+
+async def test_storage_mode_always_sets_battery_reserve():
+    """set_storage_mode_if_needed always keeps the Battery Reserve bit on, so the Battery Reserve SOC is honoured.
+
+    set_reserve_enable only says whether Predbat may change that SOC (reserve_min, or SoC + 1 for a hold). With
+    it off the user manages the reserve themselves, but it is still their reserve: the inverter enforces it,
+    and Predbat plans against it, whichever way the switch is set.
+    """
+    print("\n=== Test: storage mode always sets the Battery Reserve bit ===")
+    for reserve_enable, mode, cached, expected in [
+        (True, "Self-Use", "1", "49"),
+        (True, "Self-Use - No Timed Charge/Discharge", "33", "17"),
+        (True, "Feed-in priority - No Timed Charge/Discharge", "1", "80"),
+        (False, "Self-Use", "1", "49"),
+        (False, "Self-Use - No Timed Charge/Discharge", "33", "17"),
+    ]:
+        api = MockSolisAPI()
+        api._test_v2_mode = True
+        inverter_sn = "RES001"
+        api.inverter_sn = [inverter_sn]
+        api.base.args["set_reserve_enable"] = reserve_enable
+        api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: cached}
+        await api.set_storage_mode_if_needed(inverter_sn, mode)
+        values = [call["value"] for call in api.read_and_write_cid_calls if call["cid"] == SOLIS_CID_STORAGE_MODE]
+        assert values == [expected], "set_reserve_enable={} {} from {}: expected [{}], got {}".format(reserve_enable, mode, cached, expected, values)
+
+    print("PASSED: Battery Reserve bit always set")
+    return False
+
+
+async def test_number_event_soc_limit_shows_at_once():
+    """A battery SOC limit change shows in the cache and its entity at once; the write waits in the queue.
+
+    Predbat checks a write within write_and_poll_sleep (2s on SolisCloud), but events other than slot schedule
+    ones are only handled at the top of the next run(), up to a minute later - so the requested value is shown
+    straight away, and the queued handler writes it and refreshes the cache from what the inverter reports.
+    """
+    print("\n=== Test: number_event SOC limit shows at once ===")
+    api = MockSolisAPI()
+    inverter_sn = "123456"
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_BATTERY_RESERVE_SOC: "10"}
+    entity_id = f"number.predbat_solis_{inverter_sn}_reserve_soc"
+
+    await api.number_event(entity_id, 55)
+    assert api.cached_values[inverter_sn][SOLIS_CID_BATTERY_RESERVE_SOC] == "55", api.cached_values[inverter_sn]
+    assert api.dashboard_items[entity_id]["state"] == "55", api.dashboard_items.get(entity_id)
+    assert api.dashboard_items[entity_id]["attributes"]["unit_of_measurement"] == "%"
+    assert not [call for call in api.read_and_write_cid_calls if call["cid"] == SOLIS_CID_BATTERY_RESERVE_SOC], "the write waits for the queue"
+    assert len(api.queued_events) == 1, api.queued_events
+
+    handler, *args = api.queued_events.pop(0)
+    await handler(*args)
+    writes = [call["value"] for call in api.read_and_write_cid_calls if call["cid"] == SOLIS_CID_BATTERY_RESERVE_SOC]
+    assert writes == ["55"], writes
+
+    print("PASSED: SOC limit change shown at once, written from the queue")
+    return False
+
+
+async def test_warns_when_reserve_is_the_over_discharge_soc():
+    """A reserve binding still pointing at the over-discharge SOC is warned about.
+
+    automatic_config() used to bind reserve there, so a manual (solis_automatic: false) setup copied from it
+    would now have Predbat raise the over-discharge SOC - a safety floor it otherwise never writes - to hold
+    the battery, and battery_min_soc would follow it up.
+    """
+    print("\n=== Test: warn when reserve is the over-discharge SOC ===")
+    api = MockSolisAPI()
+    api.base.args["reserve"] = ["number.predbat_solis_123456_over_discharge_soc"]
+    api.warn_reserve_bound_to_over_discharge_soc()
+    assert any("over_discharge_soc" in msg and msg.startswith("Warn:") for msg in api.log_messages), api.log_messages
+
+    api = MockSolisAPI()
+    api.base.args["reserve"] = ["number.predbat_solis_123456_reserve_soc"]
+    api.warn_reserve_bound_to_over_discharge_soc()
+    assert not any(msg.startswith("Warn:") for msg in api.log_messages), api.log_messages
+
+    print("PASSED: over-discharge reserve binding warned about")
+    return False
+
+
 async def test_write_time_windows_v1_slot_detection():
     """Test V1 mode slot detection for active charge/discharge windows"""
     print("\n=== Test: write_time_windows_if_changed V1 mode slot detection ===")
@@ -4898,8 +5114,8 @@ async def test_set_storage_mode_self_use():
     # Verify correct CID and value (Self-Use = bits 0,5 set = 33)
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "35", f"Expected value '35' (Self-Use), got {call['value']}"
-    assert "storage mode to 35" in call["field_description"], "Field description should mention value 35"
+    assert call["value"] == "51", f"Expected value '51' (Self-Use + Battery Reserve), got {call['value']}"
+    assert "storage mode to 51" in call["field_description"], "Field description should mention value 51"
 
     print("PASSED: set_storage_mode_if_needed writes Self-Use correctly")
     return False
@@ -4926,8 +5142,8 @@ async def test_set_storage_mode_feed_in_priority():
     # Verify correct CID and value (Feed-in priority = bits 5,6 set = 96)
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "98", f"Expected value '98' (Feed-in priority), got {call['value']}"
-    assert "storage mode to 98" in call["field_description"], "Field description should mention value 98"
+    assert call["value"] == "114", f"Expected value '114' (Feed-in priority + Battery Reserve), got {call['value']}"
+    assert "storage mode to 114" in call["field_description"], "Field description should mention value 114"
 
     print("PASSED: set_storage_mode_if_needed writes Feed-in priority correctly")
     return False
@@ -4980,7 +5196,7 @@ async def test_set_storage_mode_if_needed_changes():
     # Verify correct CID and value
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "35", f"Expected value '35' (Self-Use), got {call['value']}"
+    assert call["value"] == "51", f"Expected value '51' (Self-Use + Battery Reserve), got {call['value']}"
 
     print("PASSED: set_storage_mode_if_needed writes when mode changes")
     return False
@@ -4994,8 +5210,8 @@ async def test_set_storage_mode_if_needed_no_changes():
     inverter_sn = "789012"
     api.inverter_sn = [inverter_sn]
 
-    # Setup cached value (currently Self-Use = bits 0,5 = 35)
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "35"}
+    # Setup cached value (currently Self-Use + Battery Reserve = 51)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "51"}
 
     # Call set_storage_mode_if_needed with same mode
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
@@ -5022,10 +5238,10 @@ async def test_set_storage_mode_if_needed_all_modes():
     # Test mode transitions (sequential, each uses previous cached value)
     # Default cache = 1 (1<<SOLIS_BIT_SELF_USE)
     test_modes = [
-        ("Self-Use", "35"),  # bits 0,1, 5 = 1+2+32 = 35
-        ("Feed-in priority", "98"),  # bits 5,6 = 32+64 = 98
-        ("Self-Use - No Timed Charge/Discharge", "1"),  # bit 0 = 1
-        ("Feed-in priority - No Timed Charge/Discharge", "64"),  # bit 6 = 64
+        ("Self-Use", "51"),  # bits 0,1,4,5 = 1+2+16+32 = 51
+        ("Feed-in priority", "114"),  # bits 1,4,5,6 = 2+16+32+64 = 114
+        ("Self-Use - No Timed Charge/Discharge", "17"),  # bits 0,4 = 17
+        ("Feed-in priority - No Timed Charge/Discharge", "80"),  # bits 4,6 = 80
     ]
 
     for mode_name, expected_value in test_modes:
@@ -5142,6 +5358,8 @@ async def test_storage_mode_drops_the_tou_bit_on_tou_v2_firmware():
     33, 98 became 96. Asking for the bit there produces a write the control API answers with code
     0 and then reads back without it, which is the verify-fail loop #4707 reported. Deciding it
     from the firmware generation is deterministic, so one inconsistent read-back cannot change it.
+
+    The Battery Reserve bit (16) is always set now, so the values below carry it: 33 -> 49, 35 -> 51.
     """
     failed = False
     print("\n=== Test: storage mode drops the TOU bit on TOU V2 firmware ===")
@@ -5154,11 +5372,11 @@ async def test_storage_mode_drops_the_tou_bit_on_tou_v2_firmware():
     for _ in range(3):
         await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
-    if api.writes != [33]:
-        print("ERROR: expected one write of 33 with the TOU bit already dropped, got {}".format(api.writes))
+    if api.writes != [49]:
+        print("ERROR: expected one write of 49 with the TOU bit already dropped, got {}".format(api.writes))
         failed = True
-    if api.register != 33:
-        print("ERROR: expected the inverter to settle at 33, got {}".format(api.register))
+    if api.register != 49:
+        print("ERROR: expected the inverter to settle at 49, got {}".format(api.register))
         failed = True
 
     warnings = [m for m in api.log_messages if m.startswith("Warn:") and str(SOLIS_CID_STORAGE_MODE) in m]
@@ -5179,6 +5397,8 @@ async def test_storage_mode_keeps_asking_for_the_tou_bit_on_tou_v1_firmware():
     is transient - the same write of 179 verifies minutes before and minutes after the one that
     fails - so a single sample cannot establish a firmware property. On V1 firmware bit 1 *is* the
     timed charge/discharge enable, so dropping it silently disables the charge window; keep asking.
+
+    The Battery Reserve bit (16) is always set now, so the values below carry it: 33 -> 49, 35 -> 51.
     """
     failed = False
     print("\n=== Test: storage mode keeps asking for the TOU bit on TOU V1 firmware ===")
@@ -5192,7 +5412,7 @@ async def test_storage_mode_keeps_asking_for_the_tou_bit_on_tou_v1_firmware():
     for _ in range(3):
         await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
-    if api.writes != [35, 35, 35]:
+    if api.writes != [51, 51, 51]:
         print("ERROR: expected the TOU bit to be asked for every cycle, got {}".format(api.writes))
         failed = True
 
@@ -5209,6 +5429,8 @@ async def test_a_transient_tou_bit_strip_is_recovered_on_the_next_cycle():
     and set_storage_mode_if_needed() stopped writing CID 636 altogether - for eight hours, right
     across an overnight charge window. Predbat reported a charge target every cycle while the
     inverter sat with timed charge/discharge disabled.
+
+    The Battery Reserve bit (16) is always set now, so the values below carry it: 33 -> 49, 35 -> 51.
     """
     failed = False
     print("\n=== Test: a transient TOU bit strip is recovered on the next cycle ===")
@@ -5219,19 +5441,19 @@ async def test_a_transient_tou_bit_strip_is_recovered_on_the_next_cycle():
     api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "1"}
 
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
-    if api.register != 33:
-        print("ERROR: expected the stripped write to leave the inverter at 33, got {}".format(api.register))
+    if api.register != 49:
+        print("ERROR: expected the stripped write to leave the inverter at 49, got {}".format(api.register))
         failed = True
 
     # The very same write succeeds on the next cycle, as it does in the reported logs.
     api.strip_tou = False
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
-    if api.writes != [35, 35]:
-        print("ERROR: expected 35 to be requested again after the strip, got {}".format(api.writes))
+    if api.writes != [51, 51]:
+        print("ERROR: expected 51 to be requested again after the strip, got {}".format(api.writes))
         failed = True
-    if api.register != 35:
-        print("ERROR: expected the inverter to recover to 35, got {}".format(api.register))
+    if api.register != 51:
+        print("ERROR: expected the inverter to recover to 51, got {}".format(api.register))
         failed = True
 
     if not failed:
@@ -5244,18 +5466,20 @@ async def test_storage_mode_keeps_the_tou_bit_when_the_inverter_accepts_it():
 
     Dropping it there would be a silent downgrade - without the TOU bit, 33 means
     "Self-Use - No Timed Charge/Discharge" on the firmware that still uses that table.
+
+    The Battery Reserve bit (16) is always set now, so the values below carry it: 33 -> 49, 35 -> 51.
     """
     failed = False
     print("\n=== Test: storage mode keeps the TOU bit when it is accepted ===")
 
     inverter_sn = "1031260253072197"
-    api = _StorageModeInverter(register=33, strip_tou=False)
+    api = _StorageModeInverter(register=49, strip_tou=False)
     api.inverter_sn = [inverter_sn]
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "49"}
 
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
-    if api.register != 35:
-        print("ERROR: expected the inverter to reach 35, got {}".format(api.register))
+    if api.register != 51:
+        print("ERROR: expected the inverter to reach 51, got {}".format(api.register))
         failed = True
 
     # Something outside Predbat moves it back; the next cycle must still ask for the TOU bit.
@@ -5263,8 +5487,8 @@ async def test_storage_mode_keeps_the_tou_bit_when_the_inverter_accepts_it():
     api.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] = "1"
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
-    if api.writes != [35, 35]:
-        print("ERROR: expected 35 to be requested both times, got {}".format(api.writes))
+    if api.writes != [51, 51]:
+        print("ERROR: expected 51 to be requested both times, got {}".format(api.writes))
         failed = True
 
     if not failed:
@@ -5593,9 +5817,9 @@ async def test_the_storage_mode_is_re_asserted_when_a_window_opens():
 
     inverter_sn = "6031052254150188"
     # Already in the value V2 computes, so nothing but the window open can trigger a write.
-    api = _StorageModeInverter(register=33)
+    api = _StorageModeInverter(register=49)  # Self-Use + Battery Reserve on V2
     api.inverter_sn = [inverter_sn]
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33", SOLIS_CID_TOU_V2_MODE: "43605"}
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "49", SOLIS_CID_TOU_V2_MODE: "43605"}
     api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
 
     # Slot programmed, window not yet open: the mode already matches, so nothing is written.
@@ -5608,7 +5832,7 @@ async def test_the_storage_mode_is_re_asserted_when_a_window_opens():
     # Window opens: assert the mode even though it equals the cache.
     api._test_now_utc_exact = datetime(2026, 8, 25, 23, 30, tzinfo=api.local_tz)
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
-    if api.writes != [33]:
+    if api.writes != [49]:
         print("ERROR: expected one mode write when the window opened, got {}".format(api.writes))
         failed = True
 
@@ -5616,7 +5840,7 @@ async def test_the_storage_mode_is_re_asserted_when_a_window_opens():
     for minute in (35, 40):
         api._test_now_utc_exact = datetime(2026, 8, 25, 23, minute, tzinfo=api.local_tz)
         await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
-    if api.writes != [33]:
+    if api.writes != [49]:
         print("ERROR: expected the assertion to happen once per window, got {}".format(api.writes))
         failed = True
 
@@ -5625,7 +5849,7 @@ async def test_the_storage_mode_is_re_asserted_when_a_window_opens():
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
     api._test_now_utc_exact = datetime(2026, 8, 26, 23, 30, tzinfo=api.local_tz)
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
-    if api.writes != [33, 33]:
+    if api.writes != [49, 49]:
         print("ERROR: expected the next night's window to be asserted too, got {}".format(api.writes))
         failed = True
 
@@ -5645,9 +5869,9 @@ async def test_a_window_rewritten_mid_flight_gets_its_own_mode_assertion():
     print("\n=== Test: a window rewritten mid-flight gets its own mode assertion ===")
 
     inverter_sn = "6031052254150188"
-    api = _StorageModeInverter(register=33)
+    api = _StorageModeInverter(register=49)  # Self-Use + Battery Reserve on V2
     api.inverter_sn = [inverter_sn]
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33", SOLIS_CID_TOU_V2_MODE: "43605"}
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "49", SOLIS_CID_TOU_V2_MODE: "43605"}
     api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
 
     api._test_now_utc_exact = datetime(2026, 8, 25, 23, 35, tzinfo=api.local_tz)
@@ -5657,7 +5881,7 @@ async def test_a_window_rewritten_mid_flight_gets_its_own_mode_assertion():
     api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "01:30"}}
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
-    if api.writes != [33, 33]:
+    if api.writes != [49, 49]:
         print("ERROR: expected the rewritten window to be asserted as well, got {}".format(api.writes))
         failed = True
 
@@ -5781,12 +6005,13 @@ async def test_automatic_config():
     assert "export_today" in set_arg_calls, "export_today not configured"
     assert "pv_today" in set_arg_calls, "pv_today not configured"
 
-    # Verify reserve and limits use over_discharge_soc (not reserve_soc)
+    # Verify the reserve is the Battery Reserve SOC Predbat writes, and the minimum the over-discharge SOC it reads
     assert "reserve" in set_arg_calls, "reserve not configured"
-    expected_reserve = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
+    expected_reserve = ["number.predbat_solis_abc123_reserve_soc", "number.predbat_solis_def456_reserve_soc"]
     assert set_arg_calls["reserve"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['reserve']}"
     assert "battery_min_soc" in set_arg_calls, "battery_min_soc not configured"
-    assert set_arg_calls["battery_min_soc"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['battery_min_soc']}"
+    expected_min_soc = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
+    assert set_arg_calls["battery_min_soc"] == expected_min_soc, f"Expected {expected_min_soc}, got {set_arg_calls['battery_min_soc']}"
 
     # Verify rate controls configured
     assert "battery_rate_max" in set_arg_calls, "battery_rate_max not configured"

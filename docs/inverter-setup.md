@@ -3032,9 +3032,14 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 4. Save the file as `apps.yaml` to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
 
-5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
-   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
-   In due course, these mode settings will be incorporated into the code.
+5. Predbat keeps the inverter's Energy Storage Control Switch (**energy_control_switch** in `apps.yaml`) on `Backup/Reserve`: Self-Use with the inverter's Battery Reserve switched on and grid charging allowed.
+   This firmware has no separate `Timed Charge/Discharge` control mode - timed charging and exporting are turned on and off for each slot instead, and Predbat does this using the slot 1 enable switches (**scheduled_charge_enable** and **scheduled_discharge_enable** in `apps.yaml`).
+   The Battery Reserve makes the Reserved SOC (**reserve** in `apps.yaml`, `number.solis_inverter_backup_mode_soc`) a real discharge floor, so Predbat can hold the battery on it - for **freeze charging**, while a car or iBoost charges, and when it holds a charge at its target. Turn on **switch.predbat_set_reserve_enable** for these holds.
+   Grid charging matters too: in any of the `No Grid Charging` modes a charge slot cannot charge from the grid, so Predbat puts the switch back to `Backup/Reserve` if it finds it there (for example after a period controlled by SolisCloud).
+   During a freeze or hold Predbat switches to `Backup/Reserve - No Grid Charging`, so the inverter does not import from the grid to reach the raised reserve, and back to `Backup/Reserve` afterwards.
+   For **freeze exporting** it switches to `Feed-in priority - No Grid Charging`, so solar goes to the house and then the grid rather than into the battery, while the battery still covers the house load down to the inverter's own minimum SoC.
+   If **energy_control_switch** is missing from your `apps.yaml`, Predbat warns during charge slots and you will need to keep the switch on `Backup/Reserve` yourself.
+   If you use the pre-FB00 setup (`inverter_type: "GS"`) on this firmware, charging can appear to work but exports will not, and Predbat will repeatedly report control interference on the Energy Storage Control Switch.
 
 6. Note: Predbat will read the minimum SoC level set on the inverter via **sensor.solis_battery_minimum_soc** configured in `apps.yaml`.
    You must set the minimum SoC level that Predbat will set in **input_number.predbat_set_reserve_min** to at least 1% more than the inverter minimum SoC.<BR>
