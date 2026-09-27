@@ -277,6 +277,10 @@ _ALLOWED_TOOLS_NON_GH = [
     "Bash(tr *)",
     "Bash(tee *)",
     "Bash(echo *)",
+    # Under dontAsk every command in a pipeline must match a rule, so the scoped gh api grant
+    # alone does not cover `printf '%s' '<json>' | gh api repos/.../comments --input -` - which
+    # is how PR #5250's review wrote every comment, and so posted none of them.
+    "Bash(printf *)",
     # Edit rules cover every file-editing tool (Write included) - a Write(path)
     # rule is not matched by the file permission check, so don't add one.
     f"Edit({EDIT_SCOPE})",
