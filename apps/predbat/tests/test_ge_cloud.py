@@ -15,6 +15,7 @@ from gecloud import GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_expor
 from gecloud import SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
 import asyncio
+import copy
 import json
 import pytz
 from unittest.mock import MagicMock, patch, AsyncMock
@@ -335,6 +336,8 @@ def test_ge_cloud(my_predbat=None):
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
         ("enable_defaults_skip_target", _test_enable_default_options_skips_discharge_target, "Enable defaults skips the discharge target register"),
         ("force_charge_control", _test_force_charge_control, "Force charge is the scheduled charge control when both charge switches exist"),
+        ("ac_charge_gate_on_force_charge", _test_ac_charge_gate_on_force_charge, "Force charge turn on re-enables a cleared AC charge gate"),
+        ("ac_charge_gate_on_settings_refresh", _test_ac_charge_gate_on_settings_refresh, "Settings refresh re-enables a cleared AC charge gate while force charging"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
@@ -6626,6 +6629,208 @@ def _make_run_mocks(ge_cloud, enable_default_calls=None):
     ge_cloud.publish_registers = mock_publish_registers
     ge_cloud.async_automatic_config = mock_automatic_config
     ge_cloud.enable_default_options = mock_enable_default_options
+
+
+def _ac_charge_gate_registers(force_charge, ac_charge):
+    """Registers for a device that gates grid charging behind both Enable AC Charge and Enable Force Charge."""
+    return {
+        200: {"name": "Enable_AC_Charge", "value": ac_charge, "validation_rules": ["boolean"]},
+        201: {"name": "Enable_Force_Charge", "value": force_charge, "validation_rules": ["boolean"]},
+        202: {"name": "Enable_AC_Charge_Upper_%_Limit", "value": False, "validation_rules": ["boolean"]},
+    }
+
+
+def _test_ac_charge_gate_on_force_charge(my_predbat):
+    """GH#5269: turning enable_force_charge on also turns the enable_ac_charge gate back on if something cleared it"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        force_entity = "switch.predbat_gecloud_test123_enable_force_charge"
+        ge_cloud.register_entity_map[force_entity] = {"key": 201, "device": "test123"}
+        # What async_automatic_config binds on a two-switch device (GH#5040)
+        ge_cloud.config_args["scheduled_charge_enable"] = [force_entity]
+
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        # The gate was cleared (e.g. by an Axle event), so starting the charge must re-enable it
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge=False)}
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        expect = [{"serial": "test123", "id": 201, "value": True}, {"serial": "test123", "id": 200, "value": True}]
+        if write_calls != expect:
+            print("ERROR: Expected force charge then AC charge gate written on, got {}".format(write_calls))
+            return 1
+        if ge_cloud.settings["test123"][200]["value"] is not True:
+            print("ERROR: The cached AC charge gate should be updated to on, got {}".format(ge_cloud.settings["test123"][200]["value"]))
+            return 1
+        if not any("enable_ac_charge is off for test123" in message for message in ge_cloud.log_messages):
+            print("ERROR: Expected a warning that the AC charge gate was found off, got {}".format(ge_cloud.log_messages))
+            return 1
+
+        # Normal case: the gate is already on, so only the force charge write is made
+        write_calls.clear()
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge=True)}
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        if write_calls != [{"serial": "test123", "id": 201, "value": True}]:
+            print("ERROR: Expected only the force charge write when the gate is already on, got {}".format(write_calls))
+            return 1
+
+        # A string value read back as "on" counts as on, the same as the published switch state
+        write_calls.clear()
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge="on")}
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        if write_calls != [{"serial": "test123", "id": 201, "value": True}]:
+            print("ERROR: A gate reading 'on' should not be rewritten, got {}".format(write_calls))
+            return 1
+
+        # Turning force charge off never touches the gate
+        write_calls.clear()
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=True, ac_charge=False)}
+        await ge_cloud.switch_event(force_entity, "turn_off")
+        if write_calls != [{"serial": "test123", "id": 201, "value": False}]:
+            print("ERROR: Turning force charge off should not write the gate, got {}".format(write_calls))
+            return 1
+
+        # Read only - the gate is never written
+        write_calls.clear()
+        ge_cloud._read_only = True
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge=False)}
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        ge_cloud._read_only = False
+        if any(call["id"] == 200 for call in write_calls):
+            print("ERROR: The gate must not be written in read only mode, got {}".format(write_calls))
+            return 1
+
+        # scheduled_charge_enable bound to enable_ac_charge by hand - Predbat drives that switch, so it is never forced on
+        write_calls.clear()
+        ge_cloud.config_args["scheduled_charge_enable"] = ["switch.predbat_gecloud_test123_enable_ac_charge"]
+        ge_cloud.settings = {"test123": _ac_charge_gate_registers(force_charge=False, ac_charge=False)}
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        ge_cloud.config_args["scheduled_charge_enable"] = [force_entity]
+        if write_calls != [{"serial": "test123", "id": 201, "value": True}]:
+            print("ERROR: The gate must not be written when enable_ac_charge is the scheduled charge control, got {}".format(write_calls))
+            return 1
+
+        # A write-only gate is cached as off on every read, so its state cannot be checked and it is not written
+        write_calls.clear()
+        registers = _ac_charge_gate_registers(force_charge=False, ac_charge=False)
+        registers[200]["validation_rules"] = ["writeonly"]
+        ge_cloud.settings = {"test123": registers}
+        await ge_cloud.switch_event(force_entity, "turn_on")
+        if write_calls != [{"serial": "test123", "id": 201, "value": True}]:
+            print("ERROR: A write-only gate should not be written, got {}".format(write_calls))
+            return 1
+
+        # Single-switch device: enable_ac_charge is itself the scheduled charge control, so turning it on is one write
+        write_calls.clear()
+        ac_entity = "switch.predbat_gecloud_test456_enable_ac_charge"
+        ge_cloud.register_entity_map[ac_entity] = {"key": 300, "device": "test456"}
+        ge_cloud.settings = {"test456": {300: {"name": "Enable_AC_Charge", "value": False, "validation_rules": ["boolean"]}}}
+        await ge_cloud.switch_event(ac_entity, "turn_on")
+        if write_calls != [{"serial": "test456", "id": 300, "value": True}]:
+            print("ERROR: A single-switch device should get only the one write, got {}".format(write_calls))
+            return 1
+        if ge_cloud.ac_charge_gate_keys("test456") != []:
+            print("ERROR: A device without enable_force_charge has no AC charge gate, got {}".format(ge_cloud.ac_charge_gate_keys("test456")))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_ac_charge_gate_on_settings_refresh(my_predbat):
+    """GH#5269: the 10 minute settings refresh re-enables a cleared AC charge gate only while force charging"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud.polling_mode = True
+        ge_cloud.config_args["scheduled_charge_enable"] = ["switch.predbat_gecloud_inv001_enable_force_charge"]
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        # What the next settings re-read returns, standing in for whatever the inverter now holds
+        inverter_registers = {"registers": _ac_charge_gate_registers(force_charge=False, ac_charge=True)}
+
+        async def mock_get_inverter_settings(_device, **_kwargs):
+            return copy.deepcopy(inverter_registers["registers"])
+
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        await ge_cloud.run(seconds=0, first=True)
+        if write_calls:
+            print("ERROR: Nothing should be written while the gate is on, got {}".format(write_calls))
+            return 1
+
+        # Mid-charge something clears the gate - well inside the 24 hour enable_default_options window
+        inverter_registers["registers"] = _ac_charge_gate_registers(force_charge=True, ac_charge=False)
+        await ge_cloud.run(seconds=600, first=False)
+        if write_calls != [{"serial": "inv001", "id": 200, "value": True}]:
+            print("ERROR: Expected the refresh to turn the AC charge gate back on, got {}".format(write_calls))
+            return 1
+
+        # Not force charging - leave the switch to whoever turned it off (e.g. an Axle event)
+        write_calls.clear()
+        inverter_registers["registers"] = _ac_charge_gate_registers(force_charge=False, ac_charge=False)
+        await ge_cloud.run(seconds=1200, first=False)
+        if write_calls:
+            print("ERROR: The gate must not be written while not force charging, got {}".format(write_calls))
+            return 1
+
+        # scheduled_charge_enable bound to enable_ac_charge by hand - Predbat turned it off to end a charge, so leave it
+        ge_cloud.config_args["scheduled_charge_enable"] = ["switch.predbat_gecloud_inv001_enable_ac_charge"]
+        inverter_registers["registers"] = _ac_charge_gate_registers(force_charge=True, ac_charge=False)
+        await ge_cloud.run(seconds=1500, first=False)
+        ge_cloud.config_args["scheduled_charge_enable"] = ["switch.predbat_gecloud_inv001_enable_force_charge"]
+        if write_calls:
+            print("ERROR: The gate must not be written when enable_ac_charge is the scheduled charge control, got {}".format(write_calls))
+            return 1
+
+        # An active Axle VPP event forces read only through the attribute alone, with the switch still off.
+        # Neither the gate nor the 24 hour enable_default_options pass may write, even once that pass is due.
+        ge_cloud.base.set_read_only = True
+        enable_default_calls.clear()
+        ge_cloud._now_utc_exact = ge_cloud.default_options_stamp + timedelta(hours=25)
+        await ge_cloud.run(seconds=1800, first=False)
+        if write_calls:
+            print("ERROR: The gate must not be written while an Axle event forces read only, got {}".format(write_calls))
+            return 1
+        if enable_default_calls:
+            print("ERROR: The 24 hour enable_default_options pass must wait while an Axle event forces read only, got {}".format(enable_default_calls))
+            return 1
+        del ge_cloud.base.set_read_only
+
+        # Read only switch - never written
+        ge_cloud._read_only = True
+        await ge_cloud.run(seconds=2400, first=False)
+        if write_calls:
+            print("ERROR: The gate must not be written in read only mode, got {}".format(write_calls))
+            return 1
+
+        return 0
+
+    return run_async(test())
 
 
 def _test_run_read_only_skips_reset(my_predbat):
