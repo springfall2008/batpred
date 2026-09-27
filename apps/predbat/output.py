@@ -1111,7 +1111,7 @@ class Output:
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
         the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
-        rather than from the model (see plan_row_holding_for_car()).
+        rather than from predict_car_hold_best (see plan_row_holding_for_car()).
         """
         html = ""
         plan_debug = self.plan_debug
@@ -1328,8 +1328,8 @@ class Output:
                 soc_sym = "&searr;"
 
             # The discharge hold for a charging car, so the row explains a held SoC with the same "Hold for
-            # car" execute.py shows live (#5147 review)
-            holding_for_car = self.plan_row_holding_for_car(minute_start, minute_end, prediction, car_hold_minutes)
+            # car" execute.py shows live
+            holding_for_car = self.plan_row_holding_for_car(minute_start, minute_end, car_hold_minutes)
 
             state = "&#128663;" if holding_for_car else soc_sym
             state_color = "#FFFFFF"
@@ -1456,14 +1456,9 @@ class Output:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
-                        # holding_for_car above was computed for the whole 30-minute row, but this
-                        # branch only describes the pre-export segment (minute_start to start) - a
-                        # car held for only during that segment must still get the car icon/reason
-                        # here, not lose it to the pre-export arrow below (Copilot review on
-                        # #5147). Same "car icon replaces the trend arrow/reason" convention as the
-                        # whole-row case above, so this takes priority over the trend below rather
-                        # than being shown alongside it.
-                        holding_for_car_segment = self.plan_row_holding_for_car(minute_start, start, prediction, car_hold_minutes)
+                        # This branch describes only the pre-export segment, so the car hold is
+                        # judged on that segment rather than the whole row
+                        holding_for_car_segment = self.plan_row_holding_for_car(minute_start, start, car_hold_minutes)
 
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
                         split_time_str = (self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M")
@@ -3166,17 +3161,24 @@ class Output:
                         load_value = yesterday_load_step.get(minute, 0)
                         yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
 
-    def plan_row_holding_for_car(self, minute_start, minute_end, prediction=None, car_hold_minutes=None):
+    def plan_row_holding_for_car(self, minute_start, minute_end, car_hold_minutes=None):
         """
-        Whether a plan row (or a split row's pre-export segment) shows the battery held for a charging car.
+        Whether a plan row (or a split row's pre-export segment) shows the battery held for a charging car:
+        held for at least half of it. A shorter hold leaves the row its trend arrow, so a brief dispatch
+        does not hide the battery discharging for the rest of the row, and a recorded status lagging a slot
+        boundary by a minute or two does not put the car on the next row.
 
-        With car_hold_minutes (the Yesterday actual-history table, whose SoC is measured) it is whether any
-        minute's recorded status was "Hold for car". Otherwise it is the hold the model assumes: charge
-        windows in use, the car not allowed to draw from the battery, and car_charging_hold_active().
+        With car_hold_minutes (the Yesterday actual-history table, whose SoC is measured) the held minutes
+        are those whose recorded status was "Hold for car". Otherwise they are the steps the prediction that
+        drew predict_soc_best held the battery for, so the car explains exactly the SoC shown beside it.
         """
+        if minute_end <= minute_start:
+            return False
         if car_hold_minutes is not None:
-            return any(minute in car_hold_minutes for minute in range(minute_start, minute_end))
-        return bool(self.set_charge_window and (not self.car_charging_from_battery) and self.car_charging_hold_active(minute_start, minute_end, prediction))
+            held = sum(1 for minute in range(minute_start, minute_end) if minute in car_hold_minutes)
+        else:
+            held = sum(PREDICT_STEP for minute in range(minute_start, minute_end, PREDICT_STEP) if (minute - self.minutes_now) in self.predict_car_hold_best)
+        return held * 2 >= minute_end - minute_start
 
     def calculate_yesterday(self):
         """
