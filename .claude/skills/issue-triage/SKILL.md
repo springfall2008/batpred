@@ -14,7 +14,19 @@ Arguments: `<issue-number> [scratch=<dir>]`. The scratch directory is a writable
 
 Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note any labels already applied — never remove a label a human added.
 
-## 1a. Evidence gate — ask for files before investigating
+## 1a. Split gate — one problem per ticket
+
+From the issue text alone, decide whether it reports more than one distinct problem, e.g. a plan that looks wrong *and* an inverter entity that won't update, or two unrelated errors. Several symptoms of one problem, like a wrong plan and the unexpected export it leads to, are one problem. Only take this path when the problems are clearly separate, meaning each could be fixed without touching the other. If unsure, treat it as one problem.
+
+If it is more than one, **stop here**, the same as the evidence gate below: no investigation, no theory, no duplicate search and no priority. Apply `waiting_for_user`, plus a type label only if every problem shares it (else `unclear`). Post the one comment (step 9) with the automated first-pass triage disclosure line, then:
+
+- list the separate problems you see, in one line each, in the reporter's own terms;
+- ask them to open a new issue for each problem after the first, and to trim this ticket down to the first. Name which one stays here;
+- ask them to attach the relevant log/debug files to each new issue (see the list in 1b), because each ticket is triaged separately.
+
+Apply `BOT_TRIAGED` as usual. The reporter's reply wakes a follow-up review, as in 1b.
+
+## 1b. Evidence gate — ask for files before investigating
 
 From the issue text alone, decide whether a proper analysis would need a `predbat.log`, a `predbat_debug.yaml`, or other evidence, and whether the reporter has already attached it. Typical cases that need it: a plan that looks wrong, unexpected charging/exporting, an inverter not doing what Predbat asked, an error or crash, wrong rates or forecasts. Typical cases that don't: a pure question, a feature request, a docs error, or a report whose cause is fully visible in the text or a pasted traceback.
 

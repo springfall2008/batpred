@@ -16,7 +16,7 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. Find t
 
 If there's nothing posted since the last bot comment, say so plainly in your follow-up comment rather than inventing a reason to change anything.
 
-If the previous bot comment was an evidence request (`/issue-triage` step 1a) and nothing was ever investigated, there is no earlier assessment to revise. If the requested files have now arrived, do the full first-pass work from `/issue-triage` steps 2–8 (attachments, classification, duplicates, investigation, labels, priority), If they still haven't arrived, don't investigate or give a theory. Just repeat what is still missing.
+If the previous bot comment was a split request or an evidence request (`/issue-triage` step 1a or 1b) and nothing was ever investigated, there is no earlier assessment to revise. Re-apply both gates to the ticket as it now stands. If the problems have now been split out and the files have arrived, do the full first-pass work from `/issue-triage` steps 2–8 (attachments, classification, duplicates, investigation, labels, priority). Investigate only the problem that stays on this ticket, not the ones moved elsewhere. If either is still outstanding, don't investigate or give a theory. Just repeat what is still missing.
 
 The daemon removes `waiting_for_user` and queues this review when the reporter comments on an issue carrying it. So if you still need something from the reporter after this review, whatever the earlier comment asked for, apply `waiting_for_user` again. That way their next reply triggers another review.
 
