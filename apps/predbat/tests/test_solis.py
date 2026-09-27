@@ -24,7 +24,7 @@ from solis import SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_C
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
-from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
+from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, ENUM_SELF_USE_HOLD
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_OFF_GRID
 from solis import SOLIS_CID_MAX_EXPORT_POWER, SOLIS_CLOUD_CAPABILITIES
 from coordinator import inverter_definition, validate_report
@@ -36,12 +36,13 @@ class MockBase:
 
     def __init__(self, prefix="predbat"):
         self.prefix = prefix
+        self.args = {}
 
     def get_arg(self, key, default=None):
-        """Mock get_arg method"""
+        """Mock get_arg method - prefix, then anything a test put in args, else the default"""
         if key == "prefix":
             return self.prefix
-        return default
+        return self.args.get(key, default)
 
 
 class MockSolisAPI(SolisAPI):
@@ -1502,27 +1503,28 @@ def test_solis_catalogue_two_inverters_get_their_own_entities():
     return False
 
 
-def test_solis_catalogue_reports_battery_min_soc_not_reserve():
-    """Spec D9: the record carries battery_min_soc (read-only entity plus rating) and no reserve.
+def test_solis_catalogue_reports_reserve_soc_and_battery_min_soc():
+    """The record carries reserve as the Battery Reserve SOC (CID 157, written) and battery_min_soc as the over-discharge SOC (read-only).
 
-    automatic_config() binds reserve and battery_min_soc to the same over_discharge_soc number, and
-    inverter.py dummies the reserve binding because the SolisCloud row has has_reserve_soc False -
-    so the record leaves reserve out and the derived has_reserve_soc is False. Also pins the row's
-    time_button_press False (no schedule_write_button is bound) and battery_power_invert's string
-    "True" becoming invert on battery_power.
+    Superseding spec D9: the reserve Predbat writes is the Reserved SOC, which the inverter holds as a
+    discharge floor while the Battery Reserve bit of CID 636 is on (set_storage_mode_if_needed keeps it on
+    while set_reserve_enable is). The over-discharge SOC stays the hard minimum it only reads. Also pins
+    the row's time_button_press False (no schedule_write_button is bound) and battery_power_invert's
+    string "True" becoming invert on battery_power.
     """
     api = _solis_fleet()
     api.cached_values["BAT001"][SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC] = "20"
     record = validated_inverters(api.build_discovery())[0]
     entities = record["entities"]
-    assert "reserve" not in entities, entities.get("reserve")
+    assert entities["reserve"] == {"entity_id": "number.predbat_solis_bat001_reserve_soc", "access": "rw", "unit": "%"}, entities.get("reserve")
     assert entities["battery_min_soc"] == {"entity_id": "number.predbat_solis_bat001_over_discharge_soc", "access": "r", "unit": "%"}, entities["battery_min_soc"]
     assert record["ratings"]["battery_min_soc"] == 20, record["ratings"]
     captured = capture_automatic_config(api)
-    assert captured["reserve"] == captured["battery_min_soc"], "automatic_config() binds both to over_discharge_soc"
+    assert captured["reserve"] == ["number.predbat_solis_bat001_reserve_soc"], captured["reserve"]
+    assert captured["battery_min_soc"] == ["number.predbat_solis_bat001_over_discharge_soc"], captured["battery_min_soc"]
     definition, gaps, _ = inverter_definition(record, SolisAPI.WRITE_AND_POLL_SLEEP)
     assert not gaps, gaps
-    assert definition["has_reserve_soc"] is False
+    assert definition["has_reserve_soc"] is True
     assert "schedule_write_button" not in entities and "schedule_write_button" not in captured
     assert definition["time_button_press"] is False
     assert captured["battery_power_invert"] == ["True"] and entities["battery_power"]["invert"] is True, entities["battery_power"]
@@ -1902,7 +1904,7 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_catalogue_mixed_fleet_matches_each_list_by_position()
         failed |= test_solis_catalogue_pv_load_ignore_keeps_the_entities()
         failed |= test_solis_catalogue_two_inverters_get_their_own_entities()
-        failed |= test_solis_catalogue_reports_battery_min_soc_not_reserve()
+        failed |= test_solis_catalogue_reports_reserve_soc_and_battery_min_soc()
         failed |= test_solis_catalogue_export_limit_is_the_configured_register()
         failed |= asyncio.run(test_solis_catalogue_filed_even_when_automatic_config_configures_nothing())
         failed |= asyncio.run(test_solis_catalogue_filed_when_automatic_config_gate_is_closed())
@@ -1933,6 +1935,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
         failed |= asyncio.run(test_recovery_soc_polled_outside_batch())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
+        failed |= asyncio.run(test_write_time_windows_hold_in_charge_slot())
+        failed |= asyncio.run(test_compute_solis_mode_value_hold_and_reserve())
+        failed |= asyncio.run(test_storage_mode_sets_battery_reserve_with_set_reserve_enable())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_local_time_not_utc())
@@ -3538,6 +3543,136 @@ async def test_write_time_windows_zero_charge_current():
     assert storage_mode_calls[0]["inverter_sn"] == inverter_sn, "Storage mode should be set for correct inverter"
 
     print("PASSED: Zero charge current sets Feed-in priority storage mode")
+    return False
+
+
+def _hold_slot_api(v2, battery_soc, charge_soc, charge_current=50):
+    """A MockSolisAPI at 03:00 inside charge slot 1 (02:00-05:00) with the battery at battery_soc.
+
+    Args:
+        v2: True for TOU V2 firmware (per-slot registers), False for V1 (CID 103)
+        battery_soc: batteryCapacitySoc the inverter reports
+        charge_soc: Slot 1's charge target SOC
+        charge_current: Slot 1's charge current in amps
+
+    Returns: (api, inverter_sn)
+    """
+    api = MockSolisAPI()
+    api._test_v2_mode = v2
+    api._mock_storage_mode = True
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+    empty = {"charge_start_time": "00:00", "charge_end_time": "00:00", "charge_soc": 100, "charge_current": 0, "discharge_start_time": "00:00", "discharge_end_time": "00:00", "discharge_soc": 10, "discharge_current": 0}
+    slot1 = {
+        "charge_enable": 1,
+        "charge_start_time": "02:00",
+        "charge_end_time": "05:00",
+        "charge_soc": charge_soc,
+        "charge_current": charge_current,
+        "discharge_enable": 0,
+        "discharge_start_time": "00:00",
+        "discharge_end_time": "00:00",
+        "discharge_soc": 10,
+        "discharge_current": 30,
+    }
+    if v2:
+        api.charge_discharge_time_windows[inverter_sn] = {1: slot1}
+    else:
+        api.charge_discharge_time_windows[inverter_sn] = {1: dict(slot1, field_length=18), 2: dict(empty, field_length=18), 3: dict(empty, field_length=18)}
+    api.cached_values[inverter_sn] = {}
+    api.inverter_details[inverter_sn] = {"batteryCapacitySoc": battery_soc}
+    mock_now = MagicMock()
+    mock_now.strftime.return_value = "03:00"
+    api._test_now_utc_exact = mock_now
+    return api, inverter_sn
+
+
+async def test_write_time_windows_hold_in_charge_slot():
+    """In an active charge slot with the battery at or above its target, grid charging goes off.
+
+    That is what a freeze charge looks like here - Predbat keeps the charge window with the target at the
+    current SoC - and a hold at the end of a charge: the slot keeps the battery from discharging, and
+    without grid charging it cannot import to top up to the target, while PV can still charge it. It
+    takes precedence over the 0A -> Feed-in priority rule, which would export PV during a freeze charge.
+    Below the target it is an ordinary charge and grid charging stays on.
+    """
+    print("\n=== Test: write_time_windows_if_changed hold in charge slot ===")
+    cases = [
+        # (v2, battery_soc, charge_soc, charge_current, expected mode)
+        (True, 60, 60, 50, "Self-Use - No Grid Charging"),
+        (True, 61, 60, 50, "Self-Use - No Grid Charging"),
+        (True, 60, 60, 0, "Self-Use - No Grid Charging"),
+        (True, 40, 60, 50, "Self-Use"),
+        (False, 60, 60, 50, "Self-Use - No Grid Charging"),
+        (False, 40, 60, 50, "Self-Use"),
+    ]
+    for v2, battery_soc, charge_soc, charge_current, expected in cases:
+        api, inverter_sn = _hold_slot_api(v2, battery_soc, charge_soc, charge_current)
+        result = await api.write_time_windows_if_changed(inverter_sn)
+        assert result is True, "write_time_windows_if_changed should return True"
+        modes = [call["mode"] for call in api.set_storage_mode_calls]
+        assert modes == [expected], "v2={} soc={} target={} current={}A: expected [{}], got {}".format(v2, battery_soc, charge_soc, charge_current, expected, modes)
+
+    print("PASSED: charge slot at target holds without grid charging")
+    return False
+
+
+async def test_compute_solis_mode_value_hold_and_reserve():
+    """The hold mode keeps the TOU bit only where it is the slot enable, and battery_reserve sets bit 4.
+
+    Self-Use - No Grid Charging is Self-Use with timed charge/discharge on but grid charging off: 3 on V1
+    firmware, where bit 1 enables the slots, and 1 on TOU V2, where the per-slot registers do. The existing
+    Self-Use - No Timed Charge/Discharge (1) would switch the V1 slots off and lose the hold.
+    battery_reserve=True sets the Battery Reserve bit so the Reserved SOC is a discharge floor; left at None
+    the bit is kept as it was, so a Battery Reserve the user turned on is not cleared.
+    """
+    print("\n=== Test: compute_solis_mode_value hold and battery reserve ===")
+    assert compute_solis_mode_value(ENUM_SELF_USE_HOLD, 0) == 3
+    assert compute_solis_mode_value(ENUM_SELF_USE_HOLD, 0, drop_tou_bit=True) == 1
+    assert compute_solis_mode_value(ENUM_SELF_USE_HOLD, 35) == 3, "grid charging and nothing else cleared from Self-Use"
+    assert get_solis_mode_enum(3) == (ENUM_SELF_USE_HOLD, "Self-Use - No Grid Charging")
+    assert get_solis_mode_enum(1) == (ENUM_SELF_USE_NO_GRID_CHARGING, "Self-Use - No Timed Charge/Discharge")
+
+    backup = 1 << SOLIS_BIT_BACKUP_MODE
+    assert compute_solis_mode_value(ENUM_SELF_USE, 0, battery_reserve=True) == 35 | backup
+    assert compute_solis_mode_value(ENUM_SELF_USE, 0, drop_tou_bit=True, battery_reserve=True) == 49
+    assert compute_solis_mode_value(ENUM_SELF_USE_NO_GRID_CHARGING, 0, battery_reserve=True) == 17
+    assert compute_solis_mode_value(ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, 0, battery_reserve=True) == 80
+    assert compute_solis_mode_value(ENUM_SELF_USE, backup) == 35 | backup, "bit 4 is kept when battery_reserve is not asked for"
+    assert compute_solis_mode_value(ENUM_SELF_USE, 0) == 35, "and not added"
+    assert get_solis_mode_enum(49) == (ENUM_SELF_USE, "Self-Use")
+    assert get_solis_mode_enum(80) == (ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, "Feed-in priority - No Timed Charge/Discharge")
+
+    print("PASSED: hold mode and battery reserve bit")
+    return False
+
+
+async def test_storage_mode_sets_battery_reserve_with_set_reserve_enable():
+    """set_storage_mode_if_needed turns the Battery Reserve bit on only while Predbat manages the reserve.
+
+    With set_reserve_enable on, Predbat writes the Reserved SOC (reserve_min normally, SoC + 1 for a hold),
+    so the bit makes that a real floor. With it off Predbat never writes the Reserved SOC, and turning the bit
+    on would enforce whatever the inverter already holds there, so the bit is left alone.
+    """
+    print("\n=== Test: storage mode Battery Reserve bit follows set_reserve_enable ===")
+    for reserve_enable, mode, cached, expected in [
+        (True, "Self-Use", "1", "49"),
+        (True, "Self-Use - No Timed Charge/Discharge", "33", "17"),
+        (True, "Feed-in priority - No Timed Charge/Discharge", "1", "80"),
+        (False, "Self-Use", "1", "33"),
+        (False, "Self-Use - No Timed Charge/Discharge", "33", "1"),
+    ]:
+        api = MockSolisAPI()
+        api._test_v2_mode = True
+        inverter_sn = "RES001"
+        api.inverter_sn = [inverter_sn]
+        api.base.args["set_reserve_enable"] = reserve_enable
+        api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: cached}
+        await api.set_storage_mode_if_needed(inverter_sn, mode)
+        values = [call["value"] for call in api.read_and_write_cid_calls if call["cid"] == SOLIS_CID_STORAGE_MODE]
+        assert values == [expected], "set_reserve_enable={} {} from {}: expected [{}], got {}".format(reserve_enable, mode, cached, expected, values)
+
+    print("PASSED: Battery Reserve bit follows set_reserve_enable")
     return False
 
 
@@ -5781,12 +5916,13 @@ async def test_automatic_config():
     assert "export_today" in set_arg_calls, "export_today not configured"
     assert "pv_today" in set_arg_calls, "pv_today not configured"
 
-    # Verify reserve and limits use over_discharge_soc (not reserve_soc)
+    # Verify the reserve is the Battery Reserve SOC Predbat writes, and the minimum the over-discharge SOC it reads
     assert "reserve" in set_arg_calls, "reserve not configured"
-    expected_reserve = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
+    expected_reserve = ["number.predbat_solis_abc123_reserve_soc", "number.predbat_solis_def456_reserve_soc"]
     assert set_arg_calls["reserve"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['reserve']}"
     assert "battery_min_soc" in set_arg_calls, "battery_min_soc not configured"
-    assert set_arg_calls["battery_min_soc"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['battery_min_soc']}"
+    expected_min_soc = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
+    assert set_arg_calls["battery_min_soc"] == expected_min_soc, f"Expected {expected_min_soc}, got {set_arg_calls['battery_min_soc']}"
 
     # Verify rate controls configured
     assert "battery_rate_max" in set_arg_calls, "battery_rate_max not configured"

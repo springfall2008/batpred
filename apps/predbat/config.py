@@ -2460,7 +2460,8 @@ INVERTER_DEF = {
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
         "has_target_soc": True,
-        "has_reserve_soc": False,
+        # The Battery Reserve SOC (CID 157), a floor while the component keeps the Battery Reserve bit on
+        "has_reserve_soc": True,
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
