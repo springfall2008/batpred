@@ -2772,6 +2772,48 @@ class Output:
 
         if had_errors:
             self.had_errors = True
+            # Kept so the end of the run can put the state it executed back in front of it
+            self.status_warning = message
+            self.status_warning_debug = debug
+
+    def record_status_under_warning(self, run_status):
+        """
+        Put the state a run executed back on the status sensor, in front of the warning it raised.
+
+        A warning or error recorded during a run takes over the status sensor, and the run's own
+        state used to be only logged, so a warning that recurs every cycle erased the executed state
+        from the sensor for as long as it lasted - the History view rebuilds past slots from this
+        sensor's history and had nothing to show. The state leads and the warning follows after a
+        comma, the same form as ", Hold for car", so the History view's first-comma split still
+        finds the state. The warning's own debug is kept, error_count is not counted again and no
+        notification is sent - this is the same warning, not a new one.
+
+        Does nothing when no warning was recorded this run (e.g. a component thread set had_errors
+        on its own), leaving the sensor as it was.
+        """
+        if not self.status_warning:
+            return
+        error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+        try:
+            error_count = int(error_count)
+        except (ValueError, TypeError):
+            error_count = 0
+        message = "{}, {}".format(run_status, self.status_warning)
+        self.current_status = message
+        self.dashboard_item(
+            self.prefix + ".status",
+            state=message[:255],
+            attributes={
+                "friendly_name": "Status",
+                "detail": "",
+                "icon": "mdi:information",
+                "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
+                "debug": self.status_warning_debug,
+                "version": THIS_VERSION_DISPLAY,
+                "error": True,
+                "error_count": error_count,
+            },
+        )
 
     def publish_last_started(self):
         """

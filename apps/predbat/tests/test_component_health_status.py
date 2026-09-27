@@ -86,6 +86,81 @@ def test_record_status_state_clamped(my_predbat):
             print("OK: state clamped to 255 characters ({}), full text kept in current_status ({})".format(len(state), len(my_predbat.current_status)))
     finally:
         my_predbat.current_status = ""
+        my_predbat.had_errors = False
+        my_predbat.status_warning = None
+
+    return failed
+
+
+def test_record_status_under_warning(my_predbat):
+    """
+    Verify a run that raised a warning ends with its executed state in front of the warning on the
+    status sensor ("Exporting, Warn: ..."), keeping the warning's debug, without counting the
+    warning again - and that a run whose had_errors came from somewhere that recorded no warning
+    (a component thread) leaves the sensor alone rather than failing.
+
+    A warning recorded during a run takes over the status sensor, and the run's own state used to be
+    only logged, so a warning that recurred every cycle erased the executed state from the sensor's
+    history and the History view rebuilt a day of force exports as charge holds.
+    """
+    print("*** Running test: a run's state is recorded in front of the warning it raised")
+    failed = 0
+    status_entity = my_predbat.prefix + ".status"
+    saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
+    saved_value = my_predbat.dashboard_values.get(status_entity)
+    saved = (my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components)
+    warning = "Warn: Return bad float value unavailable from car_charging_soc"
+
+    try:
+        my_predbat.components = None
+        my_predbat.had_errors = False
+        my_predbat.status_warning = None
+        my_predbat.record_status(warning, debug="https://example.invalid/failing", had_errors=True)
+        published = my_predbat.dashboard_values[status_entity]
+        error_count_before = published["attributes"]["error_count"]
+
+        my_predbat.record_final_run_status("Exporting", "target 20%")
+        published = my_predbat.dashboard_values[status_entity]
+        attributes = published["attributes"]
+        if published["state"] != "Exporting, " + warning:
+            print("ERROR: expected the state in front of the warning, got {!r}".format(published["state"]))
+            failed = 1
+        elif attributes["debug"] != "https://example.invalid/failing":
+            print("ERROR: the warning's own debug should be kept, got {!r}".format(attributes["debug"]))
+            failed = 1
+        elif attributes["error_count"] != error_count_before:
+            print("ERROR: the same warning should not be counted again: {} -> {}".format(error_count_before, attributes["error_count"]))
+            failed = 1
+        elif not attributes["error"]:
+            print("ERROR: the sensor should still show the run as in error")
+            failed = 1
+        elif my_predbat.current_status != "Exporting, " + warning:
+            print("ERROR: current_status should follow the sensor, got {!r}".format(my_predbat.current_status))
+            failed = 1
+        else:
+            print("OK: state recorded in front of the warning, debug and error_count kept")
+
+        # had_errors set by a component thread with no warning recorded, right after a restart
+        my_predbat.dashboard_values[status_entity] = {"state": "Demand", "attributes": {}}
+        my_predbat.current_status = None
+        my_predbat.had_errors = True
+        my_predbat.status_warning = None
+        my_predbat.record_final_run_status("Exporting", "")
+        if my_predbat.dashboard_values[status_entity]["state"] != "Demand":
+            print("ERROR: with no warning recorded the sensor should be left alone, got {!r}".format(my_predbat.dashboard_values[status_entity]["state"]))
+            failed = 1
+        else:
+            print("OK: no warning recorded, sensor left alone")
+    finally:
+        my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components = saved
+        if saved_item is None:
+            my_predbat.ha_interface.dummy_items.pop(status_entity, None)
+        else:
+            my_predbat.ha_interface.dummy_items[status_entity] = saved_item
+        if saved_value is None:
+            my_predbat.dashboard_values.pop(status_entity, None)
+        else:
+            my_predbat.dashboard_values[status_entity] = saved_value
 
     return failed
 
@@ -178,6 +253,7 @@ def test_component_health_status(my_predbat):
 
         # --- Pre-existing error takes precedence, and is not overwritten by the component check ---
         my_predbat.had_errors = True
+        my_predbat.status_warning = None
         my_predbat.components = FakeComponents({"octopus": False})
         recorded_statuses.clear()
         my_predbat.record_final_run_status("Idle", "")
@@ -189,6 +265,7 @@ def test_component_health_status(my_predbat):
             print("OK: Pre-existing error state left untouched by the component health check")
     finally:
         my_predbat.had_errors = False
+        my_predbat.status_warning = None
         my_predbat.components = None
         my_predbat.record_status = original_record_status
 

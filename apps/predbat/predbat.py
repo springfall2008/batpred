@@ -365,6 +365,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.current_status = None
         self.previous_status = None
         self.had_errors = False
+        self.status_warning = None
+        self.status_warning_debug = ""
         self.plan_valid = False
         self.plan_preclip = None
         self.plan_last_updated = None
@@ -1022,6 +1024,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         if self.had_errors:
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
+            self.record_status_under_warning(status)
         elif failed_components:
             error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
             self.log(error_status)
@@ -1064,6 +1067,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         recompute = False
         status_extra = ""
         self.had_errors = False
+        self.status_warning = None
+        self.status_warning_debug = ""
 
         self.update_time()
         self.save_current_config()
