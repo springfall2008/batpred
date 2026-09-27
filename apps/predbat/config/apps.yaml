@@ -168,6 +168,9 @@ pred_bat:
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
     - select.givtcp2_{geserial2}_discharge_end_time_slot_1
+  battery_calibration:
+    - select.givtcp_{geserial}_battery_calibration
+    - select.givtcp2_{geserial2}_battery_calibration
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
   pause_mode:
