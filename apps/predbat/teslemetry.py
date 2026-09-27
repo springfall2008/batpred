@@ -138,7 +138,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     # literal because components.py imports component modules lazily, and a test pins the two together.
     DEFAULT_TBC_CONTROL = True
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, hybrid=None, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
@@ -153,6 +153,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             tbc_control: teslemetry_tbc_control, on by default (GH#5186). When set, evaluate_schedule and
                 sync_tariff take the signal-tariff / Time-Based Control path - see GH#4892; False opts
                 back into the real-rate tariff and reserve-driven charging.
+            hybrid: teslemetry_hybrid - True/False forces Predbat's inverter_hybrid setting; unset (None) lets
+                automatic_config decide from the Powerwall model (on for a Powerwall 3, off otherwise).
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
                 refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
             token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
@@ -189,6 +191,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.automatic_done = False
         self.tbc_control = tbc_control
+        self.hybrid_override = self.parse_hybrid_override(hybrid)
+        self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
         self._reserve_band_warned = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
@@ -196,6 +200,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
         self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
         self.register_control_entities()
+
+    @staticmethod
+    def parse_hybrid_override(value):
+        """teslemetry_hybrid as True/False, or None (unset or unrecognised) to decide from the Powerwall model."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return {"true": True, "on": True, "yes": True, "false": False, "off": False, "no": False}.get(value.strip().lower())
+        return None
 
     def entity(self, suffix, domain="sensor"):
         """Build a prefixed virtual entity id for this component."""
@@ -436,6 +449,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return False
         response = data.get("response", {})
         self.publish_site_info(response)
+        self.battery_type = (response.get("components") or {}).get("battery_type")
         nameplate_wh = response.get("nameplate_energy", 0)
         gateway_kwh = self.gateway_energy_kwh(response)
         battery_count = response.get("battery_count")
@@ -864,16 +878,23 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
         self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
         self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
-        # Every Powerwall is an AC-coupled battery, so Predbat must not model it as a hybrid. Left at
-        # Predbat's default (on), get_total_inverted() folds PV into the inverter_limit budget, so the
-        # Powerwall's own AC rating is applied as a cap on battery + PV combined - modelling a
-        # separately inverted solar array as clipping against a limit it never passes through, which
-        # invents both the clipping and the export windows that "recover" it.
+        # A Powerwall 3 (battery_type solar_powerwall) is a hybrid inverter: solar on its own DC inputs shares
+        # the one AC nameplate with the battery, so inverter_limit must cap them combined. Every other
+        # Powerwall is AC coupled - with hybrid on, get_total_inverted() would fold a separately inverted
+        # array into the Powerwall's AC rating, inventing clipping and the export windows that "recover" it,
+        # so it stays off there and when the model is unknown. teslemetry_hybrid overrides either way, e.g.
+        # for a Powerwall 3 beside an existing string inverter, which site_info cannot tell apart (GH#5275).
         # set_state_external is the write path that updates the matching CONFIG_ITEMS value; a plain
         # state write would move the entity without changing the setting Predbat plans with.
         hybrid_entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        self.log("Info: Teslemetry setting {} off - Tesla Powerwall batteries are AC coupled".format(hybrid_entity))
-        await self.set_state_external(hybrid_entity, False)
+        if self.hybrid_override is not None:
+            hybrid, reason = self.hybrid_override, "teslemetry_hybrid in apps.yaml"
+        elif self.battery_type == "solar_powerwall":
+            hybrid, reason = True, "auto: Powerwall 3"
+        else:
+            hybrid, reason = False, "auto: AC-coupled Powerwall" if self.battery_type else "auto: Powerwall model unknown"
+        self.log("Info: Teslemetry setting {} {} ({})".format(hybrid_entity, "on" if hybrid else "off", reason))
+        await self.set_state_external(hybrid_entity, hybrid)
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.

@@ -63,6 +63,8 @@ class MockTeslemetryAPI(TeslemetryAPI):
         # Production defaults this on (GH#5186); the double keeps the real-rate path so the tests
         # written against it still exercise that path, and the TBC tests opt in explicitly.
         self.tbc_control = False
+        self.hybrid_override = None
+        self.battery_type = None
         self._reserve_band_warned = False
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
@@ -2044,13 +2046,13 @@ def test_teslemetry_run_skips_assert_without_soc():
 
 
 def test_teslemetry_automatic_config_disables_inverter_hybrid():
-    """Tesla Powerwall batteries are AC coupled, so automatic_config must turn inverter_hybrid off.
+    """An AC-coupled Powerwall 2 (battery_type ac_powerwall) must have inverter_hybrid off.
 
-    Left at Predbat's default (True), inverter_limit is modelled as a cap on battery + PV combined
-    (see get_total_inverted in prediction.py), so the Powerwall's own 5 kW rating clips a separately
-    inverted PV array that it has no bearing on - inventing solar clipping and, with it, phantom
-    export windows. Writing through set_state_external (not set_state_wrapper) is what actually
-    updates the matching CONFIG_ITEMS entry rather than just the displayed entity state.
+    With hybrid on, inverter_limit is modelled as a cap on battery + PV combined (see get_total_inverted
+    in prediction.py), so the Powerwall's own 5 kW rating clips a separately inverted PV array that it has
+    no bearing on - inventing solar clipping and, with it, phantom export windows. Writing through
+    set_state_external (not set_state_wrapper) is what actually updates the matching CONFIG_ITEMS entry
+    rather than just the displayed entity state.
     """
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_AC_POWERWALL
@@ -2059,12 +2061,58 @@ def test_teslemetry_automatic_config_disables_inverter_hybrid():
     assert api.external_states["switch.predbat_inverter_hybrid"] is False
 
 
+def test_teslemetry_automatic_config_enables_hybrid_for_powerwall_3():
+    """A Powerwall 3 (battery_type solar_powerwall) is a hybrid inverter - solar on its own DC inputs shares
+    the one AC nameplate with the battery - so inverter_hybrid is turned on (GH#5275)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_EXPANSION
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert api.external_states["switch.predbat_inverter_hybrid"] is True
+    assert any("inverter_hybrid" in message and "Powerwall 3" in message for message in api.log_messages)
+
+
 def test_teslemetry_automatic_config_disables_hybrid_without_site_info():
-    """The hybrid switch is a property of the hardware family, not of any site_info field, so it is
-    turned off even when site_info never ran or carried none of the optional fields."""
+    """With no site_info the model is unknown, so inverter_hybrid stays off - the safe setting for an
+    AC-coupled Powerwall, which is what a wrongly-on hybrid would clip."""
     api = MockTeslemetryAPI()
     run_async(api.automatic_config())
     assert api.external_states["switch.predbat_inverter_hybrid"] is False
+
+
+def test_teslemetry_hybrid_override_from_apps_yaml():
+    """teslemetry_hybrid overrides the model default either way - e.g. a Powerwall 3 beside an existing
+    string inverter, whose solar never passes through the Powerwall (GH#5275) - and the log names it."""
+    for site_info, override in ((SITE_INFO_PW3_EXPANSION, False), (SITE_INFO_AC_POWERWALL, True)):
+        api = MockTeslemetryAPI()
+        api.hybrid_override = override
+        api.mock_responses["/api/1/energy_sites/123456/site_info"] = site_info
+        assert run_async(api.fetch_site_info()) is True
+        run_async(api.automatic_config())
+        assert api.external_states["switch.predbat_inverter_hybrid"] is override
+        assert any("inverter_hybrid" in message and "teslemetry_hybrid" in message for message in api.log_messages)
+
+
+def test_teslemetry_initialize_sets_hybrid_override():
+    """initialize stores teslemetry_hybrid as True/False, and anything else - unset (None) or unrecognised -
+    as None, which means "decide from the model"; a quoted "true"/"false" is accepted too."""
+    api = MockTeslemetryAPI()
+    for value, expected in ((True, True), (False, False), (None, None), ("true", True), ("False", False), ("auto", None)):
+        api.initialize(hybrid=value)
+        assert api.hybrid_override is expected, value
+
+
+def test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key():
+    """teslemetry_hybrid is a registry arg with no default (unset must reach the component as None, not
+    False) and a boolean in the apps.yaml schema."""
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    arg = COMPONENT_LIST["teslemetry"]["args"]["hybrid"]
+    assert arg["config"] == "teslemetry_hybrid"
+    assert arg["required"] is False
+    assert "default" not in arg
+    assert APPS_SCHEMA["teslemetry_hybrid"] == {"type": "boolean"}
 
 
 def test_teslemetry_site_info_publishes_site_info_entity():
@@ -3004,7 +3052,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_skips_assert_without_soc()
     test_teslemetry_automatic_config_sets_args()
     test_teslemetry_automatic_config_disables_inverter_hybrid()
+    test_teslemetry_automatic_config_enables_hybrid_for_powerwall_3()
     test_teslemetry_automatic_config_disables_hybrid_without_site_info()
+    test_teslemetry_hybrid_override_from_apps_yaml()
+    test_teslemetry_initialize_sets_hybrid_override()
+    test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key()
     test_teslemetry_site_info_publishes_site_info_entity()
     test_teslemetry_site_info_entity_omits_tariff_blobs()
     test_teslemetry_site_info_entity_does_not_mutate_response()
