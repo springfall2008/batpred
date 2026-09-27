@@ -217,6 +217,80 @@ SITE_INFO_AC_POWERWALL = {
     }
 }
 
+# A real Powerwall 3 with one DC expansion pack (identifiers replaced, display-only settings trimmed).
+# There is no top-level nameplate_energy: the gateway carries the SYSTEM total (27 kWh, expansion
+# included), battery_count counts the expansion, and batteries[] lists only the expansion - with every
+# rating zero. min_site_meter_power_ac is the export limit in fractional kW; max_ is the 1e9 sentinel.
+SITE_INFO_PW3_EXPANSION = {
+    "response": {
+        "id": "REDACTED-GATEWAY-DIN",
+        "site_name": "Test Site",
+        "backup_reserve_percent": 4,
+        "default_real_mode": "autonomous",
+        "installation_date": "2026-01-01T00:00:00Z",
+        "components": {
+            "grid": True,
+            "solar": True,
+            "backup": True,
+            "battery": True,
+            "gateway": "teg",
+            "gateways": [
+                {
+                    "device_id": "00000000-0000-0000-0000-000000000001",
+                    "din": "1707000-30-L--TG000000000000",
+                    "serial_number": "TG000000000000",
+                    "part_number": "1707000-30-L",
+                    "part_type": 4,
+                    "part_name": "Powerwall 3",
+                    "is_active": True,
+                    "firmware_version": "26.34.0 7d707328",
+                    "nameplate_power_watts": 11040,
+                    "nameplate_energy_watts": 27000,
+                }
+            ],
+            "batteries": [
+                {
+                    "device_id": "00000000-0000-0000-0000-000000000003",
+                    "din": "1807000-20-B--TG000000000001",
+                    "serial_number": "TG000000000001",
+                    "part_number": "1807000-20-B",
+                    "part_name": "Unknown",
+                    "nameplate_max_charge_power": 0,
+                    "nameplate_max_discharge_power": 0,
+                    "nameplate_energy": 0,
+                    "is_active": True,
+                }
+            ],
+            "load_meter": True,
+            "solar_type": "pv_panel",
+            "tou_capable": True,
+            "battery_type": "solar_powerwall",
+            "net_meter_mode": "battery_ok",
+            "customer_preferred_export_rule": "pv_only",
+            "disallow_charge_from_grid_with_solar_installed": True,
+        },
+        "version": "26.34.0 7d707328",
+        "battery_count": 2,
+        "nameplate_power": 11040,
+        "installation_time_zone": "Europe/London",
+        "max_site_meter_power_ac": 1000000000,
+        "min_site_meter_power_ac": -2.32,
+        "island_config": {"low_soe_limit": 0, "max_frequency_shift_hz": 0.2, "jump_start_soe_threshold": 0, "wait_for_solar_retry_soe": 0},
+    }
+}
+
+# The GH#5275 reporter's single-pack Powerwall 3: a 9 kW commissioned nameplate, an 80 A supply
+# (max_site_meter_power_ac 18.4 kW - the site's import limit, not the inverter's) and a 5 kW DNO export limit.
+SITE_INFO_PW3_SUPPLY_METER = {
+    "response": {
+        "nameplate_power": 8999.900000000001,
+        "max_site_meter_power_ac": 18.4,
+        "min_site_meter_power_ac": -5,
+        "battery_count": 1,
+        "components": {"battery_type": "solar_powerwall", "gateways": [{"part_name": "Powerwall 3", "nameplate_power_watts": 9000, "nameplate_energy_watts": 13500}]},
+    }
+}
+
 TARIFF_RATE_NORMAL = {"response": {"tariff_content_v2": {"version": 1, "utility": "Predbat", "code": "PREDBAT-NORMAL", "name": "Predbat (normal)"}}}
 
 ENERGY_HISTORY = {
@@ -295,12 +369,113 @@ def test_teslemetry_site_info_publishes_rate_and_limit():
     assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit"]["state"] == 11500
 
 
-def test_teslemetry_site_info_limit_kw_normalised():
-    """A max_site_meter_power_ac reported in kW (small magnitude) is normalised to W."""
+def test_teslemetry_site_info_inverter_limit_from_nameplate_not_supply_meter():
+    """inverter_limit is the Powerwall's own AC rating (nameplate_power), not max_site_meter_power_ac,
+    which is the site's supply limit at the meter - 18.4 kW on an 80 A service against a 9 kW Powerwall (GH#5275)."""
     api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11.5}}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
     run_async(api.fetch_site_info())
-    assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit"]["state"] == 11500
+    assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit"]["state"] == 9000
+
+
+def test_teslemetry_site_info_publishes_export_limit():
+    """min_site_meter_power_ac is the site's export limit at the meter, in kW and possibly fractional (GH#5275)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_export_limit"]["state"] == 5000
+
+    # Fractional kW survives: converted to W before rounding, not truncated to 2 kW
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_EXPANSION
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_export_limit"]["state"] == 2320
+
+
+def test_teslemetry_site_info_export_limit_skipped_when_unlimited_or_absent():
+    """No export_limit is published for the -1e9 "unlimited" sentinel or an absent field (GH#5275)."""
+    for response in (SITE_INFO_AC_POWERWALL["response"], {"nameplate_power": 5000}):
+        api = MockTeslemetryAPI()
+        api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": response}
+        run_async(api.fetch_site_info())
+        assert "sensor.predbat_teslemetry_export_limit" not in api.dashboard_items
+
+
+def test_teslemetry_site_info_export_limit_zero_means_no_export():
+    """A min_site_meter_power_ac of 0 is a site that may not export, so export_limit is published as 0 (GH#5275)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_power": 5000, "min_site_meter_power_ac": 0}}
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_export_limit"]["state"] == 0
+    # A 0 W limit is still a limit: automatic_config must wire it, not skip it as falsy
+    run_async(api.automatic_config())
+    assert api.args_set["export_limit"] == ["sensor.predbat_teslemetry_export_limit"]
+
+
+def test_teslemetry_site_info_charge_limit_per_unit_capped_at_nameplate():
+    """The charge limit is 5 kW per battery unit (expansion packs included), capped at nameplate_power, on every
+    Powerwall and control path - fleet data: 5.0 kW on a single Powerwall 3 whatever its nameplate, ~9.8 kW with one
+    expansion, the 11 kW nameplate with two, and ~5.04 kW per Powerwall 2 unit against a reported 5.5 kW (GH#5275)."""
+    three_packs = copy.deepcopy(SITE_INFO_PW3_EXPANSION)
+    three_packs["response"]["battery_count"] = 3
+    two_pw2_units = copy.deepcopy(SITE_INFO_AC_POWERWALL)
+    two_pw2_units["response"]["battery_count"] = 2
+    two_pw2_units["response"]["nameplate_power"] = 10000
+    two_pw2_units["response"]["components"]["batteries"] = [dict(two_pw2_units["response"]["components"]["batteries"][0], nameplate_max_charge_power=5500) for _ in range(2)]
+    cases = (
+        (SITE_INFO_PW3_SUPPLY_METER, True, 5000),  # 1 pack, 9 kW nameplate
+        (SITE_INFO_PW3_EXPANSION, True, 10000),  # 2 packs, 11.04 kW nameplate
+        (three_packs, True, 11040),  # 15 kW capped at the nameplate
+        (SITE_INFO_PW3_EXPANSION, False, 10000),  # the reserve-driven path gets the same limit
+        (SITE_INFO_AC_POWERWALL, True, 5000),  # Powerwall 2
+        (two_pw2_units, True, 10000),  # 5 kW per unit, not the reported 5.5 kW
+    )
+    for response, tbc_control, expected in cases:
+        api = MockTeslemetryAPI()
+        api.tbc_control = tbc_control
+        api.mock_responses["/api/1/energy_sites/123456/site_info"] = response
+        run_async(api.fetch_site_info())
+        assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit_charge"]["state"] == expected
+
+    # With no nameplate_power there is no maximum to cap at, and nothing is published
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"battery_count": 1, "nameplate_energy": 13500}}
+    run_async(api.fetch_site_info())
+    assert "sensor.predbat_teslemetry_inverter_limit_charge" not in api.dashboard_items
+
+
+def test_teslemetry_soc_max_from_gateway_energy():
+    """A Powerwall 3 has no top-level nameplate_energy but reports the system total, expansion packs included,
+    on its gateway - a device value, so it is published as real rather than estimated (GH#5275)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_EXPANSION
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 27.0
+    assert api.soc_max_real is True
+
+
+def test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml():
+    """automatic_config wires the device-derived limits, but a value the user set in apps.yaml wins (GH#5275) -
+    set_arg would silently replace it."""
+    api = MockTeslemetryAPI()
+    api.tbc_control = True
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    for arg in ("soc_max", "battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
+        assert api.args_set[arg] == ["sensor.predbat_teslemetry_{}".format(arg)], arg
+
+    user_values = {"soc_max": 13.5, "battery_rate_max": 9000, "inverter_limit": 9000, "inverter_limit_charge": 4000, "export_limit": 3680}
+    api = MockTeslemetryAPI()
+    api.tbc_control = True
+    api.base.args_from_apps_yaml = dict(user_values)
+    api.base.apps_yaml_override_warned = set()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    for arg in user_values:
+        assert arg not in api.args_set, arg
+        assert any("keeping your apps.yaml setting" in message and arg in message for message in api.log_messages), arg
 
 
 def test_teslemetry_live_status_tracks_last_soc():
@@ -1985,13 +2160,13 @@ def test_teslemetry_automatic_config_sets_args():
 
 def test_teslemetry_automatic_config_skips_unpublished_rate_sensors():
     """automatic_config must not wire battery_rate_max/inverter_limit args when fetch_site_info
-    never published those sensors (site missing nameplate_power/max_site_meter_power_ac) - doing
+    never published those sensors (site missing nameplate_power) - doing
     so unconditionally would point Predbat at entities that never exist. Other args (e.g. soc_max)
     must still be wired normally."""
     api = MockTeslemetryAPI()
     api.register_control_entities()
     # Only nameplate_energy present -> soc_max is published but neither battery_rate_max nor
-    # inverter_limit is (see fetch_site_info: both are conditional on nameplate_power/max_site_meter_power_ac).
+    # inverter_limit is (see fetch_site_info: both are conditional on nameplate_power).
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "default_real_mode": "self_consumption", "backup_reserve_percent": 20}}
     assert run_async(api.fetch_site_info()) is True
     assert "sensor.predbat_teslemetry_battery_rate_max" not in api.entity_states
@@ -2188,7 +2363,7 @@ def test_teslemetry_soc_max_derived_from_energy_left():
 
 
 def test_teslemetry_inverter_limit_sentinel_clamped_to_nameplate():
-    """An 'unlimited' max_site_meter_power_ac sentinel (e.g. 1e9) is ignored; inverter_limit falls back to nameplate_power."""
+    """An 'unlimited' max_site_meter_power_ac sentinel (e.g. 1e9) has no effect; inverter_limit is nameplate_power."""
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_power": 11500, "max_site_meter_power_ac": 1000000000}}
     run_async(api.fetch_site_info())
@@ -2801,7 +2976,13 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_inverter_def_tesla()
     test_teslemetry_component_registry_config()
     test_teslemetry_site_info_publishes_rate_and_limit()
-    test_teslemetry_site_info_limit_kw_normalised()
+    test_teslemetry_site_info_inverter_limit_from_nameplate_not_supply_meter()
+    test_teslemetry_site_info_publishes_export_limit()
+    test_teslemetry_site_info_export_limit_skipped_when_unlimited_or_absent()
+    test_teslemetry_site_info_export_limit_zero_means_no_export()
+    test_teslemetry_site_info_charge_limit_per_unit_capped_at_nameplate()
+    test_teslemetry_soc_max_from_gateway_energy()
+    test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml()
     test_teslemetry_live_status_tracks_last_soc()
     test_teslemetry_time_to_minutes()
     test_teslemetry_in_window()
