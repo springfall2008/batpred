@@ -82,6 +82,12 @@ console output just says which issue it is working on and where that log is;
 `tail -f` it to watch a triage in progress. Logs are never pruned, so clear the
 directory out yourself if it grows.
 
+An issue the bot has triaged and parked with `waiting_for_user` is woken automatically:
+when its reporter comments after the bot's last comment, the daemon swaps
+`waiting_for_user` for BOT_REVIEW, and the follow-up review re-applies it if the reply
+still falls short. Only the reporter's comments count, and a `waiting_for_user` on an
+issue the bot never commented on is left for a human to clear.
+
 Every flow also carries JOURNAL_CAPTURE_PROMPT, asking it to leave any finding a future
 run would want in ~/predbat-triage-bot/journal-queue/ - outside the clone, because
 sync_repo() resets and cleans the checkout before every flow and would otherwise destroy
@@ -1357,6 +1363,72 @@ def fetch_bot_review_issues():
     return json.loads(result.stdout)
 
 
+# The follow-up flow's disclosure line, alongside TRIAGE_DISCLOSURE_MARKER - between them they
+# identify every comment the bot's own skills post, which is how the waiting_for_user wake-up
+# finds where the bot last spoke. Matched on body text rather than author because the bot
+# posts under a maintainer's credential.
+FOLLOWUP_DISCLOSURE_MARKER = "automated follow-up triage review"
+WAITING_FOR_USER_LABEL = "waiting_for_user"
+
+
+def fetch_waiting_for_user_issues():
+    """Return open, bot-triaged issues labelled waiting_for_user, with labels and author.
+
+    BOT_TRIAGED is required as well so the wake-up only ever leads to a follow-up review: an
+    issue without it would get a first-pass /issue-triage from the BOT_REVIEW flow instead.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", WAITING_FOR_USER_LABEL, "--label", "BOT_TRIAGED", "--json", "number,labels,title,author", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def reporter_replied_since_bot(issue_number, reporter):
+    """Return True if the issue's reporter has commented after the bot's most recent comment.
+
+    Only the reporter counts: a maintainer's or a bystander's comment is not the answer the
+    label is waiting for. False when the bot has never commented, since then the label is a
+    human's request the bot knows nothing about.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", REPO, "--json", "comments"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    comments = json.loads(result.stdout).get("comments", [])
+    markers = (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER)
+    last_bot = max((index for index, comment in enumerate(comments) if any(marker in comment.get("body", "") for marker in markers)), default=None)
+    if last_bot is None:
+        return False
+    return any((comment.get("author") or {}).get("login") == reporter for comment in comments[last_bot + 1 :])
+
+
+def wake_waiting_issue(issue):
+    """Swap waiting_for_user for BOT_REVIEW once the reporter has replied, returning True if it did.
+
+    The follow-up review queued by BOT_REVIEW re-applies waiting_for_user if the reply still
+    doesn't provide what was asked for, so the next reply wakes it again. Issues already
+    carrying BOT_REVIEW (queued anyway) or BOT_FAILED (deliberately parked) are left alone.
+    """
+    issue_number = issue["number"]
+    label_names = {label["name"] for label in issue.get("labels", [])}
+    if label_names & {"BOT_REVIEW", "BOT_FAILED"}:
+        return False
+    reporter = (issue.get("author") or {}).get("login")
+    if not reporter or not reporter_replied_since_bot(issue_number, reporter):
+        return False
+    print(f'[waiting] issue #{issue_number}: "{issue["title"]}" - reporter replied, queueing follow-up - {issue_url(issue_number)}', flush=True)
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", WAITING_FOR_USER_LABEL, "--add-label", "BOT_REVIEW"],
+        check=True,
+    )
+    return True
+
+
 def fetch_bot_review_prs():
     """Return open PRs currently labelled BOT_REVIEW, each with its title."""
     result = subprocess.run(
@@ -1836,6 +1908,9 @@ def main():
                     break
             for issue in fetch_bot_pr_issues():
                 process_bot_pr_issue(issue)
+            # Before the BOT_REVIEW poll, so a woken issue is reviewed in this same cycle.
+            for issue in fetch_waiting_for_user_issues():
+                wake_waiting_issue(issue)
             for issue in fetch_bot_review_issues():
                 process_bot_review_issue(issue)
             # Reviews before cleanups, so a PR carrying both is reviewed and cleaned up in

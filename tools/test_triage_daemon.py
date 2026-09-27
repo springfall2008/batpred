@@ -1893,6 +1893,100 @@ class FetchBotReviewIssuesTests(unittest.TestCase):
         self.assertIn("--limit", args)
 
 
+def comments_json(*comments):
+    """Build `gh issue view --json comments` output from (login, body) pairs."""
+    return json.dumps({"comments": [{"author": {"login": login}, "body": body} for login, body in comments]})
+
+
+class FetchWaitingForUserIssuesTests(unittest.TestCase):
+    """Tests for fetch_waiting_for_user_issues()."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_requires_both_waiting_for_user_and_bot_triaged(self, mock_run):
+        """Two --label flags AND together, so an issue a human parked without bot triage is never picked up."""
+        mock_run.return_value = MagicMock(stdout="[]")
+        triage_daemon.fetch_waiting_for_user_issues()
+        args = mock_run.call_args[0][0]
+        labels = [args[i + 1] for i, arg in enumerate(args) if arg == "--label"]
+        self.assertEqual(sorted(labels), ["BOT_TRIAGED", "waiting_for_user"])
+        self.assertIn("author", args[args.index("--json") + 1].split(","))
+        self.assertIn("--limit", args)
+
+
+class ReporterRepliedSinceBotTests(unittest.TestCase):
+    """Tests for reporter_replied_since_bot()."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_reporter_reply_after_triage_comment(self, mock_run):
+        mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "This is an automated first-pass triage ..."), ("reporter", "log attached")))
+        self.assertTrue(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_reporter_reply_after_followup_comment(self, mock_run):
+        """The most recent bot comment is the reference point, whichever flow posted it."""
+        mock_run.return_value = MagicMock(
+            stdout=comments_json(
+                ("maintainer", "automated first-pass triage"),
+                ("reporter", "here you go"),
+                ("maintainer", "This is an automated follow-up triage review ..."),
+                ("reporter", "and the log"),
+            )
+        )
+        self.assertTrue(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_reply_before_latest_bot_comment_does_not_count(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout=comments_json(
+                ("maintainer", "automated first-pass triage"),
+                ("reporter", "here you go"),
+                ("maintainer", "automated follow-up triage review - still need the log"),
+            )
+        )
+        self.assertFalse(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_someone_else_replying_does_not_count(self, mock_run):
+        mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "automated first-pass triage"), ("bystander", "me too")))
+        self.assertFalse(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_no_bot_comment_means_no_wake(self, mock_run):
+        """A waiting_for_user a human applied, with no bot comment, is not the bot's to clear."""
+        mock_run.return_value = MagicMock(stdout=comments_json(("maintainer", "please attach a log"), ("reporter", "attached")))
+        self.assertFalse(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+
+class WakeWaitingIssueTests(unittest.TestCase):
+    """Tests for wake_waiting_issue()."""
+
+    ISSUE = {"number": 5300, "title": "Plan looks wrong", "author": {"login": "reporter"}, "labels": [{"name": "waiting_for_user"}, {"name": "BOT_TRIAGED"}]}
+
+    @patch("triage_daemon.reporter_replied_since_bot", return_value=True)
+    @patch("triage_daemon.subprocess.run")
+    def test_swaps_waiting_for_user_for_bot_review(self, mock_run, mock_replied):
+        self.assertTrue(triage_daemon.wake_waiting_issue(self.ISSUE))
+        mock_replied.assert_called_once_with(5300, "reporter")
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "issue", "edit", "5300", "--repo", "springfall2008/batpred", "--remove-label", "waiting_for_user", "--add-label", "BOT_REVIEW"])
+
+    @patch("triage_daemon.reporter_replied_since_bot", return_value=False)
+    @patch("triage_daemon.subprocess.run")
+    def test_no_reply_leaves_labels_alone(self, mock_run, _mock_replied):
+        self.assertFalse(triage_daemon.wake_waiting_issue(self.ISSUE))
+        mock_run.assert_not_called()
+
+    @patch("triage_daemon.reporter_replied_since_bot", return_value=True)
+    @patch("triage_daemon.subprocess.run")
+    def test_skips_issues_already_queued_or_parked(self, mock_run, mock_replied):
+        """BOT_REVIEW is already queued; BOT_FAILED was parked on purpose and must not be retried by a reply."""
+        for label in ("BOT_REVIEW", "BOT_FAILED"):
+            issue = dict(self.ISSUE, labels=self.ISSUE["labels"] + [{"name": label}])
+            self.assertFalse(triage_daemon.wake_waiting_issue(issue))
+        mock_run.assert_not_called()
+        mock_replied.assert_not_called()
+
+
 class RemoveReviewLabelTests(unittest.TestCase):
     """Tests for remove_review_label(), new in the BOT_REVIEW flow."""
 

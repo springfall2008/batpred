@@ -18,7 +18,9 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note a
 
 From the issue text alone, decide whether a proper analysis would need a `predbat.log`, a `predbat_debug.yaml`, or other evidence, and whether the reporter has already attached it. Typical cases that need it: a plan that looks wrong, unexpected charging/exporting, an inverter not doing what Predbat asked, an error or crash, wrong rates or forecasts. Typical cases that don't: a pure question, a feature request, a docs error, or a report whose cause is fully visible in the text or a pasted traceback.
 
-Evidence counts as present when it is on another ticket this one points to, not only when it is attached here. Examples: an issue spun out of another issue or PR (`split from #N`, `see #N`, a link to a specific comment) where the source already has the logs or debug yaml, or a report that already carries the analysis (a quoted log excerpt, a `file:line` pointer, a replay result). Check the referenced issue with `gh issue view <N> --json body,comments` for attachments. If it has what is needed, don't ask again: carry on with step 2 and fetch the files from the source ticket, saying in the comment which ticket they came from. Only fall into the gate below if neither this ticket nor its source has the evidence.
+Evidence means the files themselves: a `predbat.log` or `predbat_debug.yaml` you can download and examine. A quoted log excerpt, a screenshot, or someone else's analysis (a `file:line` pointer, a replay result, a theory in the issue text) is not evidence for this gate. Partial log lines are seldom enough, and we always run our own analysis rather than trusting a third party's.
+
+The files do not have to be attached to this ticket. If the issue was spun out of another issue or PR (`split from #N`, `see #N`, a link to a specific comment) and the source already has the log or debug yaml covering this problem, that counts. Check the referenced issue with `gh issue view <N> --json body,comments` for attachments. If it has what is needed, don't ask again: carry on with step 2 and fetch the files from the source ticket, saying in the comment which ticket they came from. Only fall into the gate below if neither this ticket nor its source has the evidence.
 
 If the needed evidence is missing, **stop here** and take the short path instead of steps 2–8:
 
@@ -29,7 +31,7 @@ If the needed evidence is missing, **stop here** and take the short path instead
     - **If the incident is over:** the debug snapshot for that time, from the **Debug** column on the plan's **History** view (Predbat web interface → Plan → History), next to the time slot when the problem happened. With default settings only around the last 48 hours are kept, so ask them to grab it soon. Also ask for a `predbat.log` covering that period, if they still have one.
     - **Other evidence, only where it fits the report:** logs from the integration involved (e.g. GivTCP, Solis/Solax/Fox, the Octopus integration, the HA core log), their `apps.yaml` renamed to `apps.txt`, screenshots of the plan or HA history graphs of the relevant entities, and when it happened (date, time, timezone).
     - Link the [debug history docs](https://springfall2008.github.io/batpred/customisation/#debug-history) for the snapshot details.
-- Apply `BOT_TRIAGED` as usual (end of step 9). When the reporter attaches the files, a `BOT_REVIEW` re-review runs `/issue-triage-followup`, which does the full investigation.
+- Apply `BOT_TRIAGED` as usual (end of step 9). When the reporter next comments, the daemon clears `waiting_for_user` and queues `/issue-triage-followup`, which does the full investigation if the files have arrived.
 
 If the evidence is already attached, or the issue doesn't need any, carry on with step 2.
 
