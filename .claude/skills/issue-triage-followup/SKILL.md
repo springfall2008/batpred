@@ -14,6 +14,11 @@ Arguments: `<issue-number> [scratch=<dir>]`, same convention as `/issue-triage`.
 
 Fetch it with `gh issue view <number> --json title,body,labels,comments`. Find the bot's most recent prior comment (opens with "automated first-pass triage" or "automated follow-up triage review"). Everything posted **after** that comment — reporter replies, new logs, a maintainer's note — is the new information this review exists to act on.
 
+Comments from people other than the reporter ("me too" posts) are evidence for this issue by default, but not proven to be the same problem. Their files describe someone else's system. Use them, and keep the difference in mind:
+
+- Leave out any post that an "automated me-too check" comment has recorded with `Looks unrelated to this issue: <its url>`.
+- If you conclude a post is clearly a different problem, leave it out as well. Record it the same way in your comment, on its own line, and ask its author to open their own issue. The same bar applies as in `/issue-me-too` step 3: a clearly different symptom, not just a different inverter brand.
+
 If there's nothing posted since the last bot comment, say so plainly in your follow-up comment rather than inventing a reason to change anything.
 
 If the previous bot comment was a split request or an evidence request (`/issue-triage` step 1a or 1b) and nothing was ever investigated, there is no earlier assessment to revise. Re-apply both gates to the ticket as it now stands. If the problems have now been split out and the files have arrived, do the full first-pass work from `/issue-triage` steps 2–8 (attachments, classification, duplicates, investigation, labels, priority). Investigate only the problem that stays on this ticket, not the ones moved elsewhere. If either is still outstanding, don't investigate or give a theory. Just repeat what is still missing.

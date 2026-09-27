@@ -1987,6 +1987,143 @@ class WakeWaitingIssueTests(unittest.TestCase):
         mock_replied.assert_not_called()
 
 
+class ReporterReplyIgnoresMeTooTests(unittest.TestCase):
+    """A me-too reply to a bystander must not hide a reporter reply that came before it."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_me_too_reply_is_not_the_reference_point(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout=comments_json(
+                ("maintainer", "automated first-pass triage"),
+                ("reporter", "log attached"),
+                ("maintainer", "This is an automated me-too check ..."),
+            )
+        )
+        self.assertTrue(triage_daemon.reporter_replied_since_bot(5300, "reporter"))
+
+
+class LooksLikeAReportTests(unittest.TestCase):
+    """Tests for looks_like_a_report(), the cheap filter in front of a Claude run."""
+
+    def test_plus_one_and_nudges_are_not_reports(self):
+        for body in ("+1", "me too", "Any update on this?", "Same here :("):
+            self.assertFalse(triage_daemon.looks_like_a_report(body), body)
+
+    def test_attachment_makes_it_a_report(self):
+        self.assertTrue(triage_daemon.looks_like_a_report("Same [predbat.log](https://github.com/user-attachments/files/1/predbat.log)"))
+
+    def test_long_text_makes_it_a_report(self):
+        self.assertTrue(triage_daemon.looks_like_a_report("I see this too. " + "My Solis exports at 4pm every day even though the plan says hold. " * 3))
+
+    def test_quoted_lines_do_not_count_towards_length(self):
+        quote = "\n".join("> " + "quoted text from the original report " * 3 for _ in range(3))
+        self.assertFalse(triage_daemon.looks_like_a_report(quote + "\nme too"))
+
+
+class FindMeTooCommentsTests(unittest.TestCase):
+    """Tests for find_me_too_comments()."""
+
+    LONG = "My inverter does something odd here as well, and it has done so every evening this week since I upgraded. " * 2
+
+    @staticmethod
+    def _comment(login, body, created="2026-09-27T12:00:00Z", association="NONE", url=None):
+        """Build one gh comment dict."""
+        return {"author": {"login": login}, "authorAssociation": association, "body": body, "createdAt": created, "url": url or f"https://github.com/x/issues/1#{login}-{created}"}
+
+    def _find(self, mock_run, comments, checked=()):
+        """Run find_me_too_comments() over the given comments."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"comments": comments}))
+        return triage_daemon.find_me_too_comments(5300, "reporter", "2026-09-27T00:00:00Z", list(checked))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_substantial_bystander_comment_is_a_candidate(self, mock_run):
+        comment = self._comment("bystander", self.LONG)
+        self.assertEqual(self._find(mock_run, [comment]), [comment["url"]])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_excludes_reporter_maintainers_bot_old_checked_and_short(self, mock_run):
+        comments = [
+            self._comment("reporter", self.LONG),
+            self._comment("trefor", self.LONG, association="OWNER"),
+            self._comment("helper", self.LONG, association="COLLABORATOR"),
+            self._comment("bystander", "automated me-too check " + self.LONG, url="u-bot"),
+            self._comment("bystander", self.LONG, created="2026-09-26T23:59:59Z", url="u-old"),
+            self._comment("bystander", self.LONG, url="u-checked"),
+            self._comment("bystander", "+1", url="u-short"),
+        ]
+        self.assertEqual(self._find(mock_run, comments, checked=["u-checked"]), [])
+
+
+class FetchRecentlyUpdatedTriagedIssuesTests(unittest.TestCase):
+    """Tests for fetch_recently_updated_triaged_issues()."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_filters_by_updated_at_and_scopes_to_bot_triaged(self, mock_run):
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 2, "updatedAt": "2026-09-27T10:00:00Z"}, {"number": 1, "updatedAt": "2026-09-26T10:00:00Z"}]))
+        result = triage_daemon.fetch_recently_updated_triaged_issues("2026-09-27T00:00:00Z")
+        self.assertEqual([issue["number"] for issue in result], [2])
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args[args.index("--label") + 1], "BOT_TRIAGED")
+
+
+class MeTooCheckTests(DaemonPathsTestCase):
+    """Tests for me_too_check()."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_the_skill_read_only(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.me_too_check(5300, "https://c/1")
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/issue-me-too 5300 comment=https://c/1", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+        self.assertTrue((self.log_dir / "issue-5300-me-too.log").exists())
+
+    @patch("triage_daemon.subprocess.run")
+    def test_raises_on_a_non_zero_exit(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        with self.assertRaises(subprocess.CalledProcessError):
+            triage_daemon.me_too_check(5300, "https://c/1")
+
+
+class ProcessMeTooCommentsTests(DaemonPathsTestCase):
+    """Tests for process_me_too_comments()."""
+
+    @patch("triage_daemon.fetch_recently_updated_triaged_issues")
+    def test_first_run_only_sets_the_watermark(self, mock_fetch):
+        """Switching the feature on must never sweep the backlog."""
+        state = {"last_processed": 1}
+        triage_daemon.process_me_too_comments(state)
+        self.assertIn("me_too_since", state)
+        self.assertEqual(state["me_too_checked"], [])
+        mock_fetch.assert_not_called()
+
+    @patch("triage_daemon.reset_scratch")
+    @patch("triage_daemon.sync_repo")
+    @patch("triage_daemon.me_too_check", side_effect=subprocess.CalledProcessError(1, "claude"))
+    @patch("triage_daemon.find_me_too_comments", return_value=["https://c/1"])
+    @patch("triage_daemon.fetch_recently_updated_triaged_issues", return_value=[{"number": 5300, "author": {"login": "reporter"}}])
+    def test_records_a_comment_before_checking_so_a_failure_is_not_retried(self, _fetch, mock_find, mock_check, _sync, _reset):
+        state = {"me_too_since": "2026-09-27T00:00:00Z", "me_too_checked": []}
+        triage_daemon.process_me_too_comments(state)
+        mock_find.assert_called_once_with(5300, "reporter", "2026-09-27T00:00:00Z", ["https://c/1"])
+        mock_check.assert_called_once_with(5300, "https://c/1")
+        self.assertEqual(state["me_too_checked"], ["https://c/1"])
+        self.assertGreater(state["me_too_since"], "2026-09-27T00:00:00Z")
+        self.assertEqual(json.loads(self.state_file.read_text())["me_too_checked"], ["https://c/1"])
+
+    @patch("triage_daemon.reset_scratch")
+    @patch("triage_daemon.sync_repo")
+    @patch("triage_daemon.me_too_check")
+    @patch("triage_daemon.find_me_too_comments", return_value=["https://c/new"])
+    @patch("triage_daemon.fetch_recently_updated_triaged_issues", return_value=[{"number": 5300, "author": {"login": "reporter"}}])
+    def test_checked_list_is_capped(self, _fetch, _find, _check, _sync, _reset):
+        state = {"me_too_since": "2026-09-27T00:00:00Z", "me_too_checked": [f"u{i}" for i in range(triage_daemon.ME_TOO_CHECKED_CAP)]}
+        triage_daemon.process_me_too_comments(state)
+        self.assertEqual(len(state["me_too_checked"]), triage_daemon.ME_TOO_CHECKED_CAP)
+        self.assertEqual(state["me_too_checked"][-1], "https://c/new")
+
+
 class RemoveReviewLabelTests(unittest.TestCase):
     """Tests for remove_review_label(), new in the BOT_REVIEW flow."""
 

@@ -14,6 +14,8 @@ Arguments: `<issue-number> [scratch=<dir>]`. The scratch directory is a writable
 
 Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note any labels already applied — never remove a label a human added.
 
+Comments from people other than the reporter ("me too" posts) are evidence by default, but don't assume they are the same problem. If one is clearly a different problem (see `/issue-me-too` step 3 for the bar), leave it out of your analysis. Record it in your comment on its own line as `Looks unrelated to this issue: <comment-url>`, and ask its author to open their own issue.
+
 ## 1a. Split gate — one problem per ticket
 
 From the issue text alone, decide whether it reports more than one distinct problem, e.g. a plan that looks wrong *and* an inverter entity that won't update, or two unrelated errors. Several symptoms of one problem, like a wrong plan and the unexpected export it leads to, are one problem. Only take this path when the problems are clearly separate, meaning each could be fixed without touching the other. If unsure, treat it as one problem.

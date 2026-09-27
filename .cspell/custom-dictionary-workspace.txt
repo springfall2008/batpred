@@ -255,6 +255,7 @@ gitnexus
 giv
 GivEnergy
 givtcp
+gmtime
 gnueabihf
 GOELEC
 goldens
