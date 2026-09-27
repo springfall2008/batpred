@@ -925,9 +925,10 @@ Predbat supports both of myenergi's APIs:
 
 #### Important notes (myenergi)
 
-- With `myenergi_automatic` on (the default), Predbat sets three `apps.yaml` values for you:
+- With `myenergi_automatic` on (the default), Predbat sets these `apps.yaml` values for you:
     - `car_charging_energy` — every Zappi's session energy, so charging is subtracted from your house load rather than being learnt as base load. Ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect
     - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
+    - `car_charging_now` — every Zappi's power sensor, one entry per car, so a car counts as charging (or boosting) while its Zappi draws 200W or more. Predbat uses it to hold the house battery while the car charges and to check that Octopus Intelligent dispatches are really charging the car. If you have set `car_charging_now` yourself in `apps.yaml`, Predbat keeps yours
     - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
 - If you have an Eddi but charge your car with a different make of charger, set `myenergi_automatic_zappi` to `false`. It gates only the Zappi half, so `iboost_energy_today` is still wired from your Eddi while your Zappi contributes no car inputs and does not compete with the charger you actually use. The mirror case — a Zappi owner whose hot water diversion is handled elsewhere — is `myenergi_automatic_eddi: false`, which wires the Zappis but not `iboost_energy_today`. Turning `myenergi_automatic` off instead drops both halves
 - Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
@@ -946,8 +947,8 @@ Predbat supports both of myenergi's APIs:
 | `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
 | `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
 | `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
-| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned` and `iboost_energy_today` automatically |
-| `automatic_zappi` | Boolean | No | true | `myenergi_automatic_zappi` | Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of `car_charging_energy`, `car_charging_planned` and `car_charging_power`. Separate from `automatic` because the Zappi half registers a car |
+| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned`, `car_charging_now` and `iboost_energy_today` automatically |
+| `automatic_zappi` | Boolean | No | true | `myenergi_automatic_zappi` | Set to `false` to wire only the Eddi half of the automatic configuration, leaving your Zappis out of `car_charging_energy`, `car_charging_planned`, `car_charging_now` and `car_charging_power`. Separate from `automatic` because the Zappi half registers a car |
 | `automatic_eddi` | Boolean | No | true | `myenergi_automatic_eddi` | Set to `false` to wire only the Zappi half of the automatic configuration, leaving your Eddi out of `iboost_energy_today`. Separate from `automatic` so either device kind can be excluded on its own |
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
 | `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
