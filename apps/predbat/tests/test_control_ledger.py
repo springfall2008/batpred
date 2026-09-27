@@ -546,6 +546,7 @@ def _stub_inverter(state_sequence, ledger=None, generation=1000.0):
     stub.log = stub.base.log
     stub.id = 0
     stub.count_register_writes = 0
+    stub.registers_moved = 0
     stub.created_attributes = {}
     stub.inv_write_and_poll_sleep = 0
     stub.sleep = lambda seconds: None
@@ -1851,7 +1852,7 @@ def test_every_entry_point_opens_its_own_cycle():
     # The template-mode guard reads config before anything else; answer with the default (off)
     stub.get_arg = lambda arg, default=None, **kwargs: default
     stub.inverters = []
-    stub.fetch_inverter_data = lambda create=True: False
+    stub.fetch_inverter_data = lambda quick=False: False
     before = ledger.cycle
     stub.quick_inverter_data_update()
     if ledger.cycle != before + 1:

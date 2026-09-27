@@ -66,6 +66,24 @@ from deye_const import (
     DEYE_CACHE_CONTROL,
 )
 
+# How every DeyeCloud inverter behaves, as the INVERTER_DEF keys a discovery record may override
+# (coordinator.CAPABILITY_KEYS). A literal, never read back from INVERTER_DEF: the discovery
+# completeness test proves the record rebuilds the row, which it could not if the record copied it.
+DEYE_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    # Freeze Export selects SELLING_FIRST: PV goes to load, then grid, then the battery
+    "support_feedin_first": True,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+}
+
+# The format publish_schedule_settings_ha() publishes the schedule time selects in, and so the one
+# Predbat must write them in
+DEYE_SCHEDULE_TIME_FORMAT = "HH:MM:SS"
+
 
 class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
     """DEYE Cloud API component."""
@@ -1217,13 +1235,81 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    def _discovery_entities(self, sn):
+        """The entity map for one inverter: every setting automatic_config() binds, as this device has it.
+
+        Entity ids come from the same _sensor_name()/_control_name() calls automatic_config() makes,
+        so the two cannot drift. access is "rw" for the schedule controls Predbat writes and "r" for
+        the telemetry and rating sensors it only reads. The *_power_invert settings are all False
+        (publish_data() already emits Predbat's sign conventions), so no descriptor carries invert.
+
+        Each conditional sensor is listed when THIS inverter publishes it - the same per-device test
+        publish_data() uses - not behind automatic_config()'s fleet-wide "every inverter has it" gate
+        (spec D10). pv_power and pv_today are listed whatever automatic_ignore_pv says: that is the
+        user's opt-out, not a fact about the device (D11).
+        """
+        entities = {
+            "soc_percent": {"entity_id": self._sensor_name(sn, "soc"), "access": "r", "unit": "%"},
+            "battery_power": {"entity_id": self._sensor_name(sn, "battery_power"), "access": "r"},
+            "grid_power": {"entity_id": self._sensor_name(sn, "grid_power"), "access": "r"},
+            "load_power": {"entity_id": self._sensor_name(sn, "load_power"), "access": "r"},
+            "pv_power": {"entity_id": self._sensor_name(sn, "pv_power"), "access": "r"},
+            "battery_temperature": {"entity_id": self._sensor_name(sn, "temperature"), "access": "r"},
+        }
+        for leaf in DEYE_ENERGY_KEYS:
+            if leaf in self.device_energy.get(sn, {}):
+                entities[leaf] = {"entity_id": self._sensor_name(sn, leaf), "access": "r"}
+        published = {
+            "soc_max": ("battery_capacity", self.battery_capacity(sn) > 0),
+            "battery_min_soc": ("battery_reserve_min", sn in self.device_battery_config),
+            "battery_rate_max": ("battery_rate_max", self.battery_rate_max(sn) > 0),
+            "inverter_limit": ("inverter_limit", self.device_rated_power.get(sn, 0.0) > 0),
+        }
+        for setting, (leaf, present) in published.items():
+            if present:
+                entities[setting] = {"entity_id": self._sensor_name(sn, leaf), "access": "r"}
+        entities["reserve"] = {"entity_id": self._control_name("number", sn, "battery_schedule_reserve"), "access": "rw"}
+        for prefix, direction in (("charge", "charge"), ("discharge", "export")):
+            entities[prefix + "_start_time"] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_start_time".format(direction)), "access": "rw", "domain": "select", "format": DEYE_SCHEDULE_TIME_FORMAT}
+            entities[prefix + "_end_time"] = {"entity_id": self._control_name("select", sn, "battery_schedule_{}_end_time".format(direction)), "access": "rw", "domain": "select", "format": DEYE_SCHEDULE_TIME_FORMAT}
+            entities["scheduled_{}_enable".format(prefix)] = {"entity_id": self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)), "access": "rw"}
+        entities["charge_limit"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_soc"), "access": "rw"}
+        entities["charge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_charge_power"), "access": "rw", "unit": "W"}
+        entities["discharge_target_soc"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_soc"), "access": "rw"}
+        entities["discharge_rate"] = {"entity_id": self._control_name("number", sn, "battery_schedule_export_power"), "access": "rw", "unit": "W"}
+        entities["schedule_write_button"] = {"entity_id": self._control_name("switch", sn, "battery_schedule_charge_write"), "access": "rw"}
+        return entities
+
+    def _discovery_ratings(self, sn):
+        """One inverter's device-reported ratings, keyed by Predbat setting name in its units, plus the raw Ah capacity.
+
+        A rating is a figure the device reports (spec D14). inverter_limit is device/latest's
+        RatedPower (W); battery_min_soc is config/battery's battLowCapacity (%), the floor the
+        installer set on the inverter. battery_capacity_ah is config/battery's raw battCapacity.
+        soc_max and battery_rate_max are left to their entities: both are Predbat derivations (an Ah
+        or amp figure scaled by a pack voltage Predbat infers from the BMS charge request), not
+        figures Deye reports. Deye holds no grid export or import cap, so there is no export_limit
+        or import_limit.
+        """
+        ratings = {}
+        rated_w = self._as_float(self.device_rated_power.get(sn), 0.0)
+        if rated_w > 0:
+            ratings["inverter_limit"] = rated_w
+        reserve_min = self.battery_reserve_min(sn)
+        if reserve_min > 0:
+            ratings["battery_min_soc"] = reserve_min
+        configured_ah = self._battery_config_value(sn, "capacity")
+        if configured_ah > 0:
+            ratings["battery_capacity_ah"] = configured_ah
+        return ratings
+
     def build_discovery(self):
         """
         Describe the discovered Deye inverters for the discovery catalogue.
 
         Reads only state the component already holds - device_list, station_ids,
-        device_rated_power and the battery accessors - so this adds no API calls and cannot
-        change what Deye does. Reporting is independent of self.automatic.
+        device_rated_power, device_energy and the battery accessors - so this adds no API calls and
+        cannot change what Deye does. Reporting is independent of self.automatic.
 
         automatic_config() registers every serial in device_list (already filtered to deviceType
         "INVERTER") as "DeyeCloud" with no further test, and binds both PV and battery entities for
@@ -1233,14 +1319,11 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         device - and the fact a maintainer needs when a PV-only unit has been configured as a
         battery inverter.
 
-        Ratings: RatedPower (W) as inverter_w; battery_capacity() (kWh) as battery_kwh; and
-        config/battery's battCapacity as battery_capacity_ah, the raw Ah the API returned, so a
-        reader can check the kWh against its inputs. derive_battery_capacity() is never called
-        here: it logs and writes device_pack_voltage/device_capacity, whereas battery_capacity()
-        only reads them. Both battery ratings follow the latest poll - device_pack_voltage is set
-        from the BMS charge-voltage request each cycle, the same derivation soc_max already relies
-        on - so a changed request or a failed battery fetch changes them and re-files the report;
-        accepted, because it is the same derivation the component uses for soc_max.
+        capabilities is the literal DEYE_CAPABILITIES; entities is every setting automatic_config()
+        binds, as this device has it (_discovery_entities); ratings are the figures the device itself
+        reports (_discovery_ratings). derive_battery_capacity() is never called here: it logs and
+        writes device_pack_voltage/device_capacity, whereas battery_capacity() and battery_rate_max()
+        only read them.
 
         station_ids goes in account_ids only when the account has exactly one station:
         get_device_list() queries every station at once and flattens the result, so which device
@@ -1259,27 +1342,17 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
 
         inverters = []
         for sn in self.device_list:
-            ratings = {}
-            rated_w = self._as_float(self.device_rated_power.get(sn), 0.0)
-            if rated_w > 0:
-                ratings["inverter_w"] = rated_w
-            battery_kwh = self.battery_capacity(sn)
-            if battery_kwh > 0:
-                ratings["battery_kwh"] = battery_kwh
-            configured_ah = self._battery_config_value(sn, "capacity")
-            if configured_ah > 0:
-                ratings["battery_capacity_ah"] = configured_ah
-
             inverters.append(
                 inverter_record(
                     "deye:{}".format(sn),
                     inverter_type="DeyeCloud",
                     composition="direct",
                     functions=["solar", "battery"],
-                    capabilities=["schedule", "target_soc", "discharge_target", "charge_rate_power"],
+                    capabilities=dict(DEYE_CAPABILITIES),
                     hardware_ids={"serial": sn},
                     account_ids=account_ids,
-                    ratings=ratings,
+                    ratings=self._discovery_ratings(sn),
+                    entities=self._discovery_entities(sn),
                 )
             )
 

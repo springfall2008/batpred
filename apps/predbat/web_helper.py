@@ -940,29 +940,58 @@ function toggleValue(rowId) {
     updateChangeCounter();
 }
 
-function editValue(rowId) {
+async function revealSecretValue(row, attribute, path) {
+    // The page serves credentials masked, so a data-secret row's original is the placeholder,
+    // not the key - fetch the real value once and make it the row's original, so the input
+    // offers the real key and saving it unchanged is not seen as a change
+    try {
+        const response = await fetch('./apps_value?path=' + encodeURIComponent(path));
+        const result = await response.json();
+        if (!result.success) {
+            showMessage(result.message, 'error');
+            return false;
+        }
+        row.dataset[attribute] = result.value;
+        delete row.dataset.secret;
+        // A credential is text whatever it looks like - revealed marks the row so the editor
+        // neither offers the entity dropdown for a dotted key nor saves a digit-only one as a number
+        row.dataset.revealed = '1';
+        return true;
+    } catch (error) {
+        showMessage('Could not load the value to edit: ' + error.message, 'error');
+        return false;
+    }
+}
+
+async function editValue(rowId) {
     const row = document.getElementById('row_' + rowId);
     const valueCell = document.getElementById('value_' + rowId);
     const argName = row.dataset.argName;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'originalValue', argName))) {
+        return;
+    }
     const originalValue = row.dataset.originalValue;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[argName] ? pendingChanges[argName].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown
         showEntityDropdown(rowId, currentValue);
     } else {
         // Show regular text input for non-entity values
         valueCell.innerHTML = `
-            <input type="text" class="edit-input" id="input_${rowId}" value="${currentValue}">
+            <input type="text" class="edit-input" id="input_${rowId}">
             <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('input_' + rowId).focus();
+        // Set as a property rather than written into the markup, so a value holding a quote
+        // (ordinary in a password) cannot end the attribute early and be saved back truncated
+        const input = document.getElementById('input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -973,9 +1002,10 @@ function getDisplayValueEntity(entityId) {
         const entityState = allStates[entityId];
         const state = entityState.state || '';
         const unit = entityState.unit_of_measurement || '';
-        return `${entityId} = ${state} ${unit}`;
+        return escapeHtml(`${entityId} = ${state} ${unit}`);
     }
-    return entityId; // Fallback to just the entity ID if no state found
+    // Every caller assigns the result to innerHTML, and a revealed credential can hold < or &
+    return escapeHtml(entityId); // Fallback to just the entity ID if no state found
 }
 
 function cancelEdit(rowId) {
@@ -1047,7 +1077,7 @@ function saveValue(rowId) {
     }
 
     // Determine if this is an entity or numerical value
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1636,29 +1666,34 @@ function toggleNestedValue(rowId) {
     updateChangeCounter();
 }
 
-function editNestedValue(rowId) {
+async function editNestedValue(rowId) {
     const row = document.getElementById('nested_row_' + rowId);
     const valueCell = document.getElementById('nested_value_' + rowId);
     const nestedPath = row.dataset.nestedPath;
+    if (row.dataset.secret === '1' && !(await revealSecretValue(row, 'nestedOriginal', nestedPath))) {
+        return;
+    }
     const originalValue = row.dataset.nestedOriginal;
 
     // Check if there's a pending change, use that value instead of original
     const currentValue = pendingChanges[nestedPath] ? pendingChanges[nestedPath].newValue : originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (row.dataset.revealed !== '1' && currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, currentValue);
     } else {
         // Replace the value cell content with an input field for non-entity values
         valueCell.innerHTML = `
-            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${currentValue}">
+            : <input type="text" class="edit-input" id="nested_input_${rowId}">
             <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
         `;
 
-        // Focus the input field
-        document.getElementById('nested_input_' + rowId).focus();
+        // Set as a property rather than written into the markup - see editValue()
+        const input = document.getElementById('nested_input_' + rowId);
+        input.value = currentValue;
+        input.focus();
     }
 }
 
@@ -1692,7 +1727,7 @@ function saveNestedValue(rowId) {
     }
 
     // Determine the value type and validate accordingly
-    let valueType = determineValueType(originalValue);
+    let valueType = row.dataset.revealed === '1' ? 'string' : determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
         if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
@@ -1993,7 +2028,10 @@ function discardAllChanges() {
     return text
 
 
-def get_html_config_css():
+def get_filter_css():
+    """
+    Return the CSS for the filter box, shared by the Config and Apps pages
+    """
     text = """
         <style>
         .filter-container {
@@ -2015,6 +2053,13 @@ def get_html_config_css():
             border-color: #555;
         }
         </style>
+    """
+    return text
+
+
+def get_html_config_css():
+    text = get_filter_css()
+    text += """
         <script>
         // Save and restore filter value between page loads
         function saveFilterValue() {
@@ -2057,6 +2102,69 @@ def get_html_config_css():
 
         // Register event to restore filter value after page load
         document.addEventListener('DOMContentLoaded', restoreFilterValue);
+        </script>
+    """
+    return text
+
+
+def get_apps_filter_js():
+    """
+    Return the client-side row filter for the apps.yaml page filter box
+    """
+    text = """
+        <script>
+        // Save and restore the filter value between page loads, as the apps page auto-refreshes
+        function saveAppsFilterValue() {
+            localStorage.setItem('appsFilterValue', document.getElementById('appsFilter').value);
+        }
+
+        function restoreAppsFilterValue() {
+            const savedFilter = localStorage.getItem('appsFilterValue');
+            if (savedFilter) {
+                document.getElementById('appsFilter').value = savedFilter;
+                filterApps();
+            }
+        }
+
+        function filterApps() {
+            const filterValue = document.getElementById('appsFilter').value.toLowerCase();
+            const rows = document.querySelectorAll('tr[data-arg-name], tr[data-nested-path]');
+
+            // Save filter value for persistence
+            saveAppsFilterValue();
+
+            rows.forEach(function(row) {
+                // A nested row's path starts with the name of the setting it sits under, so a
+                // match on a setting keeps everything nested below it visible with no extra work
+                const path = (row.getAttribute('data-nested-path') || row.getAttribute('data-arg-name') || '').toLowerCase();
+                let matched = path.includes(filterValue);
+                if (!matched) {
+                    // Only match the value of a leaf row - a parent's value cell holds the text of
+                    // every row nested below it, so matching it would show the whole subtree
+                    const valueCell = row.children[1];
+                    if (valueCell && !valueCell.querySelector('tr')) {
+                        matched = valueCell.textContent.toLowerCase().includes(filterValue);
+                    }
+                }
+                row.style.display = matched ? '' : 'none';
+            });
+
+            // Re-show the parents of every row left visible, so a match nested inside a setting
+            // whose own name does not match is still reachable
+            rows.forEach(function(row) {
+                if (row.style.display === 'none') {
+                    return;
+                }
+                let parent = row.parentElement ? row.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                while (parent) {
+                    parent.style.display = '';
+                    parent = parent.parentElement ? parent.parentElement.closest('tr[data-arg-name], tr[data-nested-path]') : null;
+                }
+            });
+        }
+
+        // Register event to restore filter value after page load
+        document.addEventListener('DOMContentLoaded', restoreAppsFilterValue);
         </script>
     """
     return text
@@ -7129,7 +7237,9 @@ def get_plan_renderer_js():
 
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
-                    const carVal = row.car_charging > 0 ? row.car_charging : '&#9866;';
+                    // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
+                    const carCancelled = row.car_charging_cancelled > 0 ? `${row.car_charging_cancelled}?` : '';
+                    const carVal = row.car_charging > 0 ? (carCancelled ? `${row.car_charging} +${carCancelled}` : row.car_charging) : (carCancelled || '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 

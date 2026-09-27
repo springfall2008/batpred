@@ -519,6 +519,9 @@ class Compare:
         my_predbat = self.pb
 
         my_predbat.car_charging_slots = [[] for car_n in range(my_predbat.num_cars)]
+        # The live cycle's modelled car_charging_now slots were judged against the live car plan, which is
+        # rebuilt here for the compared tariff - so drop them rather than layer them on top of it
+        my_predbat.car_charging_now_slots = [[] for car_n in range(my_predbat.num_cars)]
         # Compare re-plans car charging on the rate-based path (plan_car_charging), where the real
         # fill clamp must hold - drop any model-facing limit override left by the live IOG fetch (#4967)
         my_predbat.car_charging_limit_model = None
@@ -583,6 +586,7 @@ class Compare:
         save_car_charging_soc = copy.deepcopy(my_predbat.car_charging_soc)
         save_car_charging_battery_size = copy.deepcopy(my_predbat.car_charging_battery_size)
         save_car_charging_slots = copy.deepcopy(my_predbat.car_charging_slots)
+        save_car_charging_now_slots = copy.deepcopy(my_predbat.car_charging_now_slots)
         save_soc_kw = my_predbat.soc_kw
         save_soc_max = my_predbat.soc_max
         save_battery_rate_max_charge = my_predbat.battery_rate_max_charge
@@ -691,6 +695,7 @@ class Compare:
             my_predbat.car_charging_soc = save_car_charging_soc
             my_predbat.car_charging_battery_size = save_car_charging_battery_size
             my_predbat.car_charging_slots = save_car_charging_slots
+            my_predbat.car_charging_now_slots = save_car_charging_now_slots
             my_predbat.car_charging_plan_smart = save_car_charging_plan_smart
             my_predbat.soc_kw = save_soc_kw
             my_predbat.soc_max = save_soc_max

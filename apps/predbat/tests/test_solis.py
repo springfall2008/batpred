@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import threading
+import time
 import solis as solis_module
 from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, patch
@@ -24,7 +26,9 @@ from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_OFF_GRID
-from coordinator import validate_report
+from solis import SOLIS_CID_MAX_EXPORT_POWER, SOLIS_CLOUD_CAPABILITIES
+from coordinator import inverter_definition, validate_report
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 
 
 class MockBase:
@@ -59,6 +63,9 @@ class MockSolisAPI(SolisAPI):
         # Entity callbacks queue here for the component loop to drain; the real
         # __init__ (skipped above) sets this.
         self.queued_events = []
+        # Guards the slot schedule, which slot events change from the caller's loop; the real __init__ sets both
+        self.schedule_lock = threading.Lock()
+        self.schedules_loaded = set()
         self.nominal_voltage = 48.0
         self.live_voltage_last_known = {}
         self.nominal_voltage_reported = {}
@@ -1272,40 +1279,38 @@ def test_solis_catalogue_describes_battery_and_pv_only():
     assert battery["functions"] == ["solar", "battery"]
     assert battery["hardware_ids"] == {"serial": "BAT001"}
     assert battery["info"] == {"model": "Solis-5G-Hybrid"}
-    assert sorted(battery["capabilities"]) == ["charge_rate_power", "discharge_target", "schedule", "soh", "target_soc"]
-    assert battery["flags"] == ["tou_v2"]
+    assert battery["capabilities"] == SOLIS_CLOUD_CAPABILITIES, battery["capabilities"]
+    assert battery["flags"] == ["reports_soh", "tou_v2"], battery["flags"]
     pv = by_id["solis:PV001"]
     assert "inverter_type" not in pv, "a PV-only inverter is not one automatic_config() configures"
     assert pv["functions"] == ["solar"], "every Solis inverter feeds the PV totals (automatic_config's pv_devices)"
-    assert "capabilities" not in pv
+    assert "capabilities" not in pv, pv
+    assert set(pv["entities"]) == {"pv_power", "pv_today"}, "a PV-only record carries only its PV sensors (spec D12)"
     no_detail = by_id["solis:NODETAIL001"]
     assert "functions" not in no_detail, "no detail read yet must not claim PV-only"
     assert "inverter_type" not in no_detail
+    # Review Focus 2: a device whose detail has not been read claims no entities and no capabilities
+    assert "capabilities" not in no_detail and "entities" not in no_detail, no_detail
     return False
 
 
 def test_solis_catalogue_battery_ratings_carry_only_stated_facts():
-    """battery_capacity_ah is the bank total (register 172 x pack count); kWh only when the voltage is configured.
+    """battery_capacity_ah is the bank total (register 172 x pack count); no kWh rating, even with the voltage configured.
 
     The fixture is 100 Ah per pack (register 172) with 2 packs, so the bank total is 200.0 Ah -
     publish_entities() multiplies by parallel_battery_count the same way, so battery_capacity_ah
     means the same thing here as on every other reporter.
 
-    GH#5090: without solis_nominal_voltage the voltage is inferred, and for an HV pack still a live
-    reading that moves dump to dump, so a derived kWh would present an estimate as a rating.
+    Spec D14: a rating is a figure the device reports. A kWh capacity is Predbat's product of the
+    register and a voltage - inferred, or the user's solis_nominal_voltage (GH#5090) - so it is not
+    reported as soc_max whether or not the voltage is configured.
     """
     api = _solis_fleet()
     ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
-    assert ratings == {"inverter_w": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
+    assert ratings == {"inverter_limit": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
     api.nominal_pack_voltage = 51.2
     ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
-    assert ratings["battery_kwh"] == round(100.0 * 2 * 51.2 / 1000.0, 2), ratings
-    # Prove the rounding actually does something, not just that it's a no-op here: 314 Ah x 1 pack
-    # at 51.2V is 16.0768 kWh, which must round to 16.08.
-    api.cached_values["BAT001"][SOLIS_CID_BATTERY_CAPACITY] = "314"
-    api.parallel_battery_count["BAT001"] = 1
-    ratings = {r["device_id"]: r for r in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
-    assert ratings["battery_kwh"] == 16.08, ratings
+    assert ratings == {"inverter_limit": 5000.0, "battery_capacity_ah": 200.0, "battery_pack_count": 2}, ratings
     return False
 
 
@@ -1353,6 +1358,196 @@ def test_solis_catalogue_round_trips_through_validate_report():
     cleaned = validate_report(report, "solis", warnings.append)
     assert not warnings, warnings
     assert cleaned["inverters"] == report["inverters"], (report["inverters"], cleaned["inverters"])
+    return False
+
+
+def _solis_battery_pair():
+    """A MockSolisAPI holding two battery inverters, both with the captured _DETAIL_WITH_BATTERY (plan Review Focus 1)."""
+    api = _solis_fleet()
+    api.inverter_sn = ["BAT001", "BAT002"]
+    api.inverter_details = {
+        "BAT001": dict(_DETAIL_WITH_BATTERY, productModel="Solis-5G-Hybrid", power=5.0, powerStr="kW"),
+        "BAT002": dict(_DETAIL_WITH_BATTERY, productModel="Solis-5G-Hybrid", power=3.6, powerStr="kW"),
+    }
+    api.cached_values = {sn: {SOLIS_CID_BATTERY_CAPACITY: "100", SOLIS_CID_TOU_V2_MODE: "43605"} for sn in api.inverter_sn}
+    api.parallel_battery_count = {"BAT001": 2, "BAT002": 1}
+    return api
+
+
+# automatic_config() builds these lists over every inverter (pv_devices, PV-only ones included - GH#4922),
+# and every other per-device list over the battery inverters it drives only.
+SOLIS_PV_LIST_SETTINGS = ("pv_today", "pv_power")
+
+# The settings solis_cloud_pv_load_ignore stops automatic_config() binding; the record keeps them (spec D11).
+SOLIS_PV_LOAD_IGNORED = ("load_today", "pv_today", "load_power", "pv_power")
+
+
+def _captured_for_device(captured, battery_index, pv_index):
+    """automatic_config()'s bindings for one inverter, each list cut down to that inverter's own entry.
+
+    One serial sits at different positions in automatic_config()'s two kinds of list: in a fleet of
+    [PV001, BAT001], BAT001 is index 0 of soc_percent but index 1 of pv_power. Each list is picked at the
+    index that belongs to it and returned as a one-entry list, so the shared contract checks run at index
+    0 without depending on how the fixture orders its inverters. battery_index is None for an inverter
+    automatic_config() does not drive, whose battery lists then come back empty (nothing bound).
+    """
+    device = {}
+    for setting, value in captured.items():
+        if not isinstance(value, list):
+            device[setting] = value
+            continue
+        index = pv_index if setting in SOLIS_PV_LIST_SETTINGS else battery_index
+        device[setting] = [value[index]] if index is not None and index < len(value) else []
+    return device
+
+
+def _assert_solis_fleet_agrees(api, allowed_extra=()):
+    """Every record agrees with automatic_config() in both directions, each at its own index in each kind of list.
+
+    A driven record runs both shared checks. A PV-only record has no inverter_type for them to key on,
+    so it is compared directly: exactly pv_today and pv_power, read-only, with the ids automatic_config()
+    binds at its pv_devices position (spec D12). A record whose detail has not been read carries no
+    entities, although automatic_config() still lists its serial in pv_devices (Review Focus 2).
+    Returns the records by serial.
+    """
+    records = validated_inverters(api.build_discovery())
+    captured = capture_automatic_config(api)
+    by_serial = {record["hardware_ids"]["serial"]: record for record in records}
+    assert list(by_serial) == list(api.inverter_sn), (list(by_serial), api.inverter_sn)
+    driven = [sn for sn in api.inverter_sn if by_serial[sn].get("inverter_type")]
+    for sn in api.inverter_sn:
+        record = by_serial[sn]
+        pv_index = api.inverter_sn.index(sn)
+        battery_index = driven.index(sn) if sn in driven else None
+        device = _captured_for_device(captured, battery_index, pv_index)
+        if battery_index is not None:
+            assert_record_agrees(record, device, index=0)
+            assert_record_binds_nothing_extra(record, device, index=0, allowed_extra=allowed_extra)
+        elif "functions" not in record:
+            assert "entities" not in record and "capabilities" not in record, record
+        else:
+            assert "inverter_type" not in record and "capabilities" not in record, record
+            expected = {setting: {"entity_id": "sensor.{}_solis_{}_{}".format(api.prefix, sn.lower(), "pv_energy_total" if setting == "pv_today" else "pv_power"), "access": "r"} for setting in SOLIS_PV_LIST_SETTINGS}
+            assert record["entities"] == expected, record["entities"]
+            for setting in SOLIS_PV_LIST_SETTINGS:
+                if setting not in allowed_extra:
+                    assert device[setting] == [expected[setting]["entity_id"]], (setting, device[setting])
+    return by_serial
+
+
+def test_solis_catalogue_record_rebuilds_the_row():
+    """The driven inverter's record alone rebuilds INVERTER_DEF["SolisCloud"], with no row as a base (spec section 2)."""
+    api = _solis_fleet()
+    checked = 0
+    for record in validated_inverters(api.build_discovery()):
+        if record.get("inverter_type"):
+            assert_definition_complete(record, SolisAPI.WRITE_AND_POLL_SLEEP)
+            checked += 1
+    assert checked == 1, "expected exactly one driven SolisCloud record, checked {}".format(checked)
+    return False
+
+
+def test_solis_catalogue_record_agrees_with_automatic_config():
+    """Every record matches exactly what the real automatic_config() binds for it, in both directions."""
+    by_serial = _assert_solis_fleet_agrees(_solis_fleet())
+    assert by_serial["BAT001"]["inverter_type"] == "SolisCloud" and "inverter_type" not in by_serial["PV001"]
+    return False
+
+
+def test_solis_catalogue_mixed_fleet_matches_each_list_by_position():
+    """A PV-only inverter listed first puts the battery inverter at different indexes in the two kinds of list.
+
+    [PV001, BAT001, NODETAIL001]: BAT001 is index 0 of automatic_config()'s battery lists but index 1 of
+    pv_today/pv_power; PV001 is index 0 of those; NODETAIL001 (detail not read) is index 2 of them and
+    its record still carries nothing.
+    """
+    api = _solis_fleet()
+    api.inverter_sn = ["PV001", "BAT001", "NODETAIL001"]
+    captured = capture_automatic_config(api)
+    assert captured["soc_percent"] == ["sensor.predbat_solis_bat001_battery_soc"], captured["soc_percent"]
+    assert captured["pv_power"] == ["sensor.predbat_solis_pv001_pv_power", "sensor.predbat_solis_bat001_pv_power", "sensor.predbat_solis_nodetail001_pv_power"], captured["pv_power"]
+    by_serial = _assert_solis_fleet_agrees(api)
+    assert by_serial["PV001"]["entities"]["pv_power"]["entity_id"] == "sensor.predbat_solis_pv001_pv_power"
+    assert by_serial["BAT001"]["entities"]["pv_power"]["entity_id"] == "sensor.predbat_solis_bat001_pv_power"
+    assert "entities" not in by_serial["NODETAIL001"], by_serial["NODETAIL001"]
+    return False
+
+
+def test_solis_catalogue_pv_load_ignore_keeps_the_entities():
+    """Spec D11: solis_cloud_pv_load_ignore stops automatic_config() binding the PV/load sensors, not the record carrying them."""
+    records = {}
+    for ignore in (False, True):
+        api = _solis_fleet()
+        api.get_arg = lambda name, default=None, ignore=ignore: ignore if name == "solis_cloud_pv_load_ignore" else default
+        captured = capture_automatic_config(api)
+        for setting in SOLIS_PV_LOAD_IGNORED:
+            assert (setting in captured) == (not ignore), (setting, ignore)
+        records[ignore] = _assert_solis_fleet_agrees(api, allowed_extra=SOLIS_PV_LOAD_IGNORED if ignore else ())
+    assert records[True] == records[False], "the record must not change with solis_cloud_pv_load_ignore"
+    for setting in SOLIS_PV_LOAD_IGNORED:
+        assert setting in records[True]["BAT001"]["entities"], setting
+    return False
+
+
+def test_solis_catalogue_two_inverters_get_their_own_entities():
+    """Two battery inverters give two records, each matching its own index of automatic_config()'s lists."""
+    api = _solis_battery_pair()
+    by_serial = _assert_solis_fleet_agrees(api)
+    for record in by_serial.values():
+        assert_definition_complete(record, SolisAPI.WRITE_AND_POLL_SLEEP)
+    first, second = by_serial["BAT001"]["entities"], by_serial["BAT002"]["entities"]
+    assert set(first) == set(second), (sorted(first), sorted(second))
+    for setting in first:
+        assert "bat001" in first[setting]["entity_id"] and "bat002" in second[setting]["entity_id"], setting
+    return False
+
+
+def test_solis_catalogue_reports_battery_min_soc_not_reserve():
+    """Spec D9: the record carries battery_min_soc (read-only entity plus rating) and no reserve.
+
+    automatic_config() binds reserve and battery_min_soc to the same over_discharge_soc number, and
+    inverter.py dummies the reserve binding because the SolisCloud row has has_reserve_soc False -
+    so the record leaves reserve out and the derived has_reserve_soc is False. Also pins the row's
+    time_button_press False (no schedule_write_button is bound) and battery_power_invert's string
+    "True" becoming invert on battery_power.
+    """
+    api = _solis_fleet()
+    api.cached_values["BAT001"][SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC] = "20"
+    record = validated_inverters(api.build_discovery())[0]
+    entities = record["entities"]
+    assert "reserve" not in entities, entities.get("reserve")
+    assert entities["battery_min_soc"] == {"entity_id": "number.predbat_solis_bat001_over_discharge_soc", "access": "r", "unit": "%"}, entities["battery_min_soc"]
+    assert record["ratings"]["battery_min_soc"] == 20, record["ratings"]
+    captured = capture_automatic_config(api)
+    assert captured["reserve"] == captured["battery_min_soc"], "automatic_config() binds both to over_discharge_soc"
+    definition, gaps, _ = inverter_definition(record, SolisAPI.WRITE_AND_POLL_SLEEP)
+    assert not gaps, gaps
+    assert definition["has_reserve_soc"] is False
+    assert "schedule_write_button" not in entities and "schedule_write_button" not in captured
+    assert definition["time_button_press"] is False
+    assert captured["battery_power_invert"] == ["True"] and entities["battery_power"]["invert"] is True, entities["battery_power"]
+    return False
+
+
+def test_solis_catalogue_export_limit_is_the_configured_register():
+    """export_limit is register 499 in watts, converted as publish_entities() presents it; 0 or unread gives no rating.
+
+    publish_entities() shows an unset or 0 register as 99999 W ("no limit") - a placeholder, not a
+    configured figure, so no rating is reported for it. A value under 200 is in 100 W units there.
+    """
+    api = _solis_fleet()
+
+    def ratings():
+        """The battery inverter's ratings as currently reported."""
+        return {record["device_id"]: record for record in api.build_discovery()["inverters"]}["solis:BAT001"]["ratings"]
+
+    assert "export_limit" not in ratings(), "register not read yet"
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "0"
+    assert "export_limit" not in ratings(), "0 means no limit"
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "37"
+    assert ratings()["export_limit"] == 3700.0, ratings()
+    api.cached_values["BAT001"][SOLIS_CID_MAX_EXPORT_POWER] = "3680"
+    assert ratings()["export_limit"] == 3680.0, ratings()
     return False
 
 
@@ -1702,6 +1897,13 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_catalogue_never_reports_the_inverter_name()
         failed |= test_solis_catalogue_none_before_discovery()
         failed |= test_solis_catalogue_round_trips_through_validate_report()
+        failed |= test_solis_catalogue_record_rebuilds_the_row()
+        failed |= test_solis_catalogue_record_agrees_with_automatic_config()
+        failed |= test_solis_catalogue_mixed_fleet_matches_each_list_by_position()
+        failed |= test_solis_catalogue_pv_load_ignore_keeps_the_entities()
+        failed |= test_solis_catalogue_two_inverters_get_their_own_entities()
+        failed |= test_solis_catalogue_reports_battery_min_soc_not_reserve()
+        failed |= test_solis_catalogue_export_limit_is_the_configured_register()
         failed |= asyncio.run(test_solis_catalogue_filed_even_when_automatic_config_configures_nothing())
         failed |= asyncio.run(test_solis_catalogue_filed_when_automatic_config_gate_is_closed())
         failed |= asyncio.run(test_solis_catalogue_refiled_on_a_later_cycle())
@@ -1744,6 +1946,17 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_event_queued_not_executed_on_calling_loop())
         failed |= asyncio.run(test_queued_event_failure_does_not_stop_the_queue())
         failed |= asyncio.run(test_queued_event_drained_after_startup())
+        failed |= asyncio.run(test_slot_select_applied_before_queue_drains())
+        failed |= asyncio.run(test_slot_number_and_switch_applied_before_queue_drains())
+        failed |= asyncio.run(test_slot_event_before_discovery_still_queued())
+        failed |= asyncio.run(test_read_and_write_cid_trusts_read_back_after_write_error())
+        failed |= asyncio.run(test_failed_slot_time_write_restores_inverter_value())
+        failed |= asyncio.run(test_failed_slot_enable_write_restores_inverter_value())
+        failed |= asyncio.run(test_failed_slot_write_keeps_newer_request())
+        failed |= asyncio.run(test_read_and_write_cid_settles_after_write_error())
+        failed |= asyncio.run(test_slot_event_before_schedule_decoded_is_queued())
+        failed |= asyncio.run(test_slot_event_waits_for_schedule_lock())
+        failed |= asyncio.run(test_schedule_copied_under_lock())
         failed |= asyncio.run(test_select_event_storage_mode())
         failed |= asyncio.run(test_select_event_charge_time())
         failed |= asyncio.run(test_select_event_discharge_time())
@@ -5852,8 +6065,10 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
     max_discharge_entity = f"number.{prefix}_solis_{sn.lower()}_max_discharge_power"
     slot_entity = f"number.{prefix}_solis_{sn.lower()}_discharge_slot1_power"
 
-    # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes
+    # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes the
+    # slots, and run() republishes everything else
     await api.number_event_handler(slot_entity, 3437)
+    await api.publish_entities()
     written_amps = api.charge_discharge_time_windows[sn][1]["discharge_current"]
     before = {entity: api.dashboard_items[entity]["state"] for entity in (max_charge_entity, max_discharge_entity, slot_entity)}
 
@@ -6227,6 +6442,325 @@ async def test_queued_event_drained_after_startup():
         return 1
     if api.queued_events:
         print("ERROR: queue should be empty after a successful run, got {}".format(api.queued_events))
+        return 1
+    return 0
+
+
+def _slot_event_api():
+    """A discovered V2 inverter whose slot 1 is idle, as Predbat finds it before programming an export."""
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    sn = "1031730261290196"
+    api.inverter_sn = [sn]
+    api.charge_discharge_time_windows[sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100.0,
+            "charge_current": 75.0,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10.0,
+            "discharge_current": 75.0,
+        }
+    }
+    api.schedules_loaded.add(sn)
+    return api, sn
+
+
+async def test_slot_select_applied_before_queue_drains():
+    """A slot time Predbat writes shows on its select straight away, not at the next run().
+
+    Predbat writes the select and polls it for about 20s; the queue is only drained once a
+    minute, so a queued slot time left the select on the old value and Predbat logged a write
+    that then went through as failed. The slot handlers only touch the in-memory schedule -
+    there is no API work to keep off the calling loop (issue #4875).
+    """
+    api, sn = _slot_event_api()
+    entity_id = f"select.predbat_solis_{sn}_discharge_slot1_start_time"
+
+    await api.select_event(entity_id, "11:30:00")
+
+    if api.queued_events:
+        print("ERROR: slot time should be applied, not queued: {}".format(api.queued_events))
+        return 1
+    if api.charge_discharge_time_windows[sn][1]["discharge_start_time"] != "11:30":
+        print("ERROR: schedule not updated, got {}".format(api.charge_discharge_time_windows[sn][1]["discharge_start_time"]))
+        return 1
+    state = api.dashboard_items.get(entity_id, {}).get("state")
+    if state != "11:30:00":
+        print("ERROR: select should read back 11:30:00 for Predbat's poll, got {}".format(state))
+        return 1
+    return 0
+
+
+async def test_slot_number_and_switch_applied_before_queue_drains():
+    """Slot SoC numbers and slot enable switches are schedule-only too, so they apply straight away."""
+    api, sn = _slot_event_api()
+    soc_entity = f"number.predbat_solis_{sn}_discharge_slot1_soc"
+    enable_entity = f"switch.predbat_solis_{sn}_discharge_slot1_enable"
+
+    await api.number_event(soc_entity, 15)
+    await api.switch_event(enable_entity, "turn_on")
+
+    if api.queued_events:
+        print("ERROR: slot number/switch should be applied, not queued: {}".format(api.queued_events))
+        return 1
+    slot = api.charge_discharge_time_windows[sn][1]
+    if slot["discharge_soc"] != 15.0 or slot["discharge_enable"] != 1:
+        print("ERROR: schedule not updated, got soc {} enable {}".format(slot["discharge_soc"], slot["discharge_enable"]))
+        return 1
+    if api.dashboard_items.get(soc_entity, {}).get("state") != 15.0:
+        print("ERROR: SoC number should read back 15, got {}".format(api.dashboard_items.get(soc_entity)))
+        return 1
+    if api.dashboard_items.get(enable_entity, {}).get("state") != "on":
+        print("ERROR: enable switch should read back on, got {}".format(api.dashboard_items.get(enable_entity)))
+        return 1
+    return 0
+
+
+async def test_slot_event_before_discovery_still_queued():
+    """Before the first run() has discovered the inverter a slot event cannot be applied, so it waits in the queue."""
+    api, sn = _slot_event_api()
+    api.inverter_sn = []
+
+    await api.select_event(f"select.predbat_solis_{sn}_discharge_slot1_start_time", "11:30:00")
+
+    if len(api.queued_events) != 1:
+        print("ERROR: expected the event to be queued until discovery, got {}".format(api.queued_events))
+        return 1
+    return 0
+
+
+async def test_read_and_write_cid_trusts_read_back_after_write_error():
+    """A write whose reply errored but whose value is on the inverter is a success, not a failure.
+
+    SolisCloud relays a control write to the datalogger, and the reply can time out or error
+    after the value has landed. read_and_write_cid already reads the value back; it must use
+    that read before reporting failure.
+    """
+    api = MockSolisAPI()
+    api.read_and_write_cid = SolisAPI.read_and_write_cid.__get__(api, MockSolisAPI)
+    cid_state = {5964: "00:00-00:00"}
+
+    async def mock_read_cid(inv_sn, cid):
+        return cid_state[cid], {"msg": cid_state[cid]}
+
+    async def mock_write_cid_landed_but_errored(inv_sn, cid, value, old_value=None, field_description=None):
+        cid_state[cid] = value
+        return False
+
+    api.read_cid = mock_read_cid
+    api.write_cid = mock_write_cid_landed_but_errored
+
+    result = await api.read_and_write_cid("SN1", 5964, "11:30-12:00", field_description="discharge slot 1 time")
+
+    if result is not True:
+        print("ERROR: a value confirmed by the read-back should report success, got {}".format(result))
+        return 1
+    if any("Failed to write" in msg for msg in api.log_messages):
+        print("ERROR: should not log a write failure for a value that landed: {}".format(api.log_messages))
+        return 1
+    return 0
+
+
+def _fake_inverter(api, inverter_state, refused_cids=(), on_attempt=None):
+    """Drive the real read_and_write_cid() and read_cid() against a fake inverter.
+
+    Only the network request and the control write are replaced, so cached_values is refreshed by
+    read_cid()'s own read-back - the value restore_refused_slot_write() relies on. Writes to
+    refused_cids are rejected and leave the inverter as it was.
+    """
+    api.read_and_write_cid = SolisAPI.read_and_write_cid.__get__(api, MockSolisAPI)
+    # read_cid() creates cached_values[sn] and cached_infos[sn] together; tests seed cached_values alone
+    for sn in api.cached_values:
+        api.cached_infos.setdefault(sn, {})
+
+    async def execute_request(endpoint, payload):
+        assert endpoint == SOLIS_READ_ENDPOINT, endpoint
+        return {"msg": inverter_state.get(payload["cid"], "")}
+
+    async def write_cid(inverter_sn, cid, value, old_value=None, field_description=None):
+        api.read_and_write_cid_calls.append({"inverter_sn": inverter_sn, "cid": cid, "value": str(value), "field_description": field_description})
+        if on_attempt:
+            on_attempt(cid)
+        if cid in refused_cids:
+            return False
+        inverter_state[cid] = str(value)
+        return True
+
+    api._execute_request = execute_request
+    api.write_cid = write_cid
+
+
+async def test_failed_slot_time_write_restores_inverter_value():
+    """A slot time the inverter refused goes back to what the inverter holds, so Predbat sees it and writes again.
+
+    cached_values starts stale (10:00-10:30): the restore must use the read-back taken after the
+    refused write (00:00-00:00), not whatever the cache held before it.
+    """
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
+    api, sn = _slot_event_api()
+    time_cid = SOLIS_CID_DISCHARGE_TIME[0]
+    api.cached_values[sn] = {time_cid: "10:00-10:30", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1"}
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+    _fake_inverter(api, {time_cid: "00:00-00:00", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1"}, refused_cids={time_cid})
+
+    result = await api.write_time_windows_if_changed(sn)
+
+    if result is not False:
+        print("ERROR: a refused write should still report failure, got {}".format(result))
+        return 1
+    if (slot["discharge_start_time"], slot["discharge_end_time"]) != ("00:00", "00:00"):
+        print("ERROR: refused time should be restored to the inverter's 00:00-00:00 from the read-back, got {}-{}".format(slot["discharge_start_time"], slot["discharge_end_time"]))
+        return 1
+    if slot["discharge_enable"] != 1:
+        print("ERROR: the enable was already on and should be left alone, got {}".format(slot["discharge_enable"]))
+        return 1
+    return 0
+
+
+async def test_failed_slot_enable_write_restores_inverter_value():
+    """A slot enable the inverter refused goes back to what the inverter holds, taken from the read-back."""
+    api, sn = _slot_event_api()
+    api.cached_values[sn] = {SOLIS_CID_DISCHARGE_ENABLE_BASE: "stale"}
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+    _fake_inverter(api, {SOLIS_CID_DISCHARGE_ENABLE_BASE: "0"}, refused_cids={SOLIS_CID_DISCHARGE_ENABLE_BASE})
+
+    await api.write_time_windows_if_changed(sn)
+
+    if slot["discharge_enable"] != 0:
+        print("ERROR: refused enable should be restored to the inverter's 0, got {}".format(slot["discharge_enable"]))
+        return 1
+    return 0
+
+
+async def test_failed_slot_write_keeps_newer_request():
+    """A request that arrives while the old value is being written is not overwritten when that write fails."""
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
+    api, sn = _slot_event_api()
+    time_cid = SOLIS_CID_DISCHARGE_TIME[0]
+    api.cached_values[sn] = {time_cid: "00:00-00:00", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1"}
+    slot = api.charge_discharge_time_windows[sn][1]
+    slot.update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+
+    def newer_request_arrives(cid):
+        if cid == time_cid:
+            slot["discharge_start_time"] = "13:00"
+
+    _fake_inverter(api, {time_cid: "00:00-00:00", SOLIS_CID_DISCHARGE_ENABLE_BASE: "1"}, refused_cids={time_cid}, on_attempt=newer_request_arrives)
+
+    await api.write_time_windows_if_changed(sn)
+
+    if (slot["discharge_start_time"], slot["discharge_end_time"]) != ("13:00", "12:00"):
+        print("ERROR: the newer 13:00 request should survive the failed write, got {}-{}".format(slot["discharge_start_time"], slot["discharge_end_time"]))
+        return 1
+    return 0
+
+
+async def test_read_and_write_cid_settles_after_write_error():
+    """A write whose reply errored and whose value lands a moment later is a success, not a failure to roll back.
+
+    The immediate read-back can still show the old value; the same settled re-read the successful
+    reply path uses decides it. Otherwise the rollback would revert a value that had landed.
+    """
+    api = MockSolisAPI()
+    api.read_and_write_cid = SolisAPI.read_and_write_cid.__get__(api, MockSolisAPI)
+    reads = []
+
+    async def mock_read_cid(inv_sn, cid):
+        reads.append(cid)
+        # pre-read and immediate read-back show the old value; the settled read shows the new one
+        value = "11:30-12:00" if len(reads) >= 3 else "00:00-00:00"
+        return value, {"msg": value}
+
+    async def mock_write_cid_errored(inv_sn, cid, value, old_value=None, field_description=None):
+        return False
+
+    api.read_cid = mock_read_cid
+    api.write_cid = mock_write_cid_errored
+
+    result = await api.read_and_write_cid("SN1", 5964, "11:30-12:00", field_description="discharge slot 1 time")
+
+    if result is not True:
+        print("ERROR: a value that landed by the settled read should report success, got {}".format(result))
+        return 1
+    if len(reads) != 3:
+        print("ERROR: expected pre-read, read-back and settled read, got {} reads".format(len(reads)))
+        return 1
+    return 0
+
+
+async def test_slot_event_before_schedule_decoded_is_queued():
+    """A slot event for a discovered inverter whose schedule has not been decoded yet waits in the queue.
+
+    The first run() discovers the inverter before it decodes the schedule, and the decode replaces
+    the schedule wholesale - a slot event applied in between would be lost.
+    """
+    api, sn = _slot_event_api()
+    api.schedules_loaded.clear()
+
+    await api.select_event(f"select.predbat_solis_{sn}_discharge_slot1_start_time", "11:30:00")
+
+    if len(api.queued_events) != 1:
+        print("ERROR: expected the event to be queued until the schedule is decoded, got {}".format(api.queued_events))
+        return 1
+    if api.charge_discharge_time_windows[sn][1]["discharge_start_time"] != "00:00":
+        print("ERROR: schedule should not change before decode, got {}".format(api.charge_discharge_time_windows[sn][1]["discharge_start_time"]))
+        return 1
+    return 0
+
+
+def _run_in_thread(coroutine_factory):
+    """Run a coroutine on its own loop in another thread, as the HA event loop calls the component."""
+    thread = threading.Thread(target=lambda: asyncio.run(coroutine_factory()))
+    thread.start()
+    return thread
+
+
+async def test_slot_event_waits_for_schedule_lock():
+    """A slot event changes the schedule only while holding the schedule lock that run() copies it under."""
+    api, sn = _slot_event_api()
+    api.schedule_lock.acquire()
+    thread = _run_in_thread(lambda: api.select_event(f"select.predbat_solis_{sn}_discharge_slot1_start_time", "11:30:00"))
+    time.sleep(0.2)
+    blocked = api.charge_discharge_time_windows[sn][1]["discharge_start_time"]
+    api.schedule_lock.release()
+    thread.join(2)
+
+    if blocked != "00:00":
+        print("ERROR: the slot event changed the schedule without the lock, got {}".format(blocked))
+        return 1
+    if api.charge_discharge_time_windows[sn][1]["discharge_start_time"] != "11:30":
+        print("ERROR: the slot event should apply once the lock is free, got {}".format(api.charge_discharge_time_windows[sn][1]["discharge_start_time"]))
+        return 1
+    return 0
+
+
+async def test_schedule_copied_under_lock():
+    """write_time_windows_if_changed() takes its copy of the schedule while holding the schedule lock."""
+    api, sn = _slot_event_api()
+    api.charge_discharge_time_windows[sn][1].update({"discharge_enable": 1, "discharge_start_time": "11:30", "discharge_end_time": "12:00"})
+    api.cached_values[sn] = {}
+    api.schedule_lock.acquire()
+    thread = _run_in_thread(lambda: api.write_time_windows_if_changed(sn))
+    time.sleep(0.2)
+    calls_while_locked = len(api.read_and_write_cid_calls)
+    api.schedule_lock.release()
+    thread.join(2)
+
+    if calls_while_locked:
+        print("ERROR: the schedule was copied and written without the lock ({} writes)".format(calls_while_locked))
+        return 1
+    if not api.read_and_write_cid_calls:
+        print("ERROR: the write should go ahead once the lock is free")
         return 1
     return 0
 

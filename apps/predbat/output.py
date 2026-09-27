@@ -193,6 +193,8 @@ class Output:
                     show["kwh"] = kwh
                     show["average"] = average
                     show["cost"] = cost
+                    if window.get("kwh_cancelled"):
+                        show["kwh_cancelled"] = dp2(window["kwh_cancelled"])
                     total_cost += cost
                     total_kwh += kwh
                     plan.append(show)
@@ -1189,8 +1191,11 @@ class Output:
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
 
             rate_start = minute_timestamp
-            rate_value_import = dp2(self.rate_import.get(minute, 0))
-            rate_value_export = dp2(self.rate_export.get(minute, 0))
+            # From minute_start, not the aligned interval start: the first row covers now to the end of its
+            # interval, like its times and kWh, and a rate that changed earlier in the interval (a cancelled
+            # Intelligent dispatch, say) no longer applies to it. Every later row starts on its interval anyway.
+            rate_value_import = dp2(self.rate_import.get(minute_start, 0))
+            rate_value_export = dp2(self.rate_export.get(minute_start, 0))
             # Default to a single value; overridden to a "{min}-{max}" range below when this row
             # turns out to be the first of a merged/rowspan cell whose minutes span more than one
             # distinct rate - only the first row of a span is ever actually rendered as a tooltip.
@@ -1239,7 +1244,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
-                    rate_text_import = self.rate_range_text(self.rate_import, minute, charge_end_minute, rate_value_import)
+                    rate_text_import = self.rate_range_text(self.rate_import, minute_start, charge_end_minute, rate_value_import)
                 else:
                     rowspan = 0
 
@@ -1251,7 +1256,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
-                    rate_text_export = self.rate_range_text(self.rate_export, minute, export_end_minute, rate_value_export)
+                    rate_text_export = self.rate_range_text(self.rate_export, minute_start, export_end_minute, rate_value_export)
                 else:
                     rowspan = 0
 
@@ -1561,7 +1566,7 @@ class Output:
                 soc_sym = "&#11015; " + soc_sym
 
             # Import and export rates -> to string
-            adjust_type = self.rate_import_replicated.get(minute, None)
+            adjust_type = self.rate_import_replicated.get(minute_start, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
                 rate_str_import = "<i>%02.02f %s</i>" % (rate_value_import, adjust_symbol)
@@ -1574,7 +1579,7 @@ class Output:
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
 
-            adjust_type = self.rate_export_replicated.get(minute, None)
+            adjust_type = self.rate_export_replicated.get(minute_start, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
                 rate_str_export = "<i>%02.02f %s</i>" % (rate_value_export, adjust_symbol)
@@ -1612,13 +1617,23 @@ class Output:
 
             # Car charging?
             car_rate = None
+            car_charging_cancelled = 0.0
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 car_total += car_charging_kwh
+                # A slot dynamic load cancelled (the car is not charging) is not planned for, but is still
+                # shown with a "?" so the car's own plan stays visible - alongside another car's live
+                # charging in the same step, not only when no car is charging
+                car_charging_cancelled = self.car_charge_slot_kwh_cancelled(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
+                    if car_charging_cancelled > 0.0:
+                        car_charging_str += " +" + str(car_charging_cancelled) + "?"
                     car_color = "FFFF00"
                     car_rate = self.car_charge_slot_rate(minute_start, minute_end)
+                elif car_charging_cancelled > 0.0:
+                    car_charging_str = str(car_charging_cancelled) + "?"
+                    car_color = "#FFFFCC"
                 else:
                     car_charging_str = "&#9866;"
                     car_color = "#FFFFFF"
@@ -1820,6 +1835,8 @@ class Output:
                 json_row["extra_color"] = extra_color
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
+                if car_charging_cancelled > 0.0:
+                    json_row["car_charging_cancelled"] = car_charging_cancelled
                 json_row["car_color"] = car_color
                 json_row["car_rate"] = car_rate
                 json_row["car_rate_color"] = car_rate_color if rate_split else None

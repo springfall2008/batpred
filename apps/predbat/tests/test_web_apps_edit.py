@@ -14,8 +14,10 @@ Follows the FakeRequest pattern of test_web_debug_history_routes.py.
 """
 
 import asyncio
+import html
 import json
 import os
+import re
 import shutil
 import tempfile
 
@@ -63,6 +65,14 @@ class FakeRequest:
     async def post(self):
         """Return the stored POST data, as aiohttp does."""
         return self.postdata
+
+
+class FakeGetRequest:
+    """A minimal aiohttp-request stand-in exposing only the query string the handler reads."""
+
+    def __init__(self, query):
+        """Store the query parameters this request will hand back."""
+        self.query = query
 
 
 def _load_yaml(path="apps.yaml"):
@@ -500,10 +510,258 @@ def run_web_apps_edit_tests(my_predbat):
             print("  ERROR: the rotated credential was not written")
             failed += 1
 
+        # ---------------------------------------------------------------------
+        # The page serving the mask meant clicking Edit on a credential filled the input with
+        # "xxx": the real key could not be seen or amended, only retyped from scratch. The page
+        # stays masked; Edit fetches the one real value through /apps_value instead.
+        print("Test: credential rows are flagged for reveal-on-edit and still served masked")
+        text = _render_apps_page(my_predbat, {"octopus_api_key": "sk-top-level-credential-0000", "chat": {"providers": {"openrouter": {"api_key": "sk-live-nested-credential-1234", "model": "some-model"}}}})
+        if "sk-top-level-credential-0000" in text or "sk-live-nested-credential-1234" in text:
+            print("  ERROR: a credential reached the rendered page in the clear")
+            failed += 1
+        if not re.search(r'<tr id="row_\d+" data-arg-name="octopus_api_key" data-original-value="xxx" data-secret="1">', text):
+            print("  ERROR: the top-level credential row should be masked and flagged data-secret")
+            failed += 1
+        if not re.search(r"data-nested-path='chat\.providers\.openrouter\.api_key' data-nested-original='xxx' data-secret='1'", text):
+            print("  ERROR: the nested credential row should be masked and flagged data-secret")
+            failed += 1
+        if re.search(r"data-nested-path='chat\.providers\.openrouter\.model'[^>]*data-secret", text):
+            print("  ERROR: a non-credential sibling must not be flagged data-secret")
+            failed += 1
+
+        print("Test: /apps_value hands back the real value of the credential being edited")
+        web_interface = _reset_fixture(my_predbat)
+        for path, expected in (("chat.providers.openrouter.api_key", "sk-live-nested-credential-1234"), ("forecast_solar[0].api_key", "fs-live-credential-5678"), ("forecast_solar[0].declination", "30")):
+            result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": path}))).text)
+            if not result.get("success") or result.get("value") != expected:
+                print("  ERROR: expected /apps_value for {} to return {}, got: {}".format(path, expected, result))
+                failed += 1
+
+        print("Test: /apps_value refuses a missing path or a whole structure")
+        for query in ({}, {"path": "chat.providers.nope"}, {"path": "chat.providers"}):
+            result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest(query))).text)
+            if result.get("success") or "value" in result:
+                print("  ERROR: expected /apps_value to refuse {}, got: {}".format(query, result))
+                failed += 1
+
+        print("Test: Edit reveals a flagged credential before opening the input")
+        for function, attribute in (("editValue", "originalValue"), ("editNestedValue", "nestedOriginal")):
+            edit_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            edit_src = edit_src[: edit_src.index("\n}\n")]
+            if "row.dataset.secret === '1'" not in edit_src or "revealSecretValue(row, '{}'".format(attribute) not in edit_src:
+                print("  ERROR: expected {} to fetch the real value of a data-secret row, got:\n{}".format(function, edit_src))
+                failed += 1
+        reveal_src = apps_js[apps_js.index("async function revealSecretValue(") :]
+        reveal_src = reveal_src[: reveal_src.index("\n}\n")]
+        if "fetch('./apps_value?path=' + encodeURIComponent(path))" not in reveal_src or "delete row.dataset.secret" not in reveal_src:
+            print("  ERROR: expected revealSecretValue to fetch /apps_value and replace the masked original, got:\n{}".format(reveal_src))
+            failed += 1
+
+        # A revealed credential is the first value that routinely holds quotes, braces or angle
+        # brackets to reach the editor - the mask "xxx" never did (#5243 review)
+        print("Test: a credential holding quote, brace and angle-bracket characters round-trips through reveal and save")
+        awkward = 'pa"ss{word<x>&{0}'
+        web_interface = _reset_fixture(my_predbat)
+        web_interface.args["chat"]["providers"]["openrouter"]["api_key"] = awkward
+        path = "chat.providers.openrouter.api_key"
+        result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": path}))).text)
+        if not result.get("success") or result.get("value") != awkward:
+            print("  ERROR: expected /apps_value to return the brace-bearing credential verbatim, got: {}".format(result))
+            failed += 1
+        else:
+            result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": awkward, "newValue": awkward + "2", "type": "string", "isNested": True, "path": path}})
+            if not result.get("success") or _load_yaml()["pred_bat"]["chat"]["providers"]["openrouter"]["api_key"] != awkward + "2":
+                print("  ERROR: the edited quote-bearing credential was not written intact, got: {}".format(result))
+                failed += 1
+
+        print("Test: a digit-only credential saved as a revealed row keeps its leading zeros")
+        web_interface = _reset_fixture(my_predbat)
+        path = "forecast_solar[0].api_key"
+        result = _post_changes(web_interface, {path: {"rowId": 1001, "originalValue": "0042", "newValue": "00430", "type": "string", "isNested": True, "path": path}})
+        if not result.get("success") or str(_load_yaml()["pred_bat"]["forecast_solar"][0]["api_key"]) != "00430":
+            print("  ERROR: expected the credential to be written as the string 00430, got: {} / {}".format(result, _load_yaml()["pred_bat"]["forecast_solar"][0]["api_key"]))
+            failed += 1
+
+        print("Test: /apps_value refuses a negative index into an empty list rather than raising")
+        web_interface = _reset_fixture(my_predbat)
+        web_interface.args["forecast_solar"] = []
+        result = json.loads(asyncio.run(web_interface.html_apps_value(FakeGetRequest({"path": "forecast_solar[-1].api_key"}))).text)
+        if result.get("success") or "value" in result:
+            print("  ERROR: expected a refusal for an index into an empty list, got: {}".format(result))
+            failed += 1
+
+        print("Test: the editor sets a revealed value as a property and treats it as plain text")
+        for function in ("editValue", "editNestedValue"):
+            edit_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            edit_src = edit_src[: edit_src.index("\n}\n")]
+            if 'value="${currentValue}"' in edit_src or "input.value = currentValue" not in edit_src:
+                print("  ERROR: expected {} to assign input.value rather than interpolate the value into markup, got:\n{}".format(function, edit_src))
+                failed += 1
+            if "row.dataset.revealed !== '1' && currentValue" not in edit_src:
+                print("  ERROR: expected {} to skip the entity dropdown for a revealed credential, got:\n{}".format(function, edit_src))
+                failed += 1
+        for function in ("saveValue", "saveNestedValue"):
+            save_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            save_src = save_src[: save_src.index("\n}\n")]
+            if "row.dataset.revealed === '1' ? 'string'" not in save_src:
+                print("  ERROR: expected {} to save a revealed credential as a string, got:\n{}".format(function, save_src))
+                failed += 1
+        if "row.dataset.revealed = '1'" not in reveal_src:
+            print("  ERROR: expected revealSecretValue to mark the row as revealed")
+            failed += 1
+        display_src = apps_js[apps_js.index("function getDisplayValueEntity(") :]
+        display_src = display_src[: display_src.index("\n}\n")]
+        if display_src.count("escapeHtml(") != 2:
+            print("  ERROR: expected getDisplayValueEntity to escape both of its returns, got:\n{}".format(display_src))
+            failed += 1
+
     finally:
         os.chdir(original_dir)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     if failed:
         print("**** ERROR: {} apps.yaml editor add/delete test(s) failed ****".format(failed))
+    return failed
+
+
+def _parent_row_path(path):
+    """Return the path of the row a nested path sits under, or '' when it sits at the top level."""
+    # A dict key may itself end in ']' (giving "parent.weird]", which has no '[' to split on),
+    # so index rather than assume - the helper must report a parent, never raise
+    if path.endswith("]"):
+        bracket = path.rfind("[")
+        if bracket != -1:
+            return path[:bracket]
+    if "." in path:
+        return path.rsplit(".", 1)[0]
+    return ""
+
+
+def _attribute_values(text, pattern):
+    """Return the set of values an attribute pattern matches, as the browser would decode them."""
+    return set(html.unescape(value) for value in re.findall(pattern, text))
+
+
+def _render_apps_page(my_predbat, args=None):
+    """Render the /apps page against the given args, or the nested fixture's, and return its HTML."""
+    # Built the way _reset_fixture() does: the full constructor would alias .args to the live
+    # shared args and build AnnualPage/WebChat before the rebinding below, which rendering
+    # needs none of - and which would leave this test sensitive to whatever initialize() picks up
+    web_interface = WebInterface.__new__(WebInterface)
+    web_interface.base = my_predbat
+    web_interface.log = my_predbat.log
+    web_interface.prefix = my_predbat.prefix
+    if args is None:
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        # Render the fixture's nested structures rather than whatever the live test args hold
+        args = yaml.load(APPS_YAML_FIXTURE)["pred_bat"]
+    web_interface.args = args
+    return asyncio.run(web_interface.html_apps(None)).text
+
+
+def run_web_apps_filter_tests(my_predbat):
+    """Unit tests for the apps.yaml page filter box (issue #5210)."""
+    failed = 0
+    print("**** Running apps.yaml page filter tests ****")
+
+    text = _render_apps_page(my_predbat)
+
+    # -------------------------------------------------------------------------
+    print("Test: the apps page carries a filter box wired to filterApps()")
+    for expected in ('id="appsFilter"', 'class="filter-input"', 'oninput="filterApps()"'):
+        if expected not in text:
+            print("  ERROR: the apps page should carry {} so the long settings list can be filtered".format(expected))
+            failed += 1
+    if "function filterApps(" not in text:
+        print("  ERROR: the apps page should define filterApps()")
+        failed += 1
+    if "document.getElementById('appsFilter').value=''; filterApps();" not in text:
+        print("  ERROR: the filter box should have a Clear button, as the Config page does")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the filter box is styled on the apps page, not only on the config page")
+    # .filter-container / .filter-input were defined only in get_html_config_css(), which the
+    # apps page does not load - an unstyled box would be the whole of the bug here
+    for style in (".filter-container {", ".filter-input {"):
+        if style not in text:
+            print("  ERROR: the apps page is missing the {} styling for its filter box".format(style))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the filter survives the apps page's own auto-refresh")
+    if "localStorage.setItem('appsFilterValue'" not in text or "localStorage.getItem('appsFilterValue')" not in text:
+        print("  ERROR: the filter value should persist in localStorage, as the apps page refreshes every 5 minutes")
+        failed += 1
+    if "document.addEventListener('DOMContentLoaded', restoreAppsFilterValue)" not in text:
+        print("  ERROR: the saved filter should be re-applied once the page has loaded")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the rows the filter selects on are the rows the page renders")
+    if "tr[data-arg-name], tr[data-nested-path]" not in text:
+        print("  ERROR: filterApps() should select rows by the data-arg-name / data-nested-path attributes the page renders")
+        failed += 1
+
+    arg_rows = _attribute_values(text, r'data-arg-name="([^"]+)"')
+    nested_rows = _attribute_values(text, r"data-nested-path='([^']+)'")
+    for expected in ("compare_list", "chat", "forecast_solar", "nested_matrix"):
+        if expected not in arg_rows:
+            print("  ERROR: expected a top-level row for {}, got: {}".format(expected, sorted(arg_rows)))
+            failed += 1
+    # The deeply nested rows are exactly the ones scrolling makes hardest to find
+    for expected in ("chat.providers.openrouter.api_key", "forecast_solar[0].declination", "nested_matrix[0][1]"):
+        if expected not in nested_rows:
+            print("  ERROR: expected a nested row for {}, got: {}".format(expected, sorted(nested_rows)))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: every nested row sits under a row of its own prefix")
+    # filterApps() leaves the subtree of a matching row alone and only walks back up to re-show
+    # parents, which holds because a nested path always extends the path of the row above it
+    for path in sorted(nested_rows):
+        parent = _parent_row_path(path)
+        if parent and parent not in nested_rows and parent not in arg_rows:
+            print("  ERROR: nested row {} has no row for its parent {} - filtering on a parent name would hide it".format(path, parent))
+            failed += 1
+        if not path.startswith(parent):
+            print("  ERROR: nested row {} does not extend its parent path {}".format(path, parent))
+            failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a key holding a quote cannot truncate the attributes the filter reads")
+    # data-nested-path is delimited with apostrophes and data-arg-name/data-path with quotes, so
+    # an unescaped key such as "it's" ends its attribute early: the browser then reports a path
+    # that is not the row's, and filtering on a parent name no longer keeps the row visible
+    quoted_args = {"chat": {"providers": {"it's": {"api_key": "sk-quoted-credential"}}}, 'say "hi"': 1}
+    quoted_text = _render_apps_page(my_predbat, quoted_args)
+    quoted_nested = _attribute_values(quoted_text, r"data-nested-path='([^']+)'")
+    quoted_top = _attribute_values(quoted_text, r'data-arg-name="([^"]+)"')
+    quoted_edit_paths = _attribute_values(quoted_text, r'data-path="([^"]+)"')
+    for expected, found, attribute in (
+        ("chat.providers.it's", quoted_nested, "data-nested-path"),
+        ("chat.providers.it's.api_key", quoted_nested, "data-nested-path"),
+        ('say "hi"', quoted_top, "data-arg-name"),
+        ("chat.providers.it's.api_key", quoted_edit_paths, "data-path"),
+    ):
+        if expected not in found:
+            print("  ERROR: {} should carry the whole path {}, got: {}".format(attribute, expected, sorted(found)))
+            failed += 1
+    # The truncated attribute the unescaped form produced, named directly so the test still fails
+    # if the escaping is dropped in favour of something that only looks right after unescaping
+    if "data-nested-path='chat.providers.it'" in quoted_text:
+        print("  ERROR: an apostrophe in a key truncated data-nested-path to its prefix")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: the parent-path helper handles a key that ends in a bracket")
+    # "parent.weird]" ends with ']' but holds no '[' - the helper must still report a parent
+    for path, expected_parent in (("parent.weird]", "parent"), ("nested_matrix[0][1]", "nested_matrix[0]"), ("chat", "")):
+        if _parent_row_path(path) != expected_parent:
+            print("  ERROR: the parent of {} should be '{}', got '{}'".format(path, expected_parent, _parent_row_path(path)))
+            failed += 1
+
+    if failed:
+        print("**** ERROR: {} apps.yaml page filter test(s) failed ****".format(failed))
     return failed

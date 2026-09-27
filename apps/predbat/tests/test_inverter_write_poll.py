@@ -60,6 +60,7 @@ def _stub_inverter(base, poll_sleep=10):
     stub.log = base.log
     stub.id = 0
     stub.count_register_writes = 0
+    stub.registers_moved = 0
     stub.created_attributes = {}
     stub.inv_write_and_poll_sleep = poll_sleep
     stub.slept = []
