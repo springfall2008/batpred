@@ -88,6 +88,12 @@ when its reporter comments after the bot's last comment, the daemon swaps
 still falls short. Only the reporter's comments count, and a `waiting_for_user` on an
 issue the bot never commented on is left for a human to clear.
 
+A substantial comment on a bot-triaged issue from someone other than the reporter or a
+maintainer - a "me too", often a different problem - gets one `/issue-me-too` run. Posts are trusted
+as related by default; one that is clearly a different problem is recorded as unrelated
+and its author is asked to file their own issue. The first poll only sets
+the watermark, so the backlog is never swept.
+
 Every flow also carries JOURNAL_CAPTURE_PROMPT, asking it to leave any finding a future
 run would want in ~/predbat-triage-bot/journal-queue/ - outside the clone, because
 sync_repo() resets and cleans the checkout before every flow and would otherwise destroy
@@ -1429,6 +1435,144 @@ def wake_waiting_issue(issue):
     return True
 
 
+# "Me too" comments: someone other than the reporter posting what they believe is the same
+# problem. They are trusted by default, but one that is clearly a different problem would
+# muddy the original's analysis, so each is checked by /issue-me-too. If it is clearly
+# unrelated, the check asks its author to file their own issue and records the post as
+# unrelated, so later reviews leave it out. A related post gets no reply.
+ME_TOO_DISCLOSURE_MARKER = "automated me-too check"
+# The maintainers' own comments are never "me too" reports.
+MAINTAINER_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# A comment shorter than this, once quoted lines are dropped, with no attachment, is a +1 or
+# an "any update?" - not worth a Claude run to classify.
+ME_TOO_MIN_CHARS = 150
+ATTACHMENT_HINTS = ("github.com/user-attachments/", "/files/", ".log", ".yaml", ".zip", ".tgz")
+# Comment URLs already checked, capped so the state file cannot grow without bound. Only a
+# re-check of a comment that fell off the end could result, and the watermark below makes
+# even that unlikely.
+ME_TOO_CHECKED_CAP = 500
+# The issue-listing watermark is set back by this much, so a clock skew between this machine
+# and GitHub cannot skip a comment. ME_TOO_CHECKED dedupes the overlap.
+ME_TOO_WATERMARK_MARGIN_SECONDS = 600
+
+
+def is_bot_comment(comment):
+    """Return True if a comment was posted by one of the bot's own flows, judged by its disclosure line."""
+    body = comment.get("body", "")
+    return any(marker in body for marker in (TRIAGE_DISCLOSURE_MARKER, FOLLOWUP_DISCLOSURE_MARKER, ME_TOO_DISCLOSURE_MARKER))
+
+
+def looks_like_a_report(body):
+    """Return True if a comment carries enough to be a report of its own: an attachment, or real text beyond quotes."""
+    text = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith(">"))
+    return any(hint in text for hint in ATTACHMENT_HINTS) or len(text.strip()) >= ME_TOO_MIN_CHARS
+
+
+def fetch_recently_updated_triaged_issues(since):
+    """Return open BOT_TRIAGED issues updated at or after `since` (an ISO-8601 UTC string)."""
+    result = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_TRIAGED", "--search", "sort:updated-desc", "--json", "number,title,author,updatedAt", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    # ISO-8601 UTC timestamps in the same format compare correctly as strings.
+    return [issue for issue in json.loads(result.stdout) if issue.get("updatedAt", "") >= since]
+
+
+def find_me_too_comments(issue_number, reporter, since, checked):
+    """Return the URLs of comments on an issue that need a me-too check.
+
+    That is a comment created at or after `since`, not already checked, from someone other
+    than the reporter or a maintainer, not posted by the bot, and substantial enough to be a
+    report of its own.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", REPO, "--json", "comments"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    candidates = []
+    for comment in json.loads(result.stdout).get("comments", []):
+        login = (comment.get("author") or {}).get("login")
+        if comment.get("createdAt", "") < since or comment.get("url") in checked:
+            continue
+        if login == reporter or comment.get("authorAssociation") in MAINTAINER_ASSOCIATIONS or is_bot_comment(comment):
+            continue
+        if looks_like_a_report(comment.get("body", "")):
+            candidates.append(comment["url"])
+    return candidates
+
+
+def me_too_check(issue_number, comment_url):
+    """Run the /issue-me-too skill for one comment, under the read-only triage permission set."""
+    cmd = (
+        [
+            "claude",
+            "-p",
+            f"/issue-me-too {issue_number} comment={comment_url} scratch={SCRATCH_DIR}",
+        ]
+        + [
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ALLOWED_TOOLS,
+            "--disallowedTools",
+            DISALLOWED_TOOLS,
+            "--verbose",
+            "--add-dir",
+            str(SCRATCH_DIR),
+            "--max-turns",
+            "30",
+        ]
+        + claude_model_args(review_only=True)
+        + claude_budget_args("3.00", review_only=True)
+        + claude_mcp_args()
+    )
+    log_path = LOG_DIR / f"issue-{issue_number}-me-too.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[me-too] issue #{issue_number}: checking {comment_url}, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== issue #{issue_number} me-too check of {comment_url} started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
+        log_handle.write(f"==== issue #{issue_number} me-too check exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+
+
+def process_me_too_comments(state):
+    """Check every new, substantial non-reporter comment on a bot-triaged issue.
+
+    The first run only sets the watermark, so switching this on never sweeps the backlog.
+    Each comment is recorded as checked before its run starts, so a failing check costs one
+    run, not one per poll. The watermark only moves once a whole pass has completed.
+    """
+    poll_started = time.time()
+    if "me_too_since" not in state:
+        state["me_too_since"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(poll_started))
+        state["me_too_checked"] = []
+        save_state(state)
+        return
+    since = state["me_too_since"]
+    checked = state.setdefault("me_too_checked", [])
+    for issue in fetch_recently_updated_triaged_issues(since):
+        reporter = (issue.get("author") or {}).get("login")
+        for comment_url in find_me_too_comments(issue["number"], reporter, since, checked):
+            checked.append(comment_url)
+            del checked[:-ME_TOO_CHECKED_CAP]
+            save_state(state)
+            sync_repo()
+            reset_scratch()
+            try:
+                me_too_check(issue["number"], comment_url)
+            except subprocess.CalledProcessError as exc:
+                print(f"[me-too] issue #{issue['number']}: check of {comment_url} failed, not retrying: {exc}", flush=True)
+    state["me_too_since"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(poll_started - ME_TOO_WATERMARK_MARGIN_SECONDS))
+    save_state(state)
+
+
 def fetch_bot_review_prs():
     """Return open PRs currently labelled BOT_REVIEW, each with its title."""
     result = subprocess.run(
@@ -1913,6 +2057,7 @@ def main():
                 wake_waiting_issue(issue)
             for issue in fetch_bot_review_issues():
                 process_bot_review_issue(issue)
+            process_me_too_comments(state)
             # Reviews before cleanups, so a PR carrying both is reviewed and cleaned up in
             # the same cycle; process_bot_cleanup_pr() holds any PR whose review is pending.
             for pr in fetch_bot_review_prs():
