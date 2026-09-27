@@ -896,7 +896,7 @@ def reset_kernel_run_state(pred):
     pred.predict_iboost_best = {}
     pred.predict_carbon_best = {}
     pred.predict_clipped_best = {}
-    pred.predict_car_hold_best = set()
+    pred.predict_car_hold_best = {}
     pred.iboost_running = False
     pred.iboost_running_solar = False
     pred.iboost_running_full = False

@@ -141,6 +141,11 @@ def _set_car(my_predbat, slots, soc=0.0, limit=100.0, from_battery=False, chargi
     my_predbat.car_charging_rate = [7.0]
 
 
+def _car_hold(minutes):
+    """The predict_car_hold_best a prediction records for a car held at these relative minutes."""
+    return {minute: True for minute in minutes}
+
+
 def _predict_car_hold(my_predbat, pv_step, load_step, export_window=None, export_limits=None, car_slots=None, save="best"):
     """
     Run one prediction from the fixture's car state, as the live plan does, and return the car hold it
@@ -159,21 +164,21 @@ def _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now):
     """Tests 10d-10j: a saving prediction records the minutes it held the battery for a charging car."""
     failed = False
     slot = {"start": minutes_now, "end": minutes_now + 30, "kwh": 1.0, "average": 8.0, "octopus": True}
-    whole_slot = set(range(0, 30, 5))
+    whole_slot = _car_hold(range(0, 30, 5))
 
     # --- Test 10d: a car slot with energy holds the battery for every step of the slot, and no other ---
     print("Test the prediction records the car hold for each step of a car slot")
     _set_car(my_predbat, [slot])
     held = _predict_car_hold(my_predbat, pv_step, load_step)
     if held != whole_slot:
-        print("ERROR: car hold recorded for relative minutes {}, expected {}".format(held if held is None else sorted(held), sorted(whole_slot)))
+        print("ERROR: car hold recorded as {}, expected {}".format(held, whole_slot))
         failed = True
 
     # --- Test 10e: the car may draw from the battery - nothing is held ---
     print("Test no car hold is recorded when car_charging_from_battery is on")
     _set_car(my_predbat, [slot], from_battery=True)
     held = _predict_car_hold(my_predbat, pv_step, load_step)
-    if held != set():
+    if held != {}:
         print("ERROR: car_charging_from_battery on should record no car hold, got {}".format(held))
         failed = True
 
@@ -181,7 +186,7 @@ def _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now):
     print("Test no car hold is recorded for a car already at its limit")
     _set_car(my_predbat, [slot], soc=100.0, limit=100.0)
     held = _predict_car_hold(my_predbat, pv_step, load_step)
-    if held != set():
+    if held != {}:
         print("ERROR: a full car should record no car hold, got {}".format(held))
         failed = True
 
@@ -191,8 +196,8 @@ def _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now):
     print("Test the car hold stops at the step the car fills")
     _set_car(my_predbat, [{"start": minutes_now, "end": minutes_now + 60, "kwh": 6.0, "average": 8.0, "octopus": True}], soc=0.0, limit=1.0)
     held = _predict_car_hold(my_predbat, pv_step, load_step)
-    if held != {0, 5}:
-        print("ERROR: a car filling after two steps should be held for relative minutes [0, 5], got {}".format(held if held is None else sorted(held)))
+    if held != _car_hold([0, 5]):
+        print("ERROR: a car filling after two steps should be held for relative minutes [0, 5], got {}".format(held))
         failed = True
 
     # --- Test 10h: without charge window control neither execute.py nor the prediction holds for the car ---
@@ -201,7 +206,7 @@ def _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now):
     my_predbat.set_charge_window = False
     held = _predict_car_hold(my_predbat, pv_step, load_step)
     my_predbat.set_charge_window = True
-    if held != set():
+    if held != {}:
         print("ERROR: set_charge_window off should record no car hold, got {}".format(held))
         failed = True
 
@@ -228,7 +233,7 @@ def _run_car_hold_prediction_tests(my_predbat, pv_step, load_step, minutes_now):
         print("Test a prediction with save={} records no car hold".format(save))
         _set_car(my_predbat, [slot])
         held = _predict_car_hold(my_predbat, pv_step, load_step, save=save)
-        if held != set():
+        if held != {}:
             print("ERROR: a prediction with save={} should record no car hold, got {}".format(save, held))
             failed = True
 
@@ -248,7 +253,7 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
 
     # --- Test 10k: a Demand row held for the whole of it reads as hold_for_car, with the car icon ---
     print("Test Demand row held for a charging car reads as hold_for_car")
-    my_predbat.predict_car_hold_best = set(range(0, 30, 5))
+    my_predbat.predict_car_hold_best = _car_hold(range(0, 30, 5))
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
     if row is None or _codes(row) != ["hold_for_car"]:
@@ -263,7 +268,7 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
 
     # --- Test 10l: held for exactly half the row still reads as held ---
     print("Test a Demand row held for half of it reads as hold_for_car")
-    my_predbat.predict_car_hold_best = {0, 5, 10}
+    my_predbat.predict_car_hold_best = _car_hold([0, 5, 10])
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
     if row is None or _codes(row) != ["hold_for_car"]:
@@ -274,7 +279,7 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
     # so the row keeps its falling arrow rather than a car icon claiming the grid covers the house ---
     print("Test a Demand row held for one step keeps its trend arrow")
     my_predbat.predict_soc_best = {minute: 5.0 - minute * 0.01 for minute in range(0, my_predbat.forecast_minutes + my_predbat.plan_interval_minutes + 5, 5)}
-    my_predbat.predict_car_hold_best = {0}
+    my_predbat.predict_car_hold_best = _car_hold([0])
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
     if row is None or _codes(row) != ["demand_falling"]:
@@ -291,7 +296,7 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
     split_time = (my_predbat.midnight_utc + timedelta(minutes=minutes_now + 15)).strftime("%H:%M")
     my_predbat.export_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 15.0}]
     my_predbat.export_limits_best = [50.0]
-    my_predbat.predict_car_hold_best = {0, 5, 10}
+    my_predbat.predict_car_hold_best = _car_hold([0, 5, 10])
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
     rendered = row and _render(row, templates)
@@ -308,7 +313,7 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
     # --- Test 10o: a hold only after the export start holds nothing before it - the pre-export
     # segment is checked on its own, not with the whole row ---
     print("Test split row held only after the export start shows no hold")
-    my_predbat.predict_car_hold_best = {15, 20, 25}
+    my_predbat.predict_car_hold_best = _car_hold([15, 20, 25])
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
     if row is None or _codes(row) != ["demand_before_export_steady", "export_high_rate"]:
@@ -323,13 +328,13 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
     # --- Test 10p: the Yesterday actual-history table shows measured SoC, so its car icon follows the
     # recorded "Hold for car" status, not the model ---
     print("Test the car icon follows recorded hold minutes when given")
-    my_predbat.predict_car_hold_best = set()
+    my_predbat.predict_car_hold_best = {}
     _, raw_plan = render(car_hold_minutes=set(range(minutes_now, minutes_now + 20)))
     row = _get_row(raw_plan, minutes_now)
     if row is None or _codes(row) != ["hold_for_car"]:
         print("ERROR: recorded Hold for car for most of the row should show hold_for_car with no modelled hold: {}".format(row and _codes(row)))
         failed = True
-    my_predbat.predict_car_hold_best = set(range(0, 30, 5))
+    my_predbat.predict_car_hold_best = _car_hold(range(0, 30, 5))
     _, raw_plan = render(car_hold_minutes=set())
     row = _get_row(raw_plan, minutes_now)
     if row is None or "hold_for_car" in _codes(row):
@@ -339,7 +344,7 @@ def _run_car_hold_render_tests(my_predbat, render, templates, minutes_now):
     # --- Test 10q: the recorded status lags a slot boundary by a minute or two after a hold ends, and
     # that leftover must not put the car icon on the following row ---
     print("Test a recorded hold lagging into a row by two minutes shows no car icon")
-    my_predbat.predict_car_hold_best = set()
+    my_predbat.predict_car_hold_best = {}
     _, raw_plan = render(car_hold_minutes={minutes_now, minutes_now + 1})
     row = _get_row(raw_plan, minutes_now)
     if row is None or "hold_for_car" in _codes(row):
