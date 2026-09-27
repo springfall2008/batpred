@@ -31,6 +31,7 @@
 .plan-table {
   width: 100%;
   min-width: 1120px;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.72rem;
 }
@@ -327,6 +328,7 @@
 }
 
 .plan-tooltip-trigger::after {
+  display: none;
   content: attr(data-tooltip);
   position: absolute;
   left: 50%;
@@ -358,6 +360,7 @@
 
 .plan-tooltip-trigger:hover::after,
 .plan-tooltip-trigger:focus::after {
+  display: block;
   opacity: 1;
   visibility: visible;
   transform: translate(-50%, 0);

@@ -1,3 +1,7 @@
+.app-content > main:has(> .plan-page) {
+  max-width: none;
+}
+
 .plan-page {
   display: flex;
   flex-direction: column;
