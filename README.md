@@ -6,7 +6,7 @@
 
 ## Test UI
 
-It's possible to replace the existing ui in Predbat with this test version. Disable auto updated then dit apps.yaml as follows
+It's possible to replace the existing ui in Predbat with this test version. Disable auto updated then edit apps.yaml as follows
 
 ```
 pred_bat:
