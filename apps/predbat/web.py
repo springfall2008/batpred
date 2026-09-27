@@ -2655,12 +2655,15 @@ chart.render();
 
             predbat_active, _ = self.get_ha_config("active", None)
 
+            updating = self.get_state_wrapper("update.predbat_version", attribute="in_progress", default=False) is True
+
             # Configuration health
             config_errors = len(self.arg_errors)
 
             status_data = {
                 # Existing API fields
                 "calculating": calculating,
+                "updating": updating,
                 "battery_html": battery_icon,
                 # Dashboard status
                 "status": status,

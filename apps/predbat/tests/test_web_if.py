@@ -229,6 +229,12 @@ def run_test_web_if(my_predbat):
             print("ERROR: /api/browse allowed directory traversal")
             failed = 1
 
+        my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": True})
+        if requests.get(base_url + "/api/status").json().get("updating") is not True:
+            print("ERROR: /api/status did not report an in-progress Predbat update")
+            failed = 1
+        my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": False})
+
         print("Test apps.yaml editor API and generated schema")
         schema_response = requests.get(base_url + "/api/apps_schema")
         schema = schema_response.json()

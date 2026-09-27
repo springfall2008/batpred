@@ -1,5 +1,6 @@
 export type PredbatStatus = {
   calculating: boolean
+  updating?: boolean
   battery_html: string
 
   status: string

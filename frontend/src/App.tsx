@@ -413,27 +413,51 @@ function App() {
   const apiWarning =
     controlError ?? apiErrors.plan ?? apiErrors.status ?? apiErrors.powerFlow ?? null
 
-  if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
-    return (
-      <div className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''}`}>
-        <AppNavigation
-          collapsed={navigationCollapsed}
-          onCollapsedChange={setNavigationCollapsed}
-          layout={navigationLayout}
-          onLayoutChange={setNavigationLayout}
-          calculating={statusData?.calculating ?? false}
-          batterySoc={powerFlowData?.soc_percent ?? null}
-          chatEnabled={statusData?.chat_enabled ?? false}
-          version={statusData?.version ?? ''}
-        />
-        <div className="app-content">
-          <main>
-            <Suspense fallback={<div>Loading…</div>}>
-              {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'discovery' ? <DiscoveryPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
-            </Suspense>
-          </main>
+  const updating = statusData?.updating === true
+  const busy = updating || statusData?.calculating === true
+  const activityOverlay = busy ? (
+    <div className="plan-calculating-overlay" role="status" aria-live="polite">
+      <div className="plan-calculating-message">
+        <span className="plan-calculating-spinner" aria-hidden="true" />
+
+        <div>
+          <strong>{updating ? 'Updating Predbat' : 'Recalculating plan'}</strong>
+
+          <span>{updating ? 'Downloading and installing the selected version…' : 'Predbat is updating the plan…'}</span>
         </div>
       </div>
+    </div>
+  ) : null
+
+  if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
+    return (
+      <>
+        <div
+          className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${busy ? 'is-calculating' : ''}`}
+          inert={busy}
+          aria-busy={busy}
+        >
+          <AppNavigation
+            collapsed={navigationCollapsed}
+            onCollapsedChange={setNavigationCollapsed}
+            layout={navigationLayout}
+            onLayoutChange={setNavigationLayout}
+            calculating={busy}
+            batterySoc={powerFlowData?.soc_percent ?? null}
+            chatEnabled={statusData?.chat_enabled ?? false}
+            version={statusData?.version ?? ''}
+          />
+          <div className="app-content">
+            <main>
+              <Suspense fallback={<div>Loading…</div>}>
+                {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'discovery' ? <DiscoveryPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
+              </Suspense>
+            </main>
+          </div>
+        </div>
+
+        {activityOverlay}
+      </>
     )
   }
 
@@ -470,16 +494,16 @@ function App() {
   return (
     <>
       <div
-        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${statusData.calculating ? 'is-calculating' : ''}`}
-        inert={statusData.calculating}
-        aria-busy={statusData.calculating}
+        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${busy ? 'is-calculating' : ''}`}
+        inert={busy}
+        aria-busy={busy}
       >
         <AppNavigation
           collapsed={navigationCollapsed}
           onCollapsedChange={setNavigationCollapsed}
           layout={navigationLayout}
           onLayoutChange={setNavigationLayout}
-          calculating={statusData.calculating}
+          calculating={busy}
           batterySoc={powerFlowData?.soc_percent ?? null}
           chatEnabled={statusData.chat_enabled}
           version={statusData.version}
@@ -556,19 +580,7 @@ function App() {
         </div>
       </div>
 
-      {statusData.calculating && (
-        <div className="plan-calculating-overlay" role="status" aria-live="polite">
-          <div className="plan-calculating-message">
-            <span className="plan-calculating-spinner" aria-hidden="true" />
-
-            <div>
-              <strong>Recalculating plan</strong>
-
-              <span>Predbat is updating the plan…</span>
-            </div>
-          </div>
-        </div>
-      )}
+      {activityOverlay}
     </>
   )
 }
