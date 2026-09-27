@@ -2242,6 +2242,8 @@ def _test_yesterday_status_core(my_predbat, failed):
         ("Error: Inverter 0 unable to read Export window - no source is configured", ""),
         ("Error: Complete run status Exporting with component errors: gecloud", "Exporting"),
         ("Error: Complete run status Hold charging with component errors: fox", "Hold charging"),
+        ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Exporting"),
+        ("Freeze exporting, Hold for car, Error: Inverter 0 unable to read Export window", "Freeze exporting, Hold for car"),
     ]
     for status, expected in cases:
         result = yesterday_status_core(status)
@@ -2285,6 +2287,8 @@ def _reconstruct_windows_from_status(my_predbat, status_for_stamp):
     def _capture_publish_html_plan(*args, **kwargs):
         captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
         captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        captured["status_warnings"] = kwargs.get("status_warnings")
         return ("", "{}")
 
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
@@ -2328,6 +2332,56 @@ def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
         failed = True
     if not captured.get("export_window_best"):
         print("ERROR: a transient warning before each Exporting cycle should still rebuild export windows, got none")
+        failed = True
+
+    # A run records its state in front of the warning - the state is rebuilt, the warning flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Exporting, " + warning)])
+    if captured.get("charge_window_best"):
+        print("ERROR: 'Exporting, Warn: ...' rebuilt {} charge windows, expected none".format(len(captured["charge_window_best"])))
+        failed = True
+    if not captured.get("export_window_best"):
+        print("ERROR: 'Exporting, Warn: ...' should rebuild export windows, got none")
+        failed = True
+    elif any(export_mode_of(limit) == EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
+        print("ERROR: 'Exporting, Warn: ...' should rebuild force exports, not freezes")
+        failed = True
+    if not captured.get("status_warnings") or set(captured["status_warnings"].values()) != {warning}:
+        print("ERROR: the warning should be passed on to flag the slots, got {}".format(captured.get("status_warnings") and set(captured["status_warnings"].values())))
+        failed = True
+
+    # A freeze export under a warning stays a freeze - the exact state survives, not just its side
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Freeze exporting, " + warning)])
+    if not captured.get("export_limits_best") or any(export_mode_of(limit) != EXPORT_MODE_FREEZE for limit in captured["export_limits_best"]):
+        print("ERROR: 'Freeze exporting, Warn: ...' should rebuild freeze exports only")
+        failed = True
+
+    # A bare warning (no state in front - nothing executed) is still flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, warning)])
+    if not captured.get("status_warnings"):
+        print("ERROR: a bare warning should still flag its slots")
+        failed = True
+
+    # The flag lands on the plan minutes the warning covered, and no others. _setup_base fixes now at
+    # 2024-10-04 06:00 UTC, so plan minute 0 is yesterday midnight; flag yesterday 16:00-17:00 only.
+    plan_start = datetime(2024, 10, 3, 0, 0, 0, tzinfo=pytz.utc)
+    warning_start, warning_end = 16 * 60, 17 * 60
+
+    def _warning_for_one_hour(stamp):
+        plan_minute = int((stamp - plan_start).total_seconds() // 60)
+        if warning_start <= plan_minute < warning_end:
+            return [(0, "Exporting, " + warning)]
+        return [(0, "Exporting")]
+
+    captured = _reconstruct_windows_from_status(my_predbat, _warning_for_one_hour)
+    flagged = set((captured.get("status_warnings") or {}).keys())
+    if flagged != set(range(warning_start, warning_end)):
+        print("ERROR: the warning should flag plan minutes {}-{} exactly, got {} minutes from {} to {}".format(warning_start, warning_end - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None))
+        failed = True
+
+    # A clean run is not flagged
+    captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Exporting")])
+    if captured.get("status_warnings"):
+        print("ERROR: a history with no warnings should flag no slots, got {}".format(len(captured["status_warnings"])))
         failed = True
 
     # The component-error summary carries the real run status and must still count as exporting

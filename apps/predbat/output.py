@@ -54,6 +54,7 @@ REASON_TEMPLATES = {
     "manual_override_freeze_export": "You manually set this slot to freeze exporting.",
     "manual_override_demand": "You manually set this slot to demand mode.",
     "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
+    "status_warning": "Predbat reported a problem during this slot: {warnings}",
 }
 
 
@@ -68,27 +69,37 @@ def yesterday_slot_is_exporting(slot_status):
     return "exporting" in slot_status or "cross-charging" in slot_status
 
 
-def yesterday_status_core(status):
-    """Strip a historical ``predbat.status`` string down to the charge/export state it records, for
-    the "yesterday" plan reconstruction in ``calculate_yesterday()``.
+def split_status_warning(status):
+    """Split a historical ``predbat.status`` string into the charge/export state it records and the
+    warning or error it carries, for the "yesterday" plan reconstruction in ``calculate_yesterday()``.
 
-    A warning or error pins itself on the status sensor for the rest of the run, and update_pred()
-    then only logs the real run status rather than publishing it, so a fault that recurs every cycle
-    replaces the recorded state for as long as it lasts. The reconstruction classifies states by
-    substring, so such a message was read as whatever its text happened to mention - a warning about
-    an unavailable ``car_charging_soc`` contains "charging" and rebuilt a whole day of force exports
-    as charge holds. A warning or error says nothing about the charge/export state, so it maps to
-    an empty status that matches neither side. The one exception is the component-error summary,
-    which carries the real run status inside it and is unwrapped to that.
+    Returns ``(state, warning)``, either of which may be empty.
+
+    A run that raises a warning records its state in front of it - ``"Exporting, Warn: ..."``. A
+    bare warning or error, with no state in front, is from a run that executed nothing, or from
+    history recorded before the state was kept, and says nothing about the charge/export state: it
+    maps to an empty state that matches neither side. The reconstruction classifies states by
+    substring, so reading one as a state rebuilt a day of force exports as charge holds, from a
+    warning about "car_charging_soc". The component-error summary is the one bare error that
+    carries the run's state inside it, and is unwrapped to that.
     """
     lowered = status.lower()
     component_prefix = "error: complete run status "
     component_suffix = " with component errors"
     if lowered.startswith(component_prefix) and component_suffix in lowered:
-        return status[len(component_prefix) : lowered.index(component_suffix)].strip()
+        return status[len(component_prefix) : lowered.index(component_suffix)].strip(), status
     if lowered.startswith("warn:") or lowered.startswith("error:"):
-        return ""
-    return status
+        return "", status
+    for marker in (", warn:", ", error:"):
+        index = lowered.find(marker)
+        if index >= 0:
+            return status[:index].strip(), status[index + 2 :].strip()
+    return status, ""
+
+
+def yesterday_status_core(status):
+    """The charge/export state a historical ``predbat.status`` string records - see split_status_warning()."""
+    return split_status_warning(status)[0]
 
 
 def more_active_slot_status(current, candidate, precedence):
@@ -1128,13 +1139,16 @@ class Output:
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None, status_warnings=None):
         """
         Publish the current plan in HTML format
 
         car_hold_minutes, when given, is the set of plan minutes whose recorded status was "Hold for car":
         the Yesterday actual-history table shows measured SoC, so its car icon comes from what happened
         rather than from predict_car_hold_best (see plan_row_holding_for_car()).
+
+        status_warnings maps plan minutes to the warning or error Predbat reported then. Only the
+        History view passes it, to flag the slots whose recorded state ran alongside a problem.
         """
         html = ""
         plan_debug = self.plan_debug
@@ -1591,6 +1605,19 @@ class Output:
                 raw_state_mixed = [entry.capitalize() for entry in mixed_states]
                 reason_parts.append({"code": "mixed_slot_states", "params": {"states": ", ".join(raw_state_mixed)}})
 
+            # Flag a History slot that ran alongside a warning or error. The state shown is still the
+            # one Predbat executed; the flag says something else needed attention at the time.
+            warning_reasons = []
+            if status_warnings:
+                slot_warnings = []
+                for try_minute in range(minute_start, minute_end):
+                    warning_text = status_warnings.get(try_minute)
+                    if warning_text and warning_text not in slot_warnings:
+                        slot_warnings.append(warning_text)
+                if slot_warnings:
+                    state += " &#128681;"
+                    warning_reasons.append({"code": "status_warning", "params": {"warnings": "; ".join(slot_warnings)}})
+
             # Alert
             if in_alert:
                 soc_sym = "&#9888; " + soc_sym
@@ -1816,7 +1843,7 @@ class Output:
             json_row["state_mixed"] = raw_state_mixed
             json_row["state_html"] = state
 
-            json_row["reasons"] = reason_parts if reason_parts else demand_reason
+            json_row["reasons"] = (reason_parts if reason_parts else demand_reason) + warning_reasons
 
             # Parse state_html to extract structured data for client-side rendering
             if split and "</td><td" in state:
@@ -3515,14 +3542,18 @@ class Output:
 
         # Fake charge/export windows based on previous predbat status
         car_hold_minutes = set()
+        status_warnings = {}
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
             for minute in predbat_status:
-                status = predbat_status[minute]
+                status, warning = split_status_warning(predbat_status[minute])
                 if "," in status:
                     # If there are multiple statuses take the first one
                     status = status.split(",")[0].strip()
-                predbat_status[minute] = yesterday_status_core(status)
+                predbat_status[minute] = status
+                if warning:
+                    # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago
+                    status_warnings[minutes_now + end_record - minute] = warning
             # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
             # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
             car_hold_minutes = {minutes_now + end_record - minutes_ago for minutes_ago, status in predbat_status.items() if status.lower() == "hold for car"}
@@ -3632,7 +3663,15 @@ class Output:
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
         plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(
-            yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction, car_hold_minutes=car_hold_minutes
+            yesterday_pv_step,
+            yesterday_pv_step,
+            yesterday_load_step,
+            yesterday_load_step,
+            end_record + minutes_now,
+            publish=False,
+            prediction=self.prediction,
+            car_hold_minutes=car_hold_minutes,
+            status_warnings=status_warnings,
         )
         self.forecast_minutes = end_record
 
