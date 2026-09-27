@@ -16,9 +16,13 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. Find t
 
 If there's nothing posted since the last bot comment, say so plainly in your follow-up comment rather than inventing a reason to change anything.
 
+If the previous bot comment was a split request or an evidence request (`/issue-triage` step 1a or 1b) and nothing was ever investigated, there is no earlier assessment to revise. Re-apply both gates to the ticket as it now stands. If the problems have now been split out and the files have arrived, do the full first-pass work from `/issue-triage` steps 2–8 (attachments, classification, duplicates, investigation, labels, priority). Investigate only the problem that stays on this ticket, not the ones moved elsewhere. If either is still outstanding, don't investigate or give a theory. Just repeat what is still missing.
+
+The daemon removes `waiting_for_user` and queues this review when the reporter comments on an issue carrying it. So if you still need something from the reporter after this review, whatever the earlier comment asked for, apply `waiting_for_user` again. That way their next reply triggers another review.
+
 ## 2. Fetch any new attachments
 
-Same as `/issue-triage` step 2: if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.
+Same as `/issue-triage` step 2 (including files on a source ticket this one was spun out of): if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.
 
 ## 3. Re-investigate against current main
 
