@@ -79,24 +79,34 @@ def test_intelligent_dispatch_change_requests_replan(my_predbat):
     if len(requests) != 1:
         print(f"ERROR: an unchanged poll should not request another replan, got {requests}")
         failed += 1
-    poll([dispatch(0, 30, 2.6)])
+    # Octopus revising a future dispatch's energy is left to the next scheduled cycle
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 4.2)])
+    if len(requests) != 1:
+        print(f"ERROR: a revised energy on a future dispatch should not request a replan, got {requests}")
+        failed += 1
+    # ...but its energy going to none removes the car slot, which the plan must pick up
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 0)])
     if len(requests) != 2:
+        print(f"ERROR: a future dispatch's energy going to none should request a replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6)])
+    if len(requests) != 3:
         print(f"ERROR: a withdrawn dispatch should request a replan, got {requests}")
         failed += 1
     # Octopus's completed record for a dispatch that has already ended cannot change the plan ahead
     api.intelligent_devices = {"car-1": {"device_id": "car-1", "planned_dispatches": [dispatch(0, 30, 2.6)], "completed_dispatches": [dispatch(-120, -90, 3.4)]}}
     asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
-    if len(requests) != 2:
+    if len(requests) != 3:
         print(f"ERROR: a completed record for a past dispatch should not request a replan, got {requests}")
         failed += 1
     # The last car deregistered: its dispatches are gone, which the plan must pick up
     api.intelligent_devices = {}
     asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
-    if len(requests) != 3:
+    if len(requests) != 4:
         print(f"ERROR: losing the last car should request a replan, got {requests}")
         failed += 1
     asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
-    if len(requests) != 3:
+    if len(requests) != 4:
         print(f"ERROR: still no cars should not request another replan, got {requests}")
         failed += 1
     if not failed:
@@ -770,10 +780,32 @@ async def test_octopus_intelligent_devices(my_predbat):
     # settings query keeps its settings (Test 11). Publishing an empty list instead removed the car's
     # dispatches until the next successful poll - and a change in them now requests a replan, so the
     # plan was recomputed without them and then recomputed again two minutes later.
+    #
+    # Planned dispatches are never pruned, so the kept list must drop any that have ended since the last
+    # poll, and re-trim the one in progress: the cache holds it as trimmed at the previous poll, so
+    # reusing it as-is would count the energy delivered since then twice.
     # ------------------------------------------------------------------
     print("\n*** Test 14: A failed dispatch query keeps the last known planned dispatches ***")
     api = make_api()
-    known_planned = [{"start": "2025-12-22T15:00:00+00:00", "end": "2025-12-22T16:00:00+00:00", "charge_in_kwh": 7.0, "source": "smart-charge", "location": "AT_HOME"}]
+
+    def slot_at(start_offset, end_offset, kwh):
+        """A cached planned dispatch start_offset to end_offset minutes from ref_now."""
+        return {
+            "start": (ref_now + timedelta(minutes=start_offset)).strftime(DATE_TIME_STR_FORMAT),
+            "end": (ref_now + timedelta(minutes=end_offset)).strftime(DATE_TIME_STR_FORMAT),
+            "charge_in_kwh": kwh,
+            "source": "smart-charge",
+            "location": "AT_HOME",
+        }
+
+    ended_slot = slot_at(-60, -30, 3.5)
+    # As the previous poll, 2 minutes ago, left it: start advanced to then, energy for the 20 minutes left
+    running_slot = slot_at(-2, 18, 2.0)
+    future_slot = slot_at(120, 180, 7.0)
+    cached_planned = [ended_slot, running_slot, future_slot]
+    cached_copy = [dict(x) for x in cached_planned]
+    # Re-trimmed to the 18 of those 20 minutes still to run
+    known_planned = [slot_at(0, 18, 1.8), future_slot]
 
     async def mock_query_dispatch_fail(query, context, ignore_errors=False, returns_data=True):
         if "get-intelligent-devices" in context:
@@ -784,14 +816,17 @@ async def test_octopus_intelligent_devices(my_predbat):
             return {"devices": [{"id": "device-abc", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
         return None
 
-    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": known_planned}}
+    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": cached_planned}}
     api.async_graphql_query = AsyncMock(side_effect=mock_query_dispatch_fail)
     result = await api.async_get_intelligent_devices("test-account", "device-abc")
     if result.get("device-abc", {}).get("planned_dispatches") != known_planned:
-        print(f"ERROR: Expected the last known planned dispatches to be kept, got {result.get('device-abc', {}).get('planned_dispatches')}")
+        print(f"ERROR: Expected the upcoming planned dispatches kept, the running one re-trimmed, got {result.get('device-abc', {}).get('planned_dispatches')}")
+        failed += 1
+    elif cached_planned != cached_copy:
+        print(f"ERROR: Reusing the cached planned dispatches must not modify them in place, got {cached_planned}")
         failed += 1
     else:
-        print("PASS: Last known planned dispatches kept when the dispatch query fails")
+        print("PASS: Last known planned dispatches kept when the dispatch query fails - ended dropped, running re-trimmed")
 
     # A device never seen before has nothing to keep
     api2 = make_api()
