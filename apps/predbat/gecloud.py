@@ -16,7 +16,8 @@ import re
 import aiohttp
 import pytz
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2, dp4, parse_car_plan_windows, in_car_plan_window
+from utils import str2time, dp1, dp2, dp4
+from car_charger_control import CarChargerControl
 from predbat_metrics import record_api_call
 import asyncio
 import math
@@ -212,7 +213,7 @@ EVC_SELECT_VALUE_KEY = {
 }
 
 # The two commands Predbat-led charge control drives a charger between. They are commands
-# rather than modes, so there is nothing to restore on release - see release_evc_devices().
+# rather than modes, so there is nothing to restore on release - see charger_control_release_one().
 EVC_COMMAND_START = "start-charge"
 EVC_COMMAND_STOP = "stop-charge"
 
@@ -568,7 +569,7 @@ def merge_non_null(fresh, previous):
     return merged
 
 
-class GECloudDirect(ComponentBase):
+class GECloudDirect(ComponentBase, CarChargerControl):
     """
     GivEnergy Cloud Direct API interface
     """
@@ -585,14 +586,9 @@ class GECloudDirect(ComponentBase):
         # be something a user turns on rather than something an upgrade does to them.
         self.automatic_evc = automatic_evc
         self.evc_control = evc_control
-        self.evc_control_active = False
-        # The runtime switch, on unless the user turns it off. Restored from storage at startup.
-        self.evc_control_enabled = True
-        self.evc_control_released = False
-        # What Predbat last asked each charger to do, so a poll that changes nothing sends
-        # nothing - every command goes through async_send_evc_command's retry loop.
-        self.evc_control_state = {}
-        self.evc_control_windows = {}
+        # Remembering what each charger was last asked to do means a poll that changes nothing
+        # sends nothing - every command goes through async_send_evc_command's retry loop.
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled")
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -727,9 +723,7 @@ class GECloudDirect(ComponentBase):
         Switch event
         """
         if entity_id.endswith("_gecloud_evc_control"):
-            self.evc_control_enabled = service == "turn_on"
-            self.log("GECloud: EV charger control switched {}".format("on" if self.evc_control_enabled else "off"))
-            await self.save_evc_control_enabled()
+            await self.charger_control_set_enabled(service == "turn_on")
             return
 
         mapping = self.register_entity_map.get(entity_id, None)
@@ -2092,42 +2086,14 @@ class GECloudDirect(ComponentBase):
         own car's plan, and it is that configuration which establishes which charger is
         which car - without it, charger 1 could be told to follow a car it is not attached to.
         """
-        self.evc_control_active = False
+        self.charger_control_active = False
         if not self.evc_control:
             return
         if not self.automatic_evc:
             self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
             return
-        self.evc_control_active = True
+        self.charger_control_active = True
         self.log("GECloud: Predbat-led EV charger control enabled")
-
-    async def save_evc_control_enabled(self):
-        """Persist the control switch so an off survives a restart.
-
-        Without this a restart would silently take back a charger the user had deliberately
-        released, which they would only notice when the car charged at the wrong time.
-        Fails soft: no Storage component just means the switch is not sticky.
-        """
-        if self.storage is None:
-            return
-        try:
-            await self.storage.save(EVC_STORAGE_MODULE, EVC_CONTROL_STATE, {"evc_control_enabled": self.evc_control_enabled})
-        except Exception as exc:
-            self.log("GECloud: Warn: Could not save the EV charger control switch state: {}".format(exc))
-
-    async def load_evc_control_enabled(self):
-        """Restore the control switch from storage, leaving it on when nothing is saved."""
-        if self.storage is None:
-            return
-        try:
-            saved = await self.storage.load(EVC_STORAGE_MODULE, EVC_CONTROL_STATE)
-        except Exception as exc:
-            self.log("GECloud: Warn: Could not read the EV charger control switch state: {}".format(exc))
-            return
-        if isinstance(saved, dict) and "evc_control_enabled" in saved:
-            self.evc_control_enabled = bool(saved["evc_control_enabled"])
-            if not self.evc_control_enabled:
-                self.log("GECloud: EV charger control is switched off from the last session")
 
     def read_only_now(self):
         """Is Predbat in read only mode - the live attribute rather than just the config arg.
@@ -2140,29 +2106,6 @@ class GECloudDirect(ComponentBase):
             return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
         return bool(read_only)
 
-    def refresh_evc_car_windows(self, now):
-        """Read Predbat's planned car charging windows for every car into evc_control_windows.
-
-        Returns True once at least one car's plan has been read, False while no slot sensor
-        has ever been published - which is what stops a restart stopping a charge before
-        Predbat has decided anything.
-        """
-        windows = {}
-        found = False
-        for car_n in range(self.num_cars):
-            postfix = "" if car_n == 0 else "_{}".format(car_n)
-            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
-            if planned is None:
-                continue
-            found = True
-            windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)
-        self.evc_control_windows = windows
-        return found
-
-    def evc_should_charge_now(self, car_n, now):
-        """Is now inside one of the planned charging windows for this car."""
-        return in_car_plan_window(self.evc_control_windows.get(car_n, []), now)
-
     def controlled_evc_devices(self):
         """The chargers to drive, in serial order, so charger N is auto-config's Nth car.
 
@@ -2173,68 +2116,32 @@ class GECloudDirect(ComponentBase):
         known = [uuid for uuid in self.evc_device_list if self.evc_device.get(uuid, {}).get("serial_number", None)]
         return sorted(known, key=lambda uuid: str(self.evc_device[uuid]["serial_number"]))
 
-    async def evc_control_tick(self, now):
-        """Run one cycle of EV charger control, releasing rather than just going quiet.
+    def charger_control_chargers(self):
+        """The chargers to drive, in car order - see controlled_evc_devices()."""
+        return [(uuid, uuid) for uuid in self.controlled_evc_devices()]
 
-        Read only mode and the control switch are both releases: Predbat may have left a
-        charger stopped, and walking away from that would strand the car unable to charge.
-        """
-        if not self.evc_control_active:
-            return
-        reason = None
-        if self.read_only_now():
-            reason = "Predbat is in read only mode"
-        elif not self.evc_control_enabled:
-            reason = "the EV charger control switch is off"
-        if reason:
-            if not self.evc_control_released:
-                self.log("GECloud: Releasing the EV chargers because {}".format(reason))
-                await self.release_evc_devices()
-                self.evc_control_released = True
-            return
-        if self.evc_control_released:
-            self.log("GECloud: Resuming EV charger control")
-            self.evc_control_released = False
-        await self.evc_control_charge(now)
+    def charger_control_connected(self, uuid):
+        """A charger with no car plugged in is left alone - commanding it would achieve nothing and every command costs a retry loop."""
+        return self.evc_car_connected(self.evc_device[uuid].get("status", None))
 
-    async def release_evc_devices(self):
-        """Hand every held charger back by starting it again.
+    async def charger_control_send(self, uuid, charge, car_n):
+        """Start the charger inside a planned window, stop it outside one."""
+        command = EVC_COMMAND_START if charge else EVC_COMMAND_STOP
+        self.log("GECloud: Sending {} to EV charger {} for car {}".format(command, self.evc_device[uuid]["serial_number"], car_n))
+        await self.async_send_evc_command(uuid, command, {})
+
+    async def charger_control_release_one(self, uuid, charge):
+        """Hand a held charger back by starting it again.
 
         start-charge and stop-charge are commands rather than modes, so unlike a Zappi
         there is no previous mode to restore - releasing means undoing the only thing
         Predbat did, which is the stop. A charger Predbat had left running needs nothing.
         The charger's own mode still decides what happens next.
         """
-        for uuid in self.controlled_evc_devices():
-            if self.evc_control_state.get(uuid, None) != EVC_COMMAND_STOP:
-                continue
-            self.log("GECloud: Releasing EV charger {}".format(self.evc_device[uuid]["serial_number"]))
-            await self.async_send_evc_command(uuid, EVC_COMMAND_START, {})
-        self.evc_control_state = {}
-
-    async def evc_control_charge(self, now):
-        """Drive every controlled charger from its car's charge plan.
-
-        Predbat holds the charger for as long as it is in control: charging inside a
-        planned window, stopped outside one. A charger with no car plugged in is left
-        alone - commanding it would achieve nothing and every command costs a retry loop.
-        """
-        if not self.refresh_evc_car_windows(now):
+        if charge:
             return
-        # Only as far as there are cars to follow. async_automatic_config_evc() raises
-        # num_cars to the charger count, but that reaches the base object a cycle later,
-        # so there is a window where a charger has no plan of its own - and a charger with
-        # no plan would read as "not planned" and be stopped while its car was charging.
-        for car_n, uuid in enumerate(self.controlled_evc_devices()[: self.num_cars]):
-            device = self.evc_device[uuid]
-            if not self.evc_car_connected(device.get("status", None)):
-                continue
-            wanted = EVC_COMMAND_START if self.evc_should_charge_now(car_n, now) else EVC_COMMAND_STOP
-            if self.evc_control_state.get(uuid, None) == wanted:
-                continue
-            self.log("GECloud: Sending {} to EV charger {} for car {}".format(wanted, device["serial_number"], car_n))
-            await self.async_send_evc_command(uuid, wanted, {})
-            self.evc_control_state[uuid] = wanted
+        self.log("GECloud: Releasing EV charger {}".format(self.evc_device[uuid]["serial_number"]))
+        await self.async_send_evc_command(uuid, EVC_COMMAND_START, {})
 
     async def async_automatic_config_evc(self):
         """Wire the EV chargers into Predbat's car charging inputs.
@@ -2322,7 +2229,7 @@ class GECloudDirect(ComponentBase):
             self.ems_slot_warned.clear()
         self.register_entity_map = {entity_id: entry for entity_id, entry in self.register_entity_map.items() if entry.get("device") in device_list}
         for uuid in set(self.evc_device_list) - set(evc_device_list):
-            for store in (self.evc_device, self.evc_data, self.evc_sessions, self.evc_control_state):
+            for store in (self.evc_device, self.evc_data, self.evc_sessions, self.charger_control_state):
                 store.pop(uuid, None)
 
         self.devices_dict = devices
@@ -2416,7 +2323,7 @@ class GECloudDirect(ComponentBase):
             # Before the first control cycle: the switch has to carry its restored state from
             # the start, or a restart with control switched off would take the charger back
             # for a cycle and then hand it over again
-            await self.load_evc_control_enabled()
+            await self.charger_control_load_enabled()
             self.evc_control_enable()
 
             if not self.device_list and not self.evc_device_list:
@@ -2486,16 +2393,16 @@ class GECloudDirect(ComponentBase):
                 await self.publish_evc_data(serial, self.evc_data[uuid])
                 await self.publish_evc_device(serial, self.evc_device[uuid])
 
-            if self.evc_control_active:
+            if self.charger_control_active:
                 # Published only when control could actually act on it - a switch reading
                 # "on" for a feature that cannot run would be a lie
                 self.dashboard_item(
                     "switch.{}_gecloud_evc_control".format(self.prefix),
-                    state="on" if self.evc_control_enabled else "off",
+                    state="on" if self.charger_control_enabled else "off",
                     attributes={"friendly_name": "EV Charger Control", "icon": "mdi:ev-station"},
                     app="gecloud",
                 )
-                await self.evc_control_tick(self.now_utc_exact)
+                await self.charger_control_tick(self.now_utc_exact)
 
         if first or devices_changed or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
