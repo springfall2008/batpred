@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import {
   FontAwesomeIcon,
@@ -77,6 +77,7 @@ type TimelineEvent = {
 type TimelineTick = {
   time: number
   label: string
+  dateLabel?: string
   edge: 'start' | 'middle' | 'end'
 }
 
@@ -88,6 +89,10 @@ type SocPoint = {
 type SocBoundary = {
   time: number
   soc: number
+}
+
+type SocHover = SocPoint & {
+  x: number
 }
 
 /*
@@ -317,6 +322,25 @@ function parseTarget(value: unknown): number | null {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value))
+}
+
+// oxlint-disable-next-line react/only-export-components -- exported for the timeline hover test
+export function interpolateSoc(points: SocPoint[], time: number) {
+  const nextIndex = points.findIndex((point) => point.time >= time)
+
+  if (nextIndex === -1) {
+    return points[points.length - 1]?.soc ?? 0
+  }
+
+  if (nextIndex === 0) {
+    return points[0]?.soc ?? 0
+  }
+
+  const previous = points[nextIndex - 1]
+  const next = points[nextIndex]
+  const progress = (time - previous.time) / Math.max(1, next.time - previous.time)
+
+  return previous.soc + (next.soc - previous.soc) * progress
 }
 
 /*
@@ -659,12 +683,13 @@ function formatEventRange(start: Date, end: Date) {
 }
 
 /*
- * Build an uncomplicated six-hour time scale.
+ * Build an uncomplicated three-hour time scale.
  *
- * Start and end are always labelled, with regular six-hour
+ * Start and end are always labelled, with regular three-hour
  * landmarks in between.
  */
-function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
+// oxlint-disable-next-line react/only-export-components -- exported for the timeline spacing test
+export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   const ticks: TimelineTick[] = []
 
   const start = new Date(startMs)
@@ -672,12 +697,18 @@ function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   ticks.push({
     time: startMs,
 
-    label: start.toLocaleString('en-GB', {
-      weekday: 'short',
-
+    label: start.toLocaleTimeString('en-GB', {
       hour: '2-digit',
 
       minute: '2-digit'
+    }),
+
+    dateLabel: start.toLocaleDateString('en-GB', {
+      weekday: 'short',
+
+      day: 'numeric',
+
+      month: 'short'
     }),
 
     edge: 'start'
@@ -687,7 +718,7 @@ function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
 
   cursor.setMinutes(0, 0, 0)
 
-  let nextHour = (Math.floor(cursor.getHours() / 6) + 1) * 6
+  const nextHour = (Math.floor(cursor.getHours() / 3) + 1) * 3
 
   cursor.setHours(nextHour)
 
@@ -697,7 +728,13 @@ function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
     ticks.push({
       time: cursor.getTime(),
 
-      label: midnight
+      label: cursor.toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+
+        minute: '2-digit'
+      }),
+
+      dateLabel: midnight
         ? cursor.toLocaleDateString('en-GB', {
           weekday: 'short',
 
@@ -705,16 +742,12 @@ function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
 
           month: 'short'
         })
-        : cursor.toLocaleTimeString('en-GB', {
-          hour: '2-digit',
-
-          minute: '2-digit'
-        }),
+        : undefined,
 
       edge: 'middle'
     })
 
-    cursor.setHours(cursor.getHours() + 6)
+    cursor.setHours(cursor.getHours() + 3)
   }
 
   const end = new Date(endMs)
@@ -728,13 +761,21 @@ function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
     ticks.push({
       time: endMs,
 
-      label: end.toLocaleString('en-GB', {
-        weekday: 'short',
-
+      label: end.toLocaleTimeString('en-GB', {
         hour: '2-digit',
 
         minute: '2-digit'
       }),
+
+      dateLabel: end.getHours() === 0
+        ? end.toLocaleDateString('en-GB', {
+          weekday: 'short',
+
+          day: 'numeric',
+
+          month: 'short'
+        })
+        : undefined,
 
       edge: 'end'
     })
@@ -783,6 +824,8 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
   const [hoveredEventId, setHoveredEventId] = useState<string | null>(null)
 
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
+
+  const [socHover, setSocHover] = useState<SocHover | null>(null)
 
   const rows = plan.rows
 
@@ -888,6 +931,14 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
 
   function yForSoc(soc: number) {
     return SOC_BOTTOM - (clamp(soc, 0, 100) / 100) * (SOC_BOTTOM - SOC_TOP)
+  }
+
+  function updateSocHover(event: ReactPointerEvent<SVGSVGElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const x = clamp(((event.clientX - bounds.left) / bounds.width) * timelineWidth, PLOT_LEFT, timelineWidth - PLOT_RIGHT)
+    const time = timelineStart + ((x - PLOT_LEFT) / plotWidth) * timelineDuration
+
+    setSocHover({ x, time, soc: interpolateSoc(socPoints, time) })
   }
 
   const socPath = socPoints
@@ -1077,7 +1128,8 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
                     left: `${x}px`
                   }}
                 >
-                  <span>{tick.label}</span>
+                  {tick.dateLabel && <span className="plan-timeline-tick-date">{tick.dateLabel}</span>}
+                  <span className="plan-timeline-tick-time">{tick.label}</span>
                 </div>
               )
             })}
@@ -1159,6 +1211,8 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
             viewBox={`0 0 ${timelineWidth} ${SOC_HEIGHT}`}
             role="img"
             aria-label="Predicted battery state of charge"
+            onPointerMove={updateSocHover}
+            onPointerLeave={() => setSocHover(null)}
           >
             <defs>
               {/*
@@ -1236,7 +1290,7 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
             })}
 
             {/*
-             * Vertical six-hour guide lines.
+             * Vertical three-hour guide lines.
              */}
             {ticks.map((tick, index) => {
               const x = xForTime(tick.time)
@@ -1328,6 +1382,27 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
                 </text>
               )
             })}
+
+            {socHover && (
+              <g className="plan-timeline-soc-hover" pointerEvents="none">
+                <line x1={socHover.x} x2={socHover.x} y1={SOC_TOP} y2={SOC_BOTTOM} />
+                <circle cx={socHover.x} cy={yForSoc(socHover.soc)} r="4" />
+                <g transform={`translate(${clamp(socHover.x - 57, PLOT_LEFT, timelineWidth - PLOT_RIGHT - 114)} ${yForSoc(socHover.soc) < 48 ? yForSoc(socHover.soc) + 10 : yForSoc(socHover.soc) - 30})`}>
+                  <rect width="114" height="22" rx="4" />
+                  <text x="57" y="14" textAnchor="middle">
+                    {new Date(socHover.time).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · {socHover.soc.toFixed(1)}%
+                  </text>
+                </g>
+              </g>
+            )}
+
+            <rect
+              x={PLOT_LEFT}
+              y={SOC_TOP - 8}
+              width={plotWidth}
+              height={SOC_BOTTOM - SOC_TOP + 16}
+              className="plan-timeline-soc-hover-area"
+            />
           </svg>
 
           {/*

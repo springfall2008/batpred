@@ -199,7 +199,7 @@
  */
 .plan-timeline-axis {
   position: relative;
-  height: 37px;
+  height: 52px;
 }
 
 .plan-timeline-tick {
@@ -213,7 +213,7 @@
 .plan-timeline-tick::after {
   content: '';
   position: absolute;
-  top: 27px;
+  top: 44px;
   bottom: 0;
   left: 0;
   width: 1px;
@@ -223,13 +223,22 @@
 
 .plan-timeline-tick span {
   position: absolute;
-  top: 8px;
   left: 0;
   transform: translateX(-50%);
   white-space: nowrap;
   color: var(--color-text-muted);
   font-size: 0.58rem;
   font-variant-numeric: tabular-nums;
+}
+
+.plan-timeline-tick .plan-timeline-tick-date {
+  top: 7px;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+}
+
+.plan-timeline-tick .plan-timeline-tick-time {
+  top: 26px;
 }
 
 .plan-timeline-tick.is-start span {
@@ -458,6 +467,35 @@
   stroke: var(--color-surface);
   stroke-width: 3px;
   stroke-linejoin: round;
+}
+
+.plan-timeline-soc-hover-area {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.plan-timeline-soc-hover > line {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.plan-timeline-soc-hover > circle {
+  fill: var(--color-surface);
+  stroke: var(--color-current);
+  stroke-width: 2;
+}
+
+.plan-timeline-soc-hover rect {
+  fill: var(--color-tooltip-bg);
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 20%));
+}
+
+.plan-timeline-soc-hover text {
+  fill: var(--color-tooltip-text);
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 700;
 }
 
 /*
