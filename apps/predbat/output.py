@@ -2760,67 +2760,77 @@ class Output:
         """
         Records status to HA sensor
         """
-        if not extra:
-            extra = ""
+        # Component threads (GE Cloud, Solis, ...) record status too, so the read-modify-write of
+        # error_count and the current_status/status_warning pair must not interleave with the main loop.
+        # The sensor write under the lock is a REST call with a timeout, so a slow Home Assistant does
+        # hold up other status writes. The notification is sent after the lock is released: over the
+        # websocket it waits on another thread for up to two minutes, which would stall them far longer.
+        notify_message = None
+        with self.status_lock:
+            if not extra:
+                extra = ""
 
-        # A warning that repeats the one already shown behind the previous run's state keeps that
-        # state in front of it, rather than flipping the sensor back to the bare warning for the few
-        # seconds until this run's own state is put back - two state changes every cycle for as long
-        # as the warning recurs. Any different warning or error, including the ones a run records
-        # when it bails out without executing, is shown bare.
-        state_message = message
-        if had_errors and self.current_status and self.current_status != message and self.current_status.endswith(", " + message):
-            state_message = self.current_status
+            # A warning that repeats the one already shown behind the previous run's state keeps that
+            # state in front of it, rather than flipping the sensor back to the bare warning for the few
+            # seconds until this run's own state is put back - two state changes every cycle for as long
+            # as the warning recurs. Any different warning or error, including the ones a run records
+            # when it bails out without executing, is shown bare.
+            state_message = message
+            if had_errors and self.current_status and self.current_status != message and self.current_status.endswith(", " + message):
+                state_message = self.current_status
 
-        self.current_status = state_message + extra
-        if notify and self.previous_status != message and self.set_status_notify:
-            if self.had_errors and had_errors:
-                # Already in error state, do not notify second error in a single run (spam)
-                pass
+            self.current_status = state_message + extra
+            if notify and self.previous_status != message and self.set_status_notify:
+                if self.had_errors and had_errors:
+                    # Already in error state, do not notify second error in a single run (spam)
+                    pass
+                else:
+                    notify_message = f"{self.prefix.capitalize()} status change to: {message}{extra}"
+                    self.previous_status = message
+
+            error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+            try:
+                error_count = int(error_count)
+            except (ValueError, TypeError):
+                error_count = 0
+
+            if had_errors:
+                error_count += 1
+
+            # Home Assistant rejects entity states over 255 characters, and this message is the state
+            # of the status sensor. Clamp what is written as the state - the full text survives in
+            # current_status, the log line and the notification, and attributes have no such cap.
+            # Motivated by the window warnings listing every configured inverter component (#4990):
+            # three or more of those push past 255, so the dashboard would keep a stale status on
+            # exactly the cycles the warning matters.
+            self.dashboard_item(
+                self.prefix + ".status",
+                state=state_message[:255],
+                attributes={
+                    "friendly_name": "Status",
+                    "detail": extra,
+                    "icon": "mdi:information",
+                    "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
+                    "debug": debug,
+                    "version": THIS_VERSION_DISPLAY,
+                    "error": (had_errors or self.had_errors),
+                    "error_count": error_count,
+                },
+            )
+
+            if had_errors:
+                self.log("Warn: record_status {}".format(message + extra))
             else:
-                self.call_notify(f"{self.prefix.capitalize()} status change to: {message}{extra}")
-                self.previous_status = message
+                self.log("Info: record_status {}".format(message + extra))
 
-        error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
-        try:
-            error_count = int(error_count)
-        except (ValueError, TypeError):
-            error_count = 0
+            if had_errors:
+                self.had_errors = True
+                # Kept so the end of the run can put the state it executed back in front of it
+                self.status_warning = message
+                self.status_warning_debug = debug
 
-        if had_errors:
-            error_count += 1
-
-        # Home Assistant rejects entity states over 255 characters, and this message is the state
-        # of the status sensor. Clamp what is written as the state - the full text survives in
-        # current_status, the log line and the notification, and attributes have no such cap.
-        # Motivated by the window warnings listing every configured inverter component (#4990):
-        # three or more of those push past 255, so the dashboard would keep a stale status on
-        # exactly the cycles the warning matters.
-        self.dashboard_item(
-            self.prefix + ".status",
-            state=state_message[:255],
-            attributes={
-                "friendly_name": "Status",
-                "detail": extra,
-                "icon": "mdi:information",
-                "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
-                "debug": debug,
-                "version": THIS_VERSION_DISPLAY,
-                "error": (had_errors or self.had_errors),
-                "error_count": error_count,
-            },
-        )
-
-        if had_errors:
-            self.log("Warn: record_status {}".format(message + extra))
-        else:
-            self.log("Info: record_status {}".format(message + extra))
-
-        if had_errors:
-            self.had_errors = True
-            # Kept so the end of the run can put the state it executed back in front of it
-            self.status_warning = message
-            self.status_warning_debug = debug
+        if notify_message:
+            self.call_notify(notify_message)
 
     def record_status_under_warning(self, run_status):
         """
@@ -2837,29 +2847,31 @@ class Output:
         Does nothing when no warning was recorded this run (e.g. a component thread set had_errors
         on its own), leaving the sensor as it was.
         """
-        if not self.status_warning:
-            return
-        error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
-        try:
-            error_count = int(error_count)
-        except (ValueError, TypeError):
-            error_count = 0
-        message = "{}, {}".format(run_status, self.status_warning)
-        self.current_status = message
-        self.dashboard_item(
-            self.prefix + ".status",
-            state=message[:255],
-            attributes={
-                "friendly_name": "Status",
-                "detail": "",
-                "icon": "mdi:information",
-                "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
-                "debug": self.status_warning_debug,
-                "version": THIS_VERSION_DISPLAY,
-                "error": True,
-                "error_count": error_count,
-            },
-        )
+        # Same lock as record_status() - see there.
+        with self.status_lock:
+            if not self.status_warning:
+                return
+            error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+            try:
+                error_count = int(error_count)
+            except (ValueError, TypeError):
+                error_count = 0
+            message = "{}, {}".format(run_status, self.status_warning)
+            self.current_status = message
+            self.dashboard_item(
+                self.prefix + ".status",
+                state=message[:255],
+                attributes={
+                    "friendly_name": "Status",
+                    "detail": "",
+                    "icon": "mdi:information",
+                    "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
+                    "debug": self.status_warning_debug,
+                    "version": THIS_VERSION_DISPLAY,
+                    "error": True,
+                    "error_count": error_count,
+                },
+            )
 
     def publish_last_started(self):
         """

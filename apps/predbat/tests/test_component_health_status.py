@@ -9,6 +9,9 @@
 # pylint: disable=attribute-defined-outside-init
 # fmt on
 
+import threading
+import time
+
 from output import split_status_warning
 
 
@@ -170,6 +173,101 @@ def test_record_status_under_warning(my_predbat):
             print("OK: no warning recorded, sensor left alone")
     finally:
         my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug, my_predbat.components = saved
+        if saved_item is None:
+            my_predbat.ha_interface.dummy_items.pop(status_entity, None)
+        else:
+            my_predbat.ha_interface.dummy_items[status_entity] = saved_item
+        if saved_value is None:
+            my_predbat.dashboard_values.pop(status_entity, None)
+        else:
+            my_predbat.dashboard_values[status_entity] = saved_value
+
+    return failed
+
+
+def test_record_status_concurrent(my_predbat):
+    """
+    Verify record_status() calls from several threads at once don't lose an error_count increment,
+    and that the status notification is sent with the lock released.
+
+    Component threads (GE Cloud, Solis, ...) record status alongside the main loop, and error_count is
+    a read-modify-write of the sensor's own attribute. The read is slowed here so that, without the
+    status lock, the threads reliably read the same count and overwrite each other's increment.
+    """
+    print("*** Running test: concurrent record_status calls keep every error_count increment")
+    failed = 0
+    status_entity = my_predbat.prefix + ".status"
+    saved_item = my_predbat.ha_interface.dummy_items.get(status_entity)
+    saved_value = my_predbat.dashboard_values.get(status_entity)
+    saved = (my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug)
+    original_get_state_wrapper = my_predbat.get_state_wrapper
+    original_call_notify = my_predbat.call_notify
+    saved_notify_flag = my_predbat.set_status_notify
+    saved_previous_status = my_predbat.previous_status
+    threads_count, calls_each = 4, 10
+
+    def _slow_get_state_wrapper(*args, **kwargs):
+        value = original_get_state_wrapper(*args, **kwargs)
+        time.sleep(0.001)
+        return value
+
+    def _record_warnings():
+        for _ in range(calls_each):
+            my_predbat.record_status("Warn: concurrent test", had_errors=True)
+
+    try:
+        my_predbat.dashboard_values.pop(status_entity, None)
+        my_predbat.ha_interface.dummy_items.pop(status_entity, None)
+        my_predbat.get_state_wrapper = _slow_get_state_wrapper
+        threads = [threading.Thread(target=_record_warnings) for _ in range(threads_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        error_count = my_predbat.dashboard_values[status_entity]["attributes"]["error_count"]
+        if error_count != threads_count * calls_each:
+            print("ERROR: expected error_count {} after {} concurrent warnings, got {}".format(threads_count * calls_each, threads_count * calls_each, error_count))
+            failed = 1
+        else:
+            print("OK: all {} concurrent warnings counted".format(error_count))
+        my_predbat.get_state_wrapper = original_get_state_wrapper
+
+        # The notification is sent with the lock released - over the websocket it can wait minutes
+        # on another thread, and every other status would stall behind it
+        notified = []
+
+        def _fake_notify(message):
+            result = {}
+
+            def _try_lock():
+                result["free"] = my_predbat.status_lock.acquire(blocking=False)
+                if result["free"]:
+                    my_predbat.status_lock.release()
+
+            checker = threading.Thread(target=_try_lock)
+            checker.start()
+            checker.join()
+            notified.append((message, result["free"]))
+
+        my_predbat.call_notify = _fake_notify
+        my_predbat.set_status_notify = True
+        my_predbat.previous_status = None
+        my_predbat.had_errors = False
+        my_predbat.record_status("Exporting", notify=True)
+        if len(notified) != 1 or "Exporting" not in notified[0][0]:
+            print("ERROR: expected one 'Exporting' notification, got {}".format(notified))
+            failed = 1
+        elif not notified[0][1]:
+            print("ERROR: the notification was sent while the status lock was held")
+            failed = 1
+        else:
+            print("OK: status notification sent with the lock released")
+    finally:
+        my_predbat.get_state_wrapper = original_get_state_wrapper
+        my_predbat.call_notify = original_call_notify
+        my_predbat.set_status_notify = saved_notify_flag
+        my_predbat.previous_status = saved_previous_status
+        my_predbat.current_status, my_predbat.had_errors, my_predbat.status_warning, my_predbat.status_warning_debug = saved
         if saved_item is None:
             my_predbat.ha_interface.dummy_items.pop(status_entity, None)
         else:

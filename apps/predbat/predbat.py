@@ -25,6 +25,7 @@ import traceback
 import gc
 import random
 import time
+import threading
 
 # from memory_profiler import profile
 
@@ -369,6 +370,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.had_errors = False
         self.status_warning = None
         self.status_warning_debug = ""
+        self.status_lock = threading.RLock()
         self.plan_valid = False
         self.plan_preclip = None
         self.plan_last_updated = None
