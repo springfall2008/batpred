@@ -609,6 +609,8 @@ class GECloudDirect(ComponentBase):
         self.ems_slot_warned = set()
         # (device, key) registers whose option validation text could not be parsed, so the warning is logged once
         self.validation_parse_warned = set()
+        # Hybrid model names whose inverter rating could not be parsed, so the fallback warning is logged once
+        self.model_rate_warned = set()
         self.devices_dict = {}
         self.device_list = []
         self.ems_device = None
@@ -910,6 +912,8 @@ class GECloudDirect(ComponentBase):
         - GIV-HY3.6         - 3.6kW inverter
         - GIV-HY5.0         - 5.0kW inverter
         - GIV-HY-8.0-G3-HV. - 8kW inverter
+        - GIV-3HY-11        - 11kW 3-phase hybrid (integer rating as its own segment after 3HY)
+        - GIV-AIO-GW2       - Gateway variant, the trailing 2 is not a rating
         - Plant EMS   - Not an inverter, should use the individual inverter values
         """
 
@@ -922,6 +926,17 @@ class GECloudDirect(ComponentBase):
                 return max_inverter_rate
             except ValueError:
                 pass
+
+        # Integer rating only as a whole segment straight after the 3-phase hybrid token (GIV-3HY-11),
+        # bounded by '-' or end of string so suffixes such as GW2 / G3 are never read as a rating
+        match = re.search(r"(?:^|-)3HY-(\d{1,2})(?=-|$)", model, re.IGNORECASE)
+        if match:
+            return int(match.group(1)) * 1000
+
+        # A hybrid with no parseable rating is using a battery rate as its AC rating, warn once per model
+        if "HY" in model.upper() and model not in self.model_rate_warned:
+            self.log("GECloud: Warn: Unable to determine inverter rating from model '{}', using max charge rate {}W instead - set inverter_limit in apps.yaml if this is wrong".format(model, max_charge_rate))
+            self.model_rate_warned.add(model)
         return max_charge_rate
 
     async def publish_account(self, account):

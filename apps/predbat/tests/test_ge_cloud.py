@@ -75,6 +75,7 @@ class MockGECloudDirect(GECloudDirect):
         self.gateway_device = None
         self.ems_slot_warned = set()
         self.validation_parse_warned = set()
+        self.model_rate_warned = set()
         self._discovery_report = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
@@ -7521,6 +7522,16 @@ def _test_get_max_inverter_rate_from_model(my_predbat):
         ("Plant EMS", None, None, "Plant EMS => None (no number)"),
         # No number, but max_charge_rate provided as fallback
         ("Gateway", 2600, 2600, "Gateway => fallback to max_charge_rate"),
+        # 3-phase hybrid carries an integer rating as its own segment after 3HY (GH#5136)
+        ("GIV-3HY-11", 9984, 11000, "GIV-3HY-11 => 11kW, not the 9984W battery rate"),
+        ("GIV-3HY-8", 7987, 8000, "GIV-3HY-8 => 8kW"),
+        ("giv-3hy-5", 4000, 5000, "giv-3hy-5 => 5kW (case-insensitive)"),
+        # Integer suffixes that are not ratings keep the fallback
+        ("GIV-AIO-GW2", 2600, 2600, "GIV-AIO-GW2 => fallback, GW2 is not a rating"),
+        ("GIV-3HY-G3", 9984, 9984, "GIV-3HY-G3 => fallback, G3 is not a rating"),
+        ("GIV-3HY-110", 9984, 9984, "GIV-3HY-110 => fallback, three digits is not a plausible rating"),
+        # Decimal pass still wins over the 3HY integer pass
+        ("ALPS HY-6.0-GL", 3600, 6000, "ALPS HY-6.0-GL => 6kW"),
     ]
 
     failed = 0
@@ -7532,6 +7543,20 @@ def _test_get_max_inverter_rate_from_model(my_predbat):
             failed += 1
         else:
             print("OK {}: got {}".format(description, result))
+
+    # A hybrid model that cannot be parsed warns once per model, non-hybrids stay silent
+    ge_cloud.model_rate_warned = set()
+    ge_cloud.log_messages = []
+    ge_cloud.get_max_inverter_rate_from_model("GIV-HYX", 2600)
+    ge_cloud.get_max_inverter_rate_from_model("GIV-HYX", 2600)
+    ge_cloud.get_max_inverter_rate_from_model("Gateway", 2600)
+    ge_cloud.get_max_inverter_rate_from_model("GIV-3HY-11", 9984)
+    warnings = [message for message in ge_cloud.log_messages if "Unable to determine inverter rating" in message]
+    if len(warnings) != 1 or "GIV-HYX" not in warnings[0]:
+        print("ERROR expected exactly one fallback warning naming GIV-HYX, got {}".format(warnings))
+        failed += 1
+    else:
+        print("OK unparsed hybrid model warns once")
 
     return 1 if failed else 0
 
