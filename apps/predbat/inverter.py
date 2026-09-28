@@ -801,6 +801,9 @@ class Inverter:
             else:
                 # Store None to prevent recalculation every cycle when data is unavailable
                 self.update_soc_max_calculated_sensor(None, self.nominal_capacity)
+        elif self.base.get_state_wrapper(soc_max_sensor_name) is None:
+            # Recorder has today's result, but a restart removed the live sensor.
+            trimmed_mean = self.update_soc_max_calculated_sensor(existing_history[today_key], self.nominal_capacity)
 
         if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
             if self.nominal_capacity > 0:
