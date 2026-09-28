@@ -226,6 +226,11 @@ from tests.test_alphaess_config import run_alphaess_config_tests
 from tests.test_alphaess_publish import run_alphaess_publish_tests
 from tests.test_alphaess_control import run_alphaess_control_tests
 from tests.test_alphaess_storage import run_alphaess_storage_tests
+from tests.test_ecoflow_const import run_ecoflow_const_tests
+from tests.test_ecoflow_api import run_ecoflow_api_tests
+from tests.test_ecoflow_config import run_ecoflow_config_tests
+from tests.test_ecoflow_publish import run_ecoflow_publish_tests
+from tests.test_ecoflow_control import run_ecoflow_control_tests
 from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_open_meteo import run_open_meteo_tests
@@ -619,6 +624,11 @@ def main():
         ("alphaess_publish", run_alphaess_publish_tests, "AlphaESS publish/config tests", False),
         ("alphaess_control", run_alphaess_control_tests, "AlphaESS control-logic tests", False),
         ("alphaess_storage", run_alphaess_storage_tests, "AlphaESS storage tests", False),
+        ("ecoflow_const", run_ecoflow_const_tests, "EcoFlow constants and request signing tests", False),
+        ("ecoflow_api", run_ecoflow_api_tests, "EcoFlow API tests", False),
+        ("ecoflow_config", run_ecoflow_config_tests, "EcoFlow config/INVERTER_DEF tests", False),
+        ("ecoflow_publish", run_ecoflow_publish_tests, "EcoFlow publish/auto-config tests", False),
+        ("ecoflow_control", run_ecoflow_control_tests, "EcoFlow write-path and control-gate tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),

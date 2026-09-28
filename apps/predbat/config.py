@@ -2420,6 +2420,46 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    # EcoFlow IoT Developer Platform - Power Ocean and STREAM.
+    #
+    # A MONITOR-ONLY row, and deliberately so. Every write capability is False and
+    # output_charge_control is "none" because the published documentation gives no Power Ocean
+    # cmdSet/id pair for a charge window, target SoC or work mode, so ecoflow.py binds no
+    # control entity (ECOFLOW_SCHEDULE_COMMANDS ships empty). inverter.py substitutes a dummy
+    # entity for each unbound control, which is visibly inert - far safer than a row that
+    # claims a control surface no write can reach and leaves Predbat planning charges nothing
+    # performs. These values move together with that command table, once a real pair is
+    # confirmed against hardware.
+    "EcoFlowCloud": {
+        "name": "EcoFlowCloud",
+        "has_rest_api": False,
+        # False for now, although the platform DOES push telemetry over MQTT: the component
+        # polls /quota/all today, and this flag describes what Predbat actually uses.
+        "has_mqtt_api": False,
+        "output_charge_control": "none",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": False,
+        "has_reserve_soc": False,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": False,
+        "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
+    },
     "SolaxCloud": {
         "name": "SolaxCloud",
         "has_rest_api": False,
@@ -2810,6 +2850,19 @@ APPS_SCHEMA = {
     "alphaess_battery_rate_max": {"type": "float"},
     "alphaess_api_delay": {"type": "float"},
     "alphaess_min_write_interval": {"type": "integer"},
+    "ecoflow_access_key": {"type": "string", "empty": False},
+    "ecoflow_secret_key": {"type": "string", "empty": False},
+    "ecoflow_device_sn": {"type": "string|string_list", "empty": False},
+    "ecoflow_automatic": {"type": "boolean"},
+    "ecoflow_automatic_ignore_pv": {"type": "boolean"},
+    "ecoflow_control_enable": {"type": "boolean"},
+    # {predbat_leaf: quota_key} - corrects the unverified field names in ECOFLOW_TELEMETRY
+    # without a code change. See the comment on that constant.
+    "ecoflow_key_map": {"type": "dict"},
+    "ecoflow_battery_capacity": {"type": "float"},
+    "ecoflow_inverter_limit": {"type": "float"},
+    "ecoflow_api_delay": {"type": "float"},
+    "ecoflow_min_write_interval": {"type": "integer"},
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
