@@ -325,6 +325,7 @@ jstatus
 jsyaml
 kaiming
 keepalive
+kellerza
 keydb
 khtml
 killall
@@ -528,6 +529,7 @@ pythonhashseed
 pytz
 Qwen
 randn
+rany2
 rarr
 reactivepower
 readback
