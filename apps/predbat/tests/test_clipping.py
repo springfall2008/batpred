@@ -40,6 +40,7 @@ def run_clipping_tests(my_predbat):
     failed |= test_dynamic_window_duration_scaling(my_predbat)
     failed |= test_solar_deficit_gated_arbitrage_injection(my_predbat)
     failed |= test_try_socs_includes_clipping_target_kwh(my_predbat)
+    failed |= test_multi_car_charging_during_clipping_window(my_predbat)
     return failed
 
 
@@ -1210,6 +1211,85 @@ def test_try_socs_includes_clipping_target_kwh(my_predbat):
 
     if any(length != len(charge_window) for length in tested_limit_lengths):
         print("ERROR: try_charge_limit length was corrupted during optimise_charge_limit: {}".format(tested_limit_lengths))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_multi_car_charging_during_clipping_window(my_predbat):
+    """Verify REQ-43: Multiple cars charging concurrently via dispatches during an active daytime
+    clipping window. Priority arbitration ensures forced export establishes target solar headroom,
+    while car_charging_from_battery=False prevents draining the battery below the clipping floor."""
+    print("**** test_multi_car_charging_during_clipping_window ****")
+    from prediction import Prediction
+
+    failed = False
+    setup(my_predbat)
+    my_predbat.soc_max = 10.0
+    my_predbat.reserve = 1.0
+    my_predbat.best_soc_min = 1.0
+    my_predbat.inverter_limit = 5.0 / 60.0  # 5 kW
+    my_predbat.export_limit = 5.0 / 60.0  # 5 kW
+    my_predbat.battery_rate_max_discharge = 5.0 / 60.0  # 5 kW
+    my_predbat.minutes_now = 660  # 11:00
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.soc_kw = 10.0  # Battery starts full
+
+    # Configure 2 cars
+    my_predbat.num_cars = 2
+    my_predbat.car_charging_battery_size = [60.0, 75.0]
+    my_predbat.car_charging_limit = [60.0, 75.0]
+    my_predbat.car_charging_soc = [20.0, 30.0]
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_from_battery = False
+    my_predbat.car_energy_reported_load = False
+    my_predbat.set_charge_window = True
+    my_predbat.set_export_window = True
+    my_predbat.set_export_freeze_only = False
+
+    # Staggered/overlapping dispatches:
+    # Car 0: 720 to 780 (12:00 to 13:00), 7.0 kW (0.583 kWh/5min)
+    # Car 1: 750 to 810 (12:30 to 13:30), 7.0 kW (0.583 kWh/5min)
+    # Concurrent charging between 750 and 780 (12:30 to 13:00)
+    slot_car0 = [{"start": 720, "end": 780, "kwh": 7.0, "average": 7.5, "octopus": True}]
+    slot_car1 = [{"start": 750, "end": 810, "kwh": 7.0, "average": 7.5, "octopus": True}]
+    my_predbat.car_charging_slots = [slot_car0, slot_car1]
+
+    # Anti-clipping forced export window with 70% target (7.0 kWh)
+    my_predbat.export_window_best = [{"start": 720, "end": 840, "clipping_target_soc_pct": 70.0, "average": 12.0}]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 70)]
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+
+    pv_step = {m: 0.0 for m in range(0, 24 * 60, 5)}
+    load_step = {m: 0.0 for m in range(0, 24 * 60, 5)}
+
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, car_charging_slots=my_predbat.car_charging_slots)
+    my_predbat.predict_car_hold_best = {}
+    my_predbat.run_prediction([], [], my_predbat.export_window_best, my_predbat.export_limits_best, 0, end_record=my_predbat.forecast_minutes, save="best")
+
+    # 1. Assert battery discharges from 10.0 kWh down to target 7.0 kWh during forced export
+    soc_at_840 = my_predbat.predict_soc_best.get(840 - my_predbat.minutes_now)
+    if soc_at_840 is None or abs(soc_at_840 - 7.0) > 0.1:
+        print("ERROR: Battery failed to reach target clipping headroom: {}".format(soc_at_840))
+        failed = True
+
+    # 2. Assert battery does NOT discharge below target floor (7.0 kWh) into the charging cars
+    min_soc_window = min(my_predbat.predict_soc_best[m - my_predbat.minutes_now] for m in range(720, 840 + 5, 5))
+    if min_soc_window < 6.95:
+        print("ERROR: Battery discharged below clipping target floor into cars: min_soc={}".format(min_soc_window))
+        failed = True
+
+    # 3. Assert HTML plan publishes without error
+    try:
+        html, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, 24 * 60, publish=False)
+        if not html:
+            print("ERROR: publish_html_plan returned empty html")
+            failed = True
+    except Exception as e:
+        print("ERROR: publish_html_plan crashed on multi-car clipping plan: {}".format(e))
         failed = True
 
     if not failed:
