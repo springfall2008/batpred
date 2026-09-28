@@ -27,8 +27,8 @@ from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from component_base import ComponentBase
+from car_charger_control import CarChargerControl
 from predbat_metrics import record_api_call
-from utils import parse_car_plan_windows, in_car_plan_window
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
 VERSION = "1.5.1"
@@ -95,6 +95,7 @@ CAR_DISCOVERY_ENTITY_SPEC = {
     "octopus_ready_time": {"entity_id": "select.predbat_ohme_target_time", "domain": "select", "access": "rw"},
     "octopus_charge_limit": {"entity_id": "number.predbat_ohme_target_percent", "domain": "number", "access": "rw"},
 }
+
 
 # Longest gap between power readings we will still integrate over. The charge session is polled
 # every 120 seconds, so a longer gap means Predbat stalled or was restarted and we have no evidence
@@ -221,7 +222,7 @@ class ChargerPower:
     ct_amps: float
 
 
-class OhmeAPI(ComponentBase):
+class OhmeAPI(ComponentBase, CarChargerControl):
     """Ohme API component for EV charger integration."""
 
     def initialize(self, email, password, ohme_automatic=False, ohme_automatic_octopus_intelligent=None, ohme_control=False):
@@ -234,7 +235,8 @@ class OhmeAPI(ComponentBase):
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = ohme_control
-        self.control_active = False
+        # No control switch: read only mode is what releases an Ohme charger
+        self.charger_control_setup("Ohme API", "charger")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so
@@ -249,11 +251,6 @@ class OhmeAPI(ComponentBase):
         self.charger_slots = False
         # The reason charger_slots_wanted() last stood down, so it is only logged when it changes
         self.charger_slots_blocked = None
-        self.control_windows = []
-        # The state we last pushed to the charger, None until we have acted or after releasing it
-        self.control_charging = None
-        # Last read-only state acted on, None until the control loop has run once
-        self.control_read_only = None
         # The charger's own target percent as it was before Predbat took control, restored on release
         self.control_saved_target = None
         self.energy_today = 0.0
@@ -322,8 +319,15 @@ class OhmeAPI(ComponentBase):
         # "first or ..."), so the entities this reports against already exist by the time it runs.
         self.refresh_discovery()
 
-        if self.control_active and (seconds % CONTROL_INTERVAL_SECONDS) == 0:
-            await self.control_charge()
+        if self.charger_control_active and (seconds % CONTROL_INTERVAL_SECONDS) == 0:
+            try:
+                await self.charger_control_tick(self.now_utc_exact)
+            except ApiException as exc:
+                # Ohme can refuse a command for reasons Predbat cannot see - the car unplugged since
+                # it was paused, say. Monitoring still worked, so this is a warning rather than a failed
+                # cycle, and nothing is recorded as done, so the next cycle tries again - which for a
+                # release is what stops a paused car being stranded.
+                self.log("Warn: Ohme API: Charge control failed: {}".format(exc))
 
         self.update_success_timestamp()
         return True
@@ -332,7 +336,7 @@ class OhmeAPI(ComponentBase):
         """
         Decide whether Predbat-led charge control should run, and say why when it will not.
         """
-        self.control_active = False
+        self.charger_control_active = False
         if not self.ohme_control:
             return
         if not self.ohme_automatic:
@@ -341,20 +345,8 @@ class OhmeAPI(ComponentBase):
         if octopus_intelligent:
             self.log("Warn: Ohme API: ohme_control is ignored on Octopus Intelligent - Octopus already schedules the charge")
             return
-        self.control_active = True
+        self.charger_control_active = True
         self.log("Info: Ohme API: Predbat-led charge control enabled")
-
-    def control_read_only_now(self):
-        """
-        Is Predbat in read only mode - the effective state rather than just the switch.
-
-        axle_control forces read only by setting the attribute without touching the config arg, so
-        read the attribute first and fall back to the arg for the window before it is first set.
-        """
-        read_only = getattr(self.base, "set_read_only", None)
-        if read_only is None:
-            read_only = self.get_arg("set_read_only", False)
-        return bool(read_only)
 
     def charger_mode(self):
         """
@@ -374,106 +366,49 @@ class OhmeAPI(ComponentBase):
         except (KeyError, TypeError):
             return None
 
-    def refresh_car_windows(self):
-        """
-        Read Predbat's planned car charging windows into control_windows.
+    def charger_control_chargers(self):
+        """The one Ohme charger on the account, which follows car 0."""
+        return [(self.client.serial or "ohme", self.client)]
 
-        The binary sensor's own on/off state only refreshes on Predbat's 5 minute cycle, so the
-        planned attribute is parsed and evaluated against the clock here instead - otherwise every
-        window boundary would be acted on up to 5 minutes late.
+    def charger_control_car_count(self):
+        """An Ohme account has one charger, and it follows car 0 whatever num_cars says."""
+        return 1
 
-        Returns True once a plan has been read, False while the sensor has never been published -
-        which is what stops the loop pausing a car on startup before it knows anything.
-        """
-        planned = self.get_state_wrapper("binary_sensor." + self.prefix + "_car_charging_slot", attribute="planned")
-        if planned is None:
-            return False
-
-        # The plan carries no year - parse_car_plan_windows() (shared with myenergi and GivEnergy
-        # EVC) rebuilds it around now, whichever side of New Year it is read (#269)
-        self.control_windows = parse_car_plan_windows(planned, self.now_utc_exact, self.local_tz)
-        return True
-
-    def should_charge_now(self):
-        """
-        Is now inside one of Predbat's planned charging windows.
-        """
-        return in_car_plan_window(self.control_windows, self.now_utc_exact)
-
-    def control_drifted(self, should_charge):
-        """
-        Has the charger moved away from the state we last set, e.g. changed in the Ohme app.
-
-        Purely edge-triggered control diverges silently once anything else touches the charger, so
-        the mode we already poll is compared against what we asked for and re-applied if it moved.
-        """
-        if self.control_charging is None:
-            return False
+    def charger_control_drifted(self, client, charge):
+        """Has the charger moved away from the state we last set, e.g. changed in the Ohme app."""
         mode = self.charger_mode()
         if mode is None:
             # Nothing plugged in to correct
             return False
-        if should_charge:
+        if charge:
             return mode is not ChargerMode.MAX_CHARGE
         return mode is not ChargerMode.PAUSED
 
-    async def release_charger(self, reason="Read only mode"):
-        """
-        Hand the charger back to Ohme's own smart schedule.
-        """
-        if self.control_charging is None:
-            return
-        self.log("Info: Ohme API: {}, releasing the charger back to Ohme".format(reason))
-        if not self.control_charging:
-            await self.client.async_resume_charge()
-        await self.client.async_max_charge(False)
-        # Max charge overrides the charger's own target percent, so put back what the user had
-        # before Predbat took over - otherwise Ohme's smart schedule is left charging to the wrong
-        # level once we hand it back
-        if self.control_saved_target is not None:
-            await self.client.async_set_target(target_percent=self.control_saved_target)
-            self.log("Info: Ohme API: Restored the charger target to {}%".format(self.control_saved_target))
-            self.control_saved_target = None
-        self.control_charging = None
-
-    async def control_charge(self):
-        """
-        Drive the charger from Predbat's car charging plan.
-
-        Predbat holds the charger for as long as it is in control: max charge inside a planned
-        window, paused outside one. Read only mode is the release - it hands the charger back to
-        Ohme rather than leaving a pause in place. A component stop deliberately does not release,
-        as that is nearly always a restart and releasing would glitch an in-progress charge.
-        """
-        if self.control_read_only_now():
-            if self.control_read_only is not True:
-                self.control_read_only = True
-                await self.release_charger()
-            return
-        if self.control_read_only:
-            self.log("Info: Ohme API: Read only mode cleared, resuming charge control")
-        self.control_read_only = False
-
-        if not self.refresh_car_windows():
-            return
-
-        should_charge = self.should_charge_now()
-        drifted = self.control_drifted(should_charge)
-        if should_charge == self.control_charging and not drifted:
-            return
-
-        if drifted:
-            self.log("Info: Ohme API: Charger was changed away from what Predbat set, re-applying")
-        if should_charge:
+    async def charger_control_send(self, client, charge, car_n):
+        """Max charge inside a planned window, paused outside one."""
+        if charge:
             # Snapshot the user's target before max charge overrides it, so release can put it back
             if self.control_saved_target is None:
                 self.control_saved_target = self.charger_target()
             self.log("Info: Ohme API: Charge window active, setting max charge")
-            await self.client.async_max_charge(True)
+            await client.async_max_charge(True)
         else:
             self.log("Info: Ohme API: Outside the charge plan, pausing the charger")
-            await self.client.async_pause_charge()
-        self.control_charging = should_charge
+            await client.async_pause_charge()
+
+    async def charger_control_release_one(self, client, charge):
+        """Hand the charger back to Ohme's own smart schedule."""
+        self.log("Info: Ohme API: Releasing the charger back to Ohme")
+        if not charge:
+            await client.async_resume_charge()
+        await client.async_max_charge(False)
+        # Max charge overrides the charger's own target percent, so put back what the user had
+        # before Predbat took over - otherwise Ohme's smart schedule is left charging to the wrong
+        # level once we hand it back
+        if self.control_saved_target is not None:
+            await client.async_set_target(target_percent=self.control_saved_target)
+            self.log("Info: Ohme API: Restored the charger target to {}%".format(self.control_saved_target))
+            self.control_saved_target = None
 
     def octopus_intelligent_wanted(self):
         """
@@ -567,10 +502,11 @@ class OhmeAPI(ComponentBase):
             self.enable_control(octopus_intelligent or self.octopus_other_device)
 
         # Predbat has stood down but is still holding the charger: hand it back. Checked on every
-        # poll rather than only on the change, as release_charger() clears control_charging last -
+        # poll rather than only on the change, as charger_control_release() forgets the charger last -
         # a hand-back that failed part way is tried again until the charger really is released
-        if not self.control_active and self.control_charging is not None:
-            await self.release_charger(reason="Octopus Intelligent now schedules the charge")
+        if not self.charger_control_active and self.charger_control_state:
+            self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, releasing the charger")
+            await self.charger_control_release()
 
         if octopus_intelligent:
             slot_mode = SLOT_MODE_INTELLIGENT
@@ -610,7 +546,7 @@ class OhmeAPI(ComponentBase):
         by the Octopus component for its own Intelligent devices. Never used while Octopus
         Intelligent drives another device: Octopus schedules that charge, not Ohme.
         """
-        if not self.ohme_automatic or octopus_intelligent or self.octopus_other_device or self.control_active:
+        if not self.ohme_automatic or octopus_intelligent or self.octopus_other_device or self.charger_control_active:
             self.charger_slots_blocked = None
             return False
         existing = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)

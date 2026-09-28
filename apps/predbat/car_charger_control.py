@@ -101,7 +101,7 @@ class CarChargerControl:
         released, which they would only notice when the car charged at the wrong time.
         Fails soft: no Storage component just means the switch is not sticky.
         """
-        if self.storage is None or self.charger_control_storage is None:
+        if self.charger_control_storage is None or self.storage is None:
             return
         module, key, field = self.charger_control_storage
         try:
@@ -116,7 +116,7 @@ class CarChargerControl:
         from the start, or a restart with control switched off would take the charger back
         for a cycle and then hand it over again.
         """
-        if self.storage is None or self.charger_control_storage is None:
+        if self.charger_control_storage is None or self.storage is None:
             return
         module, key, field = self.charger_control_storage
         try:
