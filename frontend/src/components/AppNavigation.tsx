@@ -165,6 +165,11 @@ const navigationGroups: NavigationGroup[] = [
         icon: faSitemap
       },
       {
+        label: 'Cards',
+        href: './dash?page=cards',
+        icon: faTableColumns
+      },
+      {
         label: 'Internals',
         href: './internals',
         icon: faServer
@@ -425,7 +430,7 @@ export default function AppNavigation({
 
               <div className="navigation-group-items">
                 {group.items.filter((item) => item.label !== 'Chat' || chatEnabled).map((item) => {
-                  const active = item.href === `./${currentPage}` || (currentPage === 'entity' && item.href.endsWith('?page=entity'))
+                  const active = item.href === `./${currentPage}` || item.href.endsWith(`?page=${currentPage}`)
 
                   return (
                     <a
