@@ -151,6 +151,16 @@ test('debug mode exposes the diagnostic plan values supplied by Predbat', () => 
   assert.match(html, />\(55\)</)
 })
 
+test('future rates show a prediction indicator', () => {
+  const html = renderPlanTable(false, {
+    ...plan,
+    rows: [{ ...row, import_rate_adjust_type: 'future' }]
+  })
+
+  assert.match(html, /aria-label="Predicted rate"/)
+  assert.match(html, /Predbat is using Nord Pool data/)
+})
+
 test('normal mode keeps diagnostic plan values hidden', () => {
   const html = renderPlanTable(false)
 

@@ -309,6 +309,11 @@
   cursor: help;
 }
 
+.plan-rate-predicted {
+  color: var(--color-current);
+  cursor: help;
+}
+
 /*
  * Column-header tooltips open downwards.
  *

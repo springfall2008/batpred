@@ -12,6 +12,8 @@ export type PlanRow = {
 
   import_rate_adjusted: number
   export_rate_adjusted: number
+  import_rate_adjust_type?: string
+  export_rate_adjust_type?: string
   rate_color_import?: string
 
   state: string

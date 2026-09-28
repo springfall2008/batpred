@@ -17,6 +17,7 @@ import {
   faPause,
   faSnowflake,
   faWater,
+  faWandMagicSparkles,
   faCheck,
   faChevronDown,
   faRotateLeft
@@ -173,6 +174,8 @@ function RateCell({
   const rate = type === 'import' ? row.import_rate : row.export_rate
 
   const adjustedRate = type === 'import' ? row.import_rate_adjusted : row.export_rate_adjusted
+
+  const isPredicted = (type === 'import' ? row.import_rate_adjust_type : row.export_rate_adjust_type) === 'future'
 
   const [value, setValue] = useState('')
 
@@ -338,6 +341,16 @@ function RateCell({
                 />
               )}
               <span>{rate.toFixed(2)}{currencyMinor}</span>
+
+              {isPredicted && (
+                <span
+                  className="plan-rate-predicted plan-tooltip-trigger"
+                  data-tooltip="Predicted rate: Predbat is using Nord Pool data until the tariff publishes this period’s rate."
+                  aria-label="Predicted rate"
+                >
+                  <FontAwesomeIcon icon={faWandMagicSparkles} aria-hidden="true" />
+                </span>
+              )}
             </span>
 
             {debugEnabled && Number.isFinite(adjustedRate) && (
