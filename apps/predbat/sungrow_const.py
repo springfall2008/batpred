@@ -675,6 +675,30 @@ def scale_from_read(param_code, value):
     return numeric / SUNGROW_PARAM_SCALE_UNVERIFIED.get(str(param_code), 1)
 
 
+def heartbeat_declared_interval(interval_seconds):
+    """Return the interval actually written to 10017, which may be longer than the user asked.
+
+    THE DECLARED INTERVAL MUST NEVER BE SHORTER THAN THE SEND CADENCE, or the component
+    promises the inverter a beat it will not deliver and control silently never holds.
+
+    That is exactly what a naive clamp produces. The send cadence is floored at
+    SUNGROW_HEARTBEAT_MIN_SEND_SECONDS to stop a 1-second configuration turning into a dispatch
+    every half second - but below about a minute that floor overtakes the margin, so a user
+    setting sungrow_heartbeat_interval to 10 would have the inverter told "expect a beat every
+    10s" while beats went out every 30s. The inverter would revert to self-consumption between
+    every pair of beats, forever, with nothing logged as an error: the battery would simply
+    never follow the plan.
+
+    So the declared interval is raised to whatever keeps the cadence inside it. The user's
+    value is honoured whenever it is achievable, and quietly widened when it is not - widening
+    only ever makes the dead-man's switch slower to fire, never faster, which is the safe
+    direction for a value whose whole job is to be met.
+    """
+    promised = clamp_range(SUNGROW_PARAM_HEARTBEAT, as_float(interval_seconds, SUNGROW_HEARTBEAT_DEFAULT_SECONDS))
+    achievable = SUNGROW_HEARTBEAT_MIN_SEND_SECONDS / SUNGROW_HEARTBEAT_MARGIN
+    return clamp_range(SUNGROW_PARAM_HEARTBEAT, max(promised, achievable))
+
+
 def heartbeat_send_interval(interval_seconds):
     """Return how often to actually send the heartbeat, given the interval promised to 10017.
 
@@ -682,11 +706,10 @@ def heartbeat_send_interval(interval_seconds):
     dispatch or one skipped component tick and the inverter has already reverted. Beating at
     a fraction of the window buys a free retry, at the cost of a few extra dispatches an hour.
 
-    Floored at SUNGROW_HEARTBEAT_MIN_SEND_SECONDS so the documented minimum interval of one
-    second cannot turn into a dispatch every half second.
+    Derived from heartbeat_declared_interval(), NOT from the raw configured value, so the
+    cadence and the declared interval can never disagree - see that function.
     """
-    promised = clamp_range(SUNGROW_PARAM_HEARTBEAT, as_float(interval_seconds, SUNGROW_HEARTBEAT_DEFAULT_SECONDS))
-    return max(SUNGROW_HEARTBEAT_MIN_SEND_SECONDS, promised * SUNGROW_HEARTBEAT_MARGIN)
+    return heartbeat_declared_interval(interval_seconds) * SUNGROW_HEARTBEAT_MARGIN
 
 
 def signed_battery_power(charge_w, discharge_w):

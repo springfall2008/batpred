@@ -157,6 +157,7 @@ from sungrow_const import (
     as_float,
     scale_for_write,
     heartbeat_send_interval,
+    heartbeat_declared_interval,
     signed_battery_power,
     signed_grid_power,
     hhmmss_to_hour_minute,
@@ -1057,7 +1058,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         """
         params = [
             param_entry(SUNGROW_PARAM_EMS_MODE, scale_for_write(SUNGROW_PARAM_EMS_MODE, SUNGROW_EMS_EXTERNAL_DISPATCH)),
-            param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, self.heartbeat_interval)),
+            param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, heartbeat_declared_interval(self.heartbeat_interval))),
             param_entry(SUNGROW_PARAM_COMMAND, scale_for_write(SUNGROW_PARAM_COMMAND, decision["command"])),
             param_entry(SUNGROW_PARAM_POWER, scale_for_write(SUNGROW_PARAM_POWER, decision.get("power", 0))),
         ]
@@ -1402,7 +1403,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         must bypass both the change-detection cache (every beat is byte-identical to the last
         one by design) and the write pacing gate (holding a beat back drops control).
         """
-        results = await self.dispatch_params(uuid, [param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, self.heartbeat_interval))], task_name="Predbat heartbeat")
+        results = await self.dispatch_params(uuid, [param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, heartbeat_declared_interval(self.heartbeat_interval)))], task_name="Predbat heartbeat")
         if results is None:
             self.log("Warn: Sungrow heartbeat for {} was not confirmed; if the beats keep failing the inverter will revert to self-consumption".format(self._serial(uuid)))
             return False

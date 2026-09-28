@@ -47,6 +47,7 @@ from sungrow_const import (
     scale_for_write,
     scale_from_read,
     heartbeat_send_interval,
+    heartbeat_declared_interval,
     signed_battery_power,
     signed_grid_power,
     hhmmss_to_hour_minute,
@@ -206,6 +207,40 @@ def test_scale_from_read_inverts_scale_for_write():
         print("ERROR: an unreadable value should be None, not a number")
         failed = True
     assert not failed, "test_scale_from_read_inverts_scale_for_write"
+
+
+def test_heartbeat_cadence_is_never_slower_than_the_interval_declared_to_the_inverter():
+    """The component must never promise the inverter a beat it will not deliver.
+
+    Below about a minute the send-cadence floor overtakes the margin, so a naive
+    clamp declares 10s to the inverter while beating every 30s. The inverter then reverts to
+    self-consumption between every pair of beats, forever, with nothing logged: the battery
+    simply never follows the plan. Checked across the whole documented 1-1000s range because it
+    is a silent failure, not a loud one.
+    """
+    failed = False
+    for configured in (1, 5, 10, 30, 45, 59, 60, 61, 120, 300, 600, 1000, 99999, 0, None, "junk"):
+        declared = heartbeat_declared_interval(configured)
+        cadence = heartbeat_send_interval(configured)
+        if cadence > declared:
+            print(f"ERROR: configured {configured!r} beats every {cadence}s but declares {declared}s - control would never hold")
+            failed = True
+        if declared > 1000:
+            print(f"ERROR: configured {configured!r} declares {declared}s, above 10017's documented maximum of 1000")
+            failed = True
+        if declared < 1:
+            print(f"ERROR: configured {configured!r} declares {declared}s, below 10017's documented minimum of 1")
+            failed = True
+    # Widening is the only correction allowed: it makes the dead-man's switch slower to fire,
+    # never faster. A declared interval SHORTER than the user asked for would silently tighten
+    # a safety timeout they chose.
+    if heartbeat_declared_interval(600) != 600:
+        print(f"ERROR: an achievable interval was changed to {heartbeat_declared_interval(600)}")
+        failed = True
+    if heartbeat_declared_interval(10) <= 10:
+        print("ERROR: an unachievable interval was not widened")
+        failed = True
+    assert not failed, "test_heartbeat_cadence_is_never_slower_than_the_interval_declared_to_the_inverter"
 
 
 def test_heartbeat_send_interval_beats_inside_the_promised_window():
@@ -532,6 +567,7 @@ def run_sungrow_const_tests(my_predbat):
         ("scale_clamps", test_scale_for_write_clamps_to_the_documented_range),
         ("scale_strings", test_scale_for_write_emits_integral_strings),
         ("scale_from_read", test_scale_from_read_inverts_scale_for_write),
+        ("heartbeat_cadence_vs_declared", test_heartbeat_cadence_is_never_slower_than_the_interval_declared_to_the_inverter),
         ("heartbeat_interval", test_heartbeat_send_interval_beats_inside_the_promised_window),
         ("strip_point_prefix", test_strip_point_prefix_separates_points_from_metadata),
         ("as_float", test_as_float_tolerates_the_apis_unavailable_marker),
