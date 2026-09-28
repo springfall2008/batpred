@@ -381,8 +381,6 @@ caution about exposing the web/MCP port outside your home network applies here, 
 
 #### Configuration Options (chat)
 
-| Option | Type | Required | Default | Config Key | Description |
-| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | Setting | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
 | `providers` | Dict | - | Named endpoints, each `{url, api_key, type, model}` - see [apps.yaml](apps-yaml.md#ai-chat-agent). Configuring one is what enables chat; there is no separate `chat_enable` setting. `model` sits on the provider rather than here, since a model id only means anything to the endpoint serving it |
@@ -811,10 +809,12 @@ solax_client_secret: !secret solax_client_secret
    - US: <https://www.solaxcloud.us>
    - CN: <https://www.solaxcloud.com.cn>
 2. Navigate to Settings → API Management (or Developer Settings)
-3. Create a new API application or view existing credentials
+3. Create a new API application
 4. Copy your **Client ID** and **Client Secret**
 5. Add to your `secrets.yaml` file
 6. Reference in `apps.yaml` using `!secret` notation
+
+*Note:* Do configure Predbat to reuse existing Solax Cloud API credentials that are being used for any other purpose (e.g. with the SolaX Developer Integration) as this will cause token key expiry errors if both Predbat and another service are trying to use the same credentials at the same time.
 
 #### Published Entities (solax)
 
