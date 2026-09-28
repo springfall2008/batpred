@@ -2,7 +2,7 @@
 
 **Goal:** Close the gaps between Predbat's native Kraken component (`apps/predbat/kraken.py`) and the community EDF Home Assistant integration ([stevekirtley/HomeAssistant-EDFEnergy](https://github.com/stevekirtley/HomeAssistant-EDFEnergy)) so an EDF (or E.ON Next) customer can run Predbat without the second integration. Three independent features, one PR each:
 
-1. **Free electricity sessions** — EDF Sunday Saver (API) and Power Perks (no API) fed into the plan as 0p import slots.
+1. **Free electricity sessions** — EDF Sunday Saver fed into the plan as 0p import slots. Power Perks (SMS-only, no API) is covered by Predbat's existing manual rate override, so needs no new mechanism.
 2. **Gas rates** — gas tariff discovery, unit rates and standing charge, wired to `metric_octopus_gas`.
 3. **EV smart-charging controls** — read and write the SmartFlex target time / target SoC, smart-charge suspend and bump charge, wired to `octopus_ready_time` / `octopus_charge_limit`.
 
@@ -55,18 +55,15 @@ API (from `api_client.async_get_sunday_saver` and `coordinators/sunday_saver.py`
 Tasks:
 
 - [ ] Add `KRAKEN_SUNDAY_SAVER_URL`, `KRAKEN_FREE_SESSION_REFRESH_MINUTES` (e.g. 60) constants; only active when `self.provider == "edf"`.
-- [ ] Add a helper to get the current bearer token for non-GraphQL calls (both `KrakenAuthMixin` and SaaS `OAuthMixin` paths). **Check the SaaS OAuth token is accepted by this endpoint**; if not, skip Sunday Saver in OAuth mode with a single log line.
+- [ ] Add a helper to get the current bearer token for non-GraphQL calls (both `KrakenAuthMixin` and SaaS `OAuthMixin` paths). Whether the SaaS OAuth token is accepted by this endpoint is confirmed by a live test once coded; if it is refused, skip Sunday Saver in OAuth mode with a single log line.
 - [ ] `async_fetch_sunday_saver()` — POST, tolerant decode (dict / string / double-encoded), UK-local time fix, +30 min end. Returns a list of `{start, end, code, source: "sunday_saver"}` (code e.g. `sunday_saver_YYYYMMDDHHMM`) or `None` on failure.
 - [ ] Keep sessions in `self.free_sessions` (list), merged by `code`, pruned once `end` is more than ~2 days old; cache in `save_kraken_cache` / `load_kraken_cache` with `free_sessions_fetched_at`.
 
-### 1.3 Power Perks (EDF only — no API)
+### 1.3 Power Perks (EDF only — no API) — no new code
 
-EDF announce Power Perks by SMS only; they are not in Kraken GraphQL, the EDF website APIs or the app. The EDF integration uses a relay run by its author (`https://apirelay.sitetest.org.uk/power_perks.php?action=sessions`, identified by the integration's User-Agent) that parses forwarded texts, plus a manual registration action.
+EDF announce Power Perks by SMS only; they are not in Kraken GraphQL, the EDF website APIs or the app. **Decision:** no new mechanism in Kraken. Users enter a Power Perks session with Predbat's existing manual rate override — **select.predbat_manual_import_rates** with **input_number.predbat_manual_import_value** at 0p (see `docs/customisation.md`), which also accepts `HH:MM=rate` from an automation. The community relay feed is not used.
 
-Tasks:
-
-- [ ] **Manual entry (always available):** accept a user-supplied list via `apps.yaml` key `kraken_free_sessions` (list of `{start, end}` in local time), validated in `APPS_SCHEMA` (`config.py`). Merge into `self.free_sessions` with `source: "manual"`.
-- [ ] **Relay feed (opt-in, default off):** new component arg `power_perks_url` / config key `kraken_power_perks_url`. When set, `GET` it, parse `{"sessions": [{start, end, code?}]}` (bare timestamps are UK local), skip malformed entries, keep last known sessions if the feed fails. **Do not ship the relay URL as a default** without the relay owner's agreement (see Open questions).
+- [ ] Document this in the Kraken section of `docs/components.md` and in `docs/energy-rates.md` (EDF Power Perks → use manual import rates at 0p).
 
 ### 1.4 Publish and wire
 
@@ -76,8 +73,7 @@ Tasks:
 ### 1.5 Tests
 
 - [ ] Sunday Saver: dict / JSON-string / double-encoded / `"{}"` / `FREE_HOURS: 0` responses; BST and GMT dates give correct UTC; +30 min end; `None` keeps cached sessions; not called for `provider="eon"`.
-- [ ] Power Perks feed: valid, malformed entry skipped, non-feed payload ignored, HTTP error keeps last sessions, disabled when no URL.
-- [ ] Manual sessions parsed and merged; pruning of old sessions; merge by code.
+- [ ] Pruning of old sessions; merge by code.
 - [ ] Sensor shape and `octopus_free_electricity` wiring; end-to-end: a published session makes `fetch_octopus_sessions()` return a 0p slot.
 - [ ] Cache round-trip includes `free_sessions`.
 
@@ -128,7 +124,7 @@ devices(accountNumber: "<acct>", deviceId: "<id>") {
 
 Per device (index suffix from `_device_index_suffix`):
 
-- [ ] `select.predbat_kraken_<acct>_intelligent_target_time[_N]` — options from the schedule range the API accepts (Octopus uses `OPTIONS_TIME` 04:00-10:30; confirm EDF's range).
+- [ ] `select.predbat_kraken_<acct>_intelligent_target_time[_N]` — offer the same `OPTIONS_TIME` list as Octopus (04:00-10:30, 30-minute steps) for now. Some values may be rejected by EDF; a rejected mutation logs a warning and reverts the select (3.4). Narrow the list after live testing.
 - [ ] `number.predbat_kraken_<acct>_intelligent_target_soc[_N]` — min/max from `minimum_soc` / `maximum_soc`.
 - [ ] `switch.predbat_kraken_<acct>_intelligent_smart_charge[_N]` — on = unsuspended.
 - [ ] `switch.predbat_kraken_<acct>_intelligent_bump_charge[_N]` — on = boost requested.
@@ -149,7 +145,7 @@ Per device (index suffix from `_device_index_suffix`):
   - bump charge → `updateBoostCharge(input: {deviceId, action: BOOST | CANCEL})`.
 - [ ] On success update the cached settings immediately, re-publish the entity, and set `dispatch_fetched_at = None` so dispatches refresh on the next cycle (a bump or new target changes the plan).
 - [ ] On failure log a warning and re-publish the previous value so the HA entity snaps back.
-- [ ] Decide whether `set_read_only` should block these writes (Octopus does not; see Open questions).
+- [ ] `set_read_only` does **not** block these writes (decided; matches Octopus). They are user-initiated setting changes, not plan execution.
 - [ ] `async_graphql_query` currently expects a data payload; check mutations return `{"data": {...}}` and handle `errors` without retrying non-auth failures.
 
 ### 3.5 Tests
@@ -167,23 +163,30 @@ Per device (index suffix from `_device_index_suffix`):
 
 ## Documentation
 
-- [ ] `docs/components.md` Kraken section: free sessions (Sunday Saver automatic for EDF, Power Perks manual/opt-in feed), gas, EV controls, new config keys, new entities table rows.
-- [ ] `docs/energy-rates.md`: note under free sessions that EDF customers get them from the Kraken component; how to add a Power Perks session by hand.
+- [ ] `docs/components.md` Kraken section: free sessions (Sunday Saver automatic for EDF, Power Perks via `select.predbat_manual_import_rates` at 0p), gas, EV controls, new config keys, new entities table rows.
+- [ ] `docs/energy-rates.md`: note under free sessions that EDF customers get them from the Kraken component; how to enter a Power Perks session with `select.predbat_manual_import_rates` at 0p.
 - [ ] `docs/car-charging.md`: Kraken SmartFlex target time / SoC / bump / suspend controls.
 - [ ] `tools/debug-journal.md`: Sunday Saver quirks (raw token header, UK time labelled UTC, double-encoded JSON, previous-Monday anchor).
 
 ## Suggested order
 
-1. Phase 1 (free sessions) — highest planning value; Sunday Saver first, Power Perks manual entry second, relay last.
+1. Phase 1 (free sessions) — highest planning value; Sunday Saver plus the Power Perks documentation.
 2. Phase 3 (EV controls) — fixes the `car_slot_owner` gap and gives Predbat the ready time / charge limit it plans against.
 3. Phase 2 (gas) — lowest value, only matters for iBoost / gas hot water users.
 
 Each phase is independent and ships as its own PR.
 
-## Open questions
+## Decisions
 
-1. **Power Perks relay:** the feed is run by the EDF integration's author and is served to that integration by User-Agent. Ask before pointing Predbat at it; otherwise ship manual entry only and leave the URL as user-supplied config.
-2. **SaaS OAuth tokens:** does the Sunday Saver website endpoint accept the OAuth access token Predbat.com uses, or only tokens minted by email/password or API key?
-3. **E.ON Next:** does E.ON have an equivalent free-session scheme with an API? If so, add it to Phase 1 behind the same sensor.
-4. **Read-only mode:** should `set_read_only` block EV control writes? Octopus does not today.
-5. **Target time range:** which times does EDF's `setDevicePreferences` accept (Octopus limits 04:00-11:00)?
+1. **Power Perks:** no new mechanism — use the existing manual import rate override (`select.predbat_manual_import_rates` at 0p). The community relay feed is not used.
+2. **SaaS OAuth token for Sunday Saver:** live test once coded.
+3. **E.ON Next free sessions:** live test / investigation once coded; add behind the same sensor if an API exists.
+4. **Read-only mode:** does not block EV control writes.
+5. **Target time range:** offer Octopus's `OPTIONS_TIME` list now; values EDF rejects log a warning and revert. Refine after a live test.
+
+## Live test checklist (after coding)
+
+- [ ] Sunday Saver fetch with email/password, API key and SaaS OAuth auth.
+- [ ] E.ON Next: any free-session equivalent.
+- [ ] Gas meter point schema and gas rates (Phase 2).
+- [ ] Preferences read, each mutation, and which target times EDF accepts (Phase 3).
