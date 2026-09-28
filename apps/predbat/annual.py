@@ -1369,7 +1369,7 @@ def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_recor
 
     ``publish_html_plan()`` unconditionally reads ``predict_soc_best``/
     ``predict_clipped_best``/``predict_iboost_best``/``predict_carbon_best``/
-    ``predict_metric_best`` off ``predbat``, which ``run_prediction()`` only populates
+    ``predict_metric_best``/``predict_car_hold_best`` off ``predbat``, which ``run_prediction()`` only populates
     when called with ``save="best"`` (or ``"compare"``/``"yesterday"`` - see
     ``plan.py``). This function therefore re-runs the prediction once more, purely to
     populate that state, rather than asking the BILLED run (``_billed_result()``) to
