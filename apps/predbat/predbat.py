@@ -65,6 +65,8 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    COMPONENT_ERROR_STATUS_PREFIX,
+    COMPONENT_ERROR_STATUS_SUFFIX,
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
@@ -1026,7 +1028,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
             self.record_status_under_warning(status)
         elif failed_components:
-            error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
+            error_status = COMPONENT_ERROR_STATUS_PREFIX + status + COMPONENT_ERROR_STATUS_SUFFIX + ", ".join(failed_components)
             self.log(error_status)
             self.record_status(
                 error_status,

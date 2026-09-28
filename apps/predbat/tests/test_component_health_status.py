@@ -9,6 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 # fmt on
 
+from output import split_status_warning
+
 
 class FakeComponent:
     """Minimal component exposing its calculation state."""
@@ -241,6 +243,12 @@ def test_component_health_status(my_predbat):
                 failed = 1
             else:
                 print("OK: All failed components listed in the recorded error status")
+            # The History view unwraps the run's own status from this summary, so the two must agree
+            if split_status_warning(message) != ("Idle", message):
+                print("ERROR: History should read the run status 'Idle' back out of {!r}, got {!r}".format(message, split_status_warning(message)))
+                failed = 1
+            else:
+                print("OK: History reads the run status back out of the component error summary")
 
         # --- LoadML can appear unhealthy during a calculation without failing the run status ---
         my_predbat.had_errors = False

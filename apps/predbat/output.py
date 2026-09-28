@@ -21,7 +21,20 @@ import copy
 from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
+from const import (
+    TIME_FORMAT,
+    PREDICT_STEP,
+    EXPORT_LIMIT_IDLE,
+    MINUTE_WATT,
+    FULL_EXPORT_POWER,
+    EXPORT_MODE_TARGET,
+    EXPORT_MODE_FREEZE,
+    EXPORT_MODE_IDLE,
+    CHARGE_STATE_PRECEDENCE,
+    EXPORT_STATE_PRECEDENCE,
+    COMPONENT_ERROR_STATUS_PREFIX,
+    COMPONENT_ERROR_STATUS_SUFFIX,
+)
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
 from prediction import Prediction
 
@@ -84,8 +97,8 @@ def split_status_warning(status):
     carries the run's state inside it, and is unwrapped to that.
     """
     lowered = status.lower()
-    component_prefix = "error: complete run status "
-    component_suffix = " with component errors"
+    component_prefix = COMPONENT_ERROR_STATUS_PREFIX.lower()
+    component_suffix = COMPONENT_ERROR_STATUS_SUFFIX.lower()
     if lowered.startswith(component_prefix) and component_suffix in lowered:
         return status[len(component_prefix) : lowered.index(component_suffix)].strip(), status
     if lowered.startswith("warn:") or lowered.startswith("warn -") or lowered.startswith("error:"):
