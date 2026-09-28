@@ -2755,6 +2755,29 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 app="solis"
             )
 
+            # Home grid energy today - published for observation only, not bound to any Predbat arg. On a
+            # metered AC-coupled site whose live grid power and gridPurchasedTodayEnergy both read 0, this
+            # was the one grid figure moving during the day (issue #5279). What it measures is undocumented
+            # - it may be net import (purchased less sold) rather than import - so yesterday's counterparts
+            # ride along as attributes, letting the day's final reading be checked against them.
+            # state_class "total" rather than "total_increasing": a net figure can fall.
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_today_home_grid_energy"
+            self.dashboard_item(
+                entity_id,
+                state=detail.get("homeGridTodayEnergy"),
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Today Home Grid Energy",
+                    "unit_of_measurement": detail.get("homeGridTodayEnergyStr", "kWh"),
+                    "device_class": "energy",
+                    "state_class": "total",
+                    "icon": "mdi:transmission-tower",
+                    "home_grid_yesterday_energy": detail.get("homeGridYesterdayEnergy"),
+                    "grid_purchased_yesterday_energy": detail.get("gridPurchasedYesterdayEnergy"),
+                    "grid_sell_yesterday_energy": detail.get("gridSellYesterdayEnergy"),
+                },
+                app="solis"
+            )
+
             # Battery state of health - published as-is, including a literal 0 (issue #4494): a 0%
             # reading here can be a flaky/unavailable API response as well as a genuinely unhealthy
             # battery, and we don't know which, so it's reported honestly rather than guessed at.

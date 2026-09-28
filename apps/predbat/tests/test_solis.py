@@ -1967,6 +1967,45 @@ async def test_publish_entities_pv_only_inverter_gets_detail_sensors_only():
     return False
 
 
+async def test_publish_entities_home_grid_energy_for_observation():
+    """Issue #5279: homeGridTodayEnergy is published with yesterday's grid counterparts, and bound to nothing.
+
+    What the field measures is undocumented, so it is only there to be watched: the attributes let the
+    day's final reading be compared with the next day's purchased/sold figures.
+    """
+    print("\n=== Test: publish_entities home grid energy sensor ===")
+    sn = "BAT001"
+    api = MockSolisAPI()
+    api.inverter_sn = [sn]
+    api.inverter_details = {
+        sn: dict(
+            _DETAIL_WITH_BATTERY,
+            homeGridTodayEnergy=2.0,
+            homeGridTodayEnergyStr="kWh",
+            homeGridYesterdayEnergy=0.0,
+            gridPurchasedYesterdayEnergy=15.1,
+            gridSellYesterdayEnergy=20.5,
+        )
+    }
+
+    await api.publish_entities()
+
+    item = api.dashboard_items.get("sensor.predbat_solis_bat001_today_home_grid_energy")
+    assert item is not None, "the home grid energy sensor should be published"
+    assert item["state"] == 2.0, item
+    attributes = item["attributes"]
+    assert attributes["unit_of_measurement"] == "kWh" and attributes["device_class"] == "energy", attributes
+    assert attributes["state_class"] == "total", "a net figure can fall, so it must not be total_increasing: {}".format(attributes)
+    assert attributes["grid_purchased_yesterday_energy"] == 15.1 and attributes["grid_sell_yesterday_energy"] == 20.5, attributes
+    assert attributes["home_grid_yesterday_energy"] == 0.0, attributes
+
+    recorded, _ = await _run_automatic_config({sn: api.inverter_details[sn]})
+    bound = [key for key, value in recorded.items() if "home_grid" in str(value)]
+    assert bound == [], "the sensor is for observation only and must not be bound to a Predbat arg, got {}".format(bound)
+    print("PASSED: home grid energy is published for observation only")
+    return False
+
+
 async def test_event_handlers_ignore_a_pv_only_inverter():
     """Issue #5279: a leftover control entity for a PV-only inverter must never reach its registers."""
     print("\n=== Test: event handlers ignore a PV-only inverter ===")
@@ -2210,6 +2249,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_run_logs_why_a_no_battery_inverter_is_not_controlled())
         failed |= asyncio.run(test_run_reads_no_registers_from_a_pv_only_inverter())
         failed |= asyncio.run(test_publish_entities_pv_only_inverter_gets_detail_sensors_only())
+        failed |= asyncio.run(test_publish_entities_home_grid_energy_for_observation())
         failed |= asyncio.run(test_event_handlers_ignore_a_pv_only_inverter())
 
     except Exception as e:
