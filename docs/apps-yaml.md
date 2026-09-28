@@ -205,7 +205,8 @@ pred_bat:
   ha_key: !secret ha_key  # Home Assistant Long-Lived Access Token
   octopus_api_key: !secret octopus_api_key  # Octopus API key (if using Octopus direct)
   solcast_api_key: !secret solcast_api_key  # Solcast API key (if using Solcast direct)
-  forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
+  forecast_solar:
+    - api_key: !secret forecast_solar_api_key  # Forecast.solar API key, per array (if using a paid Forecast.solar account)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
   myenergi_api_key: !secret myenergi_api_key  # myenergi API key (if using the myenergi direct transport)
@@ -221,6 +222,22 @@ pred_bat:
   axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
   kraken_key: !secret kraken_key  # Kraken API key (if using Kraken component)
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
+  solis_api_key: !secret solis_api_key  # Solis Cloud API key (if using Solis Cloud)
+  solis_api_secret: !secret solis_api_secret  # Solis Cloud API secret (if using Solis Cloud)
+  solax_client_id: !secret solax_client_id  # SolaX Cloud client id (if using SolaX Cloud)
+  solax_client_secret: !secret solax_client_secret  # SolaX Cloud client secret (if using SolaX Cloud)
+  sunsynk_username: !secret sunsynk_username  # Sunsynk Connect e-mail (if using Sunsynk Cloud)
+  sunsynk_password: !secret sunsynk_password  # Sunsynk Connect password (if using Sunsynk Cloud)
+  sigenergy_app_key: !secret sigenergy_app_key  # Sigenergy app key (if using Sigenergy Cloud)
+  sigenergy_app_secret: !secret sigenergy_app_secret  # Sigenergy app secret (if using Sigenergy Cloud)
+  sigenergy_ca_pem: !secret sigenergy_ca_pem  # Sigenergy CA certificate (if using Sigenergy Cloud)
+  sigenergy_client_pem: !secret sigenergy_client_pem  # Sigenergy client certificate (if using Sigenergy Cloud)
+  sigenergy_client_key: !secret sigenergy_client_key  # Sigenergy client private key (if using Sigenergy Cloud)
+  alphaess_app_id: !secret alphaess_app_id  # AlphaESS developer AppID (if using AlphaESS Cloud)
+  alphaess_app_secret: !secret alphaess_app_secret  # AlphaESS developer AppSecret (if using AlphaESS Cloud)
+  teslemetry_key: !secret teslemetry_key  # Teslemetry token (if using Teslemetry)
+  ohme_login: !secret ohme_login  # Ohme account e-mail (if using Ohme direct)
+  ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -325,10 +342,10 @@ In future versions of Predbat, AppDaemon will be removed.
 
 ```yaml
   ha_url: 'http://homeassistant.local:8123'
-  ha_key: 'xxxxxxxxxxx'
+  ha_key: !secret ha_key
 ```
 
-**Note:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
+Keep `ha_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -577,12 +594,12 @@ you will need to wait until you have a few days of history established (at least
   ge_cloud_direct: true
   ge_cloud_automatic: true
   ge_cloud_serial: '{geserial}'
-  ge_cloud_key: 'xxxxx'
+  ge_cloud_key: !secret ge_cloud_key
   ge_cloud_data: true
   ge_cloud_load_today_ignore: false
 ```
 
-**Note:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
+Keep `ge_cloud_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 - **ge_cloud_load_today_ignore** - Optional, defaults to false. When set to `true`, Predbat will override the **ge_cloud_automatic** setting and use the **load_today** sensor configured in `apps.yaml`.
 This can be useful if the **load_today** data in the GivEnergy Cloud does not accurately reflect your house load (e.g. multiple inverters that share load) and you want to use a custom load_today sensor.  All other sensors will use either the `apps.yaml` entries or the GivEnergy Cloud entities depending upon **ge_cloud_automatic**.
@@ -636,21 +653,14 @@ To use SolaX Cloud Direct, you need to obtain API credentials (client ID and cli
 If you set **solax_automatic** to `true`, Predbat will automatically discover your plants, inverters, and batteries, and configure all necessary entities without manual intervention.
 
 ```yaml
-  solax_client_id: 'your_client_id_here'
-  solax_client_secret: 'your_client_secret_here'
+  solax_client_id: !secret solax_client_id
+  solax_client_secret: !secret solax_client_secret
   solax_region: 'eu'  # Options: 'eu', 'us', or 'cn'
   solax_automatic: true
   solax_enable_controls: true
 ```
 
-**Note:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
-
-```yaml
-  solax_client_id: !secret solax_client_id
-  solax_client_secret: !secret solax_client_secret
-```
-
-See [Storing secrets](#storing-secrets) for more information.
+Keep `solax_client_id` and `solax_client_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 Set **solax_region** based on where your SolaX Cloud account is registered:
 
@@ -777,7 +787,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
   solis_cloud_pv_load_ignore: false
 ```
 
-**Note:** It's strongly recommended to store `api_key` and `api_secret` in `secrets.yaml` and reference them as `!secret solis_api_key` - see [Storing secrets](#storing-secrets).
+Keep `solis_api_key` and `solis_api_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -893,7 +903,7 @@ Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.
   deye_automatic: True
 ```
 
-**Note:** It's strongly recommended to store `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` and reference them as `!secret deye_app_id` etc - see [Storing secrets](#storing-secrets).
+Keep `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -924,14 +934,14 @@ Predbat includes support for Sunsynk (DEYE-family) hybrid inverters via the Suns
 Add your Sunsynk Connect account e-mail and password (the same login used by the Sunsynk phone app) to your `apps.yaml`:
 
 ```yaml
-  sunsynk_username: 'you@example.com'
-  sunsynk_password: 'your-password'
+  sunsynk_username: !secret sunsynk_username
+  sunsynk_password: !secret sunsynk_password
   sunsynk_region: 'sunsynk'
   sunsynk_automatic: true
   sunsynk_control_enable: true
 ```
 
-**Note:** It's strongly recommended to store `sunsynk_username` and `sunsynk_password` in `secrets.yaml` and reference them as `!secret sunsynk_username` etc - see [Storing secrets](#storing-secrets).
+Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -983,7 +993,7 @@ Register a developer application at [open.alphaess.com](https://open.alphaess.co
   alphaess_control_enable: true
 ```
 
-**Note:** It's strongly recommended to store `alphaess_app_id` and `alphaess_app_secret` in `secrets.yaml` and reference them as `!secret alphaess_app_id` etc - see [Storing secrets](#storing-secrets).
+Keep `alphaess_app_id` and `alphaess_app_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -1197,12 +1207,12 @@ If you need to create a **ge_cloud_key**, in the GivEnergy cloud portal:
 - Select 'No expiry' for the token expiry duration, or choose a fixed duration but remember to create a new token before it expires as Predbat's access will stop once the token expires
 - Ensure that 'api:inverter' is ticked
 - Create token
-- Finally, copy/paste the token created into **ge_cloud_key** within `apps.yaml`, or [store the GE cloud key in secrets.yaml](#storing-secrets)
+- Finally, copy/paste the token created into `secrets.yaml` as **ge_cloud_key** and reference it from `apps.yaml` - see [Storing secrets](#storing-secrets)
 
 i.e.
 
 ```yaml
-  ge_cloud_key: API_key_consisting_of_long_string_of_numbers_and_letters
+  ge_cloud_key: !secret ge_cloud_key
 ```
 
 ### GivEnergy Cloud controls
@@ -1785,11 +1795,11 @@ Uncomment the following Solcast cloud interface settings in `apps.yaml` and set 
 
 ```yaml
   solcast_host: 'https://api.solcast.com.au/'
-  solcast_api_key: 'xxxx'
+  solcast_api_key: !secret solcast_api_key
   solcast_poll_hours: 8
 ```
 
-**Note:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
+Keep `solcast_api_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:
@@ -1887,7 +1897,7 @@ Optionally you can set an api_key for personal or professional accounts and you 
 ``` yaml
   forecast_solar:
     - postcode: SW1A 2AB
-      api_key: 'xxxxx'
+      api_key: !secret forecast_solar_api_key
       days: 3
 ```
 

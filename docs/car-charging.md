@@ -345,10 +345,12 @@ An excellent [worked example of setting up multiple car charging with Predbat](h
 Predbat can talk directly to the Ohme charger by configuring your Ohme account details in `apps.yaml`.
 
 ```yaml
-  ohme_login: "user@domain"
-  ohme_password: "xxxxxxxxx"
+  ohme_login: !secret ohme_login
+  ohme_password: !secret ohme_password
   ohme_automatic: true
 ```
+
+Keep your Ohme login and password in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 There are two separate automatic settings, so you can have Predbat plan for the car without involving Octopus Intelligent at all:
 
@@ -364,8 +366,8 @@ Predbat uses the Ohme slots. Set it explicitly to override that either way - `tr
 off so the slots come from Octopus directly.
 
 ```yaml
-  ohme_login: "user@domain"
-  ohme_password: "xxxxxxxxx"
+  ohme_login: !secret ohme_login
+  ohme_password: !secret ohme_password
   ohme_automatic: true
   ohme_automatic_octopus_intelligent: true
 ```
@@ -380,8 +382,8 @@ Setting only **ohme_automatic_octopus_intelligent** (with no `ohme_automatic`) s
 **ohme_control** lets Predbat start and stop the charger itself, according to its own car charging plan:
 
 ```yaml
-  ohme_login: "user@domain"
-  ohme_password: "xxxxxxxxx"
+  ohme_login: !secret ohme_login
+  ohme_password: !secret ohme_password
   ohme_automatic: true
   ohme_control: true
 ```
@@ -401,8 +403,6 @@ Ohme app while Predbat is in control, Predbat notices at its next poll and puts 
 [read only mode](customisation.md#predbat-mode) is what releases it - Predbat then hands the charger back to Ohme's own smart schedule, and picks it up again when you turn read only
 off. A component restart deliberately does *not* release the charger, so restarting Predbat will not interrupt a charge in progress. If Predbat stops unexpectedly while the charger is
 paused, it stays paused until you turn read only on, disable `ohme_control`, or resume the charge in the Ohme app.
-
-**Note:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 ### Ohme charge energy
 

@@ -2732,12 +2732,14 @@ Nobody on the Predbat project has a Sunsynk account, so this integration's wire 
 You need a Sunsynk Connect account e-mail and password - the same login used by the Sunsynk phone app. Add them to `apps.yaml`:
 
 ```yaml
-  sunsynk_username: 'you@example.com'
-  sunsynk_password: 'your-password'
+  sunsynk_username: !secret sunsynk_username
+  sunsynk_password: !secret sunsynk_password
   sunsynk_region: 'sunsynk'
   sunsynk_automatic: true
   sunsynk_control_enable: true
 ```
+
+Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 Set `sunsynk_region` to `'inteless'` instead of `'sunsynk'` if your account logs in via the `pv.inteless.com` host rather than `api.sunsynk.net` - check with your installer, or try the [diagnostics CLI](#verifying-with-the-sunsynk-diagnostics-cli) below with each region if you are not sure.
 
@@ -2970,11 +2972,13 @@ template:
 The component needs only your token in `apps.yaml` and no Home Assistant Tesla integration (`site_id` is optional - omit it to use the first site on your account):
 
 ```yaml
-  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_key: !secret teslemetry_key
   teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
   teslemetry_automatic: True
   #teslemetry_tbc_control: False  # optional: on by default, uncomment to opt out - see below
 ```
+
+Keep the token in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
 
