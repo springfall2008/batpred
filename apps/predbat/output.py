@@ -101,18 +101,15 @@ def split_status_warning(status):
     component_suffix = COMPONENT_ERROR_STATUS_SUFFIX.lower()
     if lowered.startswith(component_prefix) and component_suffix in lowered:
         return status[len(component_prefix) : lowered.index(component_suffix)].strip(), status
+    # Predheat words its warnings "Warn - ..." rather than "Warn: ...", so both forms are
+    # recognised, bare and behind a state alike.
     if lowered.startswith("warn:") or lowered.startswith("warn -") or lowered.startswith("error:"):
         return "", status
-    for marker in (", warn:", ", error:"):
+    for marker in (", warn:", ", warn -", ", error:"):
         index = lowered.find(marker)
         if index >= 0:
             return status[:index].strip(), status[index + 2 :].strip()
     return status, ""
-
-
-def yesterday_status_core(status):
-    """The charge/export state a historical ``predbat.status`` string records - see split_status_warning()."""
-    return split_status_warning(status)[0]
 
 
 def more_active_slot_status(current, candidate, precedence):

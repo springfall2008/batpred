@@ -29,7 +29,7 @@ import pytz
 
 from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import export_mode_of
-from output import yesterday_slot_is_exporting, yesterday_status_core, more_active_slot_status
+from output import yesterday_slot_is_exporting, split_status_warning, more_active_slot_status
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -2224,13 +2224,13 @@ def _test_yesterday_slot_is_exporting(my_predbat, failed):
     return failed
 
 
-def _test_yesterday_status_core(my_predbat, failed):
-    """Test: yesterday_status_core() keeps real states and blanks out warnings and errors.
+def _test_split_status_warning(my_predbat, failed):
+    """Test: split_status_warning() keeps real states and blanks out warnings and errors.
 
     A warning pinned on the status sensor was read by substring: "car_charging_soc" contains
     "charging", so a day of force exports was rebuilt as charge holds.
     """
-    print("calculate_yesterday: Test - yesterday_status_core drops warnings and errors, keeps real states")
+    print("calculate_yesterday: Test - split_status_warning drops warnings and errors, keeps real states")
 
     cases = [
         ("Exporting", "Exporting"),
@@ -2245,11 +2245,25 @@ def _test_yesterday_status_core(my_predbat, failed):
         ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Exporting"),
         ("Freeze exporting, Hold for car, Error: Inverter 0 unable to read Export window", "Freeze exporting, Hold for car"),
         ("Warn - Unable to fetch data from sensor.outdoor_temperature", ""),
+        ("Exporting, Warn - Unable to fetch data from sensor.outdoor_temperature", "Exporting"),
     ]
     for status, expected in cases:
-        result = yesterday_status_core(status)
+        result = split_status_warning(status)[0]
         if result != expected:
-            print("ERROR: yesterday_status_core({!r}) should be {!r}, got {!r}".format(status, expected, result))
+            print("ERROR: split_status_warning({!r}) state should be {!r}, got {!r}".format(status, expected, result))
+            failed = True
+
+    # The warning half is what flags the History slot, so every form must hand one back
+    warning_cases = [
+        ("Exporting", ""),
+        ("Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Exporting, Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
+        ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Warn: Return bad float value unavailable from car_charging_soc"),
+    ]
+    for status, expected in warning_cases:
+        result = split_status_warning(status)[1]
+        if result != expected:
+            print("ERROR: split_status_warning({!r}) warning should be {!r}, got {!r}".format(status, expected, result))
             failed = True
 
     return failed
@@ -2439,7 +2453,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_brief_edge_blip_is_not_counted(my_predbat, failed)
     failed = _test_edge_only_state_still_gets_real_window_bounds(my_predbat, failed)
     failed = _test_cross_charging_export_window_covers_the_slot(my_predbat, failed)
-    failed = _test_yesterday_status_core(my_predbat, failed)
+    failed = _test_split_status_warning(my_predbat, failed)
     failed = _test_warning_status_is_not_a_charge_state(my_predbat, failed)
 
     return failed
