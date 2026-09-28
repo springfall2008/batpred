@@ -22,8 +22,8 @@ function loadSolarChartUtilities() {
   return module.exports
 }
 
-test('solar helpers build calendar ranges and join historical and future forecasts at Now', () => {
-  const { combineSolarForecast, getSolarChartWindow, peakSolarPower, solarAccuracy, sumDailyCumulative } = loadSolarChartUtilities()
+test('solar helpers build historical and forecast ranges and join forecasts at Now', () => {
+  const { combineSolarForecast, getSolarChartWindow, getSolarPowerWindow, peakSolarPower, solarAccuracy, sumDailyCumulative } = loadSolarChartUtilities()
   const now = Date.parse('2026-09-18T12:00:00Z')
   const before = Date.parse('2026-09-18T11:30:00Z')
   const after = Date.parse('2026-09-18T12:30:00Z')
@@ -39,10 +39,22 @@ test('solar helpers build calendar ranges and join historical and future forecas
   ])
   assert.equal(peakSolarPower(combined), 3.4)
 
-  const oneDay = getSolarChartWindow('2026-09-18T12:00:00', 1)
-  const sevenDays = getSolarChartWindow('2026-09-18T12:00:00', 7)
-  assert.equal((oneDay.end - oneDay.start) / 86400000, 1)
-  assert.equal((sevenDays.end - sevenDays.start) / 86400000, 7)
+  const oneDay = getSolarPowerWindow('2026-09-18T12:00:00', 1, Date.parse('2026-09-21T18:00:00'))
+  const threeDays = getSolarPowerWindow('2026-09-18T12:00:00', 3, Date.parse('2026-09-21T18:00:00'))
+  const sevenDays = getSolarPowerWindow('2026-09-18T12:00:00', 7, Date.parse('2026-09-21T18:00:00'))
+  assert.deepEqual({ start: new Date(oneDay.start), end: new Date(oneDay.end) }, {
+    start: new Date('2026-09-18T12:00:00'),
+    end: new Date('2026-09-19T12:00:00')
+  })
+  assert.deepEqual({ start: new Date(threeDays.start), end: new Date(threeDays.end) }, {
+    start: new Date('2026-09-18T00:00:00'),
+    end: new Date('2026-09-21T00:00:00')
+  })
+  assert.deepEqual({ start: new Date(sevenDays.start), end: new Date(sevenDays.end) }, {
+    start: new Date('2026-09-15T00:00:00'),
+    end: new Date('2026-09-22T00:00:00')
+  })
+  assert.equal((getSolarChartWindow('2026-09-18T12:00:00', 7).end - getSolarChartWindow('2026-09-18T12:00:00', 7).start) / 86400000, 7)
   assert.deepEqual({ ...solarAccuracy(8.5, 10) }, { difference: -1.5, achieved: 85 })
   assert.deepEqual({ ...solarAccuracy(null, 10) }, { difference: null, achieved: null })
   assert.equal(sumDailyCumulative([

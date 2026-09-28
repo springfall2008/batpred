@@ -149,15 +149,15 @@
 }
 
 /*
- * While Predbat is recalculating, the current contents are
- * temporarily stale.
+ * A software update replaces files and restarts Predbat, so the
+ * current page must remain read-only until it completes.
  */
 .app-shell.is-calculating {
   user-select: none;
 }
 
 /*
- * Full-screen interaction blocker.
+ * Full-screen software-update blocker.
  *
  * backdrop-filter desaturates the existing UI while leaving it
  * visible enough that the user can still see what is changing.
@@ -172,6 +172,17 @@
   backdrop-filter: grayscale(0.8) blur(1px);
   -webkit-backdrop-filter: grayscale(0.8) blur(1px);
   cursor: wait;
+}
+
+/* Plan recalculation is safe to leave running while the user continues working. */
+.plan-calculating-overlay.is-non-blocking {
+  inset: auto 1rem 1rem auto;
+  display: block;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+  cursor: default;
 }
 
 /*
@@ -220,6 +231,18 @@
 @keyframes plan-calculating-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 700px) {
+  .plan-calculating-overlay.is-non-blocking {
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+  }
+
+  .plan-calculating-overlay.is-non-blocking .plan-calculating-message {
+    width: 100%;
   }
 }
 

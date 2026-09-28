@@ -16,7 +16,7 @@ import {
 import type { SolarChartData } from '../types/charts'
 import { useStoredState } from '../hooks/useStoredState'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
-import { combineSolarForecast, getSolarChartWindow, peakSolarPower, solarAccuracy, sumDailyCumulative } from '../utils/solarChart'
+import { combineSolarForecast, getSolarChartWindow, getSolarPowerWindow, peakSolarPower, solarAccuracy, sumDailyCumulative } from '../utils/solarChart'
 
 import './BatteryChart.css'
 
@@ -162,7 +162,6 @@ export default function SolarChart({ data }: SolarChartProps) {
   const [themeRevision, setThemeRevision] = useState(0)
   const days = view === 'power' ? powerDays : accuracyDays
   const generatedAt = Date.parse(data.generated_at)
-  const window = useMemo(() => getSolarChartWindow(data.generated_at, days), [data.generated_at, days])
   const allPoints = useMemo(() => ({
     actual: toChartPoints(data.series.actual),
     forecastHistory: toChartPoints(data.series.forecast_history),
@@ -174,6 +173,16 @@ export default function SolarChart({ data }: SolarChartProps) {
     energyActual: toChartPoints(data.series.energy_actual),
     energyForecast: toChartPoints(data.series.energy_forecast)
   }), [data.series])
+  const forecastEnd = useMemo(
+    () => Math.max(generatedAt, ...allPoints.forecast.map((point) => point.x)),
+    [allPoints.forecast, generatedAt]
+  )
+  const window = useMemo(
+    () => view === 'power'
+      ? getSolarPowerWindow(data.generated_at, days, forecastEnd)
+      : getSolarChartWindow(data.generated_at, days),
+    [data.generated_at, days, forecastEnd, view]
+  )
   const actualPoints = pointsInWindow(allPoints.actual, window)
   const calibratedPoints = pointsInWindow(
     combineSolarForecast(allPoints.calibratedHistory, allPoints.calibrated, generatedAt),

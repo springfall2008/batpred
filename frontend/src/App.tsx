@@ -76,7 +76,7 @@ function App() {
 
   const [navigationLayout, setNavigationLayout] = useStoredState<'side' | 'horizontal'>(
     'predbat-navigation-layout',
-    'side',
+    'horizontal',
     ['side', 'horizontal']
   )
 
@@ -414,16 +414,17 @@ function App() {
     controlError ?? apiErrors.plan ?? apiErrors.status ?? apiErrors.powerFlow ?? null
 
   const updating = statusData?.updating === true
-  const busy = updating || statusData?.calculating === true
-  const activityOverlay = busy ? (
-    <div className="plan-calculating-overlay" role="status" aria-live="polite">
+  const calculating = statusData?.calculating === true
+  const active = updating || calculating
+  const activityOverlay = active ? (
+    <div className={`plan-calculating-overlay ${updating ? '' : 'is-non-blocking'}`} role="status" aria-live="polite">
       <div className="plan-calculating-message">
         <span className="plan-calculating-spinner" aria-hidden="true" />
 
         <div>
           <strong>{updating ? 'Updating Predbat' : 'Recalculating plan'}</strong>
 
-          <span>{updating ? 'Downloading and installing the selected version…' : 'Predbat is updating the plan…'}</span>
+          <span>{updating ? 'Downloading and installing the selected version…' : 'Further changes will be included in the next calculation.'}</span>
         </div>
       </div>
     </div>
@@ -433,16 +434,16 @@ function App() {
     return (
       <>
         <div
-          className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${busy ? 'is-calculating' : ''}`}
-          inert={busy}
-          aria-busy={busy}
+          className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${updating ? 'is-calculating' : ''}`}
+          inert={updating}
+          aria-busy={updating}
         >
           <AppNavigation
             collapsed={navigationCollapsed}
             onCollapsedChange={setNavigationCollapsed}
             layout={navigationLayout}
             onLayoutChange={setNavigationLayout}
-            calculating={busy}
+            calculating={active}
             batterySoc={powerFlowData?.soc_percent ?? null}
             chatEnabled={statusData?.chat_enabled ?? false}
             version={statusData?.version ?? ''}
@@ -494,16 +495,16 @@ function App() {
   return (
     <>
       <div
-        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${busy ? 'is-calculating' : ''}`}
-        inert={busy}
-        aria-busy={busy}
+        className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${updating ? 'is-calculating' : ''}`}
+        inert={updating}
+        aria-busy={updating}
       >
         <AppNavigation
           collapsed={navigationCollapsed}
           onCollapsedChange={setNavigationCollapsed}
           layout={navigationLayout}
           onLayoutChange={setNavigationLayout}
-          calculating={busy}
+          calculating={active}
           batterySoc={powerFlowData?.soc_percent ?? null}
           chatEnabled={statusData.chat_enabled}
           version={statusData.version}

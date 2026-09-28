@@ -18,6 +18,33 @@ export function getSolarChartWindow(generatedAt: string, days: number): SolarCha
   return { start: start.getTime(), end: end.getTime() }
 }
 
+/** Show the requested forecast period, using history to fill a seven-day view. */
+export function getSolarPowerWindow(generatedAt: string, days: number, forecastEnd: number): SolarChartWindow {
+  const now = new Date(generatedAt)
+  if (days === 1) {
+    return { start: now.getTime(), end: now.getTime() + 24 * 60 * 60 * 1000 }
+  }
+
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  let futureDays = days
+
+  if (days === 7) {
+    const lastForecast = new Date(Math.max(forecastEnd, today.getTime()))
+    futureDays = Math.min(days, Math.max(1, Math.round(
+      (Date.UTC(lastForecast.getFullYear(), lastForecast.getMonth(), lastForecast.getDate())
+        - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000
+    ) + 1))
+  }
+
+  const start = new Date(today)
+  start.setDate(start.getDate() - (days - futureDays))
+  const end = new Date(today)
+  end.setDate(end.getDate() + futureDays)
+
+  return { start: start.getTime(), end: end.getTime() }
+}
+
 /** Join the forecast recorded in the past to the current forecast from now onwards. */
 export function combineSolarForecast(history: ChartPoint[], current: ChartPoint[], now: number): ChartPoint[] {
   return [

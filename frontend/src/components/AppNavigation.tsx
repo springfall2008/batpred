@@ -478,9 +478,11 @@ export default function AppNavigation({
             </button>
           </div>
 
-          <span className="navigation-version" title={`Predbat ${version} · Modern UI ${MODERN_UI_VERSION}`}>
-            {version} · UI {MODERN_UI_VERSION}
-          </span>
+          {layout === 'side' && (
+            <span className="navigation-version" title={`Predbat ${version} · Modern UI ${MODERN_UI_VERSION}`}>
+              {version} · UI {MODERN_UI_VERSION}
+            </span>
+          )}
         </footer>
       </aside>
 
