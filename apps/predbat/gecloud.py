@@ -917,9 +917,23 @@ class GECloudDirect(ComponentBase):
         - Plant EMS   - Not an inverter, should use the individual inverter values
         """
 
+        # GE Cloud can send an explicit null model, which would crash every regex below
+        if not isinstance(model, str):
+            return max_charge_rate
+
+        # Trailing whitespace or a trailing '.' (GIV-HY-8.0-G3-HV.) must not defeat the segment anchors below
+        model_clean = model.strip().rstrip(".")
+
+        # Integer rating only as a whole segment straight after the 3-phase hybrid token (GIV-3HY-11),
+        # bounded by '-' or end of string so suffixes such as GW2 / G3 are never read as a rating.
+        # Checked before the decimal pass so a later decimal segment cannot hide the explicit 3HY rating
+        match = re.search(r"(?:^|-)3HY-(\d{1,2})(?=-|$)", model_clean, re.IGNORECASE)
+        if match:
+            return int(match.group(1)) * 1000
+
         # Find all decimal numbers anywhere in the model string (e.g. 3.6, 10.0, 12.0)
         # Use the last match so that e.g. GIV-AIO-AC-13.5-12.0 resolves to 12kW not 13.5kW
-        matches = re.findall(r"\d+\.\d+", model)
+        matches = re.findall(r"\d+\.\d+", model_clean)
         if matches:
             try:
                 max_inverter_rate = int(float(matches[-1]) * 1000)
@@ -927,15 +941,10 @@ class GECloudDirect(ComponentBase):
             except ValueError:
                 pass
 
-        # Integer rating only as a whole segment straight after the 3-phase hybrid token (GIV-3HY-11),
-        # bounded by '-' or end of string so suffixes such as GW2 / G3 are never read as a rating
-        match = re.search(r"(?:^|-)3HY-(\d{1,2})(?=-|$)", model, re.IGNORECASE)
-        if match:
-            return int(match.group(1)) * 1000
-
         # A hybrid with no parseable rating is using a battery rate as its AC rating, warn once per model
-        if "HY" in model.upper() and model not in self.model_rate_warned:
-            self.log("GECloud: Warn: Unable to determine inverter rating from model '{}', using max charge rate {}W instead - set inverter_limit in apps.yaml if this is wrong".format(model, max_charge_rate))
+        if "HY" in model_clean.upper() and model not in self.model_rate_warned:
+            fallback = "max charge rate {}W".format(max_charge_rate) if max_charge_rate is not None else "no rating"
+            self.log("GECloud: Warn: Unable to determine inverter rating from model '{}', using {} instead - set inverter_limit in apps.yaml if this is wrong".format(model, fallback))
             self.model_rate_warned.add(model)
         return max_charge_rate
 

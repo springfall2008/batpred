@@ -7530,8 +7530,18 @@ def _test_get_max_inverter_rate_from_model(my_predbat):
         ("GIV-AIO-GW2", 2600, 2600, "GIV-AIO-GW2 => fallback, GW2 is not a rating"),
         ("GIV-3HY-G3", 9984, 9984, "GIV-3HY-G3 => fallback, G3 is not a rating"),
         ("GIV-3HY-110", 9984, 9984, "GIV-3HY-110 => fallback, three digits is not a plausible rating"),
-        # Decimal pass still wins over the 3HY integer pass
+        # Non-3HY hybrids still use the decimal pass
         ("ALPS HY-6.0-GL", 3600, 6000, "ALPS HY-6.0-GL => 6kW"),
+        # The explicit 3HY segment wins over a later decimal segment
+        ("GIV-3HY-11-9.5", 9984, 11000, "GIV-3HY-11-9.5 => 11kW, later decimal does not hide the 3HY rating"),
+        # A 3HY decimal rating is not a whole integer segment and falls through to the decimal pass
+        ("GIV-3HY-10.0", 9984, 10000, "GIV-3HY-10.0 => 10kW via the decimal pass"),
+        # Trailing punctuation or whitespace does not defeat the segment anchors
+        ("GIV-3HY-11.", 9984, 11000, "GIV-3HY-11. => 11kW (trailing period)"),
+        ("GIV-3HY-11 ", 9984, 11000, "GIV-3HY-11<space> => 11kW (trailing space)"),
+        ("GIV-HY-8.0-G3-HV.", None, 8000, "GIV-HY-8.0-G3-HV. => 8kW (trailing period)"),
+        # An explicit null model from GE Cloud falls back rather than raising TypeError
+        (None, 3600, 3600, "None model => fallback to max_charge_rate"),
     ]
 
     failed = 0
@@ -7557,6 +7567,40 @@ def _test_get_max_inverter_rate_from_model(my_predbat):
         failed += 1
     else:
         print("OK unparsed hybrid model warns once")
+
+    # With no max_charge_rate the warning must not print "NoneW"
+    ge_cloud.model_rate_warned = set()
+    ge_cloud.log_messages = []
+    ge_cloud.get_max_inverter_rate_from_model("GIV-HYZ", None)
+    warnings = [message for message in ge_cloud.log_messages if "Unable to determine inverter rating" in message]
+    if len(warnings) != 1 or "NoneW" in warnings[0]:
+        print("ERROR expected one fallback warning without 'NoneW', got {}".format(warnings))
+        failed += 1
+    else:
+        print("OK fallback warning with no max_charge_rate is readable")
+
+    # End to end through publish_info: the 3-phase hybrid publishes its 11kW rating, not the fluctuating battery rate (GH#5136)
+    ge_cloud.config_args["prefix"] = "predbat"
+    ge_cloud.dashboard_items.clear()
+    info_3hy = {"info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2}, "model": "GIV-3HY-11", "max_charge_rate": 9984}}
+    run_async(ge_cloud.publish_info("dev3hy", info_3hy))
+    rate = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev3hy_max_inverter_rate", {}).get("state")
+    if rate != 11000:
+        print("ERROR publish_info GIV-3HY-11 expected max_inverter_rate 11000, got {}".format(rate))
+        failed += 1
+    else:
+        print("OK publish_info GIV-3HY-11 publishes 11000")
+
+    # An explicit null model in the payload publishes the fallback instead of crashing the refresh
+    ge_cloud.dashboard_items.clear()
+    info_null_model = {"info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2}, "model": None, "max_charge_rate": 3600}}
+    run_async(ge_cloud.publish_info("devnull", info_null_model))
+    rate = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_devnull_max_inverter_rate", {}).get("state")
+    if rate != 3600:
+        print("ERROR publish_info null model expected max_inverter_rate 3600, got {}".format(rate))
+        failed += 1
+    else:
+        print("OK publish_info null model publishes the fallback")
 
     return 1 if failed else 0
 
