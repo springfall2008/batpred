@@ -6,14 +6,14 @@
 
 ## Test UI
 
-It's possible to replace the existing ui in Predbat with this test version. Disable auto updated then edit apps.yaml as follows
+It's possible to replace the existing ui in Predbat with this test version. Disable auto update then edit apps.yaml as follows
 
 ```
 pred_bat:
 
-  web_ui: modern
+  web_ui: modern #legacy restores original predbat ui
   auto_update: false
-  predbat_repository: calvind80/predbat-modern-ui-test
+  predbat_repository: calvind80/predbat-modern-ui-test #delete this row to go back to the main predbat branch
 
 ```
 

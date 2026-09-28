@@ -74,6 +74,7 @@
   font-size: 0.95rem;
   line-height: 1.1;
   color: var(--color-text);
+  text-wrap: nowrap;
 }
 
 .detailed-flow-label small {
@@ -117,7 +118,6 @@
 .detailed-flow-solar {
   left: 48%;
   top: 20%;
-  transform: translateX(-50%);
 }
 
 /* Battery — alongside battery */
@@ -129,8 +129,7 @@
 /* Home */
 .detailed-flow-home {
   left: 57%;
-  top: 40%;
-  transform: translateX(-50%);
+  top: 36%;
 }
 
 /* Car */
@@ -165,12 +164,12 @@
 }
 
 .detailed-anchor-home {
-  left: 56%;
-  top: 49%;
+  left: 62%;
+  top: 46%;
 }
 
 .detailed-anchor-car {
-  left: 77%;
+  left: 80%;
   top: 71%;
 }
 
@@ -530,5 +529,66 @@
   .detailed-flow-debug-button {
     padding: 0.25rem 0.4rem;
     font-size: 0.6rem;
+  }
+
+  .detailed-anchor-grid {
+    left: 19%;
+    top: 43%;
+  }
+
+  .detailed-anchor-solar {
+    left: 48%;
+    top: 25%;
+  }
+
+  .detailed-anchor-inverter {
+    left: 39%;
+    top: 51%;
+  }
+
+  .detailed-anchor-battery {
+    left: 30%;
+    top: 80%;
+  }
+
+  .detailed-anchor-home {
+    left: 54%;
+    top: 70%;
+  }
+
+  .detailed-anchor-car {
+    left: 90%;
+    top: 62%;
+  }
+
+  /* Grid — alongside electricity pylon */
+  .detailed-flow-grid {
+    left: 2%;
+    top: 30%;
+  }
+
+  /* Solar — above panels */
+  .detailed-flow-solar {
+    left: 40%;
+    top: 12%;
+  }
+
+  /* Battery — alongside battery */
+  .detailed-flow-battery {
+    left: 2%;
+    top: 70%;
+  }
+
+  /* Home */
+  .detailed-flow-home {
+    left: 42%;
+    top: 70%;
+  }
+
+  /* Car */
+  .detailed-flow-car {
+    left: auto;
+    right: 2%;
+    top: 56%;
   }
 }

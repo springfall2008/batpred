@@ -662,11 +662,11 @@ function DetailedPowerFlow({ data, showCar }: DetailedPowerFlowProps) {
    */
   const car = testCar
     ? {
-        configured: true,
-        power: 3200,
-        inside_clamp: true,
-        charging: true
-      }
+      configured: true,
+      power: 3200,
+      inside_clamp: true,
+      charging: true
+    }
     : displayData.car
 
   /*
@@ -859,7 +859,7 @@ function DetailedPowerFlow({ data, showCar }: DetailedPowerFlowProps) {
       if (carVisible && carAnchorRef.current) {
         const carPoint = getAnchorPoint(carAnchorRef.current, container)
 
-        newPaths.car = createRoundedPath(inverterPoint, carPoint, 'vertical-first')
+        newPaths.car = createRoundedPath(inverterPoint, carPoint, 'horizontal-first')
       }
 
       /*
