@@ -1767,8 +1767,8 @@ CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
 def parse_car_plan_windows(planned, now, local_tz):
     """Turn one car's published charging plan into a list of localised (start, end) pairs.
 
-    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
-    so the awkward parts stay in one place: the plan carries no year, so each window is
+    Shared by every component that drives a charger from the plan (CarChargerControl and the
+    gateway's EV charger) so the awkward parts stay in one place: the plan carries no year, so each window is
     rebuilt around now - without that, a plan read either side of New Year lands eleven
     months out - and a malformed entry is skipped rather than costing the rest of the plan.
 
