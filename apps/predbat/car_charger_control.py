@@ -39,7 +39,11 @@ class CarChargerControl:
     - charger_control_car_count(): how many cars have a plan to follow.
 
     Chargers with no car to follow are left alone rather than stopped: a charger whose
-    car has no plan would otherwise read as "not planned" and be stopped mid-charge.
+    car has no plan would otherwise read as "not planned" and be stopped mid-charge. One
+    Predbat was already holding when its car went away is released rather than stranded.
+
+    send and release_one must raise when the charger refuses, so nothing is recorded as
+    done and the next cycle tries again; the component catches it in its run loop.
     """
 
     def charger_control_setup(self, log_name, noun, storage_module=None, storage_key=None, storage_field=None):
@@ -201,7 +205,16 @@ class CarChargerControl:
         """
         if not self.charger_control_refresh_windows(now):
             return
-        for car_n, (key, handle) in enumerate(self.charger_control_chargers()[: self.charger_control_car_count()]):
+        chargers = self.charger_control_chargers()
+        car_count = self.charger_control_car_count()
+        # A charger Predbat holds whose car has gone (num_cars dropped) would otherwise never be
+        # commanded again, left charging or stopped with nobody in control - hand it back instead
+        for key, handle in chargers[car_count:]:
+            if key in self.charger_control_state:
+                self.log("Info: {}: {} {} no longer has a car to follow, releasing it".format(self.charger_control_log_name, self.charger_control_noun, key))
+                await self.charger_control_release_one(handle, self.charger_control_state[key])
+                del self.charger_control_state[key]
+        for car_n, (key, handle) in enumerate(chargers[:car_count]):
             if not self.charger_control_connected(handle):
                 continue
             charge = self.charger_control_should_charge(car_n, now)

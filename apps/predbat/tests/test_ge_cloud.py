@@ -11,7 +11,7 @@
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
-from gecloud import GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
+from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import DEVICE_REFRESH_SECONDS, SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
 import asyncio
@@ -6423,6 +6423,49 @@ def _test_evc_control(my_predbat):
 
         await ge.charger_control_apply(inside)
         assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
+
+        # Test 11: a command GE Cloud refuses is not recorded as sent, so it is tried again
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.entity_attributes = plan
+        refused = []
+
+        async def refuse(uuid, command, params):
+            """Refuse the command, as async_send_evc_command reports it: None."""
+            refused.append((uuid, command))
+            return None
+
+        real_send = ge.async_send_evc_command
+        ge.async_send_evc_command = refuse
+        try:
+            await ge.charger_control_apply(outside)
+            assert False, "A refused command should raise"
+        except EVCCommandFailed:
+            pass
+        assert ge.charger_control_state == {}, "A refused stop must not be recorded, got {}".format(ge.charger_control_state)
+
+        ge.async_send_evc_command = real_send
+        await ge.charger_control_apply(outside)
+        assert commands == [("evc-001", "stop-charge")], "The stop should be retried, got {}".format(commands)
+
+        # Test 12: a refused release is not latched as done, so the stopped charger is not stranded
+        commands.clear()
+        ge._read_only = True
+        ge.async_send_evc_command = refuse
+        try:
+            await ge.charger_control_tick(outside)
+            assert False, "A refused release should raise"
+        except EVCCommandFailed:
+            pass
+        assert ge.charger_control_released is None, "A refused release must not be recorded as done"
+        assert ge.charger_control_state == {"evc-001": False}, "Predbat still holds the stopped charger"
+
+        ge.async_send_evc_command = real_send
+        await ge.charger_control_tick(outside)
+        assert commands == [("evc-001", "start-charge")], "The release should be retried, got {}".format(commands)
+        assert ge.charger_control_released is not None
 
         return 0
 

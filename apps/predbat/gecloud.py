@@ -326,6 +326,14 @@ def classify_ge_failure(data, endpoint=None):
     return {"code": code, "message": ge_code_message(data, code), "reason": reason, "retry": retry}
 
 
+class EVCCommandFailed(Exception):
+    """An EV charger command GivEnergy Cloud refused or never confirmed.
+
+    async_send_evc_command() reports failure by returning None; charger control raises this
+    instead so the command is not recorded as done and is tried again next cycle.
+    """
+
+
 class GECloudTerminalError(Exception):
     """Raised when the GE Cloud API reports a failure that no retry can clear.
 
@@ -2128,7 +2136,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """Start the charger inside a planned window, stop it outside one."""
         command = EVC_COMMAND_START if charge else EVC_COMMAND_STOP
         self.log("GECloud: Sending {} to EV charger {} for car {}".format(command, self.evc_device[uuid]["serial_number"], car_n))
-        await self.async_send_evc_command(uuid, command, {})
+        if await self.async_send_evc_command(uuid, command, {}) is None:
+            raise EVCCommandFailed("{} was not accepted by EV charger {}".format(command, self.evc_device[uuid]["serial_number"]))
 
     async def charger_control_release_one(self, uuid, charge):
         """Hand a held charger back by starting it again.
@@ -2141,7 +2150,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         if charge:
             return
         self.log("GECloud: Releasing EV charger {}".format(self.evc_device[uuid]["serial_number"]))
-        await self.async_send_evc_command(uuid, EVC_COMMAND_START, {})
+        if await self.async_send_evc_command(uuid, EVC_COMMAND_START, {}) is None:
+            raise EVCCommandFailed("the release was not accepted by EV charger {}".format(self.evc_device[uuid]["serial_number"]))
 
     async def async_automatic_config_evc(self):
         """Wire the EV chargers into Predbat's car charging inputs.
@@ -2402,7 +2412,13 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     attributes={"friendly_name": "EV Charger Control", "icon": "mdi:ev-station"},
                     app="gecloud",
                 )
-                await self.charger_control_tick(self.now_utc_exact)
+                try:
+                    await self.charger_control_tick(self.now_utc_exact)
+                except EVCCommandFailed as exc:
+                    # Already logged as an error by async_send_evc_command; nothing is recorded as
+                    # done, so the next cycle tries again - for a release, that is what stops a
+                    # stopped car being stranded
+                    self.log("GECloud: Warn: EV charger control failed, will retry: {}".format(exc))
 
         if first or devices_changed or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them

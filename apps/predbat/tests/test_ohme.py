@@ -1962,6 +1962,7 @@ def _test_ohme_control_failed_release_retries(my_predbat=None):
     resume_calls = []
 
     async def refuse_resume():
+        """Refuse the resume, as Ohme would when the car is gone."""
         resume_calls.append(True)
         raise ApiException("refused")
 
