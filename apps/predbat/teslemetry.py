@@ -191,8 +191,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.automatic_done = False
         self.tbc_control = tbc_control
-        self.hybrid_override = self.parse_hybrid_override(hybrid)
+        # teslemetry_hybrid is a boolean in APPS_SCHEMA; unset reaches here as None, meaning "decide from the model"
+        self.hybrid_override = hybrid if isinstance(hybrid, bool) else None
         self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
+        self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
         self._reserve_band_warned = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
@@ -200,15 +202,6 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
         self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
         self.register_control_entities()
-
-    @staticmethod
-    def parse_hybrid_override(value):
-        """teslemetry_hybrid as True/False, or None (unset or unrecognised) to decide from the Powerwall model."""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return {"true": True, "on": True, "yes": True, "false": False, "off": False, "no": False}.get(value.strip().lower())
-        return None
 
     def entity(self, suffix, domain="sensor"):
         """Build a prefixed virtual entity id for this component."""
@@ -378,10 +371,24 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """Capacity in kWh from components.gateways[].nameplate_energy_watts, or 0 when no gateway reports it.
 
         A Powerwall 3 has no top-level nameplate_energy but reports the whole system here, expansion packs
-        included (13500 / 27000 / 40500 across the GH#5275 fleet).
+        included (13500 / 27000 / 40500 across the GH#5275 fleet). The entries are summed, but if that comes
+        to more than 1.1 x battery_count x POWERWALL_PACK_KWH - every pack is 13.5 kWh - the gateways are
+        taken to each repeat the system total, and the largest single entry is used instead.
         """
         gateways = (response.get("components") or {}).get("gateways") or []
-        return sum(gateway.get("nameplate_energy_watts") or 0 for gateway in gateways) / 1000.0
+        energies_kwh = [(gateway.get("nameplate_energy_watts") or 0) / 1000.0 for gateway in gateways]
+        total_kwh = sum(energies_kwh)
+        battery_count = response.get("battery_count") or 0
+        expected_kwh = battery_count * POWERWALL_PACK_KWH
+        if expected_kwh and total_kwh > expected_kwh * 1.1:
+            largest_kwh = max(energies_kwh)
+            self.log(
+                "Info: Teslemetry gateways' nameplate_energy_watts add up to {} kWh, more than {} batteries x {} kWh - each gateway looks to report the system total, so using the largest single entry ({} kWh)".format(
+                    round(total_kwh, 2), battery_count, POWERWALL_PACK_KWH, round(largest_kwh, 2)
+                )
+            )
+            return largest_kwh
+        return total_kwh
 
     def site_export_limit_w(self, response):
         """The grid export limit in W from min_site_meter_power_ac, or None when there is none to apply.
@@ -449,7 +456,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return False
         response = data.get("response", {})
         self.publish_site_info(response)
-        self.battery_type = (response.get("components") or {}).get("battery_type")
+        components = response.get("components") or {}
+        self.battery_type = components.get("battery_type")
+        # battery_type alone is not trusted to mean a Powerwall 3 - a Powerwall+ might report solar_powerwall too
+        self.powerwall_3 = self.battery_type == "solar_powerwall" and any(gateway.get("part_name") == "Powerwall 3" for gateway in components.get("gateways") or [])
         nameplate_wh = response.get("nameplate_energy", 0)
         gateway_kwh = self.gateway_energy_kwh(response)
         battery_count = response.get("battery_count")
@@ -463,7 +473,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             self.publish_soc_max(self.estimate_pack_kwh(response), estimate=True)
         nameplate_power = response.get("nameplate_power", 0)
         if nameplate_power:
-            self.publish_sensor("battery_rate_max", nameplate_power, unit="W", state_class=None, friendly="Powerwall Max Rate")
+            self.publish_sensor("battery_rate_max", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall Max Rate")
             # The Powerwall's own AC rating - on a Powerwall 3 the commissioned limit. max_site_meter_power_ac
             # is the site's supply limit at the meter (18.4 kW on an 80 A service), not the inverter's (GH#5275).
             self.publish_sensor("inverter_limit", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall AC Limit")
@@ -473,7 +483,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         charge_limit = self.site_charge_limit_w(response)
         if charge_limit:
             self.publish_sensor("inverter_limit_charge", charge_limit, unit="W", state_class=None, friendly="Powerwall Charge Limit")
-            self.log("Info: Teslemetry inverter_limit_charge = {} W (5 kW per battery unit, capped at nameplate power - set inverter_limit_charge manually if wrong)".format(charge_limit))
+            battery_units = response.get("battery_count") or 1
+            if charge_limit < POWERWALL_CHARGE_PER_UNIT_W * battery_units:
+                charge_rule = "capped at the {} W nameplate".format(charge_limit)
+            else:
+                charge_rule = "{} W per battery unit x {}".format(POWERWALL_CHARGE_PER_UNIT_W, battery_units)
+            self.log("Info: Teslemetry inverter_limit_charge = {} W ({} - set inverter_limit_charge manually if wrong)".format(charge_limit, charge_rule))
         # Seed the control entity STATES (display only, no commands) from the device so they reflect
         # reality at boot instead of the hardcoded defaults set by register_control_entities().
         #
@@ -878,7 +893,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
         self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
         self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
-        # A Powerwall 3 (battery_type solar_powerwall) is a hybrid inverter: solar on its own DC inputs shares
+        # A Powerwall 3 (battery_type solar_powerwall with a "Powerwall 3" gateway) is a hybrid inverter: solar on its own DC inputs shares
         # the one AC nameplate with the battery, so inverter_limit must cap them combined. Every other
         # Powerwall is AC coupled - with hybrid on, get_total_inverted() would fold a separately inverted
         # array into the Powerwall's AC rating, inventing clipping and the export windows that "recover" it,
@@ -889,8 +904,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         hybrid_entity = "switch.{}_inverter_hybrid".format(self.prefix)
         if self.hybrid_override is not None:
             hybrid, reason = self.hybrid_override, "teslemetry_hybrid in apps.yaml"
-        elif self.battery_type == "solar_powerwall":
+        elif self.powerwall_3:
             hybrid, reason = True, "auto: Powerwall 3"
+        elif self.battery_type == "solar_powerwall":
+            hybrid, reason = False, "auto: solar_powerwall without a Powerwall 3 gateway"
         else:
             hybrid, reason = False, "auto: AC-coupled Powerwall" if self.battery_type else "auto: Powerwall model unknown"
         self.log("Info: Teslemetry setting {} {} ({})".format(hybrid_entity, "on" if hybrid else "off", reason))

@@ -65,6 +65,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.tbc_control = False
         self.hybrid_override = None
         self.battery_type = None
+        self.powerwall_3 = False
         self._reserve_band_warned = False
         self.args_set = {}
         # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
@@ -378,6 +379,8 @@ def test_teslemetry_site_info_inverter_limit_from_nameplate_not_supply_meter():
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
     run_async(api.fetch_site_info())
     assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit"]["state"] == 9000
+    # battery_rate_max is rounded the same way, so discharge is not capped 0.1 W below the AC limit
+    assert api.dashboard_items["sensor.predbat_teslemetry_battery_rate_max"]["state"] == 9000
 
 
 def test_teslemetry_site_info_publishes_export_limit():
@@ -439,6 +442,16 @@ def test_teslemetry_site_info_charge_limit_per_unit_capped_at_nameplate():
         run_async(api.fetch_site_info())
         assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit_charge"]["state"] == expected
 
+    # The log says which rule set it: the per-unit figure, or the nameplate cap
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_EXPANSION
+    run_async(api.fetch_site_info())
+    assert any("inverter_limit_charge = 10000 W" in message and "5000 W per battery unit x 2" in message for message in api.log_messages)
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = three_packs
+    run_async(api.fetch_site_info())
+    assert any("inverter_limit_charge = 11040 W" in message and "capped at the 11040 W nameplate" in message for message in api.log_messages)
+
     # With no nameplate_power there is no maximum to cap at, and nothing is published
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"battery_count": 1, "nameplate_energy": 13500}}
@@ -454,6 +467,32 @@ def test_teslemetry_soc_max_from_gateway_energy():
     run_async(api.fetch_site_info())
     assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 27.0
     assert api.soc_max_real is True
+
+    # Two gateways that each report their own pack add up
+    two_gateways = copy.deepcopy(SITE_INFO_PW3_EXPANSION)
+    two_gateways["response"]["components"]["gateways"] = [dict(two_gateways["response"]["components"]["gateways"][0], nameplate_energy_watts=13500) for _ in range(2)]
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = two_gateways
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 27.0
+
+    # Two gateways that each repeat the system total would double it - more than 1.1 x battery_count x 13.5 kWh,
+    # so the largest single entry is used instead, and logged
+    duplicated = copy.deepcopy(SITE_INFO_PW3_EXPANSION)
+    duplicated["response"]["components"]["gateways"] = [dict(duplicated["response"]["components"]["gateways"][0]) for _ in range(2)]
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = duplicated
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 27.0
+    assert any("nameplate_energy_watts" in message and "largest" in message for message in api.log_messages)
+
+    # A top-level nameplate_energy (every Powerwall 2) is preferred over the gateways
+    both = copy.deepcopy(SITE_INFO_PW3_EXPANSION)
+    both["response"]["nameplate_energy"] = 13500
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = both
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
 
 
 def test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml():
@@ -2072,6 +2111,19 @@ def test_teslemetry_automatic_config_enables_hybrid_for_powerwall_3():
     assert any("inverter_hybrid" in message and "Powerwall 3" in message for message in api.log_messages)
 
 
+def test_teslemetry_automatic_config_hybrid_needs_a_powerwall_3_gateway():
+    """battery_type solar_powerwall without a "Powerwall 3" gateway stays off: a Powerwall+ (a Powerwall 2 with a
+    built-in solar inverter) might report it too, and hybrid on would clip that inverter's output at the
+    Powerwall's AC rating (GH#5276 review)."""
+    powerwall_plus = copy.deepcopy(SITE_INFO_PW3_EXPANSION)
+    powerwall_plus["response"]["components"]["gateways"] = [{"part_name": "Tesla Backup Gateway 2", "nameplate_energy_watts": 13500}]
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = powerwall_plus
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert api.external_states["switch.predbat_inverter_hybrid"] is False
+
+
 def test_teslemetry_automatic_config_disables_hybrid_without_site_info():
     """With no site_info the model is unknown, so inverter_hybrid stays off - the safe setting for an
     AC-coupled Powerwall, which is what a wrongly-on hybrid would clip."""
@@ -2094,12 +2146,36 @@ def test_teslemetry_hybrid_override_from_apps_yaml():
 
 
 def test_teslemetry_initialize_sets_hybrid_override():
-    """initialize stores teslemetry_hybrid as True/False, and anything else - unset (None) or unrecognised -
-    as None, which means "decide from the model"; a quoted "true"/"false" is accepted too."""
+    """initialize stores teslemetry_hybrid as True/False; anything else - unset (None), or a string the boolean
+    schema rejects - is None, which means "decide from the model"."""
     api = MockTeslemetryAPI()
-    for value, expected in ((True, True), (False, False), (None, None), ("true", True), ("False", False), ("auto", None)):
+    for value, expected in ((True, True), (False, False), (None, None), ("true", None), ("off", None), ("auto", None)):
         api.initialize(hybrid=value)
         assert api.hybrid_override is expected, value
+
+
+def test_teslemetry_hybrid_unset_reaches_the_component_as_none(my_predbat):
+    """Through the real registry path (Components.initialize on a Predbat fixture), an unset or empty
+    teslemetry_hybrid reaches TeslemetryAPI.initialize() as None, not False, so the model decides; an explicit
+    value arrives as given."""
+    from components import Components
+
+    saved_args = dict(my_predbat.args)
+    try:
+        for extra, expected in (({}, None), ({"teslemetry_hybrid": None}, None), ({"teslemetry_hybrid": False}, False), ({"teslemetry_hybrid": True}, True)):
+            my_predbat.args.clear()
+            my_predbat.args.update(saved_args)
+            my_predbat.args.pop("teslemetry_hybrid", None)
+            my_predbat.args["teslemetry_key"] = "test-token"
+            my_predbat.args.update(extra)
+            components = Components(my_predbat)
+            components.initialize(only="teslemetry", phase=1)
+            api = components.components.get("teslemetry")
+            assert api is not None, extra
+            assert api.hybrid_override is expected, extra
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
 
 
 def test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key():
@@ -2937,7 +3013,7 @@ def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
     Args:
-        my_predbat: Unused; accepted for compatibility with the TEST_REGISTRY calling convention in unit_test.py.
+        my_predbat: The shared Predbat fixture from unit_test.py, used by the registry resolution test; None when run standalone, which skips that test.
     """
     test_teslemetry_entity_names()
     test_teslemetry_live_status_publishes_sensors()
@@ -3053,10 +3129,13 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_automatic_config_sets_args()
     test_teslemetry_automatic_config_disables_inverter_hybrid()
     test_teslemetry_automatic_config_enables_hybrid_for_powerwall_3()
+    test_teslemetry_automatic_config_hybrid_needs_a_powerwall_3_gateway()
     test_teslemetry_automatic_config_disables_hybrid_without_site_info()
     test_teslemetry_hybrid_override_from_apps_yaml()
     test_teslemetry_initialize_sets_hybrid_override()
     test_teslemetry_hybrid_registered_as_an_optional_apps_yaml_key()
+    if my_predbat is not None:
+        test_teslemetry_hybrid_unset_reaches_the_component_as_none(my_predbat)
     test_teslemetry_site_info_publishes_site_info_entity()
     test_teslemetry_site_info_entity_omits_tariff_blobs()
     test_teslemetry_site_info_entity_does_not_mutate_response()

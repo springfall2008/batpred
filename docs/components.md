@@ -1110,7 +1110,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 | `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; for direct Fleet API set this to your regional Fleet endpoint (e.g. `https://fleet-api.prd.eu.vn.cloud.tesla.com`) |
 | `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
 | `tbc_control` | Boolean | No | true | `teslemetry_tbc_control` | Drive the Powerwall through Tesla's Time-Based Control with a control-signal tariff (full-rate charging); set to `false` for the real-rate tariff and reserve-driven charging - see [Teslemetry component (beta)](inverter-setup.md#teslemetry-component-beta) for what it does and its known limitation |
-| `hybrid` | Boolean | No | auto | `teslemetry_hybrid` | Override Predbat's `inverter_hybrid` setting with `automatic` on. Leave unset to have it on for a Powerwall 3 and off otherwise; set `false` for a Powerwall 3 whose solar is on a separate inverter |
+| `hybrid` | Boolean | No | unset (auto) | `teslemetry_hybrid` | Override Predbat's `inverter_hybrid` setting with `automatic` on. Leave unset to have it on for a Powerwall 3 and off otherwise; set `false` for a Powerwall 3 whose solar is on a separate inverter |
 | `auth_method` | String | No | `api_key` | `teslemetry_auth_method` | `api_key` (static Teslemetry token) or `oauth` (direct Tesla Fleet API). In `oauth` mode the OAuth flow and token refresh are handled for you by predbat.com - the same way the Fox integration works - so `oauth` requires connecting via predbat.com; self-hosted users use `api_key` |
 
 ---
