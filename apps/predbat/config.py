@@ -2420,6 +2420,49 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    "SungrowCloud": {
+        "name": "SungrowCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        # Parameter 10005 is a charge/discharge POWER in watts, so Predbat's rate entities map
+        # straight onto it. A rate of zero is meaningful and is how Predbat signals freeze; the
+        # component turns that into the inverter's own stop command (10004 = 204).
+        "output_charge_control": "power",
+        # False even though Sungrow's control parameters are themselves instantaneous. This
+        # flag describes the control surface Predbat is given, and the component takes ordinary
+        # windows and does the "is it now" arithmetic itself, because the parameters carry no
+        # time for Predbat to write a window into.
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        # No pause parameter exists, so Predbat expresses freeze via the rate entities, which
+        # the component turns into the stop command.
+        "has_timed_pause": False,
+        # Anything other than HH:MM:SS makes inverter.py replace the published select entities
+        # with its own dummies and the window never reaches the component.
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        # A write is a dispatch-then-poll task, not a synchronous call, so a read-back
+        # immediately after a press is still reading the previous value.
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        # The component never writes a window to the inverter, so there is nothing that could
+        # span midnight - but Predbat still needs to be told not to hand one over.
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
     "SolaxCloud": {
         "name": "SolaxCloud",
         "has_rest_api": False,
@@ -2810,6 +2853,22 @@ APPS_SCHEMA = {
     "alphaess_battery_rate_max": {"type": "float"},
     "alphaess_api_delay": {"type": "float"},
     "alphaess_min_write_interval": {"type": "integer"},
+    "sungrow_appkey": {"type": "string", "empty": False},
+    "sungrow_access_key": {"type": "string", "empty": False},
+    "sungrow_key": {"type": "string", "empty": False},
+    "sungrow_auth_method": {"type": "string", "empty": False},
+    "sungrow_token_expires_at": {"type": "string", "empty": False},
+    "sungrow_token_hash": {"type": "string", "empty": False},
+    "sungrow_gateway": {"type": "string", "empty": False},
+    "sungrow_inverter_sn": {"type": "string|string_list", "empty": False},
+    "sungrow_automatic": {"type": "boolean"},
+    "sungrow_automatic_ignore_pv": {"type": "boolean"},
+    "sungrow_control_enable": {"type": "boolean"},
+    "sungrow_heartbeat_interval": {"type": "integer"},
+    "sungrow_forced_charge_schedule": {"type": "boolean"},
+    "sungrow_battery_rate_max": {"type": "float"},
+    "sungrow_api_delay": {"type": "float"},
+    "sungrow_min_write_interval": {"type": "integer"},
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
