@@ -633,6 +633,8 @@ COMPONENT_LIST = {
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
             "tbc_control": {"required": False, "default": True, "config": "teslemetry_tbc_control"},
+            # No default: unset must reach the component as None ("decide from the Powerwall model"), not False
+            "hybrid": {"required": False, "config": "teslemetry_hybrid"},
             "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
             "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "teslemetry_token_hash"},
