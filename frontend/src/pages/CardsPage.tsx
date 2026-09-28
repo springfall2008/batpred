@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCheck, faClipboard } from '@fortawesome/free-solid-svg-icons'
+import { faArrowUpFromBracket, faBatteryHalf, faBolt, faBullseye, faCar, faCheck, faClipboard, faClock, faCoins, faHouse } from '@fortawesome/free-solid-svg-icons'
 
-import { buildPlanSummaryYaml, getPlanSummaryEntities } from '../utils/cards'
+import { buildGlanceSummaryYaml, buildPlanSummaryYaml, getPlanSummaryEntities } from '../utils/cards'
 import { formatEntityState, type EntityState, type EntitySummary } from '../utils/entities'
 import './CardsPage.css'
 
@@ -13,8 +13,9 @@ export default function CardsPage() {
   const [states, setStates] = useState<Record<string, EntityState>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
-  const yamlRef = useRef<HTMLTextAreaElement>(null)
+  const [copied, setCopied] = useState<'plan' | 'glance' | null>(null)
+  const planYamlRef = useRef<HTMLTextAreaElement>(null)
+  const glanceYamlRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     Promise.all([
@@ -31,18 +32,25 @@ export default function CardsPage() {
   }, [])
 
   const rows = useMemo(() => getPlanSummaryEntities(entities), [entities])
-  const yaml = useMemo(() => buildPlanSummaryYaml(entities), [entities])
+  const planYaml = useMemo(() => buildPlanSummaryYaml(entities), [entities])
+  const glanceYaml = useMemo(() => buildGlanceSummaryYaml(entities), [entities])
 
-  async function copyYaml() {
-    yamlRef.current?.select()
+  async function copyYaml(yaml: string, source: 'plan' | 'glance', textarea: HTMLTextAreaElement | null) {
+    textarea?.select()
     try {
       await navigator.clipboard.writeText(yaml)
     } catch {
       document.execCommand('copy')
     }
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1800)
+    setCopied(source)
+    window.setTimeout(() => setCopied(null), 1800)
   }
+
+  const statusEntity = rows.find((row) => row.suffix === 'status')
+  const statusState = statusEntity ? states[statusEntity.id] : undefined
+  const status = `${String(statusState?.state ?? '')} ${String(statusState?.attributes?.detail ?? '')}`.toLowerCase()
+  const statusIcon = status.includes('hold for car') ? faCar : status.startsWith('charg') ? faBatteryHalf : status.startsWith('export') ? faArrowUpFromBracket : faHouse
+  const glanceIcons = [statusIcon, faBatteryHalf, faBolt, faClock, faBullseye, faClock, faBullseye, faCoins]
 
   return (
     <section className="cards-page">
@@ -75,15 +83,53 @@ export default function CardsPage() {
             <div>
               <div className="card-yaml-heading">
                 <h3>YAML</h3>
-                <button type="button" onClick={copyYaml}>
-                  <FontAwesomeIcon icon={copied ? faCheck : faClipboard} /> {copied ? 'Copied' : 'Copy YAML'}
+                <button type="button" onClick={() => copyYaml(planYaml, 'plan', planYamlRef.current)}>
+                  <FontAwesomeIcon icon={copied === 'plan' ? faCheck : faClipboard} /> {copied === 'plan' ? 'Copied' : 'Copy YAML'}
                 </button>
               </div>
-              <textarea ref={yamlRef} className="card-yaml" value={yaml} readOnly aria-label="Plan summary card YAML" />
+              <textarea ref={planYamlRef} className="card-yaml" value={planYaml} readOnly aria-label="Plan summary card YAML" />
             </div>
           </div>
 
           <p className="card-instructions">In Home Assistant, edit a dashboard, choose <strong>Add card</strong>, select <strong>Manual</strong>, then paste this YAML.</p>
+        </article>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <article className="card-example">
+          <div className="card-example-heading">
+            <div><h2>Glance summary</h2><p>A compact overview with a status icon that follows what Predbat is currently doing.</p></div>
+          </div>
+
+          <div className="card-example-layout">
+            <div>
+              <h3>Preview</h3>
+              <section className="ha-card-preview" aria-label="Glance summary card preview">
+                <h4>Predbat Summary</h4>
+                <div className="ha-glance-grid">
+                  {rows.map((row, index) => (
+                    <div key={row.id}>
+                      <FontAwesomeIcon icon={glanceIcons[index]} />
+                      <strong>{formatEntityState(states[row.id])}</strong>
+                      <span>{row.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <div>
+              <div className="card-yaml-heading">
+                <h3>YAML</h3>
+                <button type="button" onClick={() => copyYaml(glanceYaml, 'glance', glanceYamlRef.current)}>
+                  <FontAwesomeIcon icon={copied === 'glance' ? faCheck : faClipboard} /> {copied === 'glance' ? 'Copied' : 'Copy YAML'}
+                </button>
+              </div>
+              <textarea ref={glanceYamlRef} className="card-yaml" value={glanceYaml} readOnly aria-label="Glance summary card YAML" />
+            </div>
+          </div>
+
+          <p className="card-instructions">The status icon changes automatically: house for Demand, battery charging for Charging, transmission tower for Exporting and car for Hold for car.</p>
         </article>
       )}
 

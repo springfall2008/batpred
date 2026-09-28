@@ -32,3 +32,20 @@ export function buildPlanSummaryYaml(entities: EntitySummary[]) {
     ...rows
   ].join('\n')
 }
+
+/** Build a compact Home Assistant glance card using the same plan summary entities. */
+export function buildGlanceSummaryYaml(entities: EntitySummary[]) {
+  const rows = getPlanSummaryEntities(entities)
+    .flatMap(({ id, name }) => [`  - entity: ${id}`, `    name: ${name}`])
+
+  return [
+    'type: glance',
+    'title: Predbat Summary',
+    'columns: 4',
+    'show_name: true',
+    'show_icon: true',
+    'show_state: true',
+    'entities:',
+    ...rows
+  ].join('\n')
+}
