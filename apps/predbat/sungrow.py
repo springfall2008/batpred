@@ -14,12 +14,39 @@ translating Predbat's plan into Sungrow's INSTANTANEOUS external-dispatch comman
 
 THE HEARTBEAT IS THE CENTRAL FACT OF THIS COMPONENT.
 
-Sungrow's control parameters carry no time. There is no "charge between 02:00 and 05:00"
-to write - there is only "charge at 3000 W, now" (10003 external dispatch, 10004 charge,
-10005 power). Control is held open by parameter 10017, the External EMS Heartbeat: Predbat
-declares an interval of 1-1000 seconds and must keep writing that parameter inside it. If
-the beats stop, the inverter drops external dispatch and returns to self-consumption by
-itself.
+Sungrow offer TWO control paths, and this component drives the instantaneous one.
+
+The path taken here is external energy dispatch: 10003 mode, 10004 charge/discharge/stop,
+10005 power. It carries no time at all - there is no "charge between 02:00 and 05:00" in it,
+only "charge at 3000 W, now" - and control is held open by parameter 10017, the External EMS
+Heartbeat. Predbat declares an interval of 1-1000 seconds and must keep writing that
+parameter inside it. If the beats stop, the inverter drops external dispatch and returns to
+self-consumption by itself.
+
+The path NOT taken is the forced-charging schedule, 10065-10076, which does carry times
+(start and end hour/minute for two windows, each with a target SoC). It was rejected as the
+primary path for four reasons, in order of weight:
+
+  1. It is CHARGE ONLY. Nothing in the published control table is a forced-DISCHARGE window,
+     so Predbat's export windows could not be expressed through it at all. External dispatch
+     would still be needed for export, and running two control mechanisms against one battery
+     is worse than running one.
+  2. It carries no power setpoint - only a target SoC - so Predbat's charge rate, and the
+     rate-zero it uses to signal freeze, have nowhere to go.
+  3. It is two windows, recurring daily (10066 is weekdays/everyday). Predbat routinely plans
+     more than two charge slots across 48 hours, and plans them for a specific date; a window
+     written today fires again tomorrow.
+  4. It persists in the inverter. That is a real advantage when Predbat is unreachable, and a
+     real hazard when Predbat is unreachable AND its last plan has gone stale.
+
+Reason 4 cuts both ways, which is why build_forced_charge_params() exists and is offered
+behind sungrow_forced_charge_schedule (default off) - see that method. Reasons 1 to 3 are
+what make the schedule insufficient as the primary path regardless of the safety argument.
+
+The cost of the choice made here is stated plainly: with instantaneous control, Predbat must
+stay alive and reachable every few minutes for the battery to follow the plan. A network
+partition loses the rest of a charge window. The schedule path would not have, and that is
+exactly the trade the opt-in flag offers.
 
 That revert is a SAFETY PROPERTY, not a limitation, and nothing here should try to defeat
 it. If Predbat is killed mid-charge, crashes, loses its network or is simply stopped, the
@@ -146,9 +173,10 @@ from sungrow_const import (
 # charge_control_immediate is False even though the underlying commands are instantaneous.
 # The flag describes the CONTROL SURFACE Predbat is given, not the wire protocol: this
 # component takes ordinary charge/export windows and does the "is it now" arithmetic itself
-# (see decide_command), because Sungrow's parameters have no time in them for Predbat to
-# write a window into. support_feedin_first is False - there is no feed-in-first mode in the
-# control parameter table.
+# (see decide_command), because the external-dispatch parameters it drives carry no time for
+# Predbat to write a window into. Sungrow's forced-charging parameters DO carry times, and
+# the module docstring says why they are not the path taken. support_feedin_first is False -
+# there is no feed-in-first mode in the control parameter table.
 SUNGROW_CAPABILITIES = {
     "support_charge_freeze": True,
     "support_discharge_freeze": True,
@@ -1042,16 +1070,23 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     def build_forced_charge_params(self, schedule):
         """Build the forced-charging window parameters (10065-10076) from Predbat's charge window.
 
-        OFF BY DEFAULT and deliberately so. Unlike the external-dispatch command, this window
-        is stored IN THE INVERTER: it survives Predbat stopping, the network dropping and the
-        heartbeat lapsing, which is precisely what the heartbeat's revert to self-consumption
-        exists to prevent. A user who wants the inverter to keep running the last plan Predbat
-        wrote can opt in with sungrow_forced_charge_schedule; everyone else gets the safe
-        revert.
+        This is the SECOND of Sungrow's two control paths, and the one this component does not
+        drive. It is offered here as an opt-in supplement, never as a replacement - the module
+        docstring gives the full reasoning, but in short it is charge-only, carries no power
+        setpoint, and holds two daily-recurring windows, so it cannot express export, freeze,
+        a charge rate, or more than two slots.
 
-        Window 2 is left disabled. It exists in the parameter table for a second daily period,
-        and Predbat only ever has one charge window to express at a time here, so writing
-        anything into it would be inventing a second charge the plan never asked for.
+        OFF BY DEFAULT because of the one thing it does that external dispatch does not: this
+        window is stored IN THE INVERTER and survives Predbat stopping, the network dropping
+        and the heartbeat lapsing. That is a feature to a user who wants the battery to keep
+        following the last plan through an outage, and a hazard to everyone else, because the
+        inverter will go on force-charging from the grid to a target nobody is supervising,
+        every day, on whatever rates apply then. Enabling it is a deliberate trade of the safe
+        revert for continuity, so it is the user's call and not the default.
+
+        Window 2 is left disabled. Predbat only ever has one charge window to express at a time
+        here, so writing anything into it would be inventing a second charge the plan never
+        asked for.
         """
         charge = schedule.get("charge", {}) or {}
         enabled = bool(charge.get("enable")) and not window_is_empty(charge.get("start"), charge.get("end"))
