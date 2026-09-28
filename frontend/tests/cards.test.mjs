@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../src/utils/cards.ts', import.meta.url), '
 const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 const module = { exports: {} }
 vm.runInNewContext(output, { module, exports: module.exports })
-const { buildPlanSummaryYaml, getPlanSummaryEntities } = module.exports
+const { buildGlanceSummaryYaml, buildPlanSummaryYaml, getPlanSummaryEntities } = module.exports
 
 test('uses the entity IDs exposed by the running Predbat instance', () => {
   const entities = [
@@ -20,4 +20,6 @@ test('uses the entity IDs exposed by the running Predbat instance', () => {
   assert.equal(JSON.stringify(getPlanSummaryEntities(entities).map((entity) => entity.id)), '["house.status","house.soc_kw_h0"]')
   assert.match(buildPlanSummaryYaml(entities), /entity: house\.status/)
   assert.doesNotMatch(buildPlanSummaryYaml(entities), /predbat\.status|sensor\.unrelated/)
+  assert.match(buildGlanceSummaryYaml(entities), /^type: glance/)
+  assert.match(buildGlanceSummaryYaml(entities), /entities:\n  - entity: house\.status/)
 })

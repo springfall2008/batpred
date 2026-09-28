@@ -2710,6 +2710,17 @@ class Output:
         if had_errors:
             error_count += 1
 
+        status_text = (message + extra).lower()
+        status_icon = "mdi:information"
+        if "hold for car" in status_text:
+            status_icon = "mdi:car"
+        elif status_text.startswith("demand"):
+            status_icon = "mdi:house"
+        elif status_text.startswith("charg"):
+            status_icon = "mdi:battery-charging"
+        elif status_text.startswith("export"):
+            status_icon = "mdi:transmission-tower-export"
+
         # Home Assistant rejects entity states over 255 characters, and this message is the state
         # of the status sensor. Clamp what is written as the state - the full text survives in
         # current_status, the log line and the notification, and attributes have no such cap.
@@ -2722,7 +2733,7 @@ class Output:
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,
-                "icon": "mdi:information",
+                "icon": status_icon,
                 "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
                 "debug": debug,
                 "version": THIS_VERSION_DISPLAY,
