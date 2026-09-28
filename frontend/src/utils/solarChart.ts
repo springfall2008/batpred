@@ -5,6 +5,10 @@ export type SolarChartWindow = {
   end: number
 }
 
+export type SolarPowerWindow = SolarChartWindow & {
+  forecastDays: number
+}
+
 /** Show today alone, or a calendar range that includes history, today and tomorrow. */
 export function getSolarChartWindow(generatedAt: string, days: number): SolarChartWindow {
   const start = new Date(generatedAt)
@@ -18,31 +22,31 @@ export function getSolarChartWindow(generatedAt: string, days: number): SolarCha
   return { start: start.getTime(), end: end.getTime() }
 }
 
-/** Show the requested forecast period, using history to fill a seven-day view. */
-export function getSolarPowerWindow(generatedAt: string, days: number, forecastEnd: number): SolarChartWindow {
+/** Show available forecast days and fill the selected range with history. */
+export function getSolarPowerWindow(generatedAt: string, days: number, forecastEnd: number): SolarPowerWindow {
   const now = new Date(generatedAt)
-  if (days === 1) {
-    return { start: now.getTime(), end: now.getTime() + 24 * 60 * 60 * 1000 }
-  }
-
   const today = new Date(now)
   today.setHours(0, 0, 0, 0)
-  let futureDays = days
-
-  if (days === 7) {
-    const lastForecast = new Date(Math.max(forecastEnd, today.getTime()))
-    futureDays = Math.min(days, Math.max(1, Math.round(
+  const lastForecast = new Date(forecastEnd)
+  const forecastDays = Number.isFinite(forecastEnd) && forecastEnd >= now.getTime()
+    ? Math.min(days, Math.round(
       (Date.UTC(lastForecast.getFullYear(), lastForecast.getMonth(), lastForecast.getDate())
         - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000
-    ) + 1))
+    ) + 1)
+    : 0
+
+  if (days === 1) {
+    return { start: now.getTime(), end: now.getTime() + 24 * 60 * 60 * 1000, forecastDays }
   }
+
+  const futureDays = Math.max(1, forecastDays)
 
   const start = new Date(today)
   start.setDate(start.getDate() - (days - futureDays))
   const end = new Date(today)
   end.setDate(end.getDate() + futureDays)
 
-  return { start: start.getTime(), end: end.getTime() }
+  return { start: start.getTime(), end: end.getTime(), forecastDays }
 }
 
 /** Join the forecast recorded in the past to the current forecast from now onwards. */

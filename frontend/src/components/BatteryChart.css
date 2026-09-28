@@ -116,6 +116,16 @@
   text-underline-offset: 0.18rem;
 }
 
+.solar-chart-availability {
+  margin: 0 1rem 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--color-warning);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+}
+
 .battery-chart-legend {
   display: flex;
   flex-wrap: wrap;

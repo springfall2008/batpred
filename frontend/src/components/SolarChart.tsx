@@ -174,14 +174,16 @@ export default function SolarChart({ data }: SolarChartProps) {
     energyForecast: toChartPoints(data.series.energy_forecast)
   }), [data.series])
   const forecastEnd = useMemo(
-    () => Math.max(generatedAt, ...allPoints.forecast.map((point) => point.x)),
-    [allPoints.forecast, generatedAt]
+    () => Math.max(...allPoints.forecast.map((point) => point.x)),
+    [allPoints.forecast]
+  )
+  const powerWindow = useMemo(
+    () => getSolarPowerWindow(data.generated_at, powerDays, forecastEnd),
+    [data.generated_at, forecastEnd, powerDays]
   )
   const window = useMemo(
-    () => view === 'power'
-      ? getSolarPowerWindow(data.generated_at, days, forecastEnd)
-      : getSolarChartWindow(data.generated_at, days),
-    [data.generated_at, days, forecastEnd, view]
+    () => view === 'power' ? powerWindow : getSolarChartWindow(data.generated_at, days),
+    [data.generated_at, days, powerWindow, view]
   )
   const actualPoints = pointsInWindow(allPoints.actual, window)
   const calibratedPoints = pointsInWindow(
@@ -445,6 +447,15 @@ export default function SolarChart({ data }: SolarChartProps) {
           </>
         )}
       </div>
+
+      {view === 'power' && days > 1 && powerWindow.forecastDays < days && (
+        <p className="solar-chart-availability" role="status">
+          {powerWindow.forecastDays === 0
+            ? 'No forecast days are currently available.'
+            : `Only ${powerWindow.forecastDays} ${powerWindow.forecastDays === 1 ? 'day' : 'days'} of forecast data ${powerWindow.forecastDays === 1 ? 'is' : 'are'} available.`}
+          {' '}Historical data fills the remaining {days - powerWindow.forecastDays} {days - powerWindow.forecastDays === 1 ? 'day' : 'days'}.
+        </p>
+      )}
 
       <div className="battery-chart-legend" aria-label="Chart series">
         {visibleLegendItems.map((item) => <SolarLegend item={item} key={item.key} />)}

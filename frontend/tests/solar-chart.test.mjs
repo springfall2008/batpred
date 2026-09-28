@@ -40,20 +40,22 @@ test('solar helpers build historical and forecast ranges and join forecasts at N
   assert.equal(peakSolarPower(combined), 3.4)
 
   const oneDay = getSolarPowerWindow('2026-09-18T12:00:00', 1, Date.parse('2026-09-21T18:00:00'))
-  const threeDays = getSolarPowerWindow('2026-09-18T12:00:00', 3, Date.parse('2026-09-21T18:00:00'))
+  const threeDays = getSolarPowerWindow('2026-09-18T12:00:00', 3, Date.parse('2026-09-19T18:00:00'))
   const sevenDays = getSolarPowerWindow('2026-09-18T12:00:00', 7, Date.parse('2026-09-21T18:00:00'))
   assert.deepEqual({ start: new Date(oneDay.start), end: new Date(oneDay.end) }, {
     start: new Date('2026-09-18T12:00:00'),
     end: new Date('2026-09-19T12:00:00')
   })
   assert.deepEqual({ start: new Date(threeDays.start), end: new Date(threeDays.end) }, {
-    start: new Date('2026-09-18T00:00:00'),
-    end: new Date('2026-09-21T00:00:00')
+    start: new Date('2026-09-17T00:00:00'),
+    end: new Date('2026-09-20T00:00:00')
   })
+  assert.equal(threeDays.forecastDays, 2)
   assert.deepEqual({ start: new Date(sevenDays.start), end: new Date(sevenDays.end) }, {
     start: new Date('2026-09-15T00:00:00'),
     end: new Date('2026-09-22T00:00:00')
   })
+  assert.equal(sevenDays.forecastDays, 4)
   assert.equal((getSolarChartWindow('2026-09-18T12:00:00', 7).end - getSolarChartWindow('2026-09-18T12:00:00', 7).start) / 86400000, 7)
   assert.deepEqual({ ...solarAccuracy(8.5, 10) }, { difference: -1.5, achieved: 85 })
   assert.deepEqual({ ...solarAccuracy(null, 10) }, { difference: null, achieved: null })
