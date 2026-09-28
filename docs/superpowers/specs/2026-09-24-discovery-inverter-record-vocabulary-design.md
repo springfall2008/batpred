@@ -63,7 +63,7 @@ is the first to change behaviour.
 | D6 | `ratings` are keyed by Predbat setting name, in Predbat's units. A sensor binding for a rating lives in `entities` under the same key. |
 | D7 | A site-wide export limit is reported as each inverter's share of it. Predbat sums `export_limit` across inverters, so the shares add back up to the site figure. |
 | D8 | `functions` reports what the component believes the device is, whether probed or assumed. There is no marker for an assumed value. |
-| D9 | SolisCloud does not write the reserve (it often won't change); it presents the battery minimum SoC instead. Its record reports `battery_min_soc` and no `reserve` (section 3). |
+| D9 | SolisCloud does not write the reserve (it often won't change); it presents the battery minimum SoC instead. Its record reports `battery_min_soc` and no `reserve` (section 3). **Superseded:** `reserve` was then bound to the over-discharge SOC. It is now the Battery Reserve SOC (CID 157), a floor while the component keeps the Battery Reserve bit on, so SolisCloud has a reserve and its record reports both `reserve` (rw) and `battery_min_soc` (r). |
 | D10 | A record describes its own device, not the fleet. `automatic_config()` today binds some settings only when every inverter has them (GE Cloud: when any has them); the record states what this device has, and piece 3's coordinator applies whatever fleet rule it keeps. |
 | D11 | A record describes the device, not the user's opt-outs. Settings that stop a binding (`automatic_ignore_pv`, `givtcp_rest_power_ignore`) do not remove entities from the record; piece 3's coordinator applies them. |
 | D12 | A PV-only device's record carries its `pv_power` and `pv_today` as `access: r` entities - still with no `inverter_type` and no `capabilities` - so its generation is not lost when the coordinator configures from records (the GH#4922 regression). |
@@ -158,7 +158,7 @@ published, because its component publishes them itself before `build_discovery()
 A setting that `inverter.py` replaces with a dummy entity for this inverter type is left out of `entities`,
 because Predbat never reads or writes the component's binding for it. Today that means any setting whose
 presence flag is False in the type's row (section 2), and `inverter_mode` when both `has_ge_inverter_mode`
-and `has_ge_eco_toggle` are False. Solis's `reserve` is one such case (D9).
+and `has_ge_eco_toggle` are False. The Solis Modbus (`GS`) type's `reserve` is one such case; SolisCloud's was until D9 was superseded.
 
 A rating with a sensor appears twice: the number in `ratings`, the binding in `entities` with
 `access: r`. The coordinator binds the entity where one exists and the rating's number otherwise.

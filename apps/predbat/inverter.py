@@ -22,7 +22,7 @@ import os
 import time
 import pytz
 from datetime import datetime, timedelta
-from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
+from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES, SOLAX_SOLIS_MODES_FB00
 from const import (
     MINUTE_WATT,
     TIME_FORMAT,
@@ -509,6 +509,7 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
+        self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -3016,38 +3017,13 @@ class Inverter:
         current_rate_charge = self.get_current_charge_rate()
         current_rate_discharge = self.get_current_discharge_rate()
 
-        if self.inverter_type == "GS":
-            # Solis just has a single switch for both directions
-            # Need to check the logic of how this is called if both charging and exporting
-
+        if self.inv_has_solis_energy_control:
+            # Reached from mimic_target_soc, so only for GS (no target SoC): on older firmware the switch's
+            # Timed Charge/Discharge bit is the enable itself, for both directions. FB00 is driven from
+            # adjust_charge_immediate / adjust_export_immediate instead.
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
-
-            entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            switch = solax_modes.get(str(self.base.get_state_wrapper(entity_id, "")), 0)
-
-            if direction == "charge":
-                if enable:
-                    new_switch = 35
-                else:
-                    new_switch = 33
-            elif direction == "discharge":
-                if enable:
-                    new_switch = 35
-                else:
-                    new_switch = 33
-            else:
-                # ECO
-                new_switch = 35
-
-            # Find mode names
-            old_mode = {solax_modes[x]: x for x in solax_modes}[switch]
-            new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
-
-            if new_switch != switch:
-                self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
-                self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
-            else:
-                self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
+            new_switch = 35 if (enable or direction == "eco") else 33
+            self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", warn_missing=(direction == "charge" and enable))
 
         # MQTT
         if direction == "charge" and enable:
@@ -3059,6 +3035,31 @@ class Inverter:
             self.mqtt_message("set/discharge", payload=int(current_rate_discharge))
         else:
             self.mqtt_message("set/auto", payload="true")
+
+    def write_solis_energy_control(self, new_switch, solax_modes, reason, warn_missing=False):
+        """
+        Put the Solis Energy Storage Control Switch on mode value new_switch, writing only when it differs.
+
+        solax_modes maps the Solax Modbus plugin's option names to their values, which differ between the
+        pre-FB00 and FB00 plugins. A switch state the table does not know (e.g. unavailable) counts as a
+        difference. With no energy_control_switch configured nothing is written, and warn_missing says
+        whether that deserves a warning - only while charging, when a switch without grid charging stops it.
+        """
+        entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
+        if not entity_id:
+            if warn_missing:
+                self.base.log(f"Warn: Inverter {self.id} energy_control_switch is not set in apps.yaml, so Predbat cannot make sure the inverter allows grid charging")
+            return
+
+        old_mode = str(self.base.get_state_wrapper(entity_id, ""))
+        switch = solax_modes.get(old_mode, 0)
+        new_mode = {value: name for name, value in solax_modes.items()}[new_switch]
+
+        if new_switch != switch:
+            self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {reason}")
+            self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
+        else:
+            self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {reason}")
 
     def mqtt_message(self, topic, payload):
         """
@@ -3192,6 +3193,16 @@ class Inverter:
         """
         Adjust from charging or not charging based on passed target soc
         """
+        # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
+        # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
+        # reserve Predbat writes (the Reserved SOC) a real discharge floor, so the existing reserve holds work.
+        # A freeze or hold (car, iBoost, hold on reserve) also turns grid charging off - Backup/Reserve - No Grid
+        # Charging - or the inverter would import to reach a reserve raised to SoC + 1, and again each cycle as it
+        # is raised. Exporting cycles drive it from adjust_export_immediate, and GS from mimic_target_soc instead.
+        if self.inv_has_target_soc and self.inv_has_solis_energy_control:
+            reason = "freeze or hold" if freeze else "charge" if target_soc > 0 else "idle"
+            self.write_solis_energy_control(17 if freeze else 49, SOLAX_SOLIS_MODES_FB00, reason, warn_missing=(target_soc > 0 and not freeze))
+
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
@@ -3231,6 +3242,14 @@ class Inverter:
         """
         Adjust from exporting or not exporting based on passed target soc
         """
+        # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
+        # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
+        # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and
+        # Backup/Reserve for a real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate,
+        # which owns it then.
+        if self.inv_has_target_soc and self.inv_has_solis_energy_control and target_soc < 100:
+            self.write_solis_energy_control(64 if freeze else 49, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
+
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
         if target_soc < 100:

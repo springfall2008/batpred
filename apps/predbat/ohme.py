@@ -498,6 +498,11 @@ class OhmeAPI(ComponentBase):
             self.set_arg("num_cars", 1)
         self.set_arg("car_charging_planned", ["binary_sensor.predbat_ohme_connected"])
         self.set_arg("car_charging_soc", ["sensor.predbat_ohme_battery_percent"])
+        # Whether the car is drawing power, which Octopus Intelligent slot confirmation and the battery hold
+        # for the car both read - a power sensor counts as charging from CAR_CHARGING_NOW_POWER_W. Bound
+        # whoever owns car_charging_energy below, as it is the Ohme charger drawing the power either way.
+        # Only its live state is read, so a sensor the user chose in apps.yaml (the car's own, say) is kept
+        self.set_arg_auto("car_charging_now", [POWER_WATTS_ENTITY], overwrite=False)
 
         # Wire up the delivered-energy sensor so car_charging_hold can subtract car charging
         # precisely instead of falling back to the car_charging_threshold heuristic. This runs
@@ -589,10 +594,9 @@ class OhmeAPI(ComponentBase):
         car_charging_soc and the three Octopus Intelligent entities Ohme publishes - facts about the
         car and its charge target - go on the car. Every one of them is checked against the state
         store by discovery_entities() rather than assumed present. car_charging_now is deliberately
-        not reported: Ohme publishes no entity distinct from car_charging_planned's own "connected"
-        sensor that means "drawing power right now" rather than "plugged in and wanting to charge",
-        and reporting one entity under two different fact names would misdescribe it under whichever
-        name it does not actually mean.
+        not reported: ohme_automatic binds it to the power sensor already reported as
+        car_charging_power, and Ohme publishes no separate "drawing power right now" entity, so
+        reporting it would only list that one entity a second time under another fact name.
 
         Reporting is independent of self.ohme_automatic: it describes what the Ohme account itself
         holds, not whether this component wired Predbat's apps.yaml to it - that distinction is what

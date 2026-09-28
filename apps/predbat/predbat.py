@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.2.0"
+THIS_VERSION = "v9.3.1"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -392,6 +392,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc_best = {}
         self.predict_clipped_best = {}
         self.predict_iboost_best = {}
+        self.predict_car_hold_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
@@ -536,6 +537,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
         self.octopus_intelligent_trust_slots = True
+        self.octopus_intelligent_dynamic = True
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
@@ -552,6 +554,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_cancelled = {}
         self.dynamic_load_car_warned = []
         self.dynamic_load_car_warned_iog_off = False
+        self.dynamic_load_car_warned_dynamic_off = False
+        self.dynamic_load_car_run = {}
         self.dynamic_load_car_sensors = {}
         self.dynamic_load_car_effective = {}
         self.dynamic_load_car_stripped = 0

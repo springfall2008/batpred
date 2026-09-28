@@ -181,12 +181,14 @@ ENUM_SELF_USE_NO_GRID_CHARGING = 1
 ENUM_SELF_USE = 2
 ENUM_FEED_IN_PRIORITY = 3
 ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING = 4
+ENUM_SELF_USE_HOLD = 5
 SOLIS_STORAGE_MODES = {
     "Other": ENUM_OTHER,
     "Self-Use": ENUM_SELF_USE,
     "Self-Use - No Timed Charge/Discharge": ENUM_SELF_USE_NO_GRID_CHARGING,
     "Feed-in priority": ENUM_FEED_IN_PRIORITY,
-    "Feed-in priority - No Timed Charge/Discharge": ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
+    "Feed-in priority - No Timed Charge/Discharge": ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING,
+    "Self-Use - No Grid Charging": ENUM_SELF_USE_HOLD,
 }
 
 # Real solis mode bits
@@ -214,6 +216,19 @@ SOLIS_BIT_BACKUP_MODE = 4  # Battery reserve/backup mode
 SOLIS_BIT_GRID_CHARGING = 5  # Allow grid charging
 SOLIS_BIT_FEED_IN_PRIORITY = 6  # Feed-in priority mode
 SOLIS_BIT_PEAK_SHAVING = 11  # Peak-shaving mode
+
+# Battery SOC limit numbers the component publishes: (CID, entity field, friendly name, icon)
+SOLIS_SOC_LIMITS = [
+    (SOLIS_CID_BATTERY_RESERVE_SOC, "reserve_soc", "Battery Reserve SOC", "mdi:battery-50"),
+    (SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "over_discharge_soc", "Battery Over Discharge SOC", "mdi:battery-50"),
+    (SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, "force_charge_soc", "Battery Force Charge SOC", "mdi:battery-alert"),
+    (SOLIS_CID_BATTERY_RECOVERY_SOC, "recovery_soc", "Battery Recovery SOC", "mdi:battery-50"),
+    (SOLIS_CID_BATTERY_MAX_CHARGE_SOC, "max_charge_soc", "Battery Max Charge SOC", "mdi:battery"),
+]
+
+# How far below its target a charge slot that is already holding the battery may dip before it charges again.
+# Without it the mode would flip between hold and charge (a CID 636 write each way) across the target boundary.
+SOLIS_HOLD_HYSTERESIS = 1
 
 # How long to wait before re-reading a register whose verify read disagreed with the write. The
 # verify read is taken within about half a second of the write and a disagreement is not proof the
@@ -291,6 +306,8 @@ def get_solis_mode_enum(value):
         mode = ENUM_SELF_USE
     elif value & (1 << SOLIS_BIT_FEED_IN_PRIORITY):
         mode = ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
+    elif value & (1 << SOLIS_BIT_SELF_USE) and (value & (1 << SOLIS_BIT_TOU_MODE)):
+        mode = ENUM_SELF_USE_HOLD
     elif value & (1 << SOLIS_BIT_SELF_USE):
         mode = ENUM_SELF_USE_NO_GRID_CHARGING
     mode_str = "Other"
@@ -300,7 +317,7 @@ def get_solis_mode_enum(value):
             break
     return mode, mode_str
 
-def compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=False):
+def compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=False, battery_reserve=None):
     """
     Convert storage mode enum to bit flag value for CID 636
 
@@ -312,6 +329,9 @@ def compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=False):
                       into the per-slot registers (CIDs 5916/5922) and every mode value carrying
                       bit 1 was dropped from the table, so 35 becomes 33 and 98 becomes 96. Set by
                       set_storage_mode_if_needed() from is_tou_v2_mode() (see issues #4707, #4774).
+        battery_reserve: True sets the Battery Reserve bit, which makes the Battery Reserve SOC (CID 157) a
+                      discharge floor; None leaves it as old_value has it. set_storage_mode_if_needed() always
+                      sets it, so Predbat's reserve is honoured whether or not Predbat is the one changing it.
 
     Returns: The value to write to CID 636
     """
@@ -341,8 +361,19 @@ def compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=False):
         value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
         value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
 
+    elif mode_enum == ENUM_SELF_USE_HOLD:
+        # Self-Use with timed charge/discharge still on but no grid charging: a charge slot that is only
+        # holding the battery. The TOU bit stays for V1 firmware, where it is the slot enable.
+        value |= (1 << SOLIS_BIT_SELF_USE)  # Set self-use bit
+        value &= ~(1 << SOLIS_BIT_GRID_CHARGING)  # Clear grid charging bit
+        value &= ~(1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Clear feed-in priority bit
+        value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
+        value |= (1 << SOLIS_BIT_TOU_MODE)  # Set TOU mode bit
+
     if drop_tou_bit:
         value &= ~(1 << SOLIS_BIT_TOU_MODE)
+    if battery_reserve:
+        value |= (1 << SOLIS_BIT_BACKUP_MODE)
     return value
 
 
@@ -441,6 +472,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.session = None
         self.queued_events = []
+        self.charge_slot_holding = {}  # {inverter_sn: bool} whether the open charge slot was holding last time
         # Slot events change the schedule from the caller's loop while run() copies and restores it on this one
         self.schedule_lock = threading.Lock()
         self.schedules_loaded = set()  # Inverters whose schedule has been decoded, so slot events can apply to it
@@ -1074,6 +1106,44 @@ class SolisAPI(ComponentBase, OAuthMixin):
             slot_data.update(restored)
         self.log(f"Warn: Solis API: {direction} slot {slot} {kind} was not accepted by {inverter_sn}, showing the inverter's {inverter_value} so Predbat writes it again")
 
+    def is_holding_in_charge_slot(self, inverter_sn, slot_data):
+        """True when slot_data is a charge slot open now with the battery already at its target SOC.
+
+        That is what a freeze charge looks like here - Predbat keeps the charge window with the target at the
+        current SoC - and what the end of a charge looks like once the target is reached. The slot keeps the
+        battery from discharging, so with grid charging off it holds without importing to top up. Once holding,
+        a dip of up to SOLIS_HOLD_HYSTERESIS below the target stays in the hold, so the mode does not flip
+        (and re-import the dip) across the target boundary; the answer is remembered for the next call.
+
+        Args:
+            inverter_sn: Inverter serial number
+            slot_data: The charge slot to check, or None when no charge slot is open
+
+        Returns: True when the slot is only holding the battery
+        """
+        holding_before = self.charge_slot_holding.get(inverter_sn, False)
+        holding = False
+        if slot_data and slot_data.get("charge_enable", 0):
+            current_time = self.now_utc_exact.strftime("%H:%M")  # Local time, as the slot times are
+            if time_in_window(current_time, slot_data.get("charge_start_time", "00:00"), slot_data.get("charge_end_time", "00:00")):
+                try:
+                    battery_soc = float(self.inverter_details.get(inverter_sn, {}).get("batteryCapacitySoc"))
+                    charge_soc = float(slot_data.get("charge_soc", 100))
+                    holding = battery_soc >= charge_soc - (SOLIS_HOLD_HYSTERESIS if holding_before else 0)
+                except (TypeError, ValueError):
+                    holding = False
+        self.charge_slot_holding[inverter_sn] = holding
+        return holding
+
+    async def set_hold_storage_mode(self, inverter_sn):
+        """Set the storage mode for a charge slot that is only holding the battery: Self-Use with no grid charging.
+
+        Args:
+            inverter_sn: Inverter serial number
+        """
+        self.log(f"Solis API: In a charge slot at its target SOC on {inverter_sn}, setting storage mode to 'Self-Use - No Grid Charging' so it holds without importing")
+        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use - No Grid Charging")
+
     async def write_time_windows_if_changed(self, inverter_sn):
         """Write charge/discharge time windows, SOC, and current to inverter, only if values changed from cache.
         Automatically handles V1 vs V2 modes and only writes registers that have changed.
@@ -1139,6 +1209,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     if not slot_data.get("discharge_enable", 0):
                         slot_data["discharge_start_time"] = "00:00"
                         slot_data["discharge_end_time"] = "00:00"
+
+                # Whether slot 1 is a charge slot open now with the battery at its target
+                holding = self.is_holding_in_charge_slot(inverter_sn, time_windows.get(1))
 
                 # Pass 1: Clear all disabled slots first.
                 # This prevents stale times on the inverter from blocking active-slot writes due to overlap conflicts.
@@ -1263,8 +1336,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 # Decide if Solar charges the batter or exports
                 # Gate the mode choice on whether slot 1 has a window configured, the same way the V1
                 # branch does below (see the in_charge_slot/in_discharge_slot handling), so the
-                # inverter is not left in a timed mode with nothing scheduled.
-                if charge_current == 0:
+                # inverter is not left in a timed mode with nothing scheduled. A charge slot that is only
+                # holding the battery comes first: a freeze charge must not export PV via the 0A rule.
+                if holding:
+                    await self.set_hold_storage_mode(inverter_sn)
+                elif charge_current == 0:
                     if slot1_active:
                         self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
                         await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
@@ -1330,6 +1406,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 detail = self.inverter_details.get(inverter_sn, {})
                 battery_soc = detail.get("batteryCapacitySoc", 0)
 
+                # Whether the open charge slot is only holding the battery at its target - the one reading of "at
+                # target" that both the zeroed current and the mode decision below follow
+                holding = self.is_holding_in_charge_slot(inverter_sn, time_windows.get(in_charge_slot) if in_charge_slot and not in_discharge_slot else None)
+
                 # Adjust currents based on SOC and active slots
                 if in_discharge_slot:
                     slot_data = time_windows.get(in_discharge_slot)
@@ -1342,8 +1422,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 elif in_charge_slot:
                     slot_data = time_windows.get(in_charge_slot)
                     charge_soc_to_write = slot_data.get("charge_soc", 100)
-                    if battery_soc >= charge_soc_to_write:
-                        # Zero out charge current if above target SOC
+                    if holding:
+                        # Zero out charge current once at the target SOC
                         slot_data["charge_current"] = 0
                     self.log(f"Solis API: In charge slot {in_charge_slot}, target SOC: {charge_soc_to_write}%")
                     discharge_current = slot_data.get("discharge_current", discharge_current)
@@ -1383,8 +1463,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 else:
                     self.log(f"Solis API: Time windows unchanged for {inverter_sn}, skipping SOLIS_CID_CHARGE_DISCHARGE_SETTINGS write")
 
-                # Decide if Solar charges the battery or exports
-                if charge_current == 0:
+                # Decide if Solar charges the battery or exports. A charge slot that is only holding the
+                # battery comes first, as in V2: the zeroed charge current above would otherwise select
+                # Feed-in priority and export PV during a freeze charge.
+                if holding:
+                    await self.set_hold_storage_mode(inverter_sn)
+                elif charge_current == 0:
                     if in_charge_slot or in_discharge_slot:
                         self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
                         await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
@@ -1837,7 +1921,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # self.set_arg("soc_max", [f"sensor.{self.prefix}_solis_{device}_battery_capacity" for device in devices])
 
         # Reserve and limits
-        self.set_arg_auto("reserve", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
+        # reserve is the Battery Reserve SOC (CID 157): a discharge floor while set_storage_mode_if_needed keeps the
+        # Battery Reserve bit on, which is how Predbat holds the battery (car/iBoost, freeze or hold on reserve).
+        # battery_min_soc stays the over-discharge SOC, the hard minimum Predbat only reads.
+        self.set_arg_auto("reserve", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
         self.set_arg_auto("battery_min_soc", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
 
         # Charge/discharge controls - using slot 1 for Predbat primary control
@@ -1882,10 +1969,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
         for a setting inverter.py writes (the slot 1 schedule, SoC and power controls) and "r" for one
         it only reads.
 
-        Two automatic_config() bindings are deliberately absent. reserve: SolisCloud does not write
-        the reserve, the row has has_reserve_soc False and inverter.py replaces the binding with a
-        dummy, so the record reports battery_min_soc - the same over_discharge_soc number - instead
-        (spec D9). battery_power_invert: it becomes invert on battery_power.
+        One automatic_config() binding is deliberately absent: battery_power_invert, which becomes invert
+        on battery_power. reserve is the Battery Reserve SOC Predbat writes, and battery_min_soc the
+        over-discharge SOC it only reads (this supersedes spec D9, which dated from reserve being bound
+        to the over-discharge SOC).
 
         load_today, pv_today, load_power and pv_power are carried even when solis_cloud_pv_load_ignore
         stops automatic_config() binding them: the record describes the device, and the user's opt-out
@@ -1907,6 +1994,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             {
                 "import_today": {"entity_id": f"sensor.{prefix}_solis_{device}_today_import_energy", "access": "r"},
                 "export_today": {"entity_id": f"sensor.{prefix}_solis_{device}_today_export_energy", "access": "r"},
+                "reserve": {"entity_id": f"number.{prefix}_solis_{device}_reserve_soc", "access": "rw", "unit": "%"},
                 "battery_min_soc": {"entity_id": f"number.{prefix}_solis_{device}_over_discharge_soc", "access": "r", "unit": "%"},
                 "charge_start_time": {"entity_id": f"select.{prefix}_solis_{device}_charge_slot1_start_time", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
                 "charge_end_time": {"entity_id": f"select.{prefix}_solis_{device}_charge_slot1_end_time", "access": "rw", "domain": "select", "format": "HH:MM:SS"},
@@ -2989,29 +3077,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             )
 
             # Battery SOC limit numbers
-            for cid, name, friendly, icon in [
-                (SOLIS_CID_BATTERY_RESERVE_SOC, "reserve_soc", "Battery Reserve SOC", "mdi:battery-50"),
-                (SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "over_discharge_soc", "Battery Over Discharge SOC", "mdi:battery-50"),
-                (SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, "force_charge_soc", "Battery Force Charge SOC", "mdi:battery-alert"),
-                (SOLIS_CID_BATTERY_RECOVERY_SOC, "recovery_soc", "Battery Recovery SOC", "mdi:battery-50"),
-                (SOLIS_CID_BATTERY_MAX_CHARGE_SOC, "max_charge_soc", "Battery Max Charge SOC", "mdi:battery"),
-            ]:
-                entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_{name}"
-                soc_value = values.get(cid, None)
-                self.dashboard_item(
-                    entity_id,
-                    state=soc_value,
-                    attributes={
-                        "friendly_name": f"Solis {inverter_name} {friendly}",
-                        "unit_of_measurement": "%",
-                        "min": 0,
-                        "max": 100,
-                        "step": 1,
-                        "device_class": "battery",
-                        "icon": icon,
-                    },
-                    app="solis"
-                )
+            for cid, name, friendly, icon in SOLIS_SOC_LIMITS:
+                self.publish_soc_limit(inverter_sn, cid, name, friendly, icon)
 
             # Battery max current numbers (displayed as power in watts)
             entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"
@@ -3214,7 +3281,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
             cached_mode = self.get_current_solis_mode_value(inverter_sn)
             # TOU V2 firmware dropped bit 1 from the mode table, so asking for it there only
             # produces a write that reads back without it (issues #4707, #4774)
-            mode_value = compute_solis_mode_value(mode_enum, cached_mode, drop_tou_bit=self.is_tou_v2_mode(inverter_sn))
+            # Keep the Battery Reserve bit on so the Battery Reserve SOC - Predbat's reserve - is honoured as a discharge
+            # floor. set_reserve_enable only decides whether Predbat changes that SOC; with it off the user manages the
+            # reserve, but it is still their reserve and Predbat plans against it, so the inverter must enforce it too.
+            mode_value = compute_solis_mode_value(mode_enum, cached_mode, drop_tou_bit=self.is_tou_v2_mode(inverter_sn), battery_reserve=True)
 
             # Claimed unconditionally so the claim is spent by whichever write happens this cycle,
             # rather than being held over and asserting again later in the same window
@@ -3297,7 +3367,75 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     async def number_event(self, entity_id, value):
         """Handle a number change from Home Assistant."""
+        self.show_soc_limit_now(entity_id, value)
         await self.route_event(self.number_event_handler, entity_id, value)
+
+    def publish_soc_limit(self, inverter_sn, cid, name, friendly, icon):
+        """Publish one battery SOC limit number from the cached register value.
+
+        Args:
+            inverter_sn: Inverter serial number
+            cid: The limit's CID
+            name: Entity field, e.g. "reserve_soc"
+            friendly: Friendly name suffix
+            icon: Entity icon
+        """
+        prefix = self.base.get_arg("prefix", "predbat")
+        inverter_name = self.inverter_details.get(inverter_sn, {}).get("inverterName", inverter_sn)
+        self.dashboard_item(
+            f"number.{prefix}_solis_{inverter_sn.lower()}_{name}",
+            state=self.cached_values.get(inverter_sn, {}).get(cid, None),
+            attributes={
+                "friendly_name": f"Solis {inverter_name} {friendly}",
+                "unit_of_measurement": "%",
+                "min": 0,
+                "max": 100,
+                "step": 1,
+                "device_class": "battery",
+                "icon": icon,
+            },
+            app="solis",
+        )
+
+    def show_soc_limit_now(self, entity_id, value):
+        """Show a battery SOC limit change in the cache and its entity at once; the write waits in the queue.
+
+        Predbat checks what it wrote within write_and_poll_sleep, but an event other than a slot schedule one
+        is only handled at the top of the next run(), up to a minute later - so without this the reserve it
+        just set reads back unchanged and the write is reported as failed. The queued handler still does the
+        write, and its read-back puts what the inverter actually reports back in the cache.
+
+        Args:
+            entity_id: The number entity changed
+            value: The requested value
+        """
+        prefix = self.base.get_arg("prefix", "predbat")
+        entity_prefix = f"number.{prefix}_solis_"
+        if not entity_id.startswith(entity_prefix):
+            return
+        inverter_sn, _, field = entity_id[len(entity_prefix):].partition("_")
+        limit = next((limit for limit in SOLIS_SOC_LIMITS if limit[1] == field), None)
+        inverter_sn = self.find_inverter_by_sn(inverter_sn)
+        if limit is None or inverter_sn is None:
+            return
+        try:
+            value_str = str(int(value))
+        except (TypeError, ValueError):
+            return
+        cid, name, friendly, icon = limit
+        self.cached_values.setdefault(inverter_sn, {})[cid] = value_str
+        self.publish_soc_limit(inverter_sn, cid, name, friendly, icon)
+
+    def warn_reserve_bound_to_over_discharge_soc(self):
+        """Warn when the reserve is still bound to the over-discharge SOC, as automatic_config() used to bind it.
+
+        The reserve is now the Battery Reserve SOC. A manual setup copied from the old binding would have Predbat
+        raise the over-discharge SOC - a safety floor it otherwise never writes - to hold the battery.
+        """
+        reserve = self.base.get_arg("reserve", None, indirect=False)
+        for entity_id in reserve if isinstance(reserve, list) else [reserve]:
+            if isinstance(entity_id, str) and entity_id.endswith("_over_discharge_soc"):
+                self.log(f"Warn: Solis API: reserve is set to {entity_id} in apps.yaml - point it at the Battery Reserve SOC (the matching _reserve_soc number) instead, or Predbat will raise the over-discharge SOC to hold the battery")
 
     async def switch_event(self, entity_id, service):
         """Handle a switch service call from Home Assistant."""
@@ -3521,14 +3659,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 return
 
             # Handle battery SOC limits
-            if field in ["reserve_soc", "over_discharge_soc", "force_charge_soc", "recovery_soc", "max_charge_soc"]:
-                cid_map = {
-                    "reserve_soc": SOLIS_CID_BATTERY_RESERVE_SOC,
-                    "over_discharge_soc": SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC,
-                    "force_charge_soc": SOLIS_CID_BATTERY_FORCE_CHARGE_SOC,
-                    "recovery_soc": SOLIS_CID_BATTERY_RECOVERY_SOC,
-                    "max_charge_soc": SOLIS_CID_BATTERY_MAX_CHARGE_SOC,
-                }
+            cid_map = {name: cid for cid, name, _, _ in SOLIS_SOC_LIMITS}
+            if field in cid_map:
                 cid = cid_map[field]
 
                 # Write to inverter
@@ -3987,6 +4119,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 return False  # Stop further processing if no inverters
+
+            self.warn_reserve_bound_to_over_discharge_soc()
 
         # Process events queued by the entity callbacks, on this loop. Drained after the
         # startup block: the handlers need the ClientSession and the discovered inverter

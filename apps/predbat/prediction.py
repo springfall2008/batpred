@@ -576,6 +576,8 @@ class Prediction(PredictionBatch):
         self.predict_iboost_best = {}
         self.predict_carbon_best = {}
         self.predict_clipped_best = {}
+        # Relative minutes whose step held the battery for a charging car - the plan table's "Hold for car"
+        self.predict_car_hold_best = {}
         self.iboost_running = False
         self.iboost_running_solar = False
         self.iboost_running_full = False
@@ -902,6 +904,8 @@ class Prediction(PredictionBatch):
                         # car_energy_reported_load, which only controls CT-clamp house-load inclusion
                         if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                             discharge_rate_now = battery_rate_min  # 0
+                            if enable_save_stats:
+                                self.predict_car_hold_best[minute] = True
 
             # Iboost
             iboost_rate_okay = True
