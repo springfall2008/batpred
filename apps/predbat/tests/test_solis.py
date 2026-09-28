@@ -1225,6 +1225,34 @@ _DETAIL_REAL_BATTERY_ZERO_SOH = {
     "batteryList": [{"batteryTypeName": "PYLON_LV", "battSn": "PYLON", "batteryVoltage": 50.9}],
 }
 
+# A plain string inverter sharing an account with an AC-coupled battery inverter (issue #5279), trimmed
+# from its live inverterDetail. It never says "No Battery": batteryType is the code '0' rather than a
+# name, batteryList is empty and every battery reading is zero.
+_DETAIL_STRING_INVERTER = {
+    "productModel": "0106",
+    "model": "0106",
+    "inverterType": 0,
+    "power": 3.6,
+    "powerStr": "kW",
+    "pac": 0.27,
+    "pacStr": "kW",
+    "eTotal": 22258.0,
+    "eTotalStr": "kWh",
+    "uPv1": 228.8,
+    "batteryType": "0",
+    "batteryType2": 0,
+    "batteryNum": 0,
+    "batteryList": [],
+    "batteries": [],
+    "batteryJump": {"canJump": False, "batteryCount": 0},
+    "batteryHealthSoh": 0.0,
+    "batteryCapacitySoc": 0.0,
+    "batteryVoltage": 0.0,
+    "batteryPower": 0.0,
+    "batteryAcvSet": 0.0,
+    "dataTimestamp": "1790579858000",
+}
+
 
 async def _run_automatic_config(details):
     """Run automatic_config() over `details` ({sn: detail}) and return the recorded set_arg_auto args."""
@@ -1823,6 +1851,153 @@ async def test_automatic_config_keeps_no_battery_inverter_in_pv_totals():
     return failed
 
 
+def test_reports_no_battery_for_a_silent_string_inverter():
+    """Issue #5279: a string inverter that names no battery type (absent, or the code '0') is PV-only only when its battery readings are present and zero.
+
+    Every other case must still count as a battery - an unread or empty detail, a missing reading, a
+    live reading, a named pack reporting zeros (issue #4494), or a batteryList entry naming a pack.
+    """
+    print("\n=== Test: _reports_no_battery on a string inverter with no battery fields ===")
+    zeros = {"batteryVoltage": 0.0, "batteryCapacitySoc": 0.0}
+    cases = [
+        ("string inverter as captured", dict(_DETAIL_STRING_INVERTER), True),
+        ("batteryType null, readings zero", dict(zeros, batteryType=None), True),
+        ("batteryType code '0', readings zero", dict(zeros, batteryType="0"), True),
+        ("batteryType code 0 as a number, readings zero", dict(zeros, batteryType=0), True),
+        ("batteryType code '0' but a live battery", {"batteryType": "0", "batteryVoltage": 49.3, "batteryCapacitySoc": 66.0}, False),
+        ("batteryType code '0' with a pack in batteryList", dict(zeros, batteryType="0", batteryList=[{"batteryType": 1, "batteryTypeName": "PYLON_LV"}]), False),
+        ("empty batteryList, readings zero", dict(zeros, batteryList=[]), True),
+        ("readings zero as strings", {"batteryVoltage": "0", "batteryCapacitySoc": "0.0"}, True),
+        ("empty detail - not read yet", {}, False),
+        ("voltage zero, SOC absent", {"batteryVoltage": 0.0}, False),
+        ("SOC zero, voltage absent", {"batteryCapacitySoc": 0.0}, False),
+        ("voltage zero, SOC live", {"batteryVoltage": 0.0, "batteryCapacitySoc": 45.0}, False),
+        ("voltage live, SOC zero", {"batteryVoltage": 50.1, "batteryCapacitySoc": 0.0}, False),
+        ("voltage unparseable", {"batteryVoltage": "", "batteryCapacitySoc": 0.0}, False),
+        ("named pack reading zero", dict(zeros, batteryType="PYLON_LV"), False),
+        ("unrecognised pack name reading zero", dict(zeros, batteryType="Some New Pack"), False),
+        ("batteryList names a pack, readings zero", dict(zeros, batteryList=[{"batteryTypeName": "PYLON_LV", "batteryVoltage": 0.0}]), False),
+    ]
+    for label, detail, expected in cases:
+        got = MockSolisAPI._reports_no_battery(detail)
+        assert got is expected, "{}: expected _reports_no_battery {} for {}, got {}".format(label, expected, detail, got)
+    # The existing captured fixtures keep their verdicts
+    assert MockSolisAPI._reports_no_battery(_DETAIL_WITH_BATTERY) is False
+    assert MockSolisAPI._reports_no_battery(_DETAIL_REAL_BATTERY_ZERO_SOH) is False
+    assert MockSolisAPI._reports_no_battery(_DETAIL_NO_BATTERY) is True
+    print("PASSED: a silent string inverter is PV-only, nothing else is")
+    return False
+
+
+async def test_automatic_config_treats_silent_string_inverter_as_pv_only():
+    """Issue #5279: the string inverter must not be wired up as a second battery inverter, but its PV must still count."""
+    print("\n=== Test: automatic_config treats a silent string inverter as PV-only ===")
+    with_batt = "0602622270600AA"
+    string_inv = "1001060219020BB"
+    recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, string_inv: _DETAIL_STRING_INVERTER})
+
+    assert recorded.get("num_inverters") == 1, "expected only the battery inverter to be enrolled, got num_inverters={}".format(recorded.get("num_inverters"))
+    for arg in ("soc_percent", "battery_scaling", "charge_start_time", "scheduled_charge_enable", "reserve", "battery_rate_max"):
+        entities = recorded.get(arg) or []
+        assert len(entities) == 1 and string_inv.lower() not in " ".join(entities), "{} must stay on the battery inverter alone, got {}".format(arg, entities)
+    expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{string_inv.lower()}_pv_energy_total"]
+    assert recorded.get("pv_today") == expect_pv_today, "expected pv_today to cover both inverters, got {}".format(recorded.get("pv_today"))
+    assert api.is_battery_inverter(string_inv) is False and api.is_battery_inverter(with_batt) is True
+    print("PASSED: the string inverter is PV-only and stays in the PV totals")
+    return False
+
+
+async def test_run_reads_no_registers_from_a_pv_only_inverter():
+    """Issue #5279: a PV-only inverter gets inverterDetail and nothing else - no TOU mode read, no hourly register reads.
+
+    A string inverter has none of the storage registers, so each read is refused and still spends part
+    of the account's daily allowance.
+    """
+    print("\n=== Test: run reads no registers from a PV-only inverter ===")
+    with_batt = "1031260253072197"
+    string_inv = "1001060219020BB"
+    api = _make_run_api(configured_sns=[with_batt, string_inv], control_enable=True)
+    api.inverter_details = {with_batt: _DETAIL_WITH_BATTERY, string_inv: _DETAIL_STRING_INVERTER}
+
+    async def mock_get_inverter_list():
+        return [{"sn": with_batt}, {"sn": string_inv}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        result = await api.run(0, True)
+        # A later hourly boundary, which is when the infrequent and slot reads repeat
+        await api.run(3600, False)
+
+    assert result is True, f"Expected True, got {result}"
+    string_polls = [call for call in api.poll_inverter_data_calls if call[0] == string_inv]
+    assert string_polls == [], f"no register reads should go to the PV-only inverter, got {string_polls}"
+    battery_polls = [call for call in api.poll_inverter_data_calls if call[0] == with_batt]
+    assert battery_polls, "the battery inverter must still be read"
+    assert api.fetch_inverter_details_calls.count(string_inv) >= 2, f"the PV-only inverter's details must still be polled, got {api.fetch_inverter_details_calls}"
+    assert api.startup_reset_registers_calls == [with_batt], f"startup reset only for the battery inverter, got {api.startup_reset_registers_calls}"
+    assert string_inv not in api.decode_time_windows_calls + api.decode_time_windows_v2_calls, "the PV-only inverter has no time windows to decode"
+    explained = [m for m in api.log_messages if string_inv in m and "no battery" in m.lower()]
+    assert explained, f"expected a log line explaining why {string_inv} is left alone, got {api.log_messages}"
+    tou_logs = [m for m in api.log_messages if string_inv in m and "Time of Use" in m]
+    assert not tou_logs, f"no TOU mode is read from the PV-only inverter, so none should be reported, got {tou_logs}"
+    print("PASSED: the PV-only inverter is only ever asked for its details")
+    return False
+
+
+async def test_publish_entities_pv_only_inverter_gets_detail_sensors_only():
+    """Issue #5279: a PV-only inverter publishes its inverterDetail sensors, but no register-backed controls."""
+    print("\n=== Test: publish_entities for a PV-only inverter ===")
+    with_batt = "BAT001"
+    string_inv = "STR001"
+    api = MockSolisAPI()
+    api.inverter_sn = [with_batt, string_inv]
+    api.inverter_details = {with_batt: dict(_DETAIL_WITH_BATTERY), string_inv: dict(_DETAIL_STRING_INVERTER)}
+
+    await api.publish_entities()
+
+    string_entities = [entity_id for entity_id in api.dashboard_items if "_solis_str001_" in entity_id]
+    for expected in ("sensor.predbat_solis_str001_pv_power", "sensor.predbat_solis_str001_pv_energy_total", "sensor.predbat_solis_str001_data_timestamp"):
+        assert expected in api.dashboard_items, "{} should be published, got {}".format(expected, string_entities)
+    assert api.dashboard_items["sensor.predbat_solis_str001_pv_power"]["state"] == 0.27
+    controls = [entity_id for entity_id in string_entities if entity_id.split(".")[0] in ("select", "number", "switch") or entity_id.endswith("_battery_capacity")]
+    assert controls == [], "a PV-only inverter must not publish register-backed entities, got {}".format(controls)
+    assert "select.predbat_solis_bat001_storage_mode" in api.dashboard_items, "the battery inverter must keep its controls"
+    print("PASSED: the PV-only inverter publishes detail sensors only")
+    return False
+
+
+async def test_event_handlers_ignore_a_pv_only_inverter():
+    """Issue #5279: a leftover control entity for a PV-only inverter must never reach its registers."""
+    print("\n=== Test: event handlers ignore a PV-only inverter ===")
+    string_inv = "STR001"
+    api = MockSolisAPI()
+    api.inverter_sn = [string_inv]
+    api.inverter_details = {string_inv: dict(_DETAIL_STRING_INVERTER)}
+    writes = []
+
+    async def record_read_and_write_cid(*args, **kwargs):
+        writes.append(("read_and_write_cid", args))
+        return True
+
+    async def record_set_storage_mode(*args, **kwargs):
+        writes.append(("set_storage_mode_if_needed", args))
+        return True
+
+    api.read_and_write_cid = record_read_and_write_cid
+    api.set_storage_mode_if_needed = record_set_storage_mode
+
+    await api.select_event_handler("select.predbat_solis_str001_storage_mode", "Self-Use")
+    await api.number_event_handler("number.predbat_solis_str001_reserve_soc", 20)
+    await api.switch_event_handler("switch.predbat_solis_str001_battery_reserve", "turn_on")
+
+    assert writes == [], f"no write may reach a PV-only inverter, got {writes}"
+    ignored = [m for m in api.log_messages if "ignoring" in m and "STR001" in m]
+    assert len(ignored) == 3, f"each refused event should be logged, got {api.log_messages}"
+    print("PASSED: events for a PV-only inverter are ignored")
+    return False
+
+
 async def test_automatic_config_pv_totals_unchanged_when_all_have_batteries():
     """With no PV-only inverter present the PV args must still be exactly the battery inverters."""
     failed = False
@@ -1893,6 +2068,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_battery_when_battery_list_contradicts_battery_type())
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_automatic_config_keeps_no_battery_inverter_in_pv_totals())
+        failed |= test_reports_no_battery_for_a_silent_string_inverter()
+        failed |= asyncio.run(test_automatic_config_treats_silent_string_inverter_as_pv_only())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
         failed |= test_solis_catalogue_describes_battery_and_pv_only()
         failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
@@ -2031,6 +2208,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_run_skips_control_writes_for_no_battery_inverter())
         failed |= asyncio.run(test_run_skips_startup_register_reset_for_no_battery_inverter())
         failed |= asyncio.run(test_run_logs_why_a_no_battery_inverter_is_not_controlled())
+        failed |= asyncio.run(test_run_reads_no_registers_from_a_pv_only_inverter())
+        failed |= asyncio.run(test_publish_entities_pv_only_inverter_gets_detail_sensors_only())
+        failed |= asyncio.run(test_event_handlers_ignore_a_pv_only_inverter())
 
     except Exception as e:
         print(f"Error running Solis tests: {e}")
