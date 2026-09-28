@@ -172,6 +172,22 @@ def test_charger_without_a_car_is_left_alone():
     assert component.commands == [("a", "off", 0)], component.commands
 
 
+def test_charger_whose_car_goes_is_released():
+    """A held charger that falls beyond num_cars is handed back, not left with nobody in control."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    _plan(component, 0, [])
+    _plan(component, 1, [("06-01 01:00:00", "06-01 02:00:00")])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("b", "on", 1)], component.commands
+
+    component.base.num_cars = 1
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[2:] == [("b", "release", True)], component.commands
+    assert component.charger_control_state == {"a": False}, component.charger_control_state
+
+
 def test_disconnected_charger_is_left_alone():
     """No car on the cable - nothing to command."""
     component = FakeComponent([FakeCharger("a", connected=False)])
@@ -310,6 +326,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_empty_plan_stops()
     test_each_charger_follows_its_own_car()
     test_charger_without_a_car_is_left_alone()
+    test_charger_whose_car_goes_is_released()
     test_disconnected_charger_is_left_alone()
     test_drift_is_reapplied()
     test_read_only_releases_once_and_resumes()
