@@ -63,6 +63,14 @@ FORCED_ASSERT_SECONDS = 2 * 60 * 60
 POWERWALL_PACK_KWH = 13.5
 POWERWALL_1_PACK_KWH = 6.4
 POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treated as a Powerwall 1.
+# Charge rate per battery unit (expansion packs count), capped at nameplate_power. Tesla reports no usable
+# charge rating: a Powerwall 3's batteries[] lists only expansion packs, every rating zero, and a Powerwall
+# 2's 5.5 kW nameplate_max_charge_power overstates it. Fleet data (GH#5275): 5.0 kW on every single Powerwall 3
+# whatever its nameplate, ~9.8 kW with one expansion, the 11 kW nameplate with two, ~5.04 kW per Powerwall 2
+# unit - and solar charging stops at the same figure.
+POWERWALL_CHARGE_PER_UNIT_W = 5000
+# max/min_site_meter_power_ac report "no limit" as +/-1e9
+SITE_METER_UNLIMITED = 1_000_000
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
@@ -130,7 +138,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     # literal because components.py imports component modules lazily, and a test pins the two together.
     DEFAULT_TBC_CONTROL = True
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, tbc_control=DEFAULT_TBC_CONTROL, hybrid=None, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
@@ -145,6 +153,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             tbc_control: teslemetry_tbc_control, on by default (GH#5186). When set, evaluate_schedule and
                 sync_tariff take the signal-tariff / Time-Based Control path - see GH#4892; False opts
                 back into the real-rate tariff and reserve-driven charging.
+            hybrid: teslemetry_hybrid - True/False forces Predbat's inverter_hybrid setting; unset (None) lets
+                automatic_config decide from the Powerwall model (on for a Powerwall 3, off otherwise).
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
                 refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
             token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
@@ -181,6 +191,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.automatic = automatic
         self.automatic_done = False
         self.tbc_control = tbc_control
+        # teslemetry_hybrid is a boolean in APPS_SCHEMA; unset reaches here as None, meaning "decide from the model"
+        self.hybrid_override = hybrid if isinstance(hybrid, bool) else None
+        self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
+        self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
         self._reserve_band_warned = False
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
@@ -353,6 +367,54 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: Teslemetry capacity estimate: {} x {} kWh ({}, per-unit inverter ~{} W, part={})".format(battery_count, per_unit_kwh, "Powerwall 1" if is_pw1 else "Powerwall 2/3", int(per_unit_power), part_names))
         return battery_count * per_unit_kwh
 
+    def gateway_energy_kwh(self, response):
+        """Capacity in kWh from components.gateways[].nameplate_energy_watts, or 0 when no gateway reports it.
+
+        A Powerwall 3 has no top-level nameplate_energy but reports the whole system here, expansion packs
+        included (13500 / 27000 / 40500 across the GH#5275 fleet). The entries are summed, but if that comes
+        to more than 1.1 x battery_count x POWERWALL_PACK_KWH - every pack is 13.5 kWh - the gateways are
+        taken to each repeat the system total, and the largest single entry is used instead.
+        """
+        gateways = (response.get("components") or {}).get("gateways") or []
+        energies_kwh = [(gateway.get("nameplate_energy_watts") or 0) / 1000.0 for gateway in gateways]
+        total_kwh = sum(energies_kwh)
+        battery_count = response.get("battery_count") or 0
+        expected_kwh = battery_count * POWERWALL_PACK_KWH
+        if expected_kwh and total_kwh > expected_kwh * 1.1:
+            largest_kwh = max(energies_kwh)
+            self.log(
+                "Info: Teslemetry gateways' nameplate_energy_watts add up to {} kWh, more than {} batteries x {} kWh - each gateway looks to report the system total, so using the largest single entry ({} kWh)".format(
+                    round(total_kwh, 2), battery_count, POWERWALL_PACK_KWH, round(largest_kwh, 2)
+                )
+            )
+            return largest_kwh
+        return total_kwh
+
+    def site_export_limit_w(self, response):
+        """The grid export limit in W from min_site_meter_power_ac, or None when there is none to apply.
+
+        The field is the site's export limit at the meter as negative kW, possibly fractional (-2.32), with
+        -1e9 for no limit. 0 is a site that may not export, published as a 0 W limit.
+        """
+        value = response.get("min_site_meter_power_ac")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= -SITE_METER_UNLIMITED or value > 0:
+            return None
+        magnitude = abs(value)
+        if magnitude < 100:
+            # Reported in kW - converted before rounding, so -2.32 is 2320 W rather than 2 kW
+            magnitude = magnitude * 1000
+        return int(round(magnitude))
+
+    def site_charge_limit_w(self, response):
+        """The battery charge limit in W: POWERWALL_CHARGE_PER_UNIT_W per battery unit, capped at nameplate_power.
+
+        None when site_info carries no nameplate_power, as there is then no maximum to cap it at.
+        """
+        nameplate_power = response.get("nameplate_power") or 0
+        if not nameplate_power:
+            return None
+        return int(round(min(nameplate_power, POWERWALL_CHARGE_PER_UNIT_W * (response.get("battery_count") or 1))))
+
     async def fetch_live_status(self):
         """Fetch live power flows and SOC, publishing power sensors."""
         data = await self._request("GET", "/api/1/energy_sites/{}/live_status".format(self.site_id))
@@ -385,34 +447,48 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         Returns True whenever a site_info response was received (regardless of whether soc_max could
         be published), so the run()-level site_info_done latch and automatic_config are not blocked on
         a capacity field this hardware may not expose. soc_max is published here from nameplate_energy
-        when present, but the reliable source on PW3 is total_pack_energy from live_status.
+        (Powerwall 2) or the gateway's nameplate_energy_watts (Powerwall 3, expansion packs included),
+        and estimated from battery_count only when neither is present. total_pack_energy from live_status
+        also upgrades it where the firmware reports that, which Powerwall 3 expansion systems do not.
         """
         data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
         if not data:
             return False
         response = data.get("response", {})
         self.publish_site_info(response)
+        components = response.get("components") or {}
+        self.battery_type = components.get("battery_type")
+        # battery_type alone is not trusted to mean a Powerwall 3 - a Powerwall+ might report solar_powerwall too
+        self.powerwall_3 = self.battery_type == "solar_powerwall" and any(gateway.get("part_name") == "Powerwall 3" for gateway in components.get("gateways") or [])
         nameplate_wh = response.get("nameplate_energy", 0)
+        gateway_kwh = self.gateway_energy_kwh(response)
         battery_count = response.get("battery_count")
         if nameplate_wh:
             self.publish_soc_max(nameplate_wh / 1000.0)
+        elif gateway_kwh:
+            self.publish_soc_max(gateway_kwh)
         elif battery_count:
-            # No capacity field on this firmware (e.g. PW3): estimate from battery_count and model. A
-            # real value from live_status (total_pack_energy) will upgrade this if/when it appears.
+            # No capacity field at all: estimate from battery_count and model. A real value from
+            # live_status (total_pack_energy) will upgrade this if/when it appears.
             self.publish_soc_max(self.estimate_pack_kwh(response), estimate=True)
         nameplate_power = response.get("nameplate_power", 0)
         if nameplate_power:
-            self.publish_sensor("battery_rate_max", nameplate_power, unit="W", state_class=None, friendly="Powerwall Max Rate")
-        site_limit = response.get("max_site_meter_power_ac", 0)
-        if not site_limit or site_limit <= 0 or site_limit > 1_000_000:
-            # max_site_meter_power_ac is frequently an "unlimited" sentinel (e.g. 1e9) or absent;
-            # fall back to the nameplate power rather than publishing an absurd inverter limit.
-            site_limit = nameplate_power
-        if site_limit and site_limit < 100:
-            # Some sites report this field in kW; normalise to W.
-            site_limit = site_limit * 1000
-        if site_limit:
-            self.publish_sensor("inverter_limit", int(site_limit), unit="W", state_class=None, friendly="Powerwall Site Limit")
+            self.publish_sensor("battery_rate_max", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall Max Rate")
+            # The Powerwall's own AC rating - on a Powerwall 3 the commissioned limit. max_site_meter_power_ac
+            # is the site's supply limit at the meter (18.4 kW on an 80 A service), not the inverter's (GH#5275).
+            self.publish_sensor("inverter_limit", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall AC Limit")
+        export_limit = self.site_export_limit_w(response)
+        if export_limit is not None:
+            self.publish_sensor("export_limit", export_limit, unit="W", state_class=None, friendly="Powerwall Export Limit")
+        charge_limit = self.site_charge_limit_w(response)
+        if charge_limit:
+            self.publish_sensor("inverter_limit_charge", charge_limit, unit="W", state_class=None, friendly="Powerwall Charge Limit")
+            battery_units = response.get("battery_count") or 1
+            if charge_limit < POWERWALL_CHARGE_PER_UNIT_W * battery_units:
+                charge_rule = "capped at the {} W nameplate".format(charge_limit)
+            else:
+                charge_rule = "{} W per battery unit x {}".format(POWERWALL_CHARGE_PER_UNIT_W, battery_units)
+            self.log("Info: Teslemetry inverter_limit_charge = {} W ({} - set inverter_limit_charge manually if wrong)".format(charge_limit, charge_rule))
         # Seed the control entity STATES (display only, no commands) from the device so they reflect
         # reality at boot instead of the hardcoded defaults set by register_control_entities().
         #
@@ -779,11 +855,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         apps.yaml: the TESLA inverter type plus these args make inverter.py program the
         schedule entities directly and the emulator drive the device.
 
-        battery_rate_max/inverter_limit are wired conditionally: fetch_site_info only publishes
-        those two sensors when the site_info response actually carried nameplate_power/
-        max_site_meter_power_ac, so wiring them unconditionally would point Predbat at entities
-        that never exist on a site missing those fields. Predbat falls back to its own defaults
-        for absent args, so skipping the wiring here is safe.
+        The limits (battery_rate_max, inverter_limit, inverter_limit_charge, export_limit) are wired
+        conditionally: fetch_site_info only publishes each when site_info carried a basis for it, so
+        wiring them unconditionally would point Predbat at entities that never exist on a site missing
+        those fields. Predbat falls back to its own defaults for absent args, so skipping is safe. They
+        and soc_max use set_arg_auto(overwrite=False), so a value the user set in apps.yaml wins over the
+        device-derived one (GH#5275).
 
         Unlike the args above, inverter_hybrid is one of Predbat's OWN config switches rather than a
         component entity, so it is written through set_state_external (see below).
@@ -792,7 +869,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("inverter_type", ["TESLA"])
         self.set_arg("num_inverters", 1)
         self.set_arg("soc_percent", [self.entity("soc")])
-        self.set_arg("soc_max", [self.entity("soc_max")])
+        self.set_arg_auto("soc_max", [self.entity("soc_max")], overwrite=False)
         self.set_arg("battery_power", [self.entity("battery_power")])
         self.set_arg("battery_power_invert", [False])
         self.set_arg("grid_power", [self.entity("grid_power")])
@@ -803,10 +880,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("import_today", [self.entity("import_today")])
         self.set_arg("export_today", [self.entity("export_today")])
         self.set_arg("pv_today", [self.entity("solar_today")])
-        if self.get_state_wrapper(self.entity("battery_rate_max")) is not None:
-            self.set_arg("battery_rate_max", [self.entity("battery_rate_max")])
-        if self.get_state_wrapper(self.entity("inverter_limit")) is not None:
-            self.set_arg("inverter_limit", [self.entity("inverter_limit")])
+        for limit_arg in ("battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
+            if self.get_state_wrapper(self.entity(limit_arg)) is not None:
+                self.set_arg_auto(limit_arg, [self.entity(limit_arg)], overwrite=False)
         self.set_arg("reserve", [self.entity("schedule_reserve", domain="number")])
         self.set_arg("charge_start_time", [self.entity("schedule_charge_start_time", domain="select")])
         self.set_arg("charge_end_time", [self.entity("schedule_charge_end_time", domain="select")])
@@ -817,16 +893,25 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
         self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
         self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
-        # Every Powerwall is an AC-coupled battery, so Predbat must not model it as a hybrid. Left at
-        # Predbat's default (on), get_total_inverted() folds PV into the inverter_limit budget, so the
-        # Powerwall's own AC rating is applied as a cap on battery + PV combined - modelling a
-        # separately inverted solar array as clipping against a limit it never passes through, which
-        # invents both the clipping and the export windows that "recover" it.
+        # A Powerwall 3 (battery_type solar_powerwall with a "Powerwall 3" gateway) is a hybrid inverter: solar on its own DC inputs shares
+        # the one AC nameplate with the battery, so inverter_limit must cap them combined. Every other
+        # Powerwall is AC coupled - with hybrid on, get_total_inverted() would fold a separately inverted
+        # array into the Powerwall's AC rating, inventing clipping and the export windows that "recover" it,
+        # so it stays off there and when the model is unknown. teslemetry_hybrid overrides either way, e.g.
+        # for a Powerwall 3 beside an existing string inverter, which site_info cannot tell apart (GH#5275).
         # set_state_external is the write path that updates the matching CONFIG_ITEMS value; a plain
         # state write would move the entity without changing the setting Predbat plans with.
         hybrid_entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        self.log("Info: Teslemetry setting {} off - Tesla Powerwall batteries are AC coupled".format(hybrid_entity))
-        await self.set_state_external(hybrid_entity, False)
+        if self.hybrid_override is not None:
+            hybrid, reason = self.hybrid_override, "teslemetry_hybrid in apps.yaml"
+        elif self.powerwall_3:
+            hybrid, reason = True, "auto: Powerwall 3"
+        elif self.battery_type == "solar_powerwall":
+            hybrid, reason = False, "auto: solar_powerwall without a Powerwall 3 gateway"
+        else:
+            hybrid, reason = False, "auto: AC-coupled Powerwall" if self.battery_type else "auto: Powerwall model unknown"
+        self.log("Info: Teslemetry setting {} {} ({})".format(hybrid_entity, "on" if hybrid else "off", reason))
+        await self.set_state_external(hybrid_entity, hybrid)
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.

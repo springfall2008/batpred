@@ -8,7 +8,7 @@
 
 It's possible to replace the existing ui in Predbat with this test version. Disable auto update then edit apps.yaml as follows
 
-```
+```yaml
 pred_bat:
 
   web_ui: modern #legacy restores original predbat ui

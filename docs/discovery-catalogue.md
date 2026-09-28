@@ -228,8 +228,8 @@ An inverter record holds enough to rebuild that inverter's definition - the per-
 has a reserve, a target SoC, charge/discharge enable switches, idle times or a timed pause follows
 from which settings `entities` binds to a writable (`rw`) entity; and protocol detail such as the time
 format or whether the charge rate is set in watts or amps is read from those entities' descriptors.
-A setting Predbat replaces with a placeholder for this inverter type - SolisCloud's `reserve`, say - is
-left out of `entities`. See the design in
+A setting Predbat replaces with a placeholder for this inverter type - the Solis Modbus (`GS`) type's
+`reserve`, say - is left out of `entities`. See the design in
 `docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md`.
 
 ### Writing a reporter

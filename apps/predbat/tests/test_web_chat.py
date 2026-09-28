@@ -3543,6 +3543,57 @@ def test_picker_drops_a_model_the_provider_does_not_serve(my_predbat):
     return failed
 
 
+def test_default_model_can_be_reselected_after_picking_another(my_predbat):
+    """Choosing the picker's Default row goes back to the apps.yaml model after another was picked.
+
+    The Default row posts an empty id. The route cleared the conversation's own override for it
+    but only ever remembered a real selection, so the model picked earlier stayed remembered and
+    resolve_model() kept answering with it - every model could be chosen except the default (#5230).
+    The browser mirror has to forget it too, or the picker keeps naming the deselected model.
+    """
+    failed = False
+    print("**** Testing that the Default model can be reselected after picking another ****")
+
+    agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "k", "model": "apps/default"}}))
+    page = _make_web(my_predbat, agent=agent).chat_page
+    cid = asyncio.run(agent.store.create())
+
+    response = asyncio.run(page.html_chat_model(FakeRequest(body={"conversation": cid, "id": "other/model"})))
+    if response.status != 200 or agent.resolve_model(cid) != "other/model":
+        print("ERROR: picking a model did not take effect: {} / {}".format(response.status, agent.resolve_model(cid)))
+        failed = True
+
+    # The Default row, exactly as selectModel('') posts it.
+    response = asyncio.run(page.html_chat_model(FakeRequest(body={"conversation": cid, "id": None})))
+    if response.status != 200:
+        print("ERROR: selecting Default answered {}".format(response.status))
+        failed = True
+    if agent.store.get_selected_model(agent.active_provider) is not None:
+        print("ERROR: selecting Default left the earlier pick remembered: {}".format(agent.store.get_selected_model(agent.active_provider)))
+        failed = True
+    if agent.resolve_model(cid) != "apps/default":
+        print("ERROR: selecting Default still resolves to {}, expected apps/default".format(agent.resolve_model(cid)))
+        failed = True
+    # And a new conversation starts on the default too, not the forgotten pick.
+    fresh = asyncio.run(agent.store.create())
+    if agent.resolve_model(fresh) != "apps/default":
+        print("ERROR: a new conversation after selecting Default resolves to {}".format(agent.resolve_model(fresh)))
+        failed = True
+
+    # The browser must forget its copy before redrawing, or effectiveModel() falls back to it.
+    body = _extract_function_body(web_chat.get_chat_script(), "selectModel")
+    if body is None:
+        print("ERROR: could not find selectModel()")
+        return True
+    if "state.selectedModel = ''" not in body:
+        print("ERROR: selectModel() never forgets the remembered model for the Default row: {!r}".format(body))
+        failed = True
+    elif body.index("state.selectedModel = ''") > body.index("closeModelList()"):
+        print("ERROR: selectModel() redraws the picker before forgetting the remembered model")
+        failed = True
+    return failed
+
+
 def test_text_inputs_are_hinted_against_password_autofill(my_predbat):
     """No text field on the Chat tab invites a password manager to fill it.
 
@@ -4041,6 +4092,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_every_route_answers_503_while_the_component_is_starting(my_predbat)
     failed |= test_history_reports_the_override_only_for_its_own_provider(my_predbat)
     failed |= test_picker_drops_a_model_the_provider_does_not_serve(my_predbat)
+    failed |= test_default_model_can_be_reselected_after_picking_another(my_predbat)
     failed |= test_text_inputs_are_hinted_against_password_autofill(my_predbat)
     failed |= test_unavailable_catalogue_says_why(my_predbat)
     failed |= test_switching_provider_writes_nothing_and_restarts_nothing(my_predbat)

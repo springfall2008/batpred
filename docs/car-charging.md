@@ -207,6 +207,7 @@ So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an autom
 With Octopus Intelligent charging a charge outside a dispatch does not get the cheap rate either.<BR>
 A car charging outside any charging slot is also modelled in the plan at **input_number.predbat_car_charging_rate** until the end of the current plan slot (**plan_interval_minutes**, 30 minutes by default), so no export is planned over it. With **switch.predbat_metric_dynamic_load_adjust** On its load is also taken out of the recent-load estimate, so it is not counted twice - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
 Leave it commented out if you have no sensor that reports the car actually drawing power.
+The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`) and Predbat gateway integrations set it for you, unless you have set it yourself in `apps.yaml`.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
 
@@ -344,15 +345,19 @@ An excellent [worked example of setting up multiple car charging with Predbat](h
 Predbat can talk directly to the Ohme charger by configuring your Ohme account details in `apps.yaml`.
 
 ```yaml
-  ohme_login: "user@domain"
-  ohme_password: "xxxxxxxxx"
+  ohme_login: !secret ohme_login
+  ohme_password: !secret ohme_password
   ohme_automatic: true
 ```
+
+Keep your Ohme login and password in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 There are two separate automatic settings, so you can have Predbat plan for the car without involving Octopus Intelligent at all:
 
 **ohme_automatic** registers the Ohme charger with Predbat as a car. Predbat wires `num_cars`, `car_charging_planned` (from `binary_sensor.predbat_ohme_connected`, on whenever a car is
-plugged in and still wants charge), `car_charging_soc` (from `sensor.predbat_ohme_battery_percent`) and `car_charging_energy` (see [Ohme charge energy](#ohme-charge-energy) below).
+plugged in and still wants charge), `car_charging_now` (from `sensor.predbat_ohme_power_watts`, so the car counts as charging from 200W), `car_charging_soc` (from
+`sensor.predbat_ohme_battery_percent`) and `car_charging_energy` (see [Ohme charge energy](#ohme-charge-energy) below).
+If you have already set `car_charging_now` in `apps.yaml` - to your car's own charging sensor, say - Predbat keeps yours.
 The car's battery size and target charge level are left to your existing `car_charging_battery_size` and `car_charging_limit` settings, as Ohme cannot report them.
 
 **ohme_automatic_octopus_intelligent** takes the Octopus Intelligent car charging slots from Ohme rather than from Octopus Intelligent directly, by pointing `octopus_intelligent_slot`,
@@ -361,8 +366,8 @@ Predbat uses the Ohme slots. Set it explicitly to override that either way - `tr
 off so the slots come from Octopus directly.
 
 ```yaml
-  ohme_login: "user@domain"
-  ohme_password: "xxxxxxxxx"
+  ohme_login: !secret ohme_login
+  ohme_password: !secret ohme_password
   ohme_automatic: true
   ohme_automatic_octopus_intelligent: true
 ```
@@ -377,8 +382,8 @@ Setting only **ohme_automatic_octopus_intelligent** (with no `ohme_automatic`) s
 **ohme_control** lets Predbat start and stop the charger itself, according to its own car charging plan:
 
 ```yaml
-  ohme_login: "user@domain"
-  ohme_password: "xxxxxxxxx"
+  ohme_login: !secret ohme_login
+  ohme_password: !secret ohme_password
   ohme_automatic: true
   ohme_control: true
 ```
@@ -398,8 +403,6 @@ Ohme app while Predbat is in control, Predbat notices at its next poll and puts 
 [read only mode](customisation.md#predbat-mode) is what releases it - Predbat then hands the charger back to Ohme's own smart schedule, and picks it up again when you turn read only
 off. A component restart deliberately does *not* release the charger, so restarting Predbat will not interrupt a charge in progress. If Predbat stops unexpectedly while the charger is
 paused, it stays paused until you turn read only on, disable `ohme_control`, or resume the charge in the Ohme app.
-
-**Note:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 ### Ohme charge energy
 
@@ -506,6 +509,7 @@ It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intell
 **Setting it up**
 
 Point **car_charging_now** in `apps.yaml` at a sensor that shows the car charging.
+If you use `ohme_automatic`, `myenergi_automatic` or the Predbat gateway this is already done for you.
 It can be an on/off sensor (matched against **car_charging_now_response**), or a charging power sensor in W or kW, where 200W or more counts as charging - useful for chargers such as Wallbox that have no "charging" sensor:
 
 ```yaml

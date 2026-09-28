@@ -70,6 +70,7 @@ byok
 cadata
 calcsize
 calib
+calvind
 Cantarell
 cbat
 CDLL
@@ -80,6 +81,7 @@ ceyyyy
 CGNAT
 Chae
 Chaf
+charg
 chargedischarge
 chargeenergytotal
 chargefreeze
@@ -257,6 +259,7 @@ gitnexus
 giv
 GivEnergy
 givtcp
+gmtime
 gnueabihf
 GOELEC
 goldens
@@ -326,6 +329,7 @@ jstatus
 jsyaml
 kaiming
 keepalive
+kellerza
 keydb
 khtml
 killall
@@ -532,6 +536,7 @@ pythonhashseed
 pytz
 Qwen
 randn
+rany2
 rarr
 reactivepower
 readback
