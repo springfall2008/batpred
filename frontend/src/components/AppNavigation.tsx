@@ -29,6 +29,7 @@ import {
   faServer,
   faSliders,
   faXmark,
+  faCircleHalfStroke,
   faMoon,
   faSun,
   faTableColumns,
@@ -45,6 +46,7 @@ import batLogoDark from '../assets/bat_logo_dark.png'
 
 import './AppNavigation.css'
 import { MODERN_UI_VERSION } from '../version'
+import { getNextThemePreference, readThemePreference, resolveTheme, type ThemePreference } from './theme'
 
 type AppNavigationProps = {
   collapsed: boolean
@@ -272,32 +274,39 @@ export default function AppNavigation({
     }
   }, [mobileOpen])
 
-  type Theme = 'light' | 'dark'
-
-  const [theme, setTheme] = useState<Theme>(() => {
+  const [theme, setTheme] = useState<ThemePreference>(() => {
     try {
-      const stored = localStorage.getItem('predbat-theme')
-
-      if (stored === 'light' || stored === 'dark') {
-        return stored
-      }
+      return readThemePreference(localStorage.getItem('predbat-theme'))
     } catch {
       // Theme preference is non-critical.
+      return 'auto'
     }
-
-    // Use the system theme only when no valid user preference was saved.
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const resolvedTheme = resolveTheme(theme, systemDark)
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    const updateSystemTheme = (event: MediaQueryListEvent) => setSystemDark(event.matches)
+
+    query.addEventListener('change', updateSystemTheme)
+
+    return () => query.removeEventListener('change', updateSystemTheme)
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme
 
     try {
       localStorage.setItem('predbat-theme', theme)
     } catch {
       // Theme preference is non-critical.
     }
-  }, [theme])
+  }, [resolvedTheme, theme])
+
+  const nextTheme = getNextThemePreference(theme)
+  const themeLabel = theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'Auto'
+  const nextThemeLabel = nextTheme === 'light' ? 'Light' : nextTheme === 'dark' ? 'Dark' : 'Auto'
 
   const pathPage = window.location.pathname.replace(/\/+$/, '').split('/').pop() ?? 'dash'
   const currentPage = new URLSearchParams(window.location.search).get('page') ?? pathPage
@@ -319,7 +328,7 @@ export default function AppNavigation({
         </button>
 
         <img
-          src={theme === 'dark' ? batLogoDark : batLogoLight}
+          src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight}
           alt="Predbat"
           className="mobile-app-logo"
         />
@@ -357,11 +366,11 @@ export default function AppNavigation({
                 title="Predbat"
                 onClick={flyBat}
               >
-                <picture>
-                  <source media="(prefers-color-scheme: dark)" srcSet={batLogoDark} />
-
-                  <img src={batLogoLight} alt="Predbat Logo" className="navigation-logo-image" />
-                </picture>
+                <img
+                  src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight}
+                  alt="Predbat Logo"
+                  className="navigation-logo-image"
+                />
               </button>
 
               <span className="navigation-brand-name">Predbat</span>
@@ -473,13 +482,13 @@ export default function AppNavigation({
             <button
               type="button"
               className="navigation-theme-button"
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-              onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+              aria-label={`Theme is ${themeLabel}. Switch to ${nextThemeLabel.toLowerCase()} mode`}
+              title={theme === 'auto' ? `Auto follows browser settings. Switch to ${nextThemeLabel.toLowerCase()} mode` : `Switch to ${nextThemeLabel.toLowerCase()} mode`}
+              onClick={() => setTheme(getNextThemePreference)}
             >
-              <FontAwesomeIcon icon={theme === 'dark' ? faSun : faMoon} />
+              <FontAwesomeIcon icon={theme === 'light' ? faSun : theme === 'dark' ? faMoon : faCircleHalfStroke} />
 
-              <span className="navigation-theme-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+              <span className="navigation-theme-label">{themeLabel}</span>
             </button>
           </div>
 
@@ -493,11 +502,7 @@ export default function AppNavigation({
 
       {batFlying && (
         <div className="predbat-flying-bat" aria-hidden="true">
-          <picture>
-            <source media="(prefers-color-scheme: dark)" srcSet={batLogoDark} />
-
-            <img src={batLogoLight} alt="" />
-          </picture>
+          <img src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight} alt="" />
         </div>
       )}
     </>
