@@ -34,6 +34,12 @@ from sungrow_const import (
     SUNGROW_AUTH_ERROR_CODES,
     SUNGROW_RATE_LIMIT_CODES,
     SUNGROW_MAX_POINTS_PER_REQUEST,
+    SUNGROW_ESS_CAPACITY_POINT,
+    SUNGROW_ESS_PERCENT_POINTS,
+    SUNGROW_ESS_ENERGY,
+    SUNGROW_ERROR_CODES,
+    SUNGROW_CHECK_RESULTS,
+    SUNGROW_EXPIRE_SECONDS_MAX,
     gateway_url,
     strip_point_prefix,
     as_float,
@@ -451,6 +457,70 @@ def test_error_code_groups_are_short_and_disjoint():
     assert not failed, "test_error_code_groups_are_short_and_disjoint"
 
 
+def test_disputed_and_unscaled_points_are_pinned_to_the_ess_map():
+    """The two points whose units Sungrow do not settle must stay identifiable.
+
+    13140's name says kWh and its unit column says Wh - one is wrong by a factor of a thousand.
+    The percentage points carry a BLANK unit, so 0-100 vs 0-1000 is not established either. Both
+    facts are only useful if the code can still point at the exact IDs they apply to.
+    """
+    failed = False
+    if SUNGROW_ESS_CAPACITY_POINT not in SUNGROW_ESS_POINTS:
+        print(f"ERROR: the disputed capacity point {SUNGROW_ESS_CAPACITY_POINT} is not in the ESS map")
+        failed = True
+    elif SUNGROW_ESS_POINTS[SUNGROW_ESS_CAPACITY_POINT] != "battery_capacity_reported":
+        print(f"ERROR: {SUNGROW_ESS_CAPACITY_POINT} maps to {SUNGROW_ESS_POINTS[SUNGROW_ESS_CAPACITY_POINT]!r}, which is not the diagnostic leaf")
+        failed = True
+    # It must NOT be one of the leaves anything plans from.
+    if SUNGROW_ESS_POINTS.get(SUNGROW_ESS_CAPACITY_POINT) in SUNGROW_ESS_ENERGY:
+        print("ERROR: the disputed capacity point feeds an energy counter")
+        failed = True
+    for point_id in SUNGROW_ESS_PERCENT_POINTS:
+        if point_id in SUNGROW_ESS_POINTS and point_id in SUNGROW_PARAM_SCALE_UNVERIFIED:
+            print(f"ERROR: percentage point {point_id} has a scale applied, but its unit is not documented")
+            failed = True
+    assert not failed, "test_disputed_and_unscaled_points_are_pinned_to_the_ess_map"
+
+
+def test_ess_energy_leaves_exist_in_the_point_map():
+    """A typo in the energy leaf list is silent - the counter would simply never appear."""
+    failed = False
+    for leaf in SUNGROW_ESS_ENERGY:
+        if leaf not in SUNGROW_ESS_POINTS.values():
+            print(f"ERROR: energy leaf {leaf!r} is not produced by any ESS point")
+            failed = True
+    # Every leaf the plant read supplies must have a device counterpart or a plant fallback.
+    for leaf in SUNGROW_PLANT_ENERGY:
+        if leaf not in SUNGROW_ESS_ENERGY and leaf not in SUNGROW_PLANT_ENERGY:
+            print(f"ERROR: energy leaf {leaf!r} has no source at all")
+            failed = True
+    assert not failed, "test_ess_energy_leaves_exist_in_the_point_map"
+
+
+def test_error_and_check_result_tables_describe_the_codes_the_component_branches_on():
+    """Every code with its own branch carries a description, and expire_second stays in range."""
+    failed = False
+    for code in ("E00000", "E00003", "E900", "E911", "E912", "E913", "E914", "E918", "E919", "E901", "E916", "E998", "E999"):
+        if code not in SUNGROW_ERROR_CODES:
+            print(f"ERROR: branched-on error code {code} has no description")
+            failed = True
+    # check_result 1 is the only success; the rest say what actually went wrong.
+    if SUNGROW_CHECK_RESULTS.get("1") != "Task dispatch successful":
+        print(f"ERROR: check_result 1 is described as {SUNGROW_CHECK_RESULTS.get('1')!r}")
+        failed = True
+    for code in ("0", "3", "5", "7", "8", "11", "6-1"):
+        if code not in SUNGROW_CHECK_RESULTS:
+            print(f"ERROR: check_result {code} has no description")
+            failed = True
+    # A task outside 0-1800 is rejected with check_result 8, so the constant must sit inside it.
+    from sungrow_const import SUNGROW_TASK_EXPIRE_SECONDS
+
+    if not 0 <= SUNGROW_TASK_EXPIRE_SECONDS <= SUNGROW_EXPIRE_SECONDS_MAX:
+        print(f"ERROR: expire_second {SUNGROW_TASK_EXPIRE_SECONDS} is outside the accepted range 0-{SUNGROW_EXPIRE_SECONDS_MAX}")
+        failed = True
+    assert not failed, "test_error_and_check_result_tables_describe_the_codes_the_component_branches_on"
+
+
 def run_sungrow_const_tests(my_predbat):
     """Run all Sungrow constants tests."""
     failed = False
@@ -477,6 +547,9 @@ def run_sungrow_const_tests(my_predbat):
         ("command_values", test_command_values_are_the_documented_magic_bytes),
         ("heartbeat_param", test_heartbeat_parameter_is_10017),
         ("error_code_groups", test_error_code_groups_are_short_and_disjoint),
+        ("disputed_points_pinned", test_disputed_and_unscaled_points_are_pinned_to_the_ess_map),
+        ("ess_energy_leaves", test_ess_energy_leaves_exist_in_the_point_map),
+        ("error_tables", test_error_and_check_result_tables_describe_the_codes_the_component_branches_on),
     ]:
         try:
             if fn():

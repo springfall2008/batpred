@@ -105,6 +105,12 @@ from sungrow_const import (
     SUNGROW_FORCED_EVERYDAY,
     SUNGROW_HEARTBEAT_DEFAULT_SECONDS,
     SUNGROW_ESS_POINTS,
+    SUNGROW_ESS_ENERGY,
+    SUNGROW_ERROR_CODES,
+    SUNGROW_CLOCK_ERROR_CODE,
+    SUNGROW_CHECK_RESULTS,
+    SUNGROW_PARAM_STATUS,
+    SUNGROW_PARAM_STATUS_SUCCESS,
     SUNGROW_DEVICE_ESS,
     SUNGROW_MAX_POINTS_PER_REQUEST,
     SUNGROW_AUTH_ERROR_CODES,
@@ -221,6 +227,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self.device_list = []
         self.device_detail = {}
         self.device_values = {}
+        self.device_energy = {}
         self.local_schedule = {}
         self.applied_command = {}
         self.last_write_time = {}
@@ -311,20 +318,30 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         code = str(body.get("result_code", ""))
         message = body.get("result_msg") or ""
         serial = body.get("req_serial_num") or ""
-        self.last_api_error = "{} {}".format(code, message).strip()
+        # Sungrow's own result_msg is often terser than Appendix 2's description of the same
+        # code, so both are reported: the description says what the code MEANS and the message
+        # says what this particular call hit.
+        described = SUNGROW_ERROR_CODES.get(code)
+        detail = "{} - {}".format(message, described) if described and described != message else (message or described or "")
+        self.last_api_error = "{} {}".format(code, detail).strip()
         suffix = " [req {}]".format(serial) if serial else ""
+        if code == SUNGROW_CLOCK_ERROR_CODE:
+            # Called out on its own because it otherwise looks exactly like a bad credential,
+            # which is the same trap AlphaESS's 6006 sets. It is a clock problem on this host.
+            self.log("Warn: Sungrow rejected the request timestamp on {} ({}) - this host's clock is too far from Sungrow server time. It is a clock problem, not a credentials problem{}".format(path, code, suffix))
+            return
         if code in SUNGROW_AUTH_ERROR_CODES:
             # Called out because "appkey invalid" and "token expired" otherwise read as an
             # ordinary API failure and send people looking at the inverter instead of the
             # credentials.
-            self.log("Warn: Sungrow rejected the credentials on {} ({} {}) - check sungrow_appkey and sungrow_access_key, or reconnect the Sungrow account{}".format(path, code, message, suffix))
+            self.log("Warn: Sungrow rejected the credentials on {} ({} {}) - check sungrow_appkey and sungrow_access_key, or reconnect the Sungrow account{}".format(path, code, detail, suffix))
             return
         if code in SUNGROW_RATE_LIMIT_CODES:
             # A pacing signal, not a component fault. Logging it at Warn would read as a
             # genuine malfunction on an account that is simply being polled hard.
-            self.log("Info: Sungrow rate-limited {} ({} {}); this is a pacing signal, not a fault, and will be retried on the next tier refresh{}".format(path, code, message, suffix))
+            self.log("Info: Sungrow rate-limited {} ({} {}); this is a pacing signal, not a fault, and will be retried on the next tier refresh{}".format(path, code, detail, suffix))
             return
-        self.log("Warn: Sungrow {} returned result_code {} {}{}".format(path, code or "(none)", message, suffix))
+        self.log("Warn: Sungrow {} returned result_code {} {}{}".format(path, code or "(none)", detail, suffix))
 
     async def _request(self, endpoint_key, body=None, _retry_after_refresh=False):
         """Perform one authorised API call, returning (ok, result_data).
@@ -392,7 +409,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         are indistinguishable from the returned list alone, and the CLI has to name which one
         happened.
         """
-        ok, data = await self._request("plant_list", {"page": 1, "size": 100})
+        # valid_flag "1,3" is deliberate. The parameter defaults to 1 (Normal) ALONE, so a plant
+        # in the Connected state (3) is silently missing from the default listing - which looks
+        # exactly like an account with no plants and is not something the user could diagnose.
+        ok, data = await self._request("plant_list", {"page": 1, "size": 100, "valid_flag": "1,3"})
         if not ok:
             self.discovery_ok = False
             return list(self.plant_list)
@@ -513,10 +533,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     async def fetch_plant_realtime(self, ps_id):
         """Read one plant's realtime measuring points into plant_values/plant_energy.
 
-        The plant read is not a convenience duplicate of the device read. The energy-storage
-        inverter's own point list carries NO PV point and no daily energy counters at all, so
-        this is the only source for pv_power, pv_today, load_today, import_today and
-        export_today - values Predbat cannot plan without.
+        This is the FALLBACK source, not the primary one - telemetry() and energy() both prefer
+        the device read, which describes one inverter where this aggregates the whole site. It
+        is polled anyway, every cycle, because getDeviceRealTimeData is not served by every
+        account and model and a site that loses it would otherwise lose SoC, PV, load, grid and
+        every daily counter in one go. This read is what keeps such a site planning.
         """
         ok, data = await self._request("plant_realtime", {"ps_id_list": [ps_id], "point_id_list": list(SUNGROW_PLANT_POINTS.keys()), "is_get_point_dict": "1"})
         if not ok:
@@ -580,6 +601,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             elif "battery_level" in values:
                 values["soc"] = values["battery_level"]
             self.device_values[uuid] = values
+            # The daily counters are Wh on the wire like everything else, and are split out into
+            # their own map so energy() can prefer them over the plant's aggregate without
+            # re-converting on every read.
+            self.device_energy[uuid] = {leaf: round(values[leaf] * SUNGROW_WH_TO_KWH, 3) for leaf in SUNGROW_ESS_ENERGY if leaf in values}
             return True
         return False
 
@@ -616,11 +641,16 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         return self.plant_values.get(ps_id, {}).get(plant_leaf)
 
     def energy(self, uuid, leaf):
-        """Return one daily energy counter in kWh for an inverter, or None.
+        """Return one daily energy counter in kWh for an inverter, device read first then plant.
 
-        Only the plant read carries these, so unlike telemetry() there is no device-level
-        preference to express.
+        Same preference as telemetry(), and for the same reason: the energy-storage inverter
+        carries its own daily counters (13199 load, 13147 import, 13122 export, 13112 PV), which
+        describe THIS inverter, where the plant's counters aggregate everything on the site.
+        Identical on a residential single-inverter plant and not identical on a larger one.
         """
+        value = self.device_energy.get(uuid, {}).get(leaf)
+        if value is not None:
+            return value
         ps_id = self.device_detail.get(uuid, {}).get("ps_id")
         if ps_id is None:
             return None
@@ -694,6 +724,20 @@ class SungrowAPI(ComponentBase, OAuthMixin):
 
             # Ratings are published only when actually derivable - an arg pointing at a sensor
             # that never appears is worse than an absent arg the user can fill in.
+            # Published as a DIAGNOSTIC and never used for soc_max: 13140's name cell says
+            # "Battery Capacity (kWh)" and its unit cell says "Wh" in Sungrow's own table, so one
+            # of the two is wrong by a factor of a thousand and the docs do not say which. It is
+            # surfaced because a tester comparing it against the derived capacity below is
+            # exactly how that gets resolved.
+            reported = self.device_values.get(uuid, {}).get("battery_capacity_reported")
+            if reported is not None:
+                self.dashboard_item(
+                    self._sensor_name(uuid, "battery_capacity_reported"),
+                    state=round(reported, 3),
+                    attributes={"friendly_name": "Sungrow {} Battery Capacity (reported, UNIT UNVERIFIED - Sungrow document this point as both kWh and Wh)".format(serial), "icon": "mdi:help-circle-outline"},
+                    app="sungrow",
+                )
+
             capacity = self.battery_capacity(uuid)
             if capacity > 0:
                 self.dashboard_item(self._sensor_name(uuid, "battery_capacity"), state=capacity, attributes={"unit_of_measurement": "kWh", "friendly_name": "Sungrow {} Battery Capacity".format(serial)}, app="sungrow")
@@ -1083,7 +1127,19 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 return None
             status = (data or {}).get("command_status")
             if status == SUNGROW_TASK_DONE:
-                return (data or {}).get("param_list") or []
+                param_list = (data or {}).get("param_list") or []
+                # A COMPLETED TASK IS NOT A SUCCESSFUL WRITE. The status is two-level: the task
+                # reports 8 once it has finished running, while each parameter inside it carries
+                # its own status, and one of them can have failed or timed out while the task as
+                # a whole "completed". Reading only the task level reports a setpoint as landed
+                # when the inverter never took it, which is the worst possible failure here -
+                # Predbat would cache the decision as applied and never retry it.
+                bad = [entry for entry in param_list if entry.get("command_status") not in (None, SUNGROW_PARAM_STATUS_SUCCESS)]
+                if bad:
+                    detail = ", ".join("{} {}".format(describe_param(entry.get("param_code")), SUNGROW_PARAM_STATUS.get(entry.get("command_status"), entry.get("command_status"))) for entry in bad)
+                    self.log("Warn: Sungrow task {} for {} completed but {} of {} parameter(s) did not take: {}".format(task_id, self._serial(uuid), len(bad), len(param_list), detail))
+                    return None
+                return param_list
             if status != SUNGROW_TASK_RUNNING:
                 self.log("Warn: Sungrow task {} for {} ended in command_status {}".format(task_id, self._serial(uuid), status))
                 return None
@@ -1112,11 +1168,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             return None
         data = data or {}
         if str(data.get("check_result")) != SUNGROW_CHECK_OK:
-            self.log("Warn: Sungrow rejected the parameter task for {} with check_result {}".format(self._serial(uuid), data.get("check_result")))
+            check = str(data.get("check_result"))
+            self.log("Warn: Sungrow rejected the parameter task for {} with check_result {} ({})".format(self._serial(uuid), check, SUNGROW_CHECK_RESULTS.get(check, "undocumented")))
             return None
         dev_list = data.get("dev_result_list") or []
         if not dev_list or str(dev_list[0].get("code")) != SUNGROW_DEV_RESULT_OK:
-            self.log("Warn: Sungrow rejected the parameter task for {}: {}".format(self._serial(uuid), dev_list[0] if dev_list else "no device result"))
+            code = str(dev_list[0].get("code")) if dev_list else ""
+            self.log("Warn: Sungrow rejected the parameter task for {}: {} ({})".format(self._serial(uuid), code or "no device result", SUNGROW_CHECK_RESULTS.get(code, "undocumented")))
             return None
         task_id = dev_list[0].get("task_id")
         if not task_id:

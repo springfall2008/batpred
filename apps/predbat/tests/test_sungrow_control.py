@@ -370,6 +370,73 @@ def test_dispatch_rejects_a_response_with_no_task_id():
     assert not failed, "test_dispatch_rejects_a_response_with_no_task_id"
 
 
+def test_dispatch_fails_when_a_parameter_inside_a_completed_task_failed():
+    """A COMPLETED TASK IS NOT A SUCCESSFUL WRITE.
+
+    The status is two-level: the task reports command_status 8 once it has finished running,
+    while each parameter inside it carries its own status and can have failed or timed out.
+    Reading only the task level reports a setpoint as landed when the inverter never took it -
+    and _write_params would then cache the decision as applied and never retry it.
+    """
+    failed = False
+    client = _controlled_client()
+    partial = {
+        "command_status": 8,
+        "param_list": [
+            {"param_code": "10003", "set_value": "3", "command_status": 4},
+            {"param_code": "10004", "set_value": "170", "command_status": 5},
+        ],
+    }
+    with patch("asyncio.sleep", new=_no_sleep()):
+        with _mock_post([_envelope(DISPATCH_OK), _envelope(partial)]):
+            result = run_async_local(client.dispatch_params(UUID, [{"param_code": "10004", "set_value": "170"}]))
+    if result is not None:
+        print(f"ERROR: a task whose command parameter FAILED returned {result}")
+        failed = True
+    if not any("did not take" in message for message in client.log_messages):
+        print("ERROR: the per-parameter failure was not named in the log")
+        failed = True
+    assert not failed, "test_dispatch_fails_when_a_parameter_inside_a_completed_task_failed"
+
+
+def test_dispatch_tolerates_a_task_that_omits_per_parameter_status():
+    """An omitted per-parameter status is not a failure.
+
+    Not every response carries command_status inside param_list, and treating its absence as a
+    failure would reject every successful write on such an account.
+    """
+    failed = False
+    client = _controlled_client()
+    with patch("asyncio.sleep", new=_no_sleep()):
+        with _mock_post([_envelope(DISPATCH_OK), _envelope(TASK_DONE)]):
+            result = run_async_local(client.dispatch_params(UUID, [{"param_code": "10004", "set_value": "170"}]))
+    if result is None:
+        print("ERROR: a completed task with no per-parameter status was rejected")
+        failed = True
+    assert not failed, "test_dispatch_tolerates_a_task_that_omits_per_parameter_status"
+
+
+def test_a_partially_failed_task_is_not_cached_as_applied():
+    """The whole point of checking per-parameter status: the decision must stay retryable."""
+    failed = False
+    client = _controlled_client()
+    client._write_supported[UUID] = True
+    partial = {"command_status": 8, "param_list": [{"param_code": "10005", "set_value": "3000", "command_status": 6}]}
+    with patch("asyncio.sleep", new=_no_sleep()):
+        with _mock_post([_envelope(DISPATCH_OK), _envelope(partial)]):
+            ok = run_async_local(client._write_params(UUID, {"command": SUNGROW_CMD_CHARGE, "power": 3000, "reason": "test"}))
+    if ok:
+        print("ERROR: a partially failed write reported the inverter as matching the plan")
+        failed = True
+    if client.applied_command.get(UUID) is not None:
+        print("ERROR: a partially failed write was cached as applied, so it would never be retried")
+        failed = True
+    if UUID in client.control_held:
+        print("ERROR: control was marked held although a parameter did not take")
+        failed = True
+    assert not failed, "test_a_partially_failed_task_is_not_cached_as_applied"
+
+
 def test_write_params_checks_support_once_and_caches_the_verdict():
     """paramSettingCheck is a hardware/account fact, so re-probing it every cycle wastes a call."""
     failed = False
@@ -648,6 +715,9 @@ def run_sungrow_control_tests(my_predbat):
         ("dispatch_polls", test_dispatch_polls_until_the_task_completes),
         ("dispatch_failure", test_dispatch_returns_none_when_the_task_fails),
         ("dispatch_no_task_id", test_dispatch_rejects_a_response_with_no_task_id),
+        ("param_status_failure", test_dispatch_fails_when_a_parameter_inside_a_completed_task_failed),
+        ("param_status_absent_ok", test_dispatch_tolerates_a_task_that_omits_per_parameter_status),
+        ("partial_failure_not_cached", test_a_partially_failed_task_is_not_cached_as_applied),
         ("support_cached", test_write_params_checks_support_once_and_caches_the_verdict),
         ("unsupported_device", test_write_params_refuses_a_device_that_cannot_be_configured),
         ("failed_write_not_cached", test_write_params_does_not_cache_a_failed_write),

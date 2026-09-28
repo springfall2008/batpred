@@ -32,6 +32,9 @@ SUNGROW_GATEWAYS = {
     "international": "https://gateway.isolarcloud.com.hk",
     "europe": "https://gateway.isolarcloud.eu",
     "australia": "https://augateway.isolarcloud.com",
+    # NOT in Appendix 8, which lists only the four above. Kept because it is in circulation and
+    # a user whose account really is on the Indian gateway has no other way to reach it, but it
+    # is the one entry here that the portal does not confirm.
     "india": "https://gateway.isolarcloud.in",
 }
 SUNGROW_DEFAULT_GATEWAY = SUNGROW_GATEWAYS["europe"]
@@ -44,6 +47,12 @@ SUNGROW_DEFAULT_GATEWAY = SUNGROW_GATEWAYS["europe"]
 # path or query parameters. The body always carries appkey, and the headers always carry
 # x-access-key and the OAuth bearer token.
 SUNGROW_ENDPOINTS = {
+    # The OAuth dance itself. Predbat NEVER calls these - predbat.com's oauth-refresh edge
+    # function owns the whole refresh chain, exactly as it does for Fox and Teslemetry. They are
+    # named here so the component's own documentation is complete and so nobody adds a second,
+    # competing refresh path by accident.
+    "token": "/openapi/apiManage/token",
+    "refresh_token": "/openapi/apiManage/refreshToken",
     "plant_list": "/openapi/platform/queryPowerStationList",
     "plant_detail": "/openapi/platform/getPowerStationDetail",
     "device_list": "/openapi/platform/getDeviceListByPsId",
@@ -56,7 +65,21 @@ SUNGROW_ENDPOINTS = {
     "param_check": "/openapi/platform/paramSettingCheck",
     "param_setting": "/openapi/platform/paramSetting",
     "param_task": "/openapi/platform/getParamSettingTask",
+    # The read-only parameter path is a SECOND asynchronous flow with its own dispatch and poll
+    # endpoints, separate from paramSetting's set_type 2 readback. Not used today - the control
+    # parameters this component cares about are all readable through paramSetting - but named so
+    # the distinction is on the record.
+    "readonly_dispatch": "/openapi/platform/readOnlyParamSet",
+    "readonly_result": "/openapi/platform/getReadOnlyResult",
+    "readonly_definition": "/openapi/platform/getReadOnlyParamDefinition",
+    "setting_history": "/openapi/platform/getDeviceSettingRecordList",
 }
+
+# Appendix 8 carries an explicit caveat worth repeating here: "The API call addresses outlined
+# in this document do not represent the final call addresses. Refer to the API call addresses
+# on the final API call authorization instructions." So an account can legitimately be issued a
+# host that is not one of the five above, which is why sungrow_gateway accepts a full URL as
+# well as a region name.
 
 SUNGROW_LANG = "_en_US"
 
@@ -72,19 +95,98 @@ SUNGROW_RETRIES = 3
 # against this constant and coerces to str first.
 SUNGROW_RESULT_OK = "1"
 
-# Codes worth branching on. The portal's full error appendix could not be read (its document
-# viewer is a JavaScript application that would not render for us), so this is deliberately a
-# SHORT list of codes observed in the wild by the pysolarcloud library rather than a
-# half-invented table. Anything not listed is logged with the server's own result_msg, which
-# is more useful than a wrong description.
-#
-# Auth codes mean the credentials or the token are the problem, not the request. They are
-# called out separately because "appkey invalid" and "token expired" otherwise read as an
-# ordinary API failure and send people looking in the wrong place.
-SUNGROW_AUTH_ERROR_CODES = ("E00003", "E900", "E912", "E914", "E919")
+# Appendix 2, API Error Code Definitions, transcribed from the developer portal. Sungrow
+# return a short code and a terse message, and several of them are indistinguishable from one
+# another in the wild ("Unauthorized access" covers three quite different causes), so the
+# component prints this description alongside whatever the server said.
+SUNGROW_ERROR_CODES = {
+    "-1": "Internal service exception",
+    "000": "Unknown exception",
+    "001": "appkey cannot be empty",
+    "002": "token cannot be empty",
+    "003": "sys_code cannot be empty",
+    "009": "Missing parameter",
+    "010": "Invalid parameter value",
+    "011": "SQL exception",
+    "E00000": "Invalid appkey",
+    "E00001": "API service has expired",
+    "E00002": "Parameter decrypt error",
+    "E00003": "The token is invalid or has expired",
+    "E900": "Unauthorized access",
+    "E901": "Call too frequently",
+    "E902": "Request is not encrypted",
+    "E903": "Abnormal network environment (IP address change frequency too high)",
+    "E904": "Missing request header: x-random-secret-key",
+    "E905": "AES decryption exception",
+    "E906": "RSA decryption exception",
+    "E907": "AES random secret key length must be 16",
+    "E908": "Missing key parameter: api_key_param",
+    "E909": "Invalid nonce format (32-character alphanumeric string required)",
+    "E910": "Repeated request - the nonce must be regenerated",
+    "E911": "Missing request header: x-access-key",
+    "E912": "Illegal x-access-key",
+    "E913": "Expired request - this host's clock is too far from Sungrow server time",
+    "E914": "Mismatched appkey and x-access-key",
+    "E916": "Login too frequently",
+    "E918": "Permission denied by IP allow-list",
+    "E919": "Permission denied by user allow-list",
+    "E994": "System not found",
+    "E995": "Request body too large",
+    "E996": "API not found",
+    "E997": "Error transforming the business response data",
+    "E998": "Monthly API call limit reached",
+    "E999": "Hourly API call limit reached",
+}
+
+# Auth codes mean the credentials or the token are the problem, not the request. Called out
+# separately because "appkey invalid" and "token expired" otherwise read as an ordinary API
+# failure and send people looking at the inverter instead of at the credentials.
+SUNGROW_AUTH_ERROR_CODES = ("E00000", "E00003", "E900", "E911", "E912", "E914", "E918", "E919")
 # Rate limiting is a pacing signal, not a fault. Logging it at Warn would read as a genuine
-# malfunction on an account that is simply being polled hard.
-SUNGROW_RATE_LIMIT_CODES = ("E998", "E999")
+# malfunction on an account that is simply being polled hard. E901/E916 are burst limits and
+# E998/E999 are the monthly and hourly quotas.
+SUNGROW_RATE_LIMIT_CODES = ("E901", "E916", "E998", "E999")
+# The host clock, not the credentials. This otherwise looks exactly like a bad appkey, which is
+# the same trap AlphaESS's 6006 sets.
+SUNGROW_CLOCK_ERROR_CODE = "E913"
+
+# paramSetting / paramSettingCheck check_result values. 1 is the only success. These are
+# transcribed from the Grid Control pages and are the difference between "the inverter refused
+# this" and "Predbat sent something malformed", which are not the same problem at all.
+SUNGROW_CHECK_RESULTS = {
+    "0": "Verification failed, configuration could not be performed",
+    "1": "Task dispatch successful",
+    "2": "Duplicate parameter configuration measuring point",
+    "3": "Parameter limit exceeded",
+    "4": "Parameter code or value empty",
+    "5": "Device does not exist",
+    "6": "Parameter configuration template not set",
+    "6-1": "The device model does not support this parameter, or the account has no permission for it",
+    "7": "Device offline",
+    "8": "Timeout period outside the accepted range of 0-1800 seconds",
+    "9": "Operation repeated",
+    "11": "Only single-device operations are supported for parameter readback",
+    "12": "This device version does not support negative values",
+}
+
+# Per-PARAMETER status inside a completed task's param_list. A task can report itself complete
+# (command_status 8) while an individual parameter inside it failed or timed out, so checking
+# only the task-level status reports a write as landed when it did not.
+SUNGROW_PARAM_STATUS_PENDING = 1
+SUNGROW_PARAM_STATUS_EXECUTING = 2
+SUNGROW_PARAM_STATUS_SUCCESS = 4
+SUNGROW_PARAM_STATUS_FAILURE = 5
+SUNGROW_PARAM_STATUS_TIMEOUT = 6
+SUNGROW_PARAM_STATUS = {
+    SUNGROW_PARAM_STATUS_PENDING: "pending execution",
+    SUNGROW_PARAM_STATUS_EXECUTING: "executing",
+    SUNGROW_PARAM_STATUS_SUCCESS: "success",
+    SUNGROW_PARAM_STATUS_FAILURE: "failure",
+    SUNGROW_PARAM_STATUS_TIMEOUT: "timeout",
+}
+
+# expire_second's documented range. Sungrow reject a task outside it with check_result 8.
+SUNGROW_EXPIRE_SECONDS_MAX = 1800
 
 # getDeviceRealTimeData caps point_id_list at 100 and answers result_code 010 when the list is
 # longer. The maps here are far smaller, so nothing is chunked - but a future addition that
@@ -327,17 +429,59 @@ SUNGROW_HEARTBEAT_MIN_SEND_SECONDS = 30
 
 # Energy-storage (hybrid) inverter. This is the device a residential SH install controls.
 SUNGROW_ESS_POINTS = {
-    "13141": "battery_soc",  # %
-    "13142": "battery_soh",  # %
+    # Battery
+    "13141": "battery_soc",  # Battery Level (SOC) - SEE THE UNIT WARNING BELOW
+    "13142": "battery_soh",  # Battery Health (SOH) - SEE THE UNIT WARNING BELOW
     "13126": "battery_charge_power",  # W, unsigned
     "13150": "battery_discharge_power",  # W, unsigned
+    "13138": "battery_voltage",  # V
+    "13139": "battery_current",  # A
+    "13143": "battery_temperature",  # degC
+    "13140": "battery_capacity_reported",  # SEE THE UNIT CONFLICT BELOW - diagnostic only
+    "13028": "battery_charge_today",  # Wh
+    "13029": "battery_discharge_today",  # Wh
     "13034": "battery_total_charge_energy",  # Wh
     "13035": "battery_total_discharge_energy",  # Wh
+    "13162": "battery_max_charge_current",  # A, from the BMS
+    "13163": "battery_max_discharge_current",  # A, from the BMS
+    # Solar. The energy-storage inverter DOES carry its own PV points - 13003 is the total DC
+    # input power and 13112 the day's yield - so PV is per-inverter here and does not have to
+    # come from the plant read.
+    "13003": "pv_power",  # Total DC Power, W
+    "13112": "pv_today",  # Daily PV Yield, Wh
+    "13134": "pv_total",  # Total PV Yield, Wh
+    # Grid and load. Import and export are SEPARATE unsigned points, as are the two battery
+    # powers above; there is no signed point for either on this device type.
     "13119": "load_power",  # W
     "13121": "feed_in_power",  # W, unsigned - export to grid
     "13149": "purchased_power",  # W, unsigned - import from grid
+    "13122": "export_today",  # Feed-in Energy Today, Wh
+    "13147": "import_today",  # Energy Purchased Today, Wh
+    "13199": "load_today",  # Daily Load Consumption, Wh
+    "13011": "inverter_active_power",  # W
     "13146": "inverter_operating_status",
 }
+
+# !!! THE PERCENTAGE POINTS HAVE NO DOCUMENTED UNIT !!!
+#
+# 13141 (SOC), 13142 (SOH) and their siblings are published with a BLANK unit column. The
+# portal's only scaling statement is a global note on getDeviceRealTimeData - "this endpoint
+# always returns the smallest unit of data. For example, Wh for yield, W for power, A for
+# current, and V for voltage" - which says nothing about percentages. So whether SoC arrives
+# as 64 or as 640 is NOT established by the documentation, and the control parameters use BOTH
+# conventions (10001 wants 700-1000 for 70-100%, while 10071 wants a plain 0-100).
+#
+# Nothing here scales them: a value is published exactly as the inverter reported it. If a
+# tester's SoC reads ten times high, THIS is the reason, and the fix is a scale applied here
+# once it is known - not a guess applied now.
+SUNGROW_ESS_PERCENT_POINTS = ("13141", "13142", "13170")
+
+# 13140's name and unit CONTRADICT EACH OTHER in Sungrow's own table: the name cell reads
+# "Battery Capacity (kWh)" and the unit cell reads "Wh". One of them is wrong by a factor of a
+# thousand and the documentation does not say which, so this is published as a diagnostic
+# sensor only and is NEVER used for soc_max. battery_capacity() derives the pack size from the
+# plant's chargeable + dischargeable energy instead, where both halves are unambiguously Wh.
+SUNGROW_ESS_CAPACITY_POINT = "13140"
 
 # Battery pack, where the plant exposes one as a device in its own right.
 SUNGROW_BATTERY_POINTS = {
@@ -362,11 +506,14 @@ SUNGROW_METER_POINTS = {
     "8064": "meter_frequency",  # Hz
 }
 
-# Plant-level points. The residential case is one plant containing one hybrid inverter, and
-# the plant read is the only place PV power and the daily energy counters appear at all -
-# the energy-storage inverter's own point list carries no PV or yield point. So this is not
-# a convenience duplicate of the device read; it is the source for several values Predbat
-# cannot plan without.
+# Plant-level points. The residential case is one plant containing one hybrid inverter, so
+# these largely duplicate the device read - and the device read is preferred everywhere,
+# because it describes one inverter where these aggregate the whole site.
+#
+# They are kept as a FALLBACK rather than a primary source. getDeviceRealTimeData is not served
+# by every account and model, and a site that loses it would otherwise lose SoC, PV, load, grid
+# and every daily counter at once - which is the whole plan. The plant read is the one that
+# keeps working, so it is what the component degrades to.
 SUNGROW_PLANT_POINTS = {
     "83067": "total_active_power_of_pv",  # W
     "83106": "load_power",  # W
@@ -396,6 +543,11 @@ SUNGROW_PLANT_TELEMETRY = {
     "battery_power": "storage_active_power",
     "soc": "battery_level_soc",
 }
+
+# Predbat energy leaf -> the ESS inverter point that supplies it. Preferred over the plant
+# equivalents below because it describes THIS inverter rather than the whole site, which only
+# matters once a plant has more than one.
+SUNGROW_ESS_ENERGY = ("load_today", "import_today", "export_today", "pv_today", "battery_charge_today", "battery_discharge_today")
 
 # Daily energy counters, all Wh on the wire and published as kWh.
 SUNGROW_PLANT_ENERGY = {

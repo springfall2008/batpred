@@ -132,6 +132,12 @@ DEVICE_REALTIME = {
             "p13119": "800",  # load power, W
             "p13121": "0",  # feed-in power, W
             "p13149": "400",  # purchased power, W
+            "p13003": "2400",  # total DC (PV) power, W
+            "p13112": "12000",  # daily PV yield, Wh
+            "p13199": "9000",  # daily load consumption, Wh
+            "p13147": "4000",  # energy purchased today, Wh
+            "p13122": "1000",  # feed-in energy today, Wh
+            "p13140": "9.6",  # battery capacity as reported - UNIT DISPUTED
         }
     ]
 }
@@ -311,6 +317,72 @@ def test_sungrow_device_realtime_sends_the_device_type():
     assert not failed, "test_sungrow_device_realtime_sends_the_device_type"
 
 
+def test_sungrow_plant_list_asks_for_connected_plants_too():
+    """valid_flag defaults to 1 (Normal) alone, so a Connected plant is silently missing.
+
+    That looks exactly like an account with no plants and is not something a user could
+    diagnose, so the request asks for both states explicitly.
+    """
+    failed = False
+    client = MockSungrow()
+    captured = {}
+    session = create_aiohttp_mock_session(create_aiohttp_mock_response(json_data=_envelope(PLANT_LIST)))
+    original_post = session.post
+
+    def capture_post(url, headers=None, json=None):
+        """Record the outgoing body so the plant filter can be asserted."""
+        captured["json"] = json
+        return original_post(url, headers=headers, json=json)
+
+    session.post = capture_post
+    with patch("aiohttp.ClientSession", return_value=session):
+        run_async_local(client.get_plants())
+    flag = str(captured.get("json", {}).get("valid_flag", ""))
+    if "3" not in flag:
+        print(f"ERROR: valid_flag {flag!r} does not ask for Connected (3) plants")
+        failed = True
+    if "1" not in flag:
+        print(f"ERROR: valid_flag {flag!r} does not ask for Normal (1) plants")
+        failed = True
+    assert not failed, "test_sungrow_plant_list_asks_for_connected_plants_too"
+
+
+def test_sungrow_energy_prefers_the_device_counters():
+    """The inverter's own daily counters describe THIS inverter; the plant's aggregate the site."""
+    failed = False
+    client = _discovered_client()
+    # The fixtures differ on purpose: device 13199 says 9.0 kWh, plant 83118 says 9.5 kWh.
+    if client.energy("987654", "load_today") != 9.0:
+        print(f"ERROR: load_today {client.energy('987654', 'load_today')}, expected the device value 9.0")
+        failed = True
+    if client.energy("987654", "pv_today") != 12.0:
+        print(f"ERROR: pv_today {client.energy('987654', 'pv_today')}, expected the device value 12.0")
+        failed = True
+    if client.telemetry("987654", "pv_power") != 2400:
+        print(f"ERROR: pv_power {client.telemetry('987654', 'pv_power')}, expected the device value 2400")
+        failed = True
+    assert not failed, "test_sungrow_energy_prefers_the_device_counters"
+
+
+def test_sungrow_reported_capacity_is_diagnostic_only():
+    """13140 is documented as both kWh and Wh, so it must never reach soc_max."""
+    failed = False
+    client = _discovered_client()
+    run_async_local(client.publish_data())
+    published = client.published.get("sensor.predbat_sungrow_a2211test01_battery_capacity_reported")
+    if published is None:
+        print("ERROR: the reported capacity was not published as a diagnostic")
+        failed = True
+    elif "UNVERIFIED" not in published["attributes"].get("friendly_name", ""):
+        print("ERROR: the reported capacity does not warn that its unit is unverified")
+        failed = True
+    # soc_max must still come from the unambiguous Wh derivation, not from 13140's 9.6.
+    if client.battery_capacity("987654") != 10.0:
+        print(f"ERROR: battery_capacity {client.battery_capacity('987654')}, expected the derived 10.0 rather than 13140")
+        failed = True
+    assert not failed, "test_sungrow_reported_capacity_is_diagnostic_only"
+
+
 def test_sungrow_redact_masks_credentials_but_not_errors():
     """Credentials are masked; result_msg is not, because it is the only diagnostic we get."""
     failed = False
@@ -410,9 +482,10 @@ def test_sungrow_telemetry_prefers_the_device_read_over_the_plant_read():
     if client.telemetry("987654", "battery_power") != 1200:
         print(f"ERROR: battery_power {client.telemetry('987654', 'battery_power')}")
         failed = True
-    # PV appears in NO energy-storage inverter point, so it can only come from the plant.
-    if client.telemetry("987654", "pv_power") != 2500:
-        print(f"ERROR: pv_power {client.telemetry('987654', 'pv_power')}, expected the plant fallback 2500")
+    # 13003 Total DC Power is the inverter's own PV figure. The plant reports 2500 for the whole
+    # site, so preferring the device's 2400 is what is being asserted here.
+    if client.telemetry("987654", "pv_power") != 2400:
+        print(f"ERROR: pv_power {client.telemetry('987654', 'pv_power')}, expected the device value 2400")
         failed = True
     if client.telemetry("987654", "battery_soh") != 98:
         print("ERROR: battery SoH did not come through from the device read")
@@ -439,12 +512,28 @@ def test_sungrow_telemetry_falls_back_when_the_device_read_fails():
 
 
 def test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours():
-    """The OpenAPI reports energy in Wh throughout; Predbat works in kWh."""
+    """The OpenAPI reports energy in Wh throughout; Predbat works in kWh.
+
+    Checked on both sources, because they are converted in two different places - the device
+    counters in fetch_device_realtime and the plant ones in fetch_plant_realtime - and a unit
+    slip in either would be a 1000x error in Predbat's load and import history.
+    """
     failed = False
     client = _discovered_client()
+    for leaf, expected in (("load_today", 9.0), ("import_today", 4.0), ("export_today", 1.0), ("pv_today", 12.0)):
+        if client.energy("987654", leaf) != expected:
+            print(f"ERROR: device {leaf} is {client.energy('987654', leaf)}, expected {expected} kWh")
+            failed = True
+
+    # Now the plant fallback, with the device read unavailable.
+    client = MockSungrow()
+    with _mock_post([_envelope(PLANT_LIST), _envelope(DEVICE_LIST)]):
+        run_async_local(client.refresh_static())
+    with _mock_post([_envelope(PLANT_REALTIME), _envelope(None, code="E00000")]):
+        run_async_local(client.refresh_power())
     for leaf, expected in (("load_today", 9.5), ("import_today", 4.2), ("export_today", 1.1), ("pv_today", 12.3)):
         if client.energy("987654", leaf) != expected:
-            print(f"ERROR: {leaf} is {client.energy('987654', leaf)}, expected {expected} kWh")
+            print(f"ERROR: plant {leaf} is {client.energy('987654', leaf)}, expected {expected} kWh")
             failed = True
     assert not failed, "test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours"
 
@@ -672,6 +761,9 @@ def run_sungrow_api_tests(my_predbat):
         ("skip_on_dead_token", test_sungrow_request_skips_the_call_when_refresh_fails),
         ("auth_and_rate_limit_codes", test_sungrow_auth_and_rate_limit_codes_are_reported_differently),
         ("device_realtime_device_type", test_sungrow_device_realtime_sends_the_device_type),
+        ("plant_list_valid_flag", test_sungrow_plant_list_asks_for_connected_plants_too),
+        ("energy_prefers_device", test_sungrow_energy_prefers_the_device_counters),
+        ("capacity_diagnostic_only", test_sungrow_reported_capacity_is_diagnostic_only),
         ("redact", test_sungrow_redact_masks_credentials_but_not_errors),
         ("discovery", test_sungrow_discovery_finds_plants_and_energy_storage_inverters),
         ("discovery_failure_keeps_list", test_sungrow_discovery_failure_keeps_the_previous_device_list),
