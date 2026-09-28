@@ -2399,6 +2399,28 @@ def _test_warning_status_is_not_a_charge_state(my_predbat, failed):
         print("ERROR: the warning should flag plan minutes {}-{} exactly, got {} minutes from {} to {}".format(warning_start, warning_end - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None))
         failed = True
 
+    # A warning that lags two minutes into the next slot, behind the previous slot's state, is that
+    # slot's leftover: the next slot's state is rebuilt without those minutes, so its flag is too.
+    lag_slot = 16 * 60
+
+    def _warning_lags_into_next_slot(stamp):
+        plan_minute = int((stamp - plan_start).total_seconds() // 60)
+        if lag_slot - 30 <= plan_minute < lag_slot:
+            return [(0, "Charging, " + warning)]
+        if plan_minute == lag_slot:
+            return [(0, "Charging, " + warning), (120, "Exporting")]
+        return [(0, "Exporting")]
+
+    captured = _reconstruct_windows_from_status(my_predbat, _warning_lags_into_next_slot)
+    flagged = set((captured.get("status_warnings") or {}).keys())
+    if flagged != set(range(lag_slot - 30, lag_slot)):
+        print(
+            "ERROR: a warning lagging into the next slot's edge should flag only the slot it belongs to ({}-{}), got {} minutes from {} to {}".format(
+                lag_slot - 30, lag_slot - 1, len(flagged), min(flagged) if flagged else None, max(flagged) if flagged else None
+            )
+        )
+        failed = True
+
     # A clean run is not flagged
     captured = _reconstruct_windows_from_status(my_predbat, lambda stamp: [(0, "Exporting")])
     if captured.get("status_warnings"):

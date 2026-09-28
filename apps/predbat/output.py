@@ -3571,7 +3571,10 @@ class Output:
                     status = status.split(",")[0].strip()
                 predbat_status[minute] = status
                 if warning:
-                    # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago
+                    # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
+                    # minute_data_state() holds each recorded status until the next one, so across a gap in
+                    # the recorder the warning is held along with the state it arrived with - the flag
+                    # stays with the state the slot shows, which is rebuilt from the same held value.
                     status_warnings[minutes_now + end_record - minute] = warning
             # The car icon on this table follows the recorded "Hold for car" status, as its SoC is measured.
             # predbat_status is keyed by minutes ago; plan-minute m is (minutes_now + end_record - m) ago.
@@ -3591,6 +3594,12 @@ class Output:
                 slot_statuses = [predbat_status.get(minute_offset - slot_offset, "").lower() for slot_offset in range(self.plan_interval_minutes)]
                 tally_start = 0 if len(set(slot_statuses[:edge_minutes])) == 1 else edge_minutes
                 tally_end = self.plan_interval_minutes if len(set(slot_statuses[-edge_minutes:])) == 1 else self.plan_interval_minutes - edge_minutes
+
+                # A warning in an edge window the tally does not trust came in with the previous (or
+                # next) slot's leftover status, so it must not flag this slot either - the flag names
+                # a problem that ran alongside the minutes this slot's state was rebuilt from.
+                for slot_offset in list(range(0, tally_start)) + list(range(tally_end, self.plan_interval_minutes)):
+                    status_warnings.pop(minute + slot_offset, None)
 
                 charge_start_minute = None
                 charge_end_minute = None
