@@ -392,6 +392,7 @@ class Inverter:
         self.battery_scaling_config = None
         self.reserve_max = None
         self.battery_rate_max_raw = None
+        self.battery_rate_max_discharge_raw = None
         self.battery_rate_max_charge = None
         self.battery_rate_max_charge_dc = None
         self.battery_rate_max_discharge = None
@@ -566,6 +567,14 @@ class Inverter:
         else:
             self.battery_rate_max_raw = 2600.0
 
+        # Some batteries are rated to discharge at a different rate than they charge, and some
+        # components report the two limits separately. battery_rate_max_discharge is the optional
+        # discharge-side limit; without it (or with no usable reading) discharge and export share
+        # battery_rate_max_raw with charging, as they always have (GH#4940).
+        self.battery_rate_max_discharge_raw = self.base.get_arg("battery_rate_max_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        if self.battery_rate_max_discharge_raw <= 0:
+            self.battery_rate_max_discharge_raw = self.battery_rate_max_raw
+
         ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
         # A calibration cycle deliberately drives the battery outside its normal SoC range, so any
@@ -583,7 +592,7 @@ class Inverter:
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
-        inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_discharge_raw, index=self.id, required_unit="W")
         inverter_limit_override = self.base.get_arg("inverter_limit_override", 0, index=self.id, required_unit="W")
         if inverter_limit_override > 0:
             self.log("Info: Inverter {} applying inverter_limit_override of {} W to charge and discharge limits".format(self.id, inverter_limit_override))
@@ -592,9 +601,9 @@ class Inverter:
         inverter_limit_charge_dc = self.base.get_arg("inverter_limit_charge_dc", inverter_limit_charge, index=self.id, required_unit="W")
         self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_dc = inverter_limit_charge_dc / MINUTE_WATT
-        self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_discharge_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
-        self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_discharge_raw) / MINUTE_WATT
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Track and update battery size (if automatic)

@@ -1912,7 +1912,7 @@ async def test_automatic_config_treats_silent_string_inverter_as_pv_only():
     recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, string_inv: _DETAIL_STRING_INVERTER})
 
     assert recorded.get("num_inverters") == 1, "expected only the battery inverter to be enrolled, got num_inverters={}".format(recorded.get("num_inverters"))
-    for arg in ("soc_percent", "battery_scaling", "charge_start_time", "scheduled_charge_enable", "reserve", "battery_rate_max"):
+    for arg in ("soc_percent", "battery_scaling", "charge_start_time", "scheduled_charge_enable", "reserve", "battery_rate_max", "battery_rate_max_discharge"):
         entities = recorded.get(arg) or []
         assert len(entities) == 1 and string_inv.lower() not in " ".join(entities), "{} must stay on the battery inverter alone, got {}".format(arg, entities)
     expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{string_inv.lower()}_pv_energy_total"]
@@ -6366,8 +6366,12 @@ async def test_automatic_config():
     expected_min_soc = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
     assert set_arg_calls["battery_min_soc"] == expected_min_soc, f"Expected {expected_min_soc}, got {set_arg_calls['battery_min_soc']}"
 
-    # Verify rate controls configured
-    assert "battery_rate_max" in set_arg_calls, "battery_rate_max not configured"
+    # Verify rate controls configured - charge and discharge limits bound separately, as the
+    # battery can be rated to discharge faster than it charges (GH#4940)
+    expected_rate_max = ["number.predbat_solis_abc123_max_charge_power", "number.predbat_solis_def456_max_charge_power"]
+    assert set_arg_calls.get("battery_rate_max") == expected_rate_max, f"Expected {expected_rate_max}, got {set_arg_calls.get('battery_rate_max')}"
+    expected_rate_max_discharge = ["number.predbat_solis_abc123_max_discharge_power", "number.predbat_solis_def456_max_discharge_power"]
+    assert set_arg_calls.get("battery_rate_max_discharge") == expected_rate_max_discharge, f"Expected {expected_rate_max_discharge}, got {set_arg_calls.get('battery_rate_max_discharge')}"
     assert "inverter_limit" in set_arg_calls, "inverter_limit not configured"
     assert "export_limit" in set_arg_calls, "export_limit not configured"
 

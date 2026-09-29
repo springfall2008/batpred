@@ -2703,6 +2703,7 @@ APPS_SCHEMA = {
     "inverter_limit_export": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_override": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "battery_rate_max": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
+    "battery_rate_max_discharge": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
     "export_limit": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
     "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},

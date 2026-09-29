@@ -434,6 +434,54 @@ def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charg
     return failed
 
 
+def test_battery_rate_max_discharge_source(test_name, my_predbat, ha, discharge_state, inverter_limit_discharge, expect_charge, expect_discharge, expect_export):
+    """
+    Test
+       Inverter.__init__ caps discharge and export with battery_rate_max_discharge when one is configured.
+
+    discharge_state is the entity's state, None to leave the setting unconfigured, or "no_entity" to
+    configure it against an entity that has no reading yet (a Solis register not read so far).
+
+    A battery rated to discharge faster than it charges (GH#4940: Solis max charge 2647W, max
+    discharge 5559W) was modelled discharging at the charge rate, whatever inverter_limit_discharge
+    said, because every cap was clamped to the single charge-derived battery_rate_max. Charging must
+    stay on battery_rate_max, and with no usable discharge figure nothing may change.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "battery_rate_max_discharge", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override")
+    saved = {arg: my_predbat.args.get(arg, None) for arg in saved_args}
+    try:
+        for arg in saved_args:
+            my_predbat.args.pop(arg, None)
+        my_predbat.args["inverter_type"] = ["GEC"]
+        my_predbat.args["battery_rate_max"] = "sensor.battery_rate_max"
+        ha.dummy_items["sensor.battery_rate_max"] = 2647
+        if discharge_state is not None:
+            my_predbat.args["battery_rate_max_discharge"] = "sensor.battery_rate_max_discharge"
+            if discharge_state != "no_entity":
+                ha.dummy_items["sensor.battery_rate_max_discharge"] = discharge_state
+        if inverter_limit_discharge is not None:
+            my_predbat.args["inverter_limit_discharge"] = inverter_limit_discharge
+
+        inv = Inverter(my_predbat, 0)
+        for label, value, expect in (("charge", inv.battery_rate_max_charge, expect_charge), ("discharge", inv.battery_rate_max_discharge, expect_discharge), ("export", inv.battery_rate_max_export, expect_export)):
+            if round(value * MINUTE_WATT) != expect:
+                print("ERROR: battery_rate_max_{} should be {}W got {}W".format(label, expect, round(value * MINUTE_WATT)))
+                failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+        ha.dummy_items.pop("sensor.battery_rate_max", None)
+        ha.dummy_items.pop("sensor.battery_rate_max_discharge", None)
+
+    return failed
+
+
 def test_reserve_model_device_bounds(test_name, my_predbat, ha, set_reserve_min, device_min, device_max, expect_reserve_percent, set_reserve_enable=True):
     """
     Test
@@ -5149,6 +5197,17 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
+    if failed:
+        return failed
+
+    # GH#4940: a separate discharge limit caps discharge and export, never charge, and its absence
+    # (or an entity with no reading yet) leaves the shared battery_rate_max cap exactly as it was
+    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_unset", my_predbat, ha, None, 5000, expect_charge=2647, expect_discharge=2647, expect_export=2647)
+    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_limited", my_predbat, ha, 5559, 5000, expect_charge=2647, expect_discharge=5000, expect_export=5000)
+    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_unlimited", my_predbat, ha, 5559, None, expect_charge=2647, expect_discharge=5559, expect_export=5559)
+    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_lower", my_predbat, ha, 1800, None, expect_charge=2647, expect_discharge=1800, expect_export=1800)
+    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_no_entity", my_predbat, ha, "no_entity", 5000, expect_charge=2647, expect_discharge=2647, expect_export=2647)
+    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_zero", my_predbat, ha, 0, 5000, expect_charge=2647, expect_discharge=2647, expect_export=2647)
     if failed:
         return failed
 
