@@ -761,7 +761,7 @@ MAX_POLL_SECONDS = 30 * 60
 class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     """myenergi component providing Zappi and Eddi monitoring and boost control."""
 
-    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False, automatic_zappi=True, automatic_eddi=True):
+    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=None, automatic_zappi=True, automatic_eddi=True):
         """Select a transport from the configured credentials and set up component state."""
         configured_auth_method = (auth_method or "direct").lower()
         self.hub_serial = hub_serial
@@ -776,7 +776,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.automatic_zappi = automatic_zappi
         self.automatic_eddi = automatic_eddi
         self.enable_controls = enable_controls
-        self.zappi_control = bool(zappi_control)
+        # Tri-state: None (unset) follows the automatic setup, see enable_control()
+        self.zappi_control = None if zappi_control is None else bool(zappi_control)
         # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
         # interval can only be a whole number of those intervals.
         self.poll_seconds = min(MAX_POLL_SECONDS, max(MIN_POLL_SECONDS, int(round(_to_float(poll_seconds, MIN_POLL_SECONDS) / 60.0)) * 60))
@@ -785,7 +786,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.boost_amounts = {}
         # The mode each Zappi was in before Predbat first moved it, restored on release
         self.control_saved_modes = {}
-        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled")
+        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled", control=self.zappi_control)
         self.queued_events = []
         self._auto_configured = False
         self.transport = None
@@ -878,22 +879,49 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)
 
+    def automatic_set_by_user(self):
+        """Did the user write myenergi's automatic setup into apps.yaml themselves.
+
+        myenergi_automatic and myenergi_automatic_zappi both default on, so their values alone
+        cannot tell a user who asked for automatic setup from one who never mentioned it.
+        """
+        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
+        return any(raw_args.get(arg) is not None for arg in ("myenergi_automatic", "myenergi_automatic_zappi"))
+
     def enable_control(self):
         """Decide whether Predbat-led Zappi control should run, and say why when it will not.
 
         Control needs automatic configuration because a Zappi is driven from its own car's
         plan, and it is auto-config that establishes which Zappi is which car.
+
+        myenergi_zappi_control left unset turns control on only when the user wrote
+        myenergi_automatic or myenergi_automatic_zappi into apps.yaml themselves. False keeps
+        it off. Only an explicit true is worth a warning when it cannot run.
+
+        For review, to clear up later - the options considered for the unset case:
+        1. On whenever automatic setup runs, the same rule as GE and Ohme. Rejected: automatic
+           defaults on for myenergi, so every Zappi user would be switched over on upgrade,
+           and a Zappi held off between windows can no longer divert solar in Eco/Eco+.
+        2. On only when the user wrote the automatic setting themselves (this one).
+        3. Zappi control stays opt-in. Rejected: it leaves Zappi out of the automatic behaviour
+           the other chargers now get.
         """
-        if not self.zappi_control:
+        if self.zappi_control is False:
+            return
+        explicit = self.zappi_control is True
+        if not explicit and not self.automatic_set_by_user():
             return
         if not self.automatic:
-            self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic to map each Zappi to a car, Zappi control is disabled")
+            if explicit:
+                self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic to map each Zappi to a car, Zappi control is disabled")
             return
         if not self.automatic_zappi:
-            self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic_zappi to map each Zappi to a car, Zappi control is disabled")
+            if explicit:
+                self.log("Warn: myenergi: myenergi_zappi_control needs myenergi_automatic_zappi to map each Zappi to a car, Zappi control is disabled")
             return
         if not self.enable_controls:
-            self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")
+            if explicit:
+                self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")
             return
         self.charger_control_active = True
         self.log("Info: myenergi: Predbat-led Zappi charge control enabled")
