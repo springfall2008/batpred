@@ -112,12 +112,7 @@ class Inverter:
         fetch hiccup.
         """
         components = getattr(self.base, "components", None)
-        # Asked via getattr: Inverter.__init__ consults this during construction, before the base
-        # object has anything but a registry that carries the method. A registry that cannot
-        # answer - the harness stubs one with, at most, the few lookups its own test needs - is
-        # treated as "no source", which is also what a None registry already meant above.
-        source_active = getattr(components, "inverter_source_active", None)
-        return bool(source_active and source_active())
+        return bool(components) and components.inverter_source_active()
 
     def inverter_source_name(self):
         """
