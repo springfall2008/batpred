@@ -6388,7 +6388,8 @@ def _test_evc_control(my_predbat):
         await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Switching control off should release the charger, got {}".format(commands)
 
-        # Test 6b: the guest charging switch releases in the same way, and ends when the guest unplugs
+        # Test 6b: the guest charging switch releases in the same way, and ends when the guest unplugs -
+        # but not when the owner's car, on the charger when it went on, is unplugged to make way
         commands = []
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
@@ -6400,6 +6401,17 @@ def _test_evc_control(my_predbat):
         assert ge.charger_control_guest is True, "The guest switch should turn guest charging on"
         await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Guest charging should release the charger, got {}".format(commands)
+        ge.evc_device["evc-001"]["status"] = "idle"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is True, "The owner's car being unplugged should not end guest charging"
+        ge.evc_device["evc-001"]["status"] = "charging"
+        await ge.charger_control_tick(outside)
+        # A comms blip is not an unplug
+        ge.evc_device["evc-001"]["status"] = "Unavailable"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is True, "An unavailable status should not end guest charging"
+        ge.evc_device["evc-001"]["status"] = "charging"
+        await ge.charger_control_tick(outside)
         ge.evc_device["evc-001"]["status"] = "idle"
         await ge.charger_control_tick(outside)
         assert ge.charger_control_guest is False, "Unplugging the guest's car should end guest charging"

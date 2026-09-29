@@ -481,7 +481,7 @@ The GivEnergy Gateway's `gateway_evc_control` (above) is unchanged and stays opt
 On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), what Predbat does depends on which device Octopus drives for that car. Predbat reads this from the car's own dispatch sensor in `octopus_intelligent_slot`:
 
 - **Octopus drives the charger** - your charger is the Intelligent device, or the Intelligent slots come from the Ohme. Predbat leaves the charger alone, and hands it back if it was holding it, so the two do not fight. Handing back never starts a charge: a charger Predbat had stopped is left for Octopus to start, an Ohme has max charge turned off, and a Zappi goes back to its own mode (Eco+ in place of Fast).
-- **Octopus drives the car** - the car itself is the Intelligent device. Predbat drives the charger: on while a dispatch is running, off otherwise, so the car cannot charge outside the dispatches on its own timers. It follows both its plan and the car's dispatch sensor, so a new dispatch starts the charger within a minute rather than waiting for the next plan.
+- **Octopus drives the car** - the car itself is the Intelligent device. Predbat drives the charger: on while a dispatch is running, off otherwise, so the car cannot charge outside the dispatches on its own timers. It follows both its plan and the dispatch times on the car's dispatch sensor, so a new dispatch starts the charger within a few minutes of Octopus announcing it rather than waiting for the next plan, and the charger stops when the dispatch ends.
 - **Predbat cannot tell** - for example the dispatch sensor comes from the Octopus Energy integration, which does not say, or Predbat's Octopus component has not discovered your devices yet. Predbat leaves the charger alone unless you have set its control setting to `true`, which tells Predbat your charger is not the Octopus device.
 
 **switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - and a charger for a car Octopus drives follows Predbat's own plan instead of the dispatches.
@@ -490,7 +490,7 @@ On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), wha
 
 While Predbat drives a charger it holds it off outside the planned windows, so a visitor's car would not charge. Turn on the charger's guest charging switch - `switch.predbat_gecloud_guest_charging`, `switch.predbat_myenergi_guest_charging` or `switch.predbat_ohme_guest_charging` - and Predbat hands the charger back, as it does for read only mode. Choose how the guest charges (boost, solar only and so on) on the charger itself.
 
-Guest charging turns itself off when the guest's car is unplugged, or after 12 hours if it never is. It is not remembered across a restart, which puts Predbat back in charge.
+Guest charging turns itself off when a car plugged in after you switched it on is unplugged, or after 12 hours. Unplugging a car that was already on the charger - your own, making way for the guest - does not end it, so if the guest plugged in before you switched it on, it runs until the 12 hours are up or you switch it off. It is not remembered across a restart, which puts Predbat back in charge.
 
 While it is on, the guest's charging is counted as your car's charging - Predbat has no way to tell the two apart.
 

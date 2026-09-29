@@ -14,7 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
-from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, parse_control_setting
+from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, parse_control_setting, parse_dispatch_time
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -475,6 +475,34 @@ def test_octopus_rule_car_integrated_follows_the_dispatch_sensor():
     assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 2, component.commands
 
 
+def test_dispatch_times_judged_against_the_clock():
+    """The dispatch times on the sensor decide, not its on/off state, which lags the end of a
+    dispatch by up to a refresh. Octopus and Kraken write the times differently."""
+    component = _octopus_component(FakeOctopus(), is_charger=False)
+    now = _now()  # 01:30 London, 00:30 UTC
+    component.sensors[DISPATCH]["state"] = "on"
+    # Octopus format - ended at 00:30 UTC, so the stale "on" must not keep the charger running
+    component.sensors[DISPATCH]["completed_dispatches"] = [{"start": "2026-06-01T00:00:00+0000", "end": "2026-06-01T00:30:00+0000"}]
+    assert component.charger_control_dispatch_active(0, now) is False
+    # Kraken format - running now
+    component.sensors[DISPATCH]["planned_dispatches"] = [{"start": "2026-06-01T00:15:00Z", "end": "2026-06-01T01:00:00Z"}]
+    assert component.charger_control_dispatch_active(0, now) is True
+    # A sensor with no dispatch times falls back to its state
+    component.sensors[DISPATCH] = {"is_charger": False, "state": "on"}
+    assert component.charger_control_dispatch_active(0, now) is True
+    assert parse_dispatch_time("not a time") is None and parse_dispatch_time(None) is None
+
+
+def test_guest_switch_toggle():
+    """A toggle flips guest charging rather than turning it off."""
+    component = FakeComponent([FakeCharger("a")])
+    component.charger_control_switch_prefix = "fake"
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "toggle"))
+    assert component.charger_control_guest is True
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "toggle"))
+    assert component.charger_control_guest is False
+
+
 def test_octopus_rule_explicit_true_never_overrides_a_charge_point():
     """control: true does not make Predbat fight Octopus for a charger Octopus is known to drive."""
     component = _octopus_component(FakeOctopus(), is_charger=True, control=True)
@@ -581,7 +609,26 @@ def test_guest_charging_ends_when_the_car_is_unplugged():
     charger.connected = False
     run_async(component.charger_control_tick(_now()))
     assert component.charger_control_guest is False
-    assert any("the car was unplugged" in line for line in component.logs), component.logs
+    assert any("the guest's car was unplugged" in line for line in component.logs), component.logs
+
+
+def test_guest_charging_survives_the_owner_unplugging():
+    """The owner's car, already on the charger when guest charging went on, is unplugged to make
+    way for the guest - that must not end guest charging."""
+    component = _guest_component()
+    charger = component.chargers[0]
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(_now()))
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is True, "The owner's unplug must not end guest charging"
+
+    # The guest plugs in, charges, and leaves
+    charger.connected = True
+    run_async(component.charger_control_tick(_now()))
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is False
 
 
 def test_guest_charging_times_out():
@@ -628,6 +675,8 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_charge_point_hands_off_without_starting()
     test_octopus_rule_charge_point_releases_a_running_charger()
     test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
+    test_dispatch_times_judged_against_the_clock()
+    test_guest_switch_toggle()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()
     test_octopus_rule_unknown_hands_off_unless_told()
     test_octopus_rule_waits_for_octopus_discovery()
@@ -636,6 +685,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_per_car()
     test_guest_charging_releases_and_resumes()
     test_guest_charging_ends_when_the_car_is_unplugged()
+    test_guest_charging_survives_the_owner_unplugging()
     test_guest_charging_times_out()
     test_no_guest_switch_without_a_prefix()
     return False

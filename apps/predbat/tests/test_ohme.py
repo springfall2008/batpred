@@ -1620,7 +1620,7 @@ class MockOhmeAPI(OhmeAPI):
         self.ohme_automatic_octopus_intelligent = None
         # Unset, as components.py leaves it when apps.yaml does not mention it
         self.ohme_control = None
-        self.charger_control_setup("Ohme API", "charger")
+        self.charger_control_setup("Ohme API", "charger", switch_prefix="ohme")
         self.control_saved_target = None
         self.prefix = "predbat"
         self.local_tz = pytz.timezone("Europe/London")
@@ -1980,6 +1980,10 @@ def _test_ohme_control_car_plugged(my_predbat=None):
     assert api.charger_control_car_plugged(api.client) is True
     api.client._charge_session = {"mode": "DISCONNECTED"}
     assert api.charger_control_car_plugged(api.client) is False
+
+    # The guest switch reaches the mixin through the Ohme's own switch handler
+    run_async(api.switch_event_handler("switch.predbat_ohme_guest_charging", "turn_on"))
+    assert api.charger_control_guest is True, "Expected the Ohme guest switch to turn guest charging on"
     return 0
 
 
