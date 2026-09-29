@@ -788,6 +788,12 @@ def reset_sample_state(predbat):
     predbat.rate_min = 0
     predbat.rate_max = 0
     predbat.rate_average = 0
+    # set_rate_thresholds() reads these alongside the rates. _apply_rates() clears them too, since
+    # _run_scenarios() installs a second tariff without coming back through here.
+    predbat.rate_import_saving_minutes = set()
+    predbat.rate_export_saving_minutes = set()
+    predbat.rate_import_pre_saving = {}
+    predbat.rate_export_pre_saving = {}
 
     predbat.load_inday_adjustment = 1.0
     predbat.load_scaling_dynamic = None
