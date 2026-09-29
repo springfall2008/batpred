@@ -481,10 +481,10 @@ The GivEnergy Gateway's `gateway_evc_control` (above) is unchanged and stays opt
 On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), what Predbat does depends on which device Octopus drives for that car. Predbat reads this from the car's own dispatch sensor in `octopus_intelligent_slot`:
 
 - **Octopus drives the charger** - your charger is the Intelligent device, or the Intelligent slots come from the Ohme. Predbat leaves the charger alone, and hands it back if it was holding it, so the two do not fight. Handing back never starts a charge: a charger Predbat had stopped is left for Octopus to start, an Ohme has max charge turned off, and a Zappi goes back to its own mode (Eco+ in place of Fast).
-- **Octopus drives the car** - the car itself is the Intelligent device. Predbat drives the charger from `binary_sensor.predbat_car_charging_slot`, which carries the Octopus dispatches, so the car cannot charge outside them on its own timers.
+- **Octopus drives the car** - the car itself is the Intelligent device. Predbat drives the charger: on while a dispatch is running, off otherwise, so the car cannot charge outside the dispatches on its own timers. It follows both its plan and the car's dispatch sensor, so a new dispatch starts the charger within a minute rather than waiting for the next plan.
 - **Predbat cannot tell** - for example the dispatch sensor comes from the Octopus Energy integration, which does not say, or Predbat's Octopus component has not discovered your devices yet. Predbat leaves the charger alone unless you have set its control setting to `true`, which tells Predbat your charger is not the Octopus device.
 
-With **switch.predbat_octopus_intelligent_charging** off, Predbat plans the charge itself and drives the charger as normal.
+**switch.predbat_octopus_intelligent_charging** only changes Predbat's own planning. With it off, a charger Octopus drives is still left to Octopus - Octopus goes on switching it either way - and a charger for a car Octopus drives follows Predbat's own plan instead of the dispatches.
 
 ## Car Charging Planning
 

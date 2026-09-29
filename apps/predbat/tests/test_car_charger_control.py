@@ -98,7 +98,7 @@ class FakeComponent(CarChargerControl):
         """The car charging slot plans, or an attribute of a dispatch sensor."""
         if attribute == "planned":
             return self.plans.get(entity_id, default)
-        return self.sensors.get(entity_id, {}).get(attribute, default)
+        return self.sensors.get(entity_id, {}).get(attribute or "state", default)
 
     def charger_control_chargers(self):
         """Chargers in car order."""
@@ -431,10 +431,16 @@ def test_octopus_rule_charge_point_hands_off_without_starting():
     assert component.charger_control_state == {}
     assert sum("leaving it to Octopus" in line for line in component.logs) == 1, component.logs
 
-    # Octopus Intelligent turned off in Predbat - Predbat plans the car again and takes the charger back
+    # Octopus Intelligent turned off in Predbat only changes Predbat's planning - Octopus still
+    # drives the charger, so Predbat still leaves it alone rather than fight
     component.args["octopus_intelligent_charging"] = False
     run_async(component.charger_control_tick(_now()))
-    assert component.commands[-1] == ("a", "off", 0), component.commands
+    assert component.commands == [("a", "off", 0)], component.commands
+
+    # The charger stops being the Octopus device - Predbat takes it back
+    component.sensors[DISPATCH] = {"is_charger": False}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 2, component.commands
     assert any("no longer left to Octopus" in line for line in component.logs), component.logs
 
 
@@ -449,6 +455,24 @@ def test_octopus_rule_charge_point_releases_a_running_charger():
     component.sensors[DISPATCH] = {"is_charger": True}
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "on", 0), ("a", "release", True)], component.commands
+
+
+def test_octopus_rule_car_integrated_follows_the_dispatch_sensor():
+    """Octopus drives the car - the charger runs while a dispatch is on, even before the plan shows it."""
+    component = _octopus_component(FakeOctopus(), is_charger=False)
+    component.sensors[DISPATCH]["state"] = "on"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0)], component.commands
+
+    component.sensors[DISPATCH]["state"] = "off"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0), component.commands
+
+    # With octopus_intelligent_charging off Predbat follows only its own plan
+    component.args["octopus_intelligent_charging"] = False
+    component.sensors[DISPATCH]["state"] = "on"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 2, component.commands
 
 
 def test_octopus_rule_explicit_true_never_overrides_a_charge_point():
@@ -542,6 +566,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_car_integrated_drives()
     test_octopus_rule_charge_point_hands_off_without_starting()
     test_octopus_rule_charge_point_releases_a_running_charger()
+    test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()
     test_octopus_rule_unknown_hands_off_unless_told()
     test_octopus_rule_waits_for_octopus_discovery()
