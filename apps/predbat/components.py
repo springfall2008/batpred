@@ -246,9 +246,9 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ohme_automatic",
             },
+            # No default: unset means "on when ohme_automatic registers the car" - see evc_control above
             "ohme_control": {
                 "required": False,
-                "default": False,
                 "config": "ohme_control",
             },
             # Deliberately has no default: unset means "auto-detect from the Octopus component",
