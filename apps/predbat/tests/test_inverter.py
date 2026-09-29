@@ -434,36 +434,30 @@ def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charg
     return failed
 
 
-def test_battery_rate_max_discharge_source(test_name, my_predbat, ha, discharge_state, inverter_limit_discharge, expect_charge, expect_discharge, expect_export):
+def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_charge, expect_discharge, expect_export):
     """
     Test
-       Inverter.__init__ caps discharge and export with battery_rate_max_discharge when one is configured.
+       Inverter.__init__ plans each direction at its own limit with the SolisCloud automatic bindings.
 
-    discharge_state is the entity's state, None to leave the setting unconfigured, or "no_entity" to
-    configure it against an entity that has no reading yet (a Solis register not read so far).
-
-    A battery rated to discharge faster than it charges (GH#4940: Solis max charge 2647W, max
-    discharge 5559W) was modelled discharging at the charge rate, whatever inverter_limit_discharge
-    said, because every cap was clamped to the single charge-derived battery_rate_max. Charging must
-    stay on battery_rate_max, and with no usable discharge figure nothing may change.
+    GH#4940: Solis automatic config binds battery_rate_max to the larger of the inverter's max charge
+    and discharge power and inverter_limit_charge/_discharge to each one, so the reporter's battery
+    (2647W charge, 5559W discharge) is no longer planned discharging at its charge limit. user_limits
+    are apps.yaml values, which automatic config leaves in place of the bindings.
     """
     failed = False
     print("Test: {}".format(test_name))
 
-    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "battery_rate_max_discharge", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override")
+    entities = {"sensor.solis_battery_rate_max": 5559, "number.solis_max_charge_power": 2647, "number.solis_max_discharge_power": 5559}
+    bindings = {"battery_rate_max": "sensor.solis_battery_rate_max", "inverter_limit_charge": "number.solis_max_charge_power", "inverter_limit_discharge": "number.solis_max_discharge_power"}
+    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override")
     saved = {arg: my_predbat.args.get(arg, None) for arg in saved_args}
     try:
         for arg in saved_args:
             my_predbat.args.pop(arg, None)
-        my_predbat.args["inverter_type"] = ["GEC"]
-        my_predbat.args["battery_rate_max"] = "sensor.battery_rate_max"
-        ha.dummy_items["sensor.battery_rate_max"] = 2647
-        if discharge_state is not None:
-            my_predbat.args["battery_rate_max_discharge"] = "sensor.battery_rate_max_discharge"
-            if discharge_state != "no_entity":
-                ha.dummy_items["sensor.battery_rate_max_discharge"] = discharge_state
-        if inverter_limit_discharge is not None:
-            my_predbat.args["inverter_limit_discharge"] = inverter_limit_discharge
+        my_predbat.args["inverter_type"] = ["SolisCloud"]
+        my_predbat.args.update(bindings)
+        my_predbat.args.update(user_limits)
+        ha.dummy_items.update(entities)
 
         inv = Inverter(my_predbat, 0)
         for label, value, expect in (("charge", inv.battery_rate_max_charge, expect_charge), ("discharge", inv.battery_rate_max_discharge, expect_discharge), ("export", inv.battery_rate_max_export, expect_export)):
@@ -476,8 +470,8 @@ def test_battery_rate_max_discharge_source(test_name, my_predbat, ha, discharge_
                 my_predbat.args.pop(arg, None)
             else:
                 my_predbat.args[arg] = value
-        ha.dummy_items.pop("sensor.battery_rate_max", None)
-        ha.dummy_items.pop("sensor.battery_rate_max_discharge", None)
+        for entity_id in entities:
+            ha.dummy_items.pop(entity_id, None)
 
     return failed
 
@@ -5200,14 +5194,10 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
-    # GH#4940: a separate discharge limit caps discharge and export, never charge, and its absence
-    # (or an entity with no reading yet) leaves the shared battery_rate_max cap exactly as it was
-    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_unset", my_predbat, ha, None, 5000, expect_charge=2647, expect_discharge=2647, expect_export=2647)
-    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_limited", my_predbat, ha, 5559, 5000, expect_charge=2647, expect_discharge=5000, expect_export=5000)
-    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_unlimited", my_predbat, ha, 5559, None, expect_charge=2647, expect_discharge=5559, expect_export=5559)
-    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_lower", my_predbat, ha, 1800, None, expect_charge=2647, expect_discharge=1800, expect_export=1800)
-    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_no_entity", my_predbat, ha, "no_entity", 5000, expect_charge=2647, expect_discharge=2647, expect_export=2647)
-    failed |= test_battery_rate_max_discharge_source("battery_rate_max_discharge_zero", my_predbat, ha, 0, 5000, expect_charge=2647, expect_discharge=2647, expect_export=2647)
+    # GH#4940: with the SolisCloud automatic bindings each direction is planned at its own limit, and
+    # an apps.yaml limit (the reporter's own 2500/5000) still caps it
+    failed |= test_solis_cloud_rate_limits("solis_cloud_rate_limits_auto", my_predbat, ha, {}, expect_charge=2647, expect_discharge=5559, expect_export=5559)
+    failed |= test_solis_cloud_rate_limits("solis_cloud_rate_limits_user", my_predbat, ha, {"inverter_limit_charge": 2500, "inverter_limit_discharge": 5000}, expect_charge=2500, expect_discharge=5000, expect_export=5000)
     if failed:
         return failed
 

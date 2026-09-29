@@ -1990,8 +1990,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("discharge_target_soc", [f"number.{self.prefix}_solis_{device}_discharge_slot1_soc" for device in devices])
         self.set_arg_auto("discharge_rate", [f"number.{self.prefix}_solis_{device}_discharge_slot1_power" for device in devices])
         self.set_arg_auto("scheduled_discharge_enable", [f"switch.{self.prefix}_solis_{device}_discharge_slot1_enable" for device in devices])
-        self.set_arg_auto("battery_rate_max", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices])
-        self.set_arg_auto("battery_rate_max_discharge", [f"number.{self.prefix}_solis_{device}_max_discharge_power" for device in devices])
+        # The inverter holds separate charge and discharge current limits, which can differ (GH#4940).
+        # battery_rate_max caps both directions, so it is the larger of the two and each direction's
+        # own limit goes to inverter_limit_charge/_discharge, which Predbat clamps against it. Those two
+        # are overwrite=False so a limit stated in apps.yaml (an AC rating, a DNO cap) still wins.
+        self.set_arg_auto("battery_rate_max", [f"sensor.{self.prefix}_solis_{device}_battery_rate_max" for device in devices])
+        self.set_arg_auto("inverter_limit_charge", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices], overwrite=False)
+        self.set_arg_auto("inverter_limit_discharge", [f"number.{self.prefix}_solis_{device}_max_discharge_power" for device in devices], overwrite=False)
         self.set_arg_auto("inverter_limit", [f"sensor.{self.prefix}_solis_{device}_inverter_size" for device in devices])
         self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
@@ -2058,8 +2063,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 "discharge_target_soc": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_soc", "access": "rw", "unit": "%"},
                 "discharge_rate": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_power", "access": "rw", "unit": "W"},
                 "scheduled_discharge_enable": {"entity_id": f"switch.{prefix}_solis_{device}_discharge_slot1_enable", "access": "rw", "domain": "switch"},
-                "battery_rate_max": {"entity_id": f"number.{prefix}_solis_{device}_max_charge_power", "access": "r", "unit": "W"},
-                "battery_rate_max_discharge": {"entity_id": f"number.{prefix}_solis_{device}_max_discharge_power", "access": "r", "unit": "W"},
+                "battery_rate_max": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_rate_max", "access": "r", "unit": "W"},
+                "inverter_limit_charge": {"entity_id": f"number.{prefix}_solis_{device}_max_charge_power", "access": "r", "unit": "W"},
+                "inverter_limit_discharge": {"entity_id": f"number.{prefix}_solis_{device}_max_discharge_power", "access": "r", "unit": "W"},
                 "inverter_limit": {"entity_id": f"sensor.{prefix}_solis_{device}_inverter_size", "access": "r"},
                 "export_limit": {"entity_id": f"number.{prefix}_solis_{device}_max_export_power", "access": "r", "unit": "W"},
             }
@@ -2115,11 +2121,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         cap (_discovery_export_limit()), each only once the register has been read.
 
         A rating is a figure the device reports (spec D14), so two Predbat derivations are left out.
-        battery_rate_max and battery_rate_max_discharge are entities only: the max_charge_power and
-        max_discharge_power numbers are register current x get_nominal_voltage(). soc_max is not
-        reported at all: a kWh capacity is register 172 x a voltage that is either inferred (for an
-        HV pack still a live reading, GH#5090) or the user's solis_nominal_voltage, and
-        automatic_config() binds no soc_max entity either.
+        battery_rate_max is an entity only: the larger of the max_charge_power and max_discharge_power
+        numbers, each register current x get_nominal_voltage(). soc_max is not reported at all: a kWh
+        capacity is register 172 x a voltage that is either inferred (for an HV pack still a live
+        reading, GH#5090) or the user's solis_nominal_voltage, and automatic_config() binds no soc_max
+        entity either.
 
         Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
         per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
@@ -3230,6 +3236,21 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     "step": self.get_nominal_voltage(inverter_sn),
                     "device_class": "power",
                     "icon": "mdi:battery-arrow-up-outline",
+                },
+                app="solis"
+            )
+
+            # battery_rate_max caps charge and discharge alike, so it is published as the larger of the
+            # two limits; automatic_config() binds each direction's own limit separately (GH#4940)
+            known_limits = [watts for watts in (max_charge_power_watts, max_discharge_power_watts) if watts is not None]
+            self.dashboard_item(
+                f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_rate_max",
+                state=max(known_limits) if known_limits else None,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Rate Max",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "icon": "mdi:battery-sync-outline",
                 },
                 app="solis"
             )

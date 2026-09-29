@@ -1260,7 +1260,7 @@ async def _run_automatic_config(details):
     api.inverter_sn = list(details.keys())
     api.inverter_details = dict(details)
     recorded = {}
-    api.set_arg_auto = lambda key, value: recorded.__setitem__(key, value)
+    api.set_arg_auto = lambda key, value, overwrite=True: recorded.__setitem__(key, value)
     await api.automatic_config()
     return recorded, api
 
@@ -1594,7 +1594,7 @@ async def test_solis_catalogue_filed_even_when_automatic_config_configures_nothi
     # _make_run_api() stubs automatic_config(); put the real one back so it genuinely runs.
     api.automatic_config = SolisAPI.automatic_config.__get__(api)
     configured = {}
-    api.set_arg_auto = lambda key, value: configured.__setitem__(key, value)
+    api.set_arg_auto = lambda key, value, overwrite=True: configured.__setitem__(key, value)
 
     async def mock_get_inverter_list():
         """Discover the one inverter."""
@@ -1912,7 +1912,7 @@ async def test_automatic_config_treats_silent_string_inverter_as_pv_only():
     recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, string_inv: _DETAIL_STRING_INVERTER})
 
     assert recorded.get("num_inverters") == 1, "expected only the battery inverter to be enrolled, got num_inverters={}".format(recorded.get("num_inverters"))
-    for arg in ("soc_percent", "battery_scaling", "charge_start_time", "scheduled_charge_enable", "reserve", "battery_rate_max", "battery_rate_max_discharge"):
+    for arg in ("soc_percent", "battery_scaling", "charge_start_time", "scheduled_charge_enable", "reserve", "battery_rate_max", "inverter_limit_charge", "inverter_limit_discharge"):
         entities = recorded.get(arg) or []
         assert len(entities) == 1 and string_inv.lower() not in " ".join(entities), "{} must stay on the battery inverter alone, got {}".format(arg, entities)
     expect_pv_today = [f"sensor.predbat_solis_{with_batt.lower()}_pv_energy_total", f"sensor.predbat_solis_{string_inv.lower()}_pv_energy_total"]
@@ -2359,6 +2359,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
         failed |= asyncio.run(test_set_arg_auto_warns_once_on_apps_yaml_override())
         failed |= asyncio.run(test_automatic_config())
+        failed |= asyncio.run(test_automatic_config_keeps_apps_yaml_inverter_limits())
+        failed |= asyncio.run(test_publish_battery_rate_max_is_larger_limit())
         failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
         failed |= asyncio.run(test_publish_entities_capacity_voltage_reliability())
         failed |= test_nominal_voltage_sources_and_stability()
@@ -6288,6 +6290,78 @@ async def test_set_arg_auto_warns_once_on_apps_yaml_override():
     return False
 
 
+async def test_automatic_config_keeps_apps_yaml_inverter_limits():
+    """GH#4940: an inverter_limit_charge/_discharge the user set in apps.yaml wins over the inverter's own limit.
+
+    automatic_config() binds each direction's limit to the inverter's max charge/discharge power, but
+    those settings are also where a user states a lower cap (an AC rating, a DNO limit), so they are
+    bound with overwrite=False - while battery_rate_max keeps the usual auto-discovery-wins rule.
+    """
+    print("\n=== Test: automatic_config keeps apps.yaml inverter limits ===")
+    api = MockSolisAPI(prefix="predbat")
+    api.inverter_sn = ["ABC123"]
+    api.inverter_details = {"ABC123": {"batteryHealthSoh": 95}}
+    set_arg_calls = {}
+
+    def mock_set_arg(key, value):
+        set_arg_calls[key] = value
+
+    api.set_arg = mock_set_arg
+    api.base.args_from_apps_yaml = {"inverter_limit_discharge": 5000, "battery_rate_max": 6000}
+    api.base.apps_yaml_override_warned = set()
+
+    await api.automatic_config()
+
+    assert "inverter_limit_discharge" not in set_arg_calls, f"The apps.yaml inverter_limit_discharge must be left as written, got {set_arg_calls.get('inverter_limit_discharge')}"
+    assert any("keeping your apps.yaml setting" in msg and "inverter_limit_discharge" in msg for msg in api.log_messages), "Keeping the user's inverter_limit_discharge should be logged"
+    assert set_arg_calls.get("inverter_limit_charge") == ["number.predbat_solis_abc123_max_charge_power"], f"An unset inverter_limit_charge must still be auto-bound, got {set_arg_calls.get('inverter_limit_charge')}"
+    assert set_arg_calls.get("battery_rate_max") == ["sensor.predbat_solis_abc123_battery_rate_max"], f"battery_rate_max keeps auto-discovery precedence, got {set_arg_calls.get('battery_rate_max')}"
+    print("PASSED: apps.yaml inverter limits win, unset ones are auto-bound")
+    return False
+
+
+async def test_publish_battery_rate_max_is_larger_limit():
+    """GH#4940: the battery_rate_max sensor is the larger of the max charge and discharge power.
+
+    Predbat clamps both directions to battery_rate_max, so it must not be the charge limit alone
+    (the reporter's 2647W charge / 5559W discharge battery was planned discharging at 2647W). With
+    one limit unread it is the other, and with neither there is no figure to publish.
+    """
+    print("\n=== Test: battery_rate_max sensor is the larger of the two limits ===")
+    from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_STORAGE_MODE
+
+    sn = "SN0RATE1"
+    # A 15S LV pack (batteryAcvSet 53.2V), so amps convert at its 48V nominal
+    cases = [
+        ("discharge above charge", "55", "116", int(116 * 48.0)),
+        ("charge above discharge", "116", "55", int(116 * 48.0)),
+        ("equal limits", "70", "70", int(70 * 48.0)),
+        ("discharge unread", "55", None, int(55 * 48.0)),
+        ("charge unread", None, "116", int(116 * 48.0)),
+        ("neither read", None, None, None),
+    ]
+    for label, charge_amps, discharge_amps, expected in cases:
+        api = MockSolisAPI()
+        api.inverter_sn = [sn]
+        api.inverter_details[sn] = {"inverterName": "Rate Test", "batteryVoltage": 52.1, "batteryAcvSet": 53.2}
+        values = {SOLIS_CID_STORAGE_MODE: "33"}
+        if charge_amps is not None:
+            values[SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT] = charge_amps
+        if discharge_amps is not None:
+            values[SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT] = discharge_amps
+        api.cached_values[sn] = values
+        api.charge_discharge_time_windows[sn] = {}
+
+        await api.publish_entities()
+
+        rate_max = api.dashboard_items.get(f"sensor.{api.prefix}_solis_{sn.lower()}_battery_rate_max")
+        assert rate_max is not None, f"{label}: battery_rate_max sensor should be published"
+        assert rate_max["state"] == expected, f"{label}: expected battery_rate_max {expected}W, got {rate_max['state']}"
+        assert rate_max["attributes"]["unit_of_measurement"] == "W", f"{label}: battery_rate_max should be in W"
+    print("PASSED: battery_rate_max is the larger of the two limits")
+    return False
+
+
 async def test_automatic_config():
     """Test automatic_config method configures Predbat correctly"""
     print("Testing automatic_config...")
@@ -6366,12 +6440,14 @@ async def test_automatic_config():
     expected_min_soc = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
     assert set_arg_calls["battery_min_soc"] == expected_min_soc, f"Expected {expected_min_soc}, got {set_arg_calls['battery_min_soc']}"
 
-    # Verify rate controls configured - charge and discharge limits bound separately, as the
-    # battery can be rated to discharge faster than it charges (GH#4940)
-    expected_rate_max = ["number.predbat_solis_abc123_max_charge_power", "number.predbat_solis_def456_max_charge_power"]
+    # Verify rate controls configured - battery_rate_max is the larger of the two limits and each
+    # direction gets its own limit, as the battery can discharge faster than it charges (GH#4940)
+    expected_rate_max = ["sensor.predbat_solis_abc123_battery_rate_max", "sensor.predbat_solis_def456_battery_rate_max"]
     assert set_arg_calls.get("battery_rate_max") == expected_rate_max, f"Expected {expected_rate_max}, got {set_arg_calls.get('battery_rate_max')}"
-    expected_rate_max_discharge = ["number.predbat_solis_abc123_max_discharge_power", "number.predbat_solis_def456_max_discharge_power"]
-    assert set_arg_calls.get("battery_rate_max_discharge") == expected_rate_max_discharge, f"Expected {expected_rate_max_discharge}, got {set_arg_calls.get('battery_rate_max_discharge')}"
+    expected_limit_charge = ["number.predbat_solis_abc123_max_charge_power", "number.predbat_solis_def456_max_charge_power"]
+    assert set_arg_calls.get("inverter_limit_charge") == expected_limit_charge, f"Expected {expected_limit_charge}, got {set_arg_calls.get('inverter_limit_charge')}"
+    expected_limit_discharge = ["number.predbat_solis_abc123_max_discharge_power", "number.predbat_solis_def456_max_discharge_power"]
+    assert set_arg_calls.get("inverter_limit_discharge") == expected_limit_discharge, f"Expected {expected_limit_discharge}, got {set_arg_calls.get('inverter_limit_discharge')}"
     assert "inverter_limit" in set_arg_calls, "inverter_limit not configured"
     assert "export_limit" in set_arg_calls, "export_limit not configured"
 
@@ -6625,7 +6701,7 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
 
     This is the symptom the reporter saw: with the current limit untouched, max_charge_power and
     max_discharge_power swung 3352W-3726W as the pack moved between 47.89V and 53.24V, dragging
-    battery_rate_max (auto-bound to max_charge_power) and the write tolerance derived from it with
+    battery_rate_max (then auto-bound to max_charge_power) and the write tolerance derived from it with
     them, and making Predbat rewrite slot rates it had already written correctly.
     """
     print("\n=== Test: rate setpoints do not drift with battery voltage ===")
@@ -6645,6 +6721,7 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
     prefix = api.prefix
     max_charge_entity = f"number.{prefix}_solis_{sn.lower()}_max_charge_power"
     max_discharge_entity = f"number.{prefix}_solis_{sn.lower()}_max_discharge_power"
+    rate_max_entity = f"sensor.{prefix}_solis_{sn.lower()}_battery_rate_max"
     slot_entity = f"number.{prefix}_solis_{sn.lower()}_discharge_slot1_power"
 
     # Predbat writes a discharge rate in watts; the handler converts it to amps and republishes the
@@ -6652,7 +6729,7 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
     await api.number_event_handler(slot_entity, 3437)
     await api.publish_entities()
     written_amps = api.charge_discharge_time_windows[sn][1]["discharge_current"]
-    before = {entity: api.dashboard_items[entity]["state"] for entity in (max_charge_entity, max_discharge_entity, slot_entity)}
+    before = {entity: api.dashboard_items[entity]["state"] for entity in (max_charge_entity, max_discharge_entity, rate_max_entity, slot_entity)}
 
     # The pack now sags under the export it was just told to do, then recovers past where it began
     for live in (47.89, 53.24):
@@ -6662,8 +6739,8 @@ async def test_rate_setpoints_do_not_drift_with_battery_voltage():
             now = api.dashboard_items[entity]["state"]
             assert now == was, f"{entity} moved from {was}W to {now}W at {live}V with the current unchanged"
 
-    # battery_rate_max is auto-bound to the max_charge_power entity, so a stable entity is the
-    # whole point: 70A on a 15S pack must publish as 70A at its 48V nominal, whatever the pack
+    # battery_rate_max and inverter_limit_charge/_discharge are auto-bound to these entities, so a
+    # stable entity is the whole point: 70A on a 15S pack must publish as 70A at its 48V nominal, whatever the pack
     # happens to read at the time - and 3360W is outside the 3352W-3726W the reporter observed
     assert before[max_charge_entity] == int(70 * 48.0), f"Expected 70A at the 15S pack's 48V nominal, got {before[max_charge_entity]}W"
 
