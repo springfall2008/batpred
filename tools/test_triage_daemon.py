@@ -777,6 +777,18 @@ class GhApiFormPromptTests(unittest.TestCase):
         completed review in the log. The prompt asks for a denial to be stated plainly."""
         self.assertIn("denied", triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
 
+    def test_closes_the_skills_print_instead_fallback(self):
+        """/code-review --comment prefers mcp__github_inline_comment__create_inline_comment, and when
+        that is missing offers "fall back to gh api ... or print the findings instead". The tool is
+        never loaded here (--strict-mcp-config), so every review lands on that sentence, and PR
+        #5283's run took the print branch without ever trying gh api - no denial to report, so the
+        denial rule above never applied. The prompt must name the tool as absent and make gh api the
+        required path, with printing allowed only once a gh api call has actually been denied."""
+        prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
+        self.assertIn("mcp__github_inline_comment__create_inline_comment", prompt)
+        self.assertIn("never available", prompt)
+        self.assertIn("not an acceptable substitute", prompt)
+
     def test_steers_comment_bodies_into_a_scratch_file(self):
         """PR #5229's review had its endpoint-first POST denied because the body was an inline
         double-quoted argument holding backticks: the shell reads those as command substitution,

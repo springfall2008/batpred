@@ -2644,7 +2644,15 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%H:%M:%S",
-        "write_and_poll_sleep": 2,
+        # The hub applies register writes one at a time and a single write can take 10-20s (longer
+        # under an EMS), so re-sending every couple of seconds only queues more work ahead of the
+        # read-back. Allow each attempt 10s to verify, give up after 3, and when a control keeps
+        # failing from one cycle to the next send it once, at most every few minutes (see
+        # INVERTER_WRITE_BACKOFF_FAILURES and INVERTER_WRITE_DEGRADED_INTERVAL). Only this row sets
+        # write_max_retry/write_backoff.
+        "write_and_poll_sleep": 10,
+        "write_max_retry": 3,
+        "write_backoff": True,
         "has_time_window": True,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
@@ -2929,6 +2937,7 @@ APPS_SCHEMA = {
     "teslemetry_base_url": {"type": "string", "empty": False},
     "teslemetry_automatic": {"type": "boolean"},
     "teslemetry_tbc_control": {"type": "boolean"},
+    "teslemetry_hybrid": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},

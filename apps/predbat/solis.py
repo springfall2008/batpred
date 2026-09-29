@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 import copy
 import threading
@@ -798,6 +799,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 await asyncio.sleep(delay)
                 delay = min(delay * 1.5, max_retry_time - elapsed_time)  # Exponential backoff
 
+    def check_register_access(self, inverter_sn):
+        """Raise instead of sending a register read or write to an inverter that reports no battery.
+
+        The backstop behind each caller's own is_battery_inverter() check: a string inverter has none of
+        the storage registers, so the request can only be refused and still counts against the daily
+        allowance (issue #5279). Raised before _with_retry, so the refusal is never retried.
+        """
+        if not self.is_battery_inverter(inverter_sn):
+            raise SolisAPIError(f"Register access withheld from {inverter_sn}: Solis Cloud reports no battery attached")
+
     async def read_cid(self, inverter_sn, cid):
         """Read single CID value"""
         async def read_operation():
@@ -819,6 +830,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
             return value, info
 
+        self.check_register_access(inverter_sn)
         return await self._with_retry(read_operation)
 
     async def read_batch(self, inverter_sn, cids):
@@ -845,6 +857,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
             return result, result_info
 
+        self.check_register_access(inverter_sn)
         return await self._with_retry(read_batch_operation)
 
     async def encode_time_windows(self, inverter_sn, time_windows):
@@ -1697,6 +1710,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     raise SolisAPIError(f"Write CID {cid} failed: {error_msg}", response_code=str(code))
 
         try:
+            self.check_register_access(inverter_sn)
             await self._with_retry(write_operation)
 
             # Update cache on success
@@ -1751,10 +1765,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     @staticmethod
     def _reports_no_battery(detail):
-        """True only when Solis Cloud explicitly declares this inverter has no battery attached.
+        """True only when Solis Cloud reports this inverter has no battery attached.
 
         Deliberately narrow: absence of these fields (older firmware, other models) means "unknown",
-        which leaves the inverter enrolled exactly as before.
+        which leaves the inverter enrolled exactly as before - except for the string inverter case
+        described at the end.
 
         Match on the self-describing name, in both the places Solis reports it. The `noBattery`
         boolean is checked too but cannot be relied on alone - one firmware sets it True, another
@@ -1778,29 +1793,65 @@ class SolisAPI(ComponentBase, OAuthMixin):
         live, healthy pack while batteryList still carries a "No Battery" entry, and letting the
         list win there drops a working battery. Both no-battery accounts observed so far state it
         in batteryType as well, so nothing that motivated checking the list is lost by this.
+
+        A plain string inverter never says "No Battery" either (issue #5279). The one captured reports
+        batteryType '0' - the code batteryList uses for "No Battery" on the alternative firmware, not
+        a name - with batteryList empty and every battery reading 0. It is read as no battery only
+        when all of these hold:
+          - no battery type named (absent, empty or the code 0), and batteryList empty or absent -
+            any non-empty batteryList that names no "No Battery" entry still means a battery, even
+            one whose entries cannot be parsed;
+          - batteryVoltage and batteryCapacitySoc both present and 0;
+          - batteryNum and batteryJump.batteryCount both present and 0.
+        The readings alone are not enough: SolisCloud does return transient zero placeholders (the
+        behaviour behind #4494), and a real battery inverter on firmware that names no type would be
+        dropped by one such response - on the one-shot automatic_config() pass that leaves Predbat
+        planning with no battery until a restart. The pack counts are what corroborate them. Every
+        field must be present, so an empty or unread detail still counts as a battery, and a named
+        pack is decided before any of this is looked at.
         """
-        battery_type = str(detail.get("batteryType", "")).strip()
+        battery_type = str(detail.get("batteryType") or "").strip()
         if battery_type.lower() == "no battery":
             return True
-        if battery_type:
+        if battery_type and battery_type != "0":
             return False
-        for entry in detail.get("batteryList") or []:
+        battery_list = detail.get("batteryList")
+        for entry in battery_list if isinstance(battery_list, list) else []:
             if not isinstance(entry, dict):
                 continue
             if entry.get("noBattery") is True:
                 return True
             if str(entry.get("batteryTypeName", "")).strip().lower() == "no battery":
                 return True
-        return False
+        if battery_list:
+            return False
+        battery_jump = detail.get("batteryJump")
+        return (
+            SolisAPI._reads_zero(detail, "batteryVoltage")
+            and SolisAPI._reads_zero(detail, "batteryCapacitySoc")
+            and SolisAPI._reads_zero(detail, "batteryNum")
+            and isinstance(battery_jump, dict)
+            and SolisAPI._reads_zero(battery_jump, "batteryCount")
+        )
+
+    @staticmethod
+    def _reads_zero(detail, field):
+        """True when the detail carries this field and it parses as exactly zero - absent or unparseable is not zero"""
+        try:
+            return float(detail.get(field)) == 0.0
+        except (ValueError, TypeError):
+            return False
 
     def is_battery_inverter(self, inverter_sn):
-        """False only when Solis Cloud explicitly declares this inverter has no battery attached.
+        """False only when Solis Cloud reports this inverter has no battery attached (see _reports_no_battery).
 
         Predbat has nothing to control on a PV-only inverter, and writing to one produces an
         endless stream of refused control writes: it is never planned for, so its slot 1 keeps
         whatever stale window it happened to hold and the storage mode is recomputed and
-        rewritten every cycle (see issue #4707). It is still polled and published, so its PV
-        sensors keep working - only the writes are withheld.
+        rewritten every cycle (see issue #4707). Its register reads are withheld too - a string
+        inverter has none of the storage registers, and each refused read still counts against the
+        daily allowance (issue #5279). Its inverterDetail is still polled and its PV sensors
+        published; only the control API is left alone.
         """
         return not self._reports_no_battery(self.inverter_details.get(inverter_sn, {}))
 
@@ -1939,7 +1990,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("discharge_target_soc", [f"number.{self.prefix}_solis_{device}_discharge_slot1_soc" for device in devices])
         self.set_arg_auto("discharge_rate", [f"number.{self.prefix}_solis_{device}_discharge_slot1_power" for device in devices])
         self.set_arg_auto("scheduled_discharge_enable", [f"switch.{self.prefix}_solis_{device}_discharge_slot1_enable" for device in devices])
-        self.set_arg_auto("battery_rate_max", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices])
+        # The inverter holds separate charge and discharge current limits, which can differ (GH#4940).
+        # battery_rate_max caps both directions, so it is the larger of the two and each direction's
+        # own limit goes to inverter_limit_charge/_discharge, which Predbat clamps against it. Those two
+        # are overwrite=False so a limit stated in apps.yaml (an AC rating, a DNO cap) still wins.
+        self.set_arg_auto("battery_rate_max", [f"sensor.{self.prefix}_solis_{device}_battery_rate_max" for device in devices])
+        self.set_arg_auto("inverter_limit_charge", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices], overwrite=False)
+        self.set_arg_auto("inverter_limit_discharge", [f"number.{self.prefix}_solis_{device}_max_discharge_power" for device in devices], overwrite=False)
         self.set_arg_auto("inverter_limit", [f"sensor.{self.prefix}_solis_{device}_inverter_size" for device in devices])
         self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
@@ -2006,7 +2063,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 "discharge_target_soc": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_soc", "access": "rw", "unit": "%"},
                 "discharge_rate": {"entity_id": f"number.{prefix}_solis_{device}_discharge_slot1_power", "access": "rw", "unit": "W"},
                 "scheduled_discharge_enable": {"entity_id": f"switch.{prefix}_solis_{device}_discharge_slot1_enable", "access": "rw", "domain": "switch"},
-                "battery_rate_max": {"entity_id": f"number.{prefix}_solis_{device}_max_charge_power", "access": "r", "unit": "W"},
+                "battery_rate_max": {"entity_id": f"sensor.{prefix}_solis_{device}_battery_rate_max", "access": "r", "unit": "W"},
+                "inverter_limit_charge": {"entity_id": f"number.{prefix}_solis_{device}_max_charge_power", "access": "r", "unit": "W"},
+                "inverter_limit_discharge": {"entity_id": f"number.{prefix}_solis_{device}_max_discharge_power", "access": "r", "unit": "W"},
                 "inverter_limit": {"entity_id": f"sensor.{prefix}_solis_{device}_inverter_size", "access": "r"},
                 "export_limit": {"entity_id": f"number.{prefix}_solis_{device}_max_export_power", "access": "r", "unit": "W"},
             }
@@ -2062,10 +2121,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         cap (_discovery_export_limit()), each only once the register has been read.
 
         A rating is a figure the device reports (spec D14), so two Predbat derivations are left out.
-        battery_rate_max is an entity only: the max_charge_power number is register current x
-        get_nominal_voltage(). soc_max is not reported at all: a kWh capacity is register 172 x a
-        voltage that is either inferred (for an HV pack still a live reading, GH#5090) or the user's
-        solis_nominal_voltage, and automatic_config() binds no soc_max entity either.
+        battery_rate_max is an entity only: the larger of the max_charge_power and max_discharge_power
+        numbers, each register current x get_nominal_voltage(). soc_max is not reported at all: a kWh
+        capacity is register 172 x a voltage that is either inferred (for an HV pack still a live
+        reading, GH#5090) or the user's solis_nominal_voltage, and automatic_config() binds no soc_max
+        entity either.
 
         Battery ratings carry only stated facts. Register 172 (SOLIS_CID_BATTERY_CAPACITY) is the
         per-battery Ah; battery_capacity_ah reports the bank total - register 172 x
@@ -2734,6 +2794,31 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 app="solis"
             )
 
+            # Home grid energy today - published for observation only, not bound to any Predbat arg. On a
+            # metered AC-coupled site whose live grid power and gridPurchasedTodayEnergy both read 0, this
+            # was the one grid figure moving during the day (issue #5279). What it measures is undocumented
+            # - it may be net import (purchased less sold) rather than import - so yesterday's counterparts
+            # ride along as attributes, letting the day's final reading be checked against them. All four
+            # are in kWh, converted from MWh as the other energy totals are, so they compare directly.
+            # state_class "total" rather than "total_increasing": a net figure can fall. Only published
+            # when the field is there, so installs whose detail lacks it get no permanently unknown entity.
+            if detail.get("homeGridTodayEnergy") is not None:
+                self.dashboard_item(
+                    f"sensor.{prefix}_solis_{inverter_sn_lower}_today_home_grid_energy",
+                    state=self._energy_kwh(detail, "homeGridTodayEnergy"),
+                    attributes={
+                        "friendly_name": f"Solis {inverter_name} Today Home Grid Energy",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "state_class": "total",
+                        "icon": "mdi:transmission-tower",
+                        "home_grid_yesterday_energy": self._energy_kwh(detail, "homeGridYesterdayEnergy"),
+                        "grid_purchased_yesterday_energy": self._energy_kwh(detail, "gridPurchasedYesterdayEnergy"),
+                        "grid_sell_yesterday_energy": self._energy_kwh(detail, "gridSellYesterdayEnergy"),
+                    },
+                    app="solis"
+                )
+
             # Battery state of health - published as-is, including a literal 0 (issue #4494): a 0%
             # reading here can be a flaky/unavailable API response as well as a genuinely unhealthy
             # battery, and we don't know which, so it's reported honestly rather than guessed at.
@@ -3000,6 +3085,28 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 app="solis"
             )
 
+            # Data logger timestamp from inverterDetail API (shows when the data logger last reported to SolisCloud)
+            data_timestamp_ms = detail.get("dataTimestamp")
+            if data_timestamp_ms is not None:
+                try:
+                    data_timestamp_dt = datetime.fromtimestamp(int(data_timestamp_ms) / 1000, tz=UTC)
+                    self.dashboard_item(
+                        f"sensor.{prefix}_solis_{inverter_sn_lower}_data_timestamp",
+                        state=data_timestamp_dt.isoformat(),
+                        attributes={
+                            "friendly_name": f"Solis {inverter_name} Data Logger Timestamp",
+                            "device_class": "timestamp",
+                            "icon": "mdi:clock-check-outline",
+                        },
+                        app="solis"
+                    )
+                except (ValueError, TypeError, OSError):
+                    self.log(f"Warn: Failed to parse dataTimestamp for {inverter_sn}: {data_timestamp_ms}")
+
+            if not self.is_battery_inverter(inverter_sn):
+                # Everything below is backed by a storage register, and a PV-only inverter's are never read (issue #5279)
+                continue
+
             self.publish_slot_entities(inverter_sn)
 
             # Storage mode selector
@@ -3133,6 +3240,21 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 app="solis"
             )
 
+            # battery_rate_max caps charge and discharge alike, so it is published as the larger of the
+            # two limits; automatic_config() binds each direction's own limit separately (GH#4940)
+            known_limits = [watts for watts in (max_charge_power_watts, max_discharge_power_watts) if watts is not None]
+            self.dashboard_item(
+                f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_rate_max",
+                state=max(known_limits) if known_limits else None,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Rate Max",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "icon": "mdi:battery-sync-outline",
+                },
+                app="solis"
+            )
+
             # Power control numbers
             entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_power_limit"
             power_limit_value = values.get(SOLIS_CID_POWER_LIMIT, None)
@@ -3241,23 +3363,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 except (ValueError, TypeError):
                     self.log("Warn: Failed to convert battery capacity for {}: {}".format(inverter_sn, battery_capacity_ah))  # Debug log
 
-            # Data logger timestamp from inverterDetail API (shows when the data logger last reported to SolisCloud)
-            data_timestamp_ms = detail.get("dataTimestamp")
-            if data_timestamp_ms is not None:
-                try:
-                    data_timestamp_dt = datetime.fromtimestamp(int(data_timestamp_ms) / 1000, tz=UTC)
-                    self.dashboard_item(
-                        f"sensor.{prefix}_solis_{inverter_sn_lower}_data_timestamp",
-                        state=data_timestamp_dt.isoformat(),
-                        attributes={
-                            "friendly_name": f"Solis {inverter_name} Data Logger Timestamp",
-                            "device_class": "timestamp",
-                            "icon": "mdi:clock-check-outline",
-                        },
-                        app="solis"
-                    )
-                except (ValueError, TypeError, OSError):
-                    self.log(f"Warn: Failed to parse dataTimestamp for {inverter_sn}: {data_timestamp_ms}")
+    @staticmethod
+    def _energy_kwh(detail, field):
+        """An inverterDetail energy field in kWh, converting from MWh when its <field>Str unit says so - None when absent, as-is when unparseable"""
+        value = detail.get(field)
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            return value
+        if detail.get(field + "Str") == "MWh":
+            value *= 1000.0
+        return value
 
     def get_current_solis_mode_value(self, inverter_sn):
         """Get the current solis mode value"""
@@ -3446,6 +3562,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         with self.schedule_lock:
             self.charge_discharge_time_windows.setdefault(inverter_sn, {}).setdefault(slot_num, {})[field] = value
 
+    def refuse_pv_only_event(self, inverter_sn, entity_id):
+        """True, after logging it, when an entity event targets an inverter that reports no battery - its control registers are never read or written (issue #5279)"""
+        if self.is_battery_inverter(inverter_sn):
+            return False
+        self.log(f"Warn: Solis API: Inverter {inverter_sn} reports no battery attached, ignoring {entity_id}")
+        return True
+
     async def select_event_handler(self, entity_id, value):
         """Handle select entity changes"""
         try:
@@ -3471,6 +3594,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             inverter_sn = self.find_inverter_by_sn(inverter_sn)
             if inverter_sn is None:
                 self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in select_event")
+                return
+            if self.refuse_pv_only_event(inverter_sn, entity_id):
                 return
 
             # Handle storage mode
@@ -3563,6 +3688,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             inverter_sn = self.find_inverter_by_sn(inverter_sn)
             if inverter_sn is None:
                 self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in number_event")
+                return
+            if self.refuse_pv_only_event(inverter_sn, entity_id):
                 return
 
             # Convert value to string for API
@@ -3742,6 +3869,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             inverter_sn = self.find_inverter_by_sn(inverter_sn)
             if inverter_sn is None:
                 self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in switch_event")
+                return
+            if self.refuse_pv_only_event(inverter_sn, entity_id):
                 return
 
             # Handle charge slot enables
@@ -4086,7 +4215,20 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if self.datalogger_offline(sn):
                     poll_success = False
                     continue
-                await self.fetch_inverter_details(sn)
+                if not await self.fetch_inverter_details(sn):
+                    # Without this attempt's detail there is no telling whether it has a battery, and
+                    # is_battery_inverter() assumes one when unsure - so its register reads would go to
+                    # a string inverter that refuses them (issue #5279). Its TOU mode and startup reset
+                    # wait for the next attempt, which failing the poll brings round.
+                    poll_success = False
+                    continue
+                if not self.datalogger_offline(sn) and not self.is_battery_inverter(sn):
+                    # Everything Predbat uses from a PV-only inverter is in inverterDetail. A string inverter has
+                    # none of the storage registers, so reading them is refused and still counts against the
+                    # daily allowance (issue #5279). automatic_config() logs its own version of this, but only
+                    # when auto-config is on.
+                    self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will read its PV data only and will not read or write its control registers")
+                    continue
                 if not self.datalogger_offline(sn):
                     await self.poll_inverter_data(sn, [SOLIS_CID_TOU_V2_MODE])  # Get TOU V2 mode status
                 if self.datalogger_offline(sn):
@@ -4098,17 +4240,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 else:
                     self.log(f"Solis API: Inverter {sn} is in standard Time of Use mode")
                 if self.control_enable:
-                    if self.is_battery_inverter(sn):
-                        # Best effort: it only lowers one setting. Left to raise, a datalogger that refuses the
-                        # read (B0600, B0115) aborted every startup attempt, so the inverter was never
-                        # configured at all (issue #5177).
-                        try:
-                            await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
-                        except Exception as e:
-                            self.log(f"Warn: Solis API: Startup register reset failed for inverter {sn}, continuing without it: {e}")
-                    else:
-                        # automatic_config() logs its own version of this, but only when auto-config is on
-                        self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will poll it but not write any control registers to it")
+                    # Best effort: it only lowers one setting. Left to raise, a datalogger that refuses the
+                    # read (B0600, B0115) aborted every startup attempt, so the inverter was never
+                    # configured at all (issue #5177).
+                    try:
+                        await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                    except Exception as e:
+                        self.log(f"Warn: Solis API: Startup register reset failed for inverter {sn}, continuing without it: {e}")
 
             # Keep the fleet for next time, or fall back to it when discovery could not run at all
             if self.inverter_sn:
@@ -4153,6 +4291,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
             for sn in self.inverter_sn:
                 if self.datalogger_offline(sn):
                     poll_success = False
+                    continue
+                if not self.is_battery_inverter(sn):
+                    # Every register below is a storage setting a PV-only inverter does not have (issue #5279)
                     continue
                 self.log(f"Solis API: Performing infrequent data poll for inverter {sn}...")
                 await self.poll_inverter_data(sn, SOLIS_CID_INFREQUENT)
@@ -4268,17 +4409,21 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.log("Solis API: Component stopped")
 
 
-async def test_solis_api(key_id, secret):  # pragma: no cover
+async def test_solis_api(key_id, secret, write=False):  # pragma: no cover
     """
     Run a test of Solis API
     """
     print(f"Testing Solis API with key_id: {key_id[:10]}...")
+    # Read-only unless asked: with control enabled run() does the startup register reset and the
+    # control-path writes against the real inverter, which reprogrammed the storage mode of an
+    # inverter that was only being inspected (issue #5279)
+    print("Control writes ENABLED - this run will write to the inverter" if write else "Read-only - no control writes (pass --write to enable them)")
 
     # Create a mock base object
     mock_base = MockBase()
 
     # Create SolisAPI instance with correct parameter names
-    arg_dict = {"api_key": key_id, "api_secret": secret, "automatic": True, "control_enable": True}
+    arg_dict = {"api_key": key_id, "api_secret": secret, "automatic": True, "control_enable": write}
     solis_api = SolisAPI(mock_base, **arg_dict)
 
     # Call run() once
@@ -4298,6 +4443,15 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
         #new_mode = current_mode & ~(1 << SOLIS_BIT_BACKUP_MODE)
         #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_STORAGE_MODE, str(new_mode), field_description=f"battery reserve to (mode: {current_mode} -> {new_mode})")
         pass
+    # The raw inverterDetail fields that decide battery detection and grid/load power, from the details
+    # run() already fetched - no extra requests. Filtered by name so the owner's station and address
+    # details stay out of a log that gets shared with support.
+    field_pattern = re.compile(r"battery|batt|psum|grid|meter|load|pac|type|model", re.IGNORECASE)
+    for device_sn, detail in solis_api.inverter_details.items():
+        print(f"DETAIL: {device_sn} is_battery_inverter={solis_api.is_battery_inverter(device_sn)}")
+        for key in sorted(detail):
+            if field_pattern.search(key):
+                print(f"  {key} = {detail[key]!r}")
     print("Run completed successfully")
 
     await solis_api.final()
@@ -4310,13 +4464,14 @@ def main():  # pragma: no cover
     parser = argparse.ArgumentParser(description="Test Solis Cloud API")
     parser.add_argument("--key-id", required=True, help="Solis Cloud API Key ID")
     parser.add_argument("--secret", required=True, help="Solis Cloud API Secret")
+    parser.add_argument("--write", action="store_true", help="Allow control writes to the inverter (default: read-only)")
 
     args = parser.parse_args()
     key_id = args.key_id
     secret = args.secret
 
     # Run the test
-    asyncio.run(test_solis_api(key_id, secret))
+    asyncio.run(test_solis_api(key_id, secret, write=args.write))
 
 
 if __name__ == "__main__":
