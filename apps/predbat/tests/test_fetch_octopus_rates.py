@@ -32,6 +32,7 @@ def test_fetch_octopus_rates(my_predbat):
     # Setup test environment
     old_forecast_days = my_predbat.forecast_days
     old_midnight_utc = my_predbat.midnight_utc
+    old_io_adjusted = my_predbat.io_adjusted
 
     my_predbat.forecast_days = 2
     my_predbat.midnight_utc = datetime.strptime("2025-01-01T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
@@ -204,6 +205,27 @@ def test_fetch_octopus_rates(my_predbat):
         print("ERROR: Expected minute 0 to be marked as intelligent adjusted")
         failed = True
 
+    # Test 5a: A later fetch without adjust_key (export or gas, which fetch_rates() reads after import)
+    # must keep the import's dispatch markers (#5286)
+    print("*** Test 5a: Fetch without adjust_key keeps the import's intelligent adjusted markers")
+
+    my_predbat.ha_interface.dummy_items["sensor.octopus_export"] = {
+        "state": "15.0",
+        "rates": [
+            {"value_inc_vat": 15.0, "valid_from": "2025-01-01T00:00:00+00:00", "valid_to": "2025-01-01T01:00:00+00:00"},
+        ],
+    }
+    rate_data = my_predbat.fetch_octopus_rates("sensor.octopus_export")
+
+    if not rate_data:
+        print("ERROR: Expected export rate data for Test 5a")
+        failed = True
+    elif my_predbat.io_adjusted.get(0, False) and not my_predbat.io_adjusted.get(30, False):
+        print("Test 5a passed - export fetch kept the import's intelligent adjusted markers")
+    else:
+        print("ERROR: Expected minute 0 still marked (and minute 30 not) after the export fetch, got {}".format(sorted(my_predbat.io_adjusted)[:5]))
+        failed = True
+
     # Test 5b: Missing day-rate events - no legacy 'all_rates' sensor fallback (#1699)
     print("*** Test 5b: Missing previous/current day-rate events warn about 'rates', not 'all_rates'")
 
@@ -275,6 +297,7 @@ def test_fetch_octopus_rates(my_predbat):
     # Restore original values
     my_predbat.forecast_days = old_forecast_days
     my_predbat.midnight_utc = old_midnight_utc
+    my_predbat.io_adjusted = old_io_adjusted
 
     if not failed:
         print("**** All fetch_octopus_rates tests PASSED ****")

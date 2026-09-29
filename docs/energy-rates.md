@@ -45,12 +45,14 @@ You should first log into your Octopus account and go to the [Accounts](https://
 
 Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access), click 'regenerate API key' and copy your API key e.g. `sk_live_1as12355...`
 
-Put these both into your `apps.yaml` and you are done.
+Put the account number in `apps.yaml` and the API key in `secrets.yaml`, referenced with `!secret`:
 
 ```yaml
   octopus_api_account: 'XXXXXXXX'
-  octopus_api_key: 'sk_live_yyyyyyyy'
+  octopus_api_key: !secret octopus_api_key
 ```
+
+The API key can read and change your Octopus account, so keep it out of `apps.yaml`, which is more likely to be shared or attached to a bug report - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 ### Octopus Free energy sessions
 

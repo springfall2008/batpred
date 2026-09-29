@@ -59,8 +59,10 @@ class Compare:
                 self.log("Warn: Compare, config item {} not found".format(key))
         self.pb.fetch_config_options()
 
-    def fetch_rates(self, tariff, rate_import_base, rate_export_base):
+    def fetch_rates(self, tariff, rate_import_base, rate_export_base, io_adjusted_base=None):
         pb = self.pb
+        if io_adjusted_base is None:
+            io_adjusted_base = pb.io_adjusted
 
         # Reset threshold to automatic
         pb.rate_low_threshold = 0
@@ -69,6 +71,10 @@ class Compare:
         # Reset rates to base
         pb.rate_import = copy.deepcopy(rate_import_base)
         pb.rate_export = copy.deepcopy(rate_export_base)
+
+        # Intelligent Octopus dispatch markers go with the import rates they came from (#5286)
+        live_import = pb.rate_import
+        pb.io_adjusted = {}
 
         # Fetch rates from Octopus Energy API
         if "rates_import_octopus_url" in tariff:
@@ -101,6 +107,8 @@ class Compare:
             pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import", include_manual_api=False)
         else:
             self.log("Using existing rate import data")
+        if pb.rate_import is live_import:
+            pb.io_adjusted = copy.deepcopy(io_adjusted_base)
 
         if "rates_export_octopus_url" in tariff:
             # Fixed URL for rate export
@@ -334,7 +342,7 @@ class Compare:
 
         return result_data
 
-    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=None, start_soc=None, io_adjusted_base=None):
         """
         Compare a single energy tariff with the current settings and report results
         """
@@ -362,7 +370,7 @@ class Compare:
 
         # Fetch rates
         try:
-            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base)
+            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base, io_adjusted_base)
         except ValueError as e:
             self.log("Warn fetching rates during comparison of tariff {}: {}".format(tariff, e))
             return {}
@@ -601,6 +609,7 @@ class Compare:
         # Save baseline rates
         rate_import_base = copy.deepcopy(self.pb.rate_import)
         rate_export_base = copy.deepcopy(self.pb.rate_export)
+        io_adjusted_base = copy.deepcopy(self.pb.io_adjusted)
 
         # Midnight SOC fallback for tariffs with no prior result
         soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_now, my_predbat.soc_kw)
@@ -634,7 +643,7 @@ class Compare:
                     start_soc = soc_midnight_fallback
                 self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
                 try:
-                    result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc)
+                    result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc, io_adjusted_base=io_adjusted_base)
                     if result_data is not None:
                         results[tariff["id"]] = result_data
                 finally:
@@ -704,3 +713,4 @@ class Compare:
             my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
             my_predbat.battery_rate_max_export = save_battery_rate_max_export
             my_predbat.inverter_limit = save_inverter_limit
+            my_predbat.io_adjusted = io_adjusted_base

@@ -3839,7 +3839,8 @@ class Octopus:
         Fetch the Octopus rates from the sensor
 
         :param entity_id: The entity_id of the sensor
-        :param adjust_key: The key use to find Octopus Intelligent adjusted rates
+        :param adjust_key: The key use to find Octopus Intelligent adjusted rates. self.io_adjusted is only
+            replaced when this is given, so a fetch without it (export, gas) keeps the import's markers
         """
         data_all = []
         rate_data = {}
@@ -3904,7 +3905,11 @@ class Octopus:
                 rate_key = "price"
                 from_key = "from"
                 to_key = "till"
-            rate_data, self.io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
+            rate_data, io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
+            # A fetch without adjust_key has no markers to give, so it must not wipe the ones an earlier
+            # import fetch found (#5286)
+            if adjust_key:
+                self.io_adjusted = io_adjusted
 
         return rate_data
 

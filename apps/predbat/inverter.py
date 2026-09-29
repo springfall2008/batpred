@@ -31,6 +31,8 @@ from const import (
     INVERTER_TEST,
     TIME_FORMAT_SECONDS,
     INVERTER_MAX_RETRY,
+    INVERTER_WRITE_BACKOFF_FAILURES,
+    INVERTER_WRITE_DEGRADED_INTERVAL,
     EXPORT_MODE_TARGET,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
@@ -61,6 +63,12 @@ class Inverter:
     window programming, target SoC setting, and reserve management via both
     REST API and Home Assistant entity writes with polling validation.
     """
+
+    # Write retry policy, set per type from INVERTER_DEF by refresh_config(). Declared here too so an
+    # Inverter built without __init__ (the test stubs) gets the default policy: INVERTER_MAX_RETRY
+    # attempts per write and no per-control backoff. Only GWMQTT sets anything else.
+    inv_write_max_retry = INVERTER_MAX_RETRY
+    inv_write_backoff = False
 
     def self_test(self, minutes_now):
         self.base.log("======= INVERTER CONTROL SELF TEST START ========")
@@ -348,6 +356,8 @@ class Inverter:
         # the new value back afterwards. Callers take the difference across their own writes to
         # learn whether something outside Predbat had changed what they manage - see commit_needed().
         self.registers_moved = 0
+        # Per-control write backoff state, keyed by entity_id - see _write_attempts().
+        self.write_backoff = {}
 
         self._init_attribute_defaults()
 
@@ -505,6 +515,9 @@ class Inverter:
         self.inv_has_ge_eco_toggle = INVERTER_DEF[self.inverter_type].get("has_ge_eco_toggle", False)
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
+        # Only take effect when a row sets them explicitly - currently only GWMQTT does
+        self.inv_write_max_retry = INVERTER_DEF[self.inverter_type].get("write_max_retry", INVERTER_MAX_RETRY)
+        self.inv_write_backoff = INVERTER_DEF[self.inverter_type].get("write_backoff", False)
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
@@ -2256,6 +2269,57 @@ class Inverter:
         self.base.record_status(message, had_errors=True)
         return False
 
+    def _write_attempts(self, name, entity_id, new_value):
+        """
+        How many times to send a write of new_value to this control before giving up on it.
+
+        Normally inv_write_max_retry. For inverter types with write_backoff set, a control whose
+        write of this same target has failed INVERTER_WRITE_BACKOFF_FAILURES times in a row is
+        degraded: re-sending a burst every cycle can swamp a device that applies writes slowly and
+        one at a time, which only makes the read-back lag further behind. A degraded control gets a
+        single attempt, at most once per INVERTER_WRITE_DEGRADED_INTERVAL seconds; in between it
+        gets 0, so the caller only checks the read it already took and, if that still differs,
+        reports the failure as usual. A different target is new work and gets the full ladder at once.
+        """
+        if not self.inv_write_backoff:
+            return self.inv_write_max_retry
+        state = self.write_backoff.get(entity_id)
+        if state is not None and state["value"] != new_value:
+            if state["failures"] >= INVERTER_WRITE_BACKOFF_FAILURES:
+                self.base.log(f"Inverter {self.id} {name} target changed to {new_value}, retrying writes normally again")
+            del self.write_backoff[entity_id]
+            state = None
+        if state is None or state["failures"] < INVERTER_WRITE_BACKOFF_FAILURES:
+            return self.inv_write_max_retry
+        now = time.monotonic()
+        if state.get("published_at") is not None and now - state["published_at"] < INVERTER_WRITE_DEGRADED_INTERVAL:
+            return 0
+        state["published_at"] = now
+        return 1
+
+    def _write_backoff_result(self, name, entity_id, new_value, verified):
+        """
+        Record whether a write to this control verified, for _write_attempts().
+
+        Logged once when a control drops to a single attempt per write and once when it recovers.
+        """
+        if not self.inv_write_backoff:
+            return
+        state = self.write_backoff.get(entity_id)
+        if verified:
+            if state is not None and state["failures"] >= INVERTER_WRITE_BACKOFF_FAILURES:
+                self.base.log(f"Inverter {self.id} {name} write verified, retrying writes normally again")
+            self.write_backoff.pop(entity_id, None)
+            return
+        if state is None or state["value"] != new_value:
+            state = {"value": new_value, "failures": 0}
+            self.write_backoff[entity_id] = state
+        state["failures"] += 1
+        if state["failures"] == INVERTER_WRITE_BACKOFF_FAILURES:
+            # This failing call has just published, so the degraded interval runs from now
+            state["published_at"] = time.monotonic()
+            self.base.log(f"Warn: Inverter {self.id} write of {new_value} to {name} has failed {state['failures']} times in a row, sending it at most once every {INVERTER_WRITE_DEGRADED_INTERVAL} seconds until it verifies")
+
     def write_and_poll_switch(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
@@ -2300,10 +2364,12 @@ class Inverter:
             # weaker but sufficient evidence.
             if ledger is not None:
                 ledger.record_ownership_from_read(entity_id, name, raw_state, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
 
+        attempts = self._write_attempts(name, entity_id, new_value)
         retry = 0
-        while not switch_matched(raw_state) and retry < INVERTER_MAX_RETRY:
+        while not switch_matched(raw_state) and retry < attempts:
             retry += 1
             if domain == "sensor":
                 if new_value:
@@ -2328,6 +2394,7 @@ class Inverter:
             # like a change - PredBat accusing somebody else of its own successful write.
             if ledger is not None:
                 ledger.record_write(entity_id, name, raw_state, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
         else:
             self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
@@ -2336,6 +2403,7 @@ class Inverter:
             # confirmation would report the next read of a control we have just failed to set.
             if ledger is not None:
                 ledger.clear(entity_id)
+            self._write_backoff_result(name, entity_id, new_value, False)
             return False
 
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
@@ -2382,8 +2450,9 @@ class Inverter:
             if not matched:
                 ledger.note_write_attempt(entity_id)
 
+        attempts = self._write_attempts(name, entity_id, new_value) if not matched else 0
         retry = 0
-        while (not matched) and (retry < INVERTER_MAX_RETRY):
+        while (not matched) and (retry < attempts):
             retry += 1
             if domain == "sensor":
                 self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}), required_unit=required_unit)
@@ -2404,12 +2473,13 @@ class Inverter:
             current_state = value_state(raw_state)
             matched = value_matched(raw_state)
 
-        if retry == 0:
+        if retry == 0 and matched:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
             # Re-arm - see write_and_poll_switch() for why this early return would otherwise leave
             # the control unwatched for good once ownership had been dropped.
             if ledger is not None:
                 ledger.record_ownership_from_read(entity_id, name, raw_state, fuzzy=fuzzy, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
         elif matched:
             self.base.log(f"Inverter {self.id} write_and_poll_value: Wrote {new_value} to {name}, successfully now {current_state}")
@@ -2421,12 +2491,14 @@ class Inverter:
             # 0.0 read-back would otherwise be stored as a confirmed owned value.
             if ledger is not None:
                 ledger.record_write(entity_id, name, raw_state, fuzzy=fuzzy, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
         else:
             self.base.log(f"Warn: Inverter {self.id} Trying to write {new_value} to {name} didn't complete got {current_state}")
             self.base.record_status(f"Warn: Inverter {self.id} write to {name} failed", had_errors=True)
             if ledger is not None:
                 ledger.clear(entity_id)
+            self._write_backoff_result(name, entity_id, new_value, False)
             return False
 
     def write_and_poll_option(self, name, entity_id, new_value, ignore_fail=False):
@@ -2459,7 +2531,15 @@ class Inverter:
             if old_value != new_value:
                 ledger.note_write_attempt(entity_id)
 
-        for _retry in range(INVERTER_MAX_RETRY):
+        attempts = self._write_attempts(name, entity_id, new_value)
+        if attempts == 0 and old_value == new_value:
+            # A degraded control between publishes that already reads back as wanted
+            self.base.log("Inverter {} {} already reads {}".format(self.id, name, new_value))
+            if ledger is not None:
+                ledger.record_ownership_from_read(entity_id, name, old_value, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
+            return True
+        for _retry in range(attempts):
             if entity_base == "time":
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
@@ -2482,11 +2562,13 @@ class Inverter:
                     self.registers_moved += 1
                 if ledger is not None:
                     ledger.record_write(entity_id, name, old_value, now=time.time(), generation=self._ledger_generation(entity_id))
+                self._write_backoff_result(name, entity_id, new_value, True)
                 return True
         self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id, refresh=True)))
         self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         if ledger is not None:
             ledger.clear(entity_id)
+        self._write_backoff_result(name, entity_id, new_value, False)
         return False
 
     def write_hm_time_part(self, name, new_time):
