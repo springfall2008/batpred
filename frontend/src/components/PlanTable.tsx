@@ -989,11 +989,13 @@ export default function PlanTable({
 
   const showCar = plan.num_cars > 0
 
+  const showIBoost = plan.iboost_enable === true
+
   const showExtraLoad = debugEnabled && rows.some((row) => row.extra_load !== undefined)
 
   const showCarbon = plan.carbon_enable === true
 
-  const columnCount = 10 + (showCar ? 1 : 0) + (debugEnabled ? 1 : 0) + (showExtraLoad ? 1 : 0) + (showCarbon ? 2 : 0)
+  const columnCount = 10 + (showCar ? 1 : 0) + (showIBoost ? 1 : 0) + (debugEnabled ? 1 : 0) + (showExtraLoad ? 1 : 0) + (showCarbon ? 2 : 0)
 
   const [openOverrideTime, setOpenOverrideTime] = useState<string | null>(null)
 
@@ -1205,6 +1207,15 @@ export default function PlanTable({
                   <ColumnHeading
                     label="Car"
                     help="Predicted energy used to charge the car during this plan slot."
+                  />
+                </th>
+              )}
+
+              {showIBoost && (
+                <th>
+                  <ColumnHeading
+                    label="iBoost"
+                    help="Cumulative energy diverted to iBoost, with the energy added during this slot shown in brackets, in kWh."
                   />
                 </th>
               )}
@@ -1530,6 +1541,35 @@ export default function PlanTable({
                       </td>
                     )}
 
+                    {showIBoost && (
+                      <td
+                        className={[
+                          'plan-number',
+                          (row.iboost_change ?? 0) > 0 && row.iboost_color ? 'has-plan-cell-colour' : ''
+                        ].filter(Boolean).join(' ')}
+                        style={cellColour((row.iboost_change ?? 0) > 0 ? row.iboost_color : undefined)}
+                      >
+                        {(row.iboost_change ?? 0) > 0 ? (
+                          <span className="plan-value-with-indicator">
+                            {row.iboost_color && (
+                              <span
+                                className="plan-value-indicator"
+                                style={{ backgroundColor: row.iboost_color }}
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span>
+                              {(row.iboost ?? 0).toFixed(2)} (+{(row.iboost_change ?? 0).toFixed(2)})
+                            </span>
+                          </span>
+                        ) : (row.iboost ?? 0) > 0 ? (
+                          (row.iboost ?? 0).toFixed(2)
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    )}
+
                     <TargetCell
                       row={row}
                       overrides={overrides}
@@ -1622,6 +1662,7 @@ export default function PlanTable({
                 {debugEnabled && <td>{(plan.totals.clipped ?? 0).toFixed(2)}</td>}
                 {showExtraLoad && <td>{(plan.totals.extra_load ?? 0).toFixed(2)}</td>}
                 {showCar && <td>{(plan.totals.car_charging ?? 0).toFixed(2)}</td>}
+                {showIBoost && <td>{(plan.totals.iboost ?? 0) > 0 ? (plan.totals.iboost ?? 0).toFixed(2) : '—'}</td>}
                 <td>—</td>
                 <td>{plan.totals.soc_percent}%</td>
                 <td>—</td>

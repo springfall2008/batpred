@@ -166,6 +166,31 @@ test('future rates show a prediction indicator', () => {
   assert.match(html, /data-icon="nord-pool"/)
 })
 
+test('iBoost column appears when iBoost is enabled', () => {
+  const enabledHtml = renderPlanTable(false, {
+    ...plan,
+    iboost_enable: true,
+    rows: [{
+      ...row,
+      iboost: 1.25,
+      iboost_change: 0.5,
+      iboost_color: '#FFFF00'
+    }],
+    totals: {
+      ...plan.totals,
+      iboost: 1.75
+    }
+  })
+  const disabledHtml = renderPlanTable(false)
+
+  assert.match(enabledHtml, />iBoost</)
+  assert.match(enabledHtml, /Cumulative energy diverted to iBoost/)
+  assert.match(enabledHtml, /1\.25 \(\+0\.50\)/)
+  assert.match(enabledHtml, /1\.75/)
+  assert.match(enabledHtml, /background-color:#FFFF00/)
+  assert.doesNotMatch(disabledHtml, />iBoost</)
+})
+
 test('normal mode keeps diagnostic plan values hidden', () => {
   const html = renderPlanTable(false)
 

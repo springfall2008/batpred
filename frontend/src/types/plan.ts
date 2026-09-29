@@ -33,6 +33,10 @@ export type PlanRow = {
 
   car_charging?: number
 
+  iboost?: number
+  iboost_change?: number
+  iboost_color?: string
+
   soc_percent: number
   soc_change: number
 
@@ -59,6 +63,7 @@ export type Plan = {
   mode: string
   plan_debug?: boolean
   num_cars: number
+  iboost_enable?: boolean
   carbon_enable?: boolean
   car_charging_from_battery: boolean
   car_energy_reported_load: boolean
@@ -71,6 +76,7 @@ export type Plan = {
     clipped?: number
     extra_load?: number
     car_charging?: number
+    iboost?: number
     carbon_intensity?: number
     total_carbon?: number
   }
