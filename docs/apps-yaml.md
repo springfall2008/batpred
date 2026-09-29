@@ -845,6 +845,8 @@ When `automatic: true` (recommended), Predbat will automatically create and conf
 
 No manual entity configuration is required when using automatic mode.
 
+The inverter holds separate maximum charge and discharge currents, which can differ. Automatic mode sets `inverter_limit_charge` and `inverter_limit_discharge` from them (converted to watts), and `battery_rate_max` to the larger of the two, so a battery allowed to discharge faster than it charges is planned at both rates. An `inverter_limit_charge` or `inverter_limit_discharge` you set in `apps.yaml` takes precedence - use it to state a lower limit such as your inverter's AC rating.
+
 #### Manual configuration (solis_automatic: false)
 
 If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
