@@ -1711,11 +1711,33 @@ def _test_ohme_control_enable_rules(my_predbat=None):
     assert api.charger_control_active is False, "Expected unset control off without ohme_automatic"
     assert not any("Warn" in msg for msg in api.log_messages), f"Unset control is not a request, got {api.log_messages}"
 
-    # ... on with it
+    # ... but not while the car's size and limit are left at their 100 kWh / 100% defaults, since
+    # max charge overrides the Ohme's own target and would charge to full
     api = MockOhmeAPI()
     api.ohme_automatic = True
     api.enable_control(False)
+    assert api.charger_control_active is False, "Expected unset control to wait for the car's size and limit"
+    assert any("car_charging_battery_size and car_charging_limit" in msg for msg in api.log_messages), api.log_messages
+    assert not any("Warn" in msg for msg in api.log_messages), api.log_messages
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.base.args_from_apps_yaml = {"car_charging_battery_size": 77}
+    api.enable_control(False)
+    assert api.charger_control_active is False, "Expected unset control to wait for car_charging_limit too"
+
+    # ... on with it once both are set
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.base.args_from_apps_yaml = {"car_charging_battery_size": 77, "car_charging_limit": 80}
+    api.enable_control(False)
     assert api.charger_control_active is True, "Expected unset control to turn on with ohme_automatic"
+
+    # An explicit true is the user's call, and does not need them
+    api = MockOhmeAPI()
+    api.ohme_control = True
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.charger_control_active is True, "Expected ohme_control: true to turn on without the size and limit"
 
     # ... but left to Octopus when the Intelligent slots come from the Ohme, again without a warning
     api = MockOhmeAPI()
