@@ -1182,6 +1182,37 @@ def test_control_gating_refuses_with_a_reason():
     print("  ✓ Zappi control refuses to run without its prerequisites, and says which")
 
 
+def _unset_control_component(apps_yaml, **overrides):
+    """Build a component with myenergi_zappi_control unset and the given apps.yaml entries."""
+    component = _control_component(**overrides)
+    component.base.args_from_apps_yaml = apps_yaml
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.enable_control()
+    return component
+
+
+def test_unset_control_follows_automatic_written_by_the_user():
+    """Unset myenergi_zappi_control turns on only when the user wrote the automatic setting.
+
+    Both automatic settings default on, so without this check every Zappi user would be
+    switched to Predbat control on upgrade.
+    """
+    assert _unset_control_component({}).charger_control_active is False, "Nothing written: Zappi control stays off"
+    assert _unset_control_component({"myenergi_automatic": True}).charger_control_active is True
+    assert _unset_control_component({"myenergi_automatic_zappi": True}).charger_control_active is True
+    # An explicit false still wins over automatic written by the user
+    assert _unset_control_component({"myenergi_automatic": True}, zappi_control=False).charger_control_active is False
+
+    # Following the automatic setting is not a request, so a missing prerequisite is not warned about
+    for overrides in ({"automatic": False}, {"automatic_zappi": False}, {"enable_controls": False}):
+        component = _unset_control_component({"myenergi_automatic": True}, **overrides)
+        assert component.charger_control_active is False, overrides
+        assert not any("Warn" in message for message in component.log_messages), (overrides, component.log_messages)
+    print("  ✓ Unset Zappi control follows myenergi_automatic only when the user wrote it")
+
+
 def test_control_releases_to_the_saved_mode():
     """Releasing puts the Zappi back where it was before Predbat first moved it."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
@@ -2601,6 +2632,7 @@ def test_myenergi(my_predbat=None):
     test_control_charge_ignores_eddis()
     test_control_charge_does_nothing_before_a_plan_exists()
     test_control_gating_refuses_with_a_reason()
+    test_unset_control_follows_automatic_written_by_the_user()
     test_control_releases_to_the_saved_mode()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
