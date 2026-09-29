@@ -938,6 +938,10 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """The Zappis to drive, in car order - see controlled_zappis()."""
         return [(device.device_id, device) for device in self.controlled_zappis()]
 
+    def charger_control_car_plugged(self, device):
+        """Is a car plugged in to this Zappi - an unknown or faulted plug state reads as plugged in."""
+        return device.plug_status != ZAPPI_PLUG_STATES["A"]
+
     def charger_control_drifted(self, device, charge):
         """Has the Zappi been put in a different mode, e.g. from the myenergi app."""
         return device.mode != (ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED)

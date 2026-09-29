@@ -360,6 +360,13 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """The one Ohme charger on the account, which follows car 0."""
         return [(self.client.serial or "ohme", self.client)]
 
+    def charger_control_car_plugged(self, client):
+        """Is a car plugged in to the Ohme - with no session read yet, as charger_mode(), it reads as plugged in."""
+        try:
+            return client.status is not ChargerStatus.UNPLUGGED
+        except (KeyError, TypeError):
+            return True
+
     def charger_control_car_count(self):
         """An Ohme account has one charger, and it follows car 0 whatever num_cars says."""
         return 1

@@ -1379,6 +1379,21 @@ def test_guest_switch_is_published_and_releases_the_zappi():
     print("  ✓ The guest charging switch is published and hands the Zappi back")
 
 
+def test_guest_charging_ends_when_the_zappi_is_unplugged():
+    """The Zappi's plug status ends guest charging once the guest's car is unplugged."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    device = component.devices["Z12345678"]
+    assert component.charger_control_car_plugged(device) is True, device.plug_status
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.charger_control_guest is True
+
+    device.plug_status = "EV Disconnected"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.charger_control_guest is False
+    print("  ✓ Unplugging from the Zappi ends guest charging")
+
+
 def test_control_switch_is_not_published_when_control_cannot_run():
     """No switch appears when control could never act on it, rather than one that lies.
 
@@ -2683,6 +2698,7 @@ def test_myenergi(my_predbat=None):
     test_control_stops_and_resumes_on_read_only()
     test_control_switch_is_published_and_toggles_control()
     test_guest_switch_is_published_and_releases_the_zappi()
+    test_guest_charging_ends_when_the_zappi_is_unplugged()
     test_control_switch_is_not_published_when_control_cannot_run()
     test_control_switch_publishes_its_restored_state_on_the_first_cycle()
     test_control_switch_is_not_published_without_the_feature()

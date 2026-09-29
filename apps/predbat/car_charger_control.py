@@ -57,6 +57,8 @@ class CarChargerControl:
     - charger_control_drifted(handle, charge): True when the charger is no longer in the
       state Predbat last set, so it is set again.
     - charger_control_car_count(): how many cars have a plan to follow.
+    - charger_control_car_plugged(handle): False once a car is unplugged, which ends guest
+      charging. Defaults to charger_control_connected().
     - charger_control_hand_to_octopus(handle, charge): let go of a charger Octopus is taking
       over, without starting a charge.
 
@@ -120,6 +122,14 @@ class CarChargerControl:
     def charger_control_drifted(self, handle, charge):
         """Has the charger moved away from the state Predbat last set - never, unless the charger can tell."""
         return False
+
+    def charger_control_car_plugged(self, handle):
+        """Is a car plugged in, for ending guest charging - kept apart from charger_control_connected().
+
+        A charger can report its plug state without Predbat also skipping commands to it while
+        it is empty, which is what charger_control_connected() returning False would mean.
+        """
+        return self.charger_control_connected(handle)
 
     def charger_control_car_count(self):
         """How many cars have a plan to follow."""
@@ -221,7 +231,7 @@ class CarChargerControl:
         if (now - self.charger_control_guest_since).total_seconds() >= GUEST_CHARGING_MAX_HOURS * 3600:
             return "on for {} hours".format(GUEST_CHARGING_MAX_HOURS)
         for key, handle in self.charger_control_chargers()[: self.charger_control_car_count()]:
-            if self.charger_control_connected(handle):
+            if self.charger_control_car_plugged(handle):
                 self.charger_control_guest_connected.add(key)
             elif key in self.charger_control_guest_connected:
                 return "the car was unplugged from {} {}".format(self.charger_control_noun, key)
