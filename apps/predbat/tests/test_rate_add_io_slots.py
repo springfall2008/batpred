@@ -42,6 +42,80 @@ def run_rate_add_io_slots_test(testname, my_predbat, slots, octopus_slot_low_rat
     return failed
 
 
+def run_rate_add_io_flag_case(testname, my_predbat, slots, octopus_slot_low_rate, octopus_slot_max, flagged, unflagged, night=None, car_cancelled=False, feed_flags=None):
+    """
+    Run rate_add_io_slots over a 10p day with an optional fixed off-peak window at rate_min_base, and
+    check which minutes end up in io_adjusted.
+
+    night is a (start, end) minute range already priced at rate_min_base by the tariff; feed_flags
+    are io_adjusted markers the rate feed set before the overlay ran.
+    """
+    print("**** Running Test: rate_add_io_slots io_adjusted {} ****".format(testname))
+    failed = False
+    my_predbat.args["octopus_slot_low_rate"] = octopus_slot_low_rate
+    my_predbat.args["octopus_slot_max"] = octopus_slot_max
+
+    rates = {}
+    for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60)):
+        rates[minute] = 10.0
+    if night:
+        for minute in range(night[0], night[1]):
+            rates[minute] = my_predbat.rate_min_base
+
+    my_predbat.io_adjusted = dict(feed_flags or {})
+    my_predbat.dynamic_load_car_effective = {0: car_cancelled}
+    my_predbat.rate_add_io_slots(0, rates, slots)
+
+    for minute in flagged:
+        if not my_predbat.io_adjusted.get(minute, False):
+            print("ERROR: {}: minute {} should be flagged io_adjusted but is not".format(testname, minute))
+            failed = True
+    for minute in unflagged:
+        if my_predbat.io_adjusted.get(minute, False):
+            print("ERROR: {}: minute {} should not be flagged io_adjusted but is".format(testname, minute))
+            failed = True
+    return failed
+
+
+def run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, time_format):
+    """
+    rate_add_io_slots() marks the minutes a dispatch made cheaper in io_adjusted, the way the Octopus
+    Energy integration's rate feed marks them with is_intelligent_adjusted: only a rate the dispatch
+    actually lowered, so minutes already off-peak by tariff, over the daily cap, left at their rate
+    by octopus_slot_low_rate off, or withheld from a cancelled car stay unmarked. Without the marker
+    the PV10 "slot goes away" re-pricing never sees these dispatches.
+    """
+    failed = False
+    saved_io_adjusted = my_predbat.io_adjusted
+    saved_effective = my_predbat.dynamic_load_car_effective
+    try:
+        # Dispatch 21:30-01:00 running on into a fixed 23:30-05:30 off-peak window: only the
+        # dispatch-only part before 23:30 was lowered by the dispatch
+        start = midnight_utc + timedelta(hours=21, minutes=30)
+        end = midnight_utc + timedelta(hours=25)
+        slots = [{"start": start.strftime(time_format), "end": end.strftime(time_format), "charge_in_kwh": 20.0, "source": "smart-charge", "location": "AT_HOME"}]
+        failed |= run_rate_add_io_flag_case("flag_dispatch_only_minutes", my_predbat, slots, True, 12, flagged=range(1290, 1410), unflagged=range(1410, 1500), night=(1410, 1770))
+
+        # Rate feed markers set before the overlay are kept
+        failed |= run_rate_add_io_flag_case("flag_keeps_feed_markers", my_predbat, slots, True, 12, flagged=[3000, 3001], unflagged=[], night=(1410, 1770), feed_flags={3000: True, 3001: True})
+
+        # Over the daily cap: the first two blocks are lowered and marked, the rest stay at the day rate
+        start = midnight_utc + timedelta(hours=14)
+        end = start + timedelta(hours=3)
+        slots = [{"start": start.strftime(time_format), "end": end.strftime(time_format), "charge_in_kwh": 20.0, "source": "smart-charge", "location": "AT_HOME"}]
+        failed |= run_rate_add_io_flag_case("flag_over_cap_unmarked", my_predbat, slots, True, 2, flagged=range(840, 900), unflagged=range(900, 1020))
+
+        # octopus_slot_low_rate off: the dispatch keeps the tariff rate, nothing was lowered
+        failed |= run_rate_add_io_flag_case("flag_low_rate_off_unmarked", my_predbat, slots, False, 12, flagged=[], unflagged=range(840, 1020))
+
+        # Cancelled car: its future dispatch minutes are not given the cheap rate, so not marked
+        failed |= run_rate_add_io_flag_case("flag_cancelled_car_unmarked", my_predbat, slots, True, 12, flagged=[], unflagged=range(840, 1020), car_cancelled=True)
+    finally:
+        my_predbat.io_adjusted = saved_io_adjusted
+        my_predbat.dynamic_load_car_effective = saved_effective
+    return failed
+
+
 def run_rate_add_io_slots_tests(my_predbat):
     """
     Test for rate_add_io_slots - the function that adds Octopus Intelligent slots to rates
@@ -499,6 +573,8 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates[minute] = 10.0
 
     failed |= run_rate_add_io_slots_test("test25_completed_away_consumes_cap", my_predbat, slots, True, 2, expected_rates)
+
+    failed |= run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, TIME_FORMAT)
 
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes

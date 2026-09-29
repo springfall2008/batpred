@@ -497,6 +497,12 @@ Whether the car is charging is judged the same way as for **switch.predbat_octop
 It needs **switch.predbat_octopus_intelligent_dynamic** On, which does the checking; with that Off this switch has no effect and Predbat logs a warning.
 It only applies when **switch.predbat_octopus_intelligent_charging** is On, as it acts on the car plan that Octopus Intelligent charging builds. With that Off, the Intelligent dispatch rates are used as before and Predbat logs a warning.
 
+- Octopus often moves or withdraws a dispatch before it starts, so Predbat plans for that in its pessimistic PV10% scenario (weighted by **input_number.predbat_pv_metric10_weight**).
+In that scenario, any part of a dispatch more than 30 minutes ahead that is cheap only because of the dispatch - not the fixed 23:30-05:30 off-peak - is assumed to go away.
+The rest of the house then pays the peak rate for those minutes, and the battery is not held for the car, although the car's own charging is still costed at the dispatch rate so the two scenarios stay comparable.
+The effect is that with a low battery Predbat may top it up in the first half hour of a dispatch, which is treated as certain, so that it can carry the house through to the fixed off-peak window if the rest of the dispatch disappears.
+This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
+
 - Let the Octopus app control when your car charges.
 
 #### Checking Intelligent dispatches against the car

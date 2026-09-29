@@ -679,6 +679,28 @@ def run_edge_case_tests(my_predbat):
         ),
     ]
 
+    # An Intelligent dispatch assumed gone in PV10: the car keeps charging at the slot rate but no longer
+    # holds the battery, and joins the grid balance after the battery has acted. Kept last because the
+    # overrides persist into later cases; io_adjusted is cleared after the loop.
+    dispatch_car = {
+        "num_cars": 1,
+        "car_charging_from_battery": False,
+        "car_charging_slots": [[{"start": minutes_now, "end": minutes_now + 300, "kwh": 15.0, "average": 5, "octopus": True}], [], [], []],
+        "car_charging_soc": [0, 0, 0, 0],
+        "car_charging_limit": [100, 100, 100, 100],
+        "car_charging_limit_model": None,
+        "car_charging_loss": 0.9,
+        "soc_kw": 50.0,
+        "io_adjusted": {minute: 1 for minute in range(minutes_now, minutes_now + 300)},
+        "rate_max": 40.0,
+    }
+    cases += [
+        ("car_dispatch_gone", dict(dispatch_car, car_energy_reported_load=True), [], [], [], [], 0, 0.5, forecast_minutes),
+        ("car_dispatch_gone_pv_surplus", dict(dispatch_car, car_energy_reported_load=True), [], [], [], [], 3.0, 0.5, forecast_minutes),
+        ("car_dispatch_gone_charging", dict(dispatch_car, car_energy_reported_load=True), [100.0], half_window, [], [], 0, 0.5, forecast_minutes),
+        ("car_dispatch_gone_not_reported", dict(dispatch_car, car_energy_reported_load=False), [], [], [], [], 1.0, 0.5, forecast_minutes),
+    ]
+
     for name, overrides, charge_limit, charge_window, export_window, export_limits, pv_kw, load_kw, end_record in cases:
         reset_inverter(my_predbat)
         reset_rates(my_predbat, 10.0, 5.0)
@@ -701,6 +723,7 @@ def run_edge_case_tests(my_predbat):
                 pv_scenario,
                 end_record,
             )
+    my_predbat.io_adjusted = {}
 
     # pv90: the kernel must select the p90 arrays, skip the pv10 charge de-rate, and skip the
     # io_adjusted worst-case import rate. Distinct series per scenario so a wrong selection shows up.
