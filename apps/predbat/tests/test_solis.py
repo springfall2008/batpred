@@ -82,6 +82,9 @@ class MockSolisAPI(SolisAPI):
         self.slot_current_probed = {}
         self.slot_current_probes_loaded = False
         self.slot_probe_no_slot_logged = set()
+        self.slot_probe_pending_logged = set()
+        self.slot_probe_failures = {}
+        self.slot_probe_retry_at = {}
         self.mode_asserted_for = {}
         self.control_enable = True
         self.configured_inverter_sn = []
@@ -2381,6 +2384,13 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_slot_probe_reloaded_not_repeated())
         failed |= asyncio.run(test_slot_probe_skips())
         failed |= asyncio.run(test_publish_slot_power_limits_follow_the_cap())
+        failed |= asyncio.run(test_slot_probe_pending_while_read_only())
+        failed |= asyncio.run(test_slot_probe_backs_off_after_failures())
+        failed |= asyncio.run(test_slot_probe_second_settle_for_a_slow_relay())
+        failed |= asyncio.run(test_slot_probe_load_is_robust())
+        failed |= test_slot_current_limits_unreadable_values()
+        failed |= test_slot_current_limits_hv_voltage_logged_once()
+        failed |= asyncio.run(test_run_probes_after_control_and_publish())
         failed |= asyncio.run(test_automatic_config_keeps_apps_yaml_inverter_limits())
         failed |= asyncio.run(test_publish_battery_rate_max_is_larger_limit())
         failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
@@ -6529,7 +6539,7 @@ def test_slot_current_limits_logged_on_change():
     text = api.describe_slot_current_limits(sn, api.slot_current_limits(sn))
     print(text)
     assert "charge 75.0A from the rated current (register 100A, no slot metadata max)" in text, f"charge inputs missing: {text}"
-    assert "discharge 60.0A from the default (register not read, default 60.0A, slot metadata max 100A)" in text, f"discharge inputs missing: {text}"
+    assert "discharge 60.0A from the default (register not read, default 60.0A, slot metadata max 100.0A)" in text, f"discharge inputs missing: {text}"
     assert "rated 75.0A from 3.6kW at 48.0V" in text and "applied" not in text, f"rated inputs missing: {text}"
 
     for _ in range(3):
@@ -6682,6 +6692,168 @@ async def test_publish_slot_power_limits_follow_the_cap():
     return False
 
 
+async def test_slot_probe_pending_while_read_only():
+    """Read-only holds the probe back - no writes at all - and it runs on the first cycle once writes are allowed again."""
+    print("\n=== Test: slot probe pending while read-only ===")
+    api, sn = _probe_api(storage=_FakeStorage())
+    inverter = _ProbeInverter(api, ceiling=60)
+    api.dashboard_items["switch.predbat_set_read_only"] = {"state": "on", "attributes": {}}
+    for _ in range(3):
+        await api.ensure_slot_current_probed(sn)
+    assert inverter.requests == 0, f"nothing may be read or written while read-only, made {inverter.requests} requests"
+    assert sum("pending until read-only is turned off" in m for m in api.log_messages) == 1, "the pending probe should be logged once"
+    api.dashboard_items["switch.predbat_set_read_only"]["state"] = "off"
+    await api.ensure_slot_current_probed(sn)
+    assert api.slot_current_probed[sn]["charge"] == 60.0, f"the probe should run as soon as read-only is off, got {api.slot_current_probed.get(sn)}"
+    print("PASSED: slot probe pending while read-only")
+    return False
+
+
+async def test_slot_probe_backs_off_after_failures():
+    """A probe that learns nothing waits an hour, then doubles the wait each time, up to a day - never every hour for good."""
+    print("\n=== Test: slot probe backs off after failures ===")
+    now = datetime(2026, 9, 29, 20, 0, 0, tzinfo=UTC)
+    api, sn = _probe_api(storage=_FakeStorage())
+    api._test_now_utc_exact = now
+    inverter = _ProbeInverter(api, write_error=True)
+    await api.ensure_slot_current_probed(sn)
+    assert api.slot_probe_retry_at[sn] == now + timedelta(hours=1), f"the first failure should wait an hour, got {api.slot_probe_retry_at.get(sn)}"
+    before = inverter.requests
+    api._test_now_utc_exact = now + timedelta(minutes=59)
+    await api.ensure_slot_current_probed(sn)
+    assert inverter.requests == before, "nothing may be tried before the retry time"
+    waits = []
+    for _ in range(7):
+        api._test_now_utc_exact = api.slot_probe_retry_at[sn]
+        await api.ensure_slot_current_probed(sn)
+        waits.append((api.slot_probe_retry_at[sn] - api._test_now_utc_exact).total_seconds() / 3600)
+    assert waits == [2, 4, 8, 16, 24, 24, 24], f"the wait should double up to a day, got {waits}"
+
+    # A success clears the backoff
+    inverter.write_error = False
+    api._test_now_utc_exact = api.slot_probe_retry_at[sn]
+    await api.ensure_slot_current_probed(sn)
+    assert api.slot_current_probed[sn]["charge"] == 60.0 and sn not in api.slot_probe_retry_at and sn not in api.slot_probe_failures, "a success should clear the backoff"
+    print("PASSED: slot probe backs off after failures")
+    return False
+
+
+async def test_slot_probe_second_settle_for_a_slow_relay():
+    """A write that lands after the first settle is kept, not saved as a refusal; one that never lands is refused."""
+    print("\n=== Test: slot probe gives a slow relay a second settle ===")
+    api, sn = _probe_api(storage=_FakeStorage())
+    # Each accepted write shows up only on the third read after it - after the first settle, before the second
+    inverter = _ProbeInverter(api, ceiling=60, lag_reads=2)
+    await api.ensure_slot_current_probed(sn)
+    assert api.slot_current_probed[sn]["discharge"] == 60.0, f"a late-landing write must not lower the ceiling, got {api.slot_current_probed.get(sn)}"
+    assert any("kept, after a second settle" in m for m in api.log_messages), "the late landing should be logged"
+    # Landing any later than that is a refusal, so the probe still finishes (the slot holds 0A, so no
+    # value it already holds is reached on the way down)
+    api, sn = _probe_api(storage=_FakeStorage())
+    _ProbeInverter(api, ceiling=100, lag_reads=5, held="0")
+    await api.ensure_slot_current_probed(sn)
+    assert sn not in api.slot_current_probed, f"a write landing after both settles cannot be told from a refusal of everything, got {api.slot_current_probed.get(sn)}"
+    print("PASSED: slot probe gives a slow relay a second settle")
+    return False
+
+
+async def test_slot_probe_load_is_robust():
+    """A storage error is retried and holds the probe back; a malformed file or entry is ignored without raising."""
+    print("\n=== Test: slot probe load is robust ===")
+
+    class _FailingOnceStorage(_FakeStorage):
+        """Raises on the first load, as a transient storage error does."""
+
+        def __init__(self, contents=None):
+            super().__init__(contents)
+            self.loads = 0
+
+        async def load(self, module, filename):
+            """Fail the first time."""
+            self.loads += 1
+            if self.loads == 1:
+                raise OSError("storage unavailable")
+            return await super().load(module, filename)
+
+    saved = {"SN0PROBE": {"charge": 60, "discharge": 60, "probed_at": datetime.now(UTC).isoformat()}}
+    storage = _FailingOnceStorage({("solis", "slot_current_limits"): saved})
+    api, sn = _probe_api(storage=storage, loaded=False)
+    inverter = _ProbeInverter(api, ceiling=60)
+    await api.load_slot_current_probes()
+    assert not api.slot_current_probes_loaded, "a failed load must not count as loaded"
+    await api.ensure_slot_current_probed(sn)
+    assert inverter.requests == 0, "nothing may be probed until the saved ceilings have loaded"
+    await api.load_slot_current_probes()
+    assert api.slot_current_probes_loaded and api.slot_current_probed[sn]["charge"] == 60.0, f"the retried load should succeed, got {api.slot_current_probed}"
+
+    for label, data in (("a list", [1, 2]), ("an entry that is a string", {"SN0PROBE": "junk"})):
+        api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): data}), loaded=False)
+        await api.load_slot_current_probes()
+        assert api.slot_current_probes_loaded and sn not in api.slot_current_probed, f"{label}: should be ignored without raising, got {api.slot_current_probed}"
+    print("PASSED: slot probe load is robust")
+    return False
+
+
+def test_slot_current_limits_unreadable_values():
+    """An unreadable register or slot metadata is treated as not read, so publishing never raises on it."""
+    print("\n=== Test: slot current limits with unreadable values ===")
+    api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "junk", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: ""}, {SOLIS_CID_DISCHARGE_CURRENT[0]: {"sysCommand": {"max": "n/a"}}, SOLIS_CID_CHARGE_CURRENT[0]: {"sysCommand": "text"}})
+    limits = api.slot_current_limits(sn)
+    assert limits["charge_register"] is None and limits["discharge_register"] is None, f"unreadable registers should read as not read, got {limits}"
+    assert limits["discharge_metadata"] is None and limits["charge_metadata"] is None, f"unreadable metadata should be ignored, got {limits}"
+    assert api.slot_power_limits(sn) == {"charge": None, "discharge": None}, "with nothing readable there is no slot power limit to publish"
+    print("PASSED: slot current limits with unreadable values")
+    return False
+
+
+def test_slot_current_limits_hv_voltage_logged_once():
+    """On an HV pack the conversion voltage is the live reading; the limits line must not be logged again just because it moved."""
+    print("\n=== Test: slot current limits line not re-logged for a moving HV voltage ===")
+    api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "25", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "25"}, power=8.0)
+    api.inverter_details[sn].pop("batteryAcvSet")
+    for live in (402.3, 402.7, 401.9):
+        api.inverter_details[sn]["batteryVoltage"] = live
+        api.log_slot_current_limits(sn, api.slot_current_limits(sn))
+    assert sum("Slot current limits for" in m for m in api.log_messages) == 1, "a moving live voltage should not re-log unchanged limits"
+    print("PASSED: slot current limits line not re-logged for a moving HV voltage")
+    return False
+
+
+async def test_run_probes_after_control_and_publish():
+    """run() probes last in the cycle, so a first probe never delays the control writes or the publish."""
+    print("\n=== Test: run probes after control and publish ===")
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+    order = []
+
+    async def mock_get_inverter_list():
+        """Discover the one inverter."""
+        return [{"sn": sn}]
+
+    async def record_write(inverter_sn):
+        """Record the control write."""
+        order.append("write")
+        return True
+
+    async def record_publish():
+        """Record the publish."""
+        order.append("publish")
+
+    async def record_probe(inverter_sn):
+        """Record the probe."""
+        order.append("probe")
+
+    api.get_inverter_list = mock_get_inverter_list
+    api.write_time_windows_if_changed = record_write
+    api.publish_entities = record_publish
+    api.ensure_slot_current_probed = record_probe
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+    assert order == ["write", "publish", "probe"], f"the probe should come after the write and the publish, got {order}"
+    print("PASSED: run probes after control and publish")
+    return False
+
+
 class _ProbeInverter:
     """A simulated inverter for the slot current probe: it keeps a current up to its ceiling and leaves the old value on refusal.
 
@@ -6689,10 +6861,12 @@ class _ProbeInverter:
     makes the control endpoint report an error instead.
     """
 
-    def __init__(self, api, ceiling=60, offline_after=None, write_error=False, held="50"):
+    def __init__(self, api, ceiling=60, offline_after=None, write_error=False, held="50", lag_reads=0):
         from solis import SolisAPIError
 
         self.error_class = SolisAPIError
+        self.lag_reads = lag_reads  # Reads after an accepted write that still return the old value, as a slow relay does
+        self.lagging = {}  # {cid: [reads left, value landing]}
         self.registers = {cid: held for cid in SOLIS_CID_CHARGE_CURRENT + SOLIS_CID_DISCHARGE_CURRENT}
         self.registers[SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
         self.ceiling = ceiling
@@ -6712,6 +6886,11 @@ class _ProbeInverter:
         """Read a simulated register."""
         if self._offline():
             raise self.error_class("Datalogger offline or disconnected", response_code="B0115")
+        if cid in self.lagging:
+            if self.lagging[cid][0] > 0:
+                self.lagging[cid][0] -= 1
+            else:
+                self.registers[cid] = self.lagging.pop(cid)[1]
         return self.registers.get(cid), {}
 
     async def write_cid(self, inverter_sn, cid, value, old_value=None, field_description=None):
@@ -6720,13 +6899,20 @@ class _ProbeInverter:
             return False
         self.writes.append((cid, value))
         if float(value) <= self.ceiling:
-            self.registers[cid] = value
+            if self.lag_reads:
+                self.lagging[cid] = [self.lag_reads, value]
+            else:
+                self.registers[cid] = value
         return True
 
 
-def _probe_api(storage=None, control_enable=True, v2=True, slot6_enabled=False):
-    """A MockSolisAPI for one 3.6kW V2 battery inverter (48V pack) reading 100A limits, with slot 1 discharging and slots 2-6 disabled."""
+def _probe_api(storage=None, control_enable=True, v2=True, slot6_enabled=False, loaded=True):
+    """A MockSolisAPI for one 3.6kW V2 battery inverter (48V pack) reading 100A limits, with slot 1 discharging and slots 2-6 disabled.
+
+    loaded marks the saved ceilings as already loaded, which the probe waits for; pass False to test the load itself.
+    """
     api = MockSolisAPI()
+    api.slot_current_probes_loaded = loaded
     if storage is not None:
         # ComponentBase.storage reads through base.components, which MockBase does not have
         api.__class__ = type("MockSolisAPIWithStorage", (MockSolisAPI,), {"storage": property(lambda self: storage)})
@@ -6833,7 +7019,7 @@ async def test_slot_probe_reloaded_not_repeated():
     print("\n=== Test: slot probe result reloaded from storage ===")
     now = datetime(2026, 9, 29, 20, 0, 0, tzinfo=UTC)
     recent = {"SN0PROBE": {"charge": 60, "discharge": 58, "probed_at": (now - timedelta(hours=23)).isoformat()}}
-    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): recent}))
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): recent}), loaded=False)
     api._test_now_utc_exact = now
     inverter = _ProbeInverter(api, ceiling=60)
     await api.load_slot_current_probes()
@@ -6844,7 +7030,7 @@ async def test_slot_probe_reloaded_not_repeated():
 
     # A day old with the ceiling unchanged: the re-check starts at the known ceiling, so it costs two writes and the restore
     unchanged = {"SN0PROBE": {"charge": 60, "discharge": 60, "probed_at": (now - timedelta(hours=25)).isoformat()}}
-    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): unchanged}))
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): unchanged}), loaded=False)
     api._test_now_utc_exact = now
     inverter = _ProbeInverter(api, ceiling=60)
     await api.load_slot_current_probes()
@@ -6856,7 +7042,7 @@ async def test_slot_probe_reloaded_not_repeated():
     # A day old: checked again, and the fresh result replaces it
     stale = {"SN0PROBE": {"charge": 60, "discharge": 58, "probed_at": (now - timedelta(hours=25)).isoformat()}}
     storage = _FakeStorage({("solis", "slot_current_limits"): stale})
-    api, sn = _probe_api(storage=storage)
+    api, sn = _probe_api(storage=storage, loaded=False)
     api._test_now_utc_exact = now
     inverter = _ProbeInverter(api, ceiling=62)
     await api.load_slot_current_probes()
@@ -6867,7 +7053,7 @@ async def test_slot_probe_reloaded_not_repeated():
 
     # A re-check that gets no answer keeps the ceiling already known
     storage = _FakeStorage({("solis", "slot_current_limits"): stale})
-    api, sn = _probe_api(storage=storage)
+    api, sn = _probe_api(storage=storage, loaded=False)
     api._test_now_utc_exact = now
     _ProbeInverter(api, offline_after=0)
     await api.load_slot_current_probes()
@@ -6877,12 +7063,12 @@ async def test_slot_probe_reloaded_not_repeated():
     assert any("keeping charge 60.0A, discharge 58.0A" in m for m in api.log_messages), "keeping the known ceiling should be logged"
 
     # No probe time at all counts as due
-    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): {"SN0PROBE": {"charge": 60, "discharge": 58}}}))
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): {"SN0PROBE": {"charge": 60, "discharge": 58}}}), loaded=False)
     await api.load_slot_current_probes()
     assert api.slot_probe_due(sn), "a saved ceiling with no probe time should be due for a check"
 
     # An unreadable saved entry is ignored rather than trusted
-    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): {"SN0PROBE": {"charge": "junk"}}}))
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): {"SN0PROBE": {"charge": "junk"}}}), loaded=False)
     await api.load_slot_current_probes()
     assert sn not in api.slot_current_probed, f"an unreadable saved ceiling should be ignored, got {api.slot_current_probed}"
     print("PASSED: slot probe result reloaded from storage")
