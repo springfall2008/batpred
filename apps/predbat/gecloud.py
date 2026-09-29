@@ -621,6 +621,12 @@ class GECloudDirect(ComponentBase):
         self.evc_device_list = []
         self.settings_from_cache = False
         self.default_options_stamp = None
+        # Devices found by the periodic device check still waiting for their default options, kept across
+        # cycles so a device found while read only is set up once read only ends
+        self.pending_default_options = set()
+        # An EMS turns GE Cloud Data off; what it replaced is kept so it can be put back if the EMS leaves
+        self.ems_disabled_ge_cloud_data = False
+        self.ge_cloud_data_before_ems = None
 
         # Customer account details, including the timezone the inverter register times are expressed in
         self.account = {}
@@ -1682,6 +1688,9 @@ class GECloudDirect(ComponentBase):
             ems = devices["ems"]
             self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
             self.set_arg("ge_cloud_serial", ems)
+            if not self.ems_disabled_ge_cloud_data:
+                self.ge_cloud_data_before_ems = self.get_arg("ge_cloud_data", default=None, indirect=False)
+                self.ems_disabled_ge_cloud_data = True
             self.set_arg("ge_cloud_data", False)
             if not self.get_arg("ge_cloud_load_today_ignore", default=False):
                 self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_total"])
@@ -1701,6 +1710,10 @@ class GECloudDirect(ComponentBase):
             self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+        elif self.ems_disabled_ge_cloud_data:
+            # The EMS has left the account since it turned GE Cloud Data off, so put back what it replaced
+            self.set_arg("ge_cloud_data", self.ge_cloud_data_before_ems)
+            self.ems_disabled_ge_cloud_data = False
 
         # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
         # First fetch "model"
@@ -2273,10 +2286,16 @@ class GECloudDirect(ComponentBase):
         device_list, ems_device, gateway_device = self.select_poll_devices(devices)
         evc_device_list = [device.get("uuid", None) for device in evc_devices]
 
-        for device in set(self.device_list) - set(device_list):
-            for store in (self.status, self.meter, self.info, self.settings, self.pending_writes, self.register_list):
+        # Every store rather than just the devices polled until now, so entries that never were polled
+        # (settings restored from the storage cache for hardware that has since gone) are dropped too
+        stores = (self.status, self.meter, self.info, self.settings, self.pending_writes, self.register_list)
+        for device in set().union(*stores, self.ems_slot_warned) - set(device_list):
+            for store in stores:
                 store.pop(device, None)
             self.ems_slot_warned.discard(device)
+        if ems_device != self.ems_device:
+            # A different EMS is a new episode, so a standing slot override is reported again
+            self.ems_slot_warned.clear()
         self.register_entity_map = {entity_id: entry for entity_id, entry in self.register_entity_map.items() if entry.get("device") in device_list}
         for uuid in set(self.evc_device_list) - set(evc_device_list):
             for store in (self.evc_device, self.evc_data, self.evc_sessions, self.evc_control_state):
@@ -2308,7 +2327,9 @@ class GECloudDirect(ComponentBase):
     @staticmethod
     def device_signature(devices):
         """What automatic config and the polled device list depend on in an async_get_devices() result, independent of the API's ordering"""
-        return (sorted(devices.get("battery", [])), sorted(devices.get("pv", [])), devices.get("ems"), devices.get("gateway"))
+        # battery_meters decides async_automatic_config()'s shared-CT detection, so a CT rewiring is a change too
+        meters = sorted((serial, sorted(str(meter) for meter in (serials or []))) for serial, serials in (devices.get("battery_meters") or {}).items())
+        return (sorted(devices.get("battery", [])), sorted(devices.get("pv", [])), devices.get("ems"), devices.get("gateway"), meters)
 
     async def refresh_devices(self):
         """
@@ -2319,12 +2340,17 @@ class GECloudDirect(ComponentBase):
         reports a failed read as no devices at all, and async_get_evc_devices() hands back the list it was
         given, so a failed read keeps the current devices rather than dropping them - on an API blip that
         would take the whole system off the plan.
+
+        A read that leaves no battery inverters is not adopted either. It cannot be told apart from a
+        failed read, and even if the hardware really has gone, async_automatic_config() cannot wire up a
+        plant with no batteries, so the configuration would still name the removed ones. The warning
+        says to restart in that case.
         """
         devices = await self.async_get_devices()
         evc_devices = await self.async_get_evc_devices(previous=self.evc_devices_dict)
-        if not self.device_serials(devices):
+        if not self.device_serials(devices) or (self.devices_dict.get("battery") and not devices["battery"]):
             if self.device_list:
-                self.log("GECloud: Warn: Device list refresh found no inverters, keeping the current devices {}".format(self.device_list))
+                self.log("GECloud: Warn: Device list refresh found no battery inverters, keeping the current devices {} - if they really have been removed from the account, restart Predbat to reconfigure".format(self.device_list))
             devices = self.devices_dict
 
         old_serials = self.device_serials(self.devices_dict)
@@ -2352,8 +2378,8 @@ class GECloudDirect(ComponentBase):
         # The account details change rarely, so they are cached in storage and only re-fetched once a day
         await self.update_account(first)
 
-        # Devices found by the periodic device check in this cycle; their settings are read and their
-        # defaults set up now rather than waiting for the next slow refresh or 24 hour pass
+        # Devices found by the periodic device check in this cycle; their settings are read now rather
+        # than waiting for the next slow refresh
         devices_changed = False
         new_devices = []
 
@@ -2381,7 +2407,8 @@ class GECloudDirect(ComponentBase):
                 if isinstance(cached_settings, dict) and cached_settings:
                     settings_age = await self.storage.age("gecloud", "settings")
                     if settings_age is not None and settings_age < 10:
-                        self.settings = cached_settings
+                        # Only the devices found now, or departed hardware would be saved back to the cache forever
+                        self.settings = {device: settings for device, settings in cached_settings.items() if device in self.device_list}
                         self.settings_from_cache = True
                         self.log("GECloud: Restored settings from storage cache (age {:.1f} minutes), skipping initial poll".format(settings_age))
                     else:
@@ -2393,6 +2420,7 @@ class GECloudDirect(ComponentBase):
             if refreshed is not None:
                 devices_changed = True
                 new_devices = refreshed
+                self.pending_default_options.update(refreshed)
 
         # The site details change rarely, so they are cached in storage and only re-fetched every 12 hours
         await self.update_site(first)
@@ -2491,8 +2519,10 @@ class GECloudDirect(ComponentBase):
                     self.default_options_stamp = now_utc
                     option_devices = self.device_list
                 else:
-                    # A device found by the periodic device check is set up now, not at the next 24 hour pass
-                    option_devices = new_devices
+                    # A device found by the periodic device check is set up now, not at the next 24 hour pass -
+                    # or, when it was found while read only, on the first settings cycle after read only ends
+                    option_devices = [device for device in self.device_list if device in self.pending_default_options]
+                self.pending_default_options.clear()
                 for device in option_devices:
                     await self.enable_default_options(device, self.settings[device])
 
@@ -2617,12 +2647,14 @@ class GECloudDirect(ComponentBase):
         """
         if previous is None:
             previous = {}
-        if serial not in self.register_list:
+        # A failed fetch leaves None, which is fetched again on the next read rather than kept as the device's
+        # register list - otherwise one transient failure would break every later settings read for it
+        if self.register_list.get(serial) is None:
             self.register_list[serial] = await self.async_get_inverter_data_retry(GE_API_INVERTER_SETTINGS, serial)
 
         results = previous.copy()
 
-        if serial in self.register_list:
+        if self.register_list.get(serial):
             # Async read for all the registers
             futures = []
             pending = []
