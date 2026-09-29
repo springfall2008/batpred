@@ -415,6 +415,52 @@ def test_saving_minute_capped_against_post_io_rates(my_predbat):
     return failed
 
 
+def test_saving_minute_keeps_user_override(my_predbat):
+    """An override on a session minute must reach the threshold stats, not be capped back to the tariff.
+
+    apply_rate_overrides(), which fetch_sensor_data() runs the overrides through, gives
+    rate_import_pre_saving the same overrides as rate_import, so the cap takes a session minute back to
+    "this rate without the session" rather than to the bare tariff. Before, a fixed 50p the user put
+    over a +50p session to discourage charging read as the 25.95p day rate, and a +5p increment on top
+    of the event was dropped along with the event (#5163 review).
+    """
+    print("**** test_saving_minute_keeps_user_override ****")
+    failed = False
+
+    session_window = [{"start": "17:00:00", "end": "19:00:00"}]
+    cases = [
+        # (label, override items, manual rates, expected average). The window is 14h of 25.95p day
+        # rate, 8h of 3.49p night rate and the 2h session; a snapshot without the overrides gave 18.46.
+        ("fixed 50p override", [dict(session_window[0], rate=50.0)], {}, (14 * 25.95 + 2 * 50.0 + 8 * 3.49) / 24),
+        ("+5p increment override", [dict(session_window[0], rate_increment=5.0)], {}, (14 * 25.95 + 2 * 30.95 + 8 * 3.49) / 24),
+        ("40p manual rate", [], {minute: 40.0 for minute in range(17 * 60, 19 * 60)}, (14 * 25.95 + 2 * 40.0 + 8 * 3.49) / 24),
+    ]
+    for label, override, manual, expected in cases:
+        _setup_two_rate_tariff(my_predbat, event_start=17 * 60, event_end=19 * 60, event_boost=50.0)
+        my_predbat.rate_import, my_predbat.rate_import_pre_saving = my_predbat.apply_rate_overrides(
+            my_predbat.rate_import, my_predbat.rate_import_pre_saving, my_predbat.rate_import_saving_minutes, override, "rates_import_override", manual, True, my_predbat.rate_import_replicated
+        )
+        my_predbat.rate_low_threshold = 1.0
+
+        my_predbat.set_rate_thresholds()
+
+        if abs(my_predbat.rate_import_cost_threshold - expected) > 0.01:
+            print("ERROR: {}: rate_import_cost_threshold should be {:.2f} (average with the override kept), got {}".format(label, expected, my_predbat.rate_import_cost_threshold))
+            failed = True
+
+    # With no session minutes nothing reads the snapshot, so it is left untouched
+    _setup_two_rate_tariff(my_predbat, event_start=17 * 60, event_end=19 * 60, event_boost=50.0)
+    pre_saving = my_predbat.rate_import_pre_saving
+    _, returned = my_predbat.apply_rate_overrides(my_predbat.rate_import, pre_saving, set(), cases[0][1], "rates_import_override", {}, True, my_predbat.rate_import_replicated)
+    if returned is not pre_saving or returned[17 * 60] != 25.95:
+        print("ERROR: with no saving minutes the pre-saving snapshot should come back untouched, got {} at 17:00".format(returned.get(17 * 60)))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def _setup_export_event(my_predbat, export_boost=50.0):
     """Flat 15p export tariff with a boosted, "saving"-tagged export event 10:00-12:00, and a two-rate import tariff (20p night, 30p day)."""
     my_predbat.minutes_now = 0
@@ -514,6 +560,8 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     - rate_import_saving_minutes must sit AFTER those three loaders (so every tagged minute is
       captured) and BEFORE basic_rates()/apply_manual_rates() (so an override active during a
       session cannot overwrite the "saving" tag before it is read - #5052 review).
+    - The overrides go through apply_rate_overrides(), which also puts them on the pre-saving snapshot
+      so a saving minute the user overrode is capped to the override, not the bare tariff (#5163 review).
 
     Driving the whole of fetch_sensor_data() would need the entire sensor/Octopus/Axle surface stood
     up, so assert on the source order instead. That is weaker than a behavioural test, but it is the
@@ -543,13 +591,13 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     free_slot = find("self.load_free_slot(self.octopus_free_slots, import_rates", "load_free_slot() for import")
     axle_slot = find("load_axle_slot(self, self.axle_sessions, import_rates", "load_axle_slot() for import")
     saving_minutes = find("self.rate_import_saving_minutes = {minute for minute, tag", "the rate_import_saving_minutes snapshot")
-    basic = find('import_rates = self.basic_rates(self.get_arg("rates_import_override"', "basic_rates() for import")
+    basic = find("import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(", "the import overrides")
 
     export_pre_saving = find("self.rate_export_pre_saving = self.rate_export_base.copy()", "the rate_export_pre_saving snapshot")
     export_saving_slot = find("self.load_saving_slot(self.octopus_saving_slots, export_rates", "load_saving_slot() for export")
     export_axle_slot = find("load_axle_slot(self, self.axle_sessions, export_rates", "load_axle_slot() for export")
     export_saving_minutes = find("self.rate_export_saving_minutes = {minute for minute, tag", "the rate_export_saving_minutes snapshot")
-    export_basic = find('export_rates = self.basic_rates(self.get_arg("rates_export_override"', "basic_rates() for export")
+    export_basic = find("export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(", "the export overrides")
 
     if None in (io_loop, pre_saving, saving_slot, free_slot, axle_slot, saving_minutes, basic, export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic):
         return True
@@ -563,11 +611,11 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
         failed = True
 
     if not export_pre_saving < export_saving_slot < export_axle_slot < export_saving_minutes < export_basic:
-        print("ERROR: export snapshots out of order - pre_saving {}, saving slot {}, axle {}, saving minutes {}, basic_rates {}".format(export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic))
+        print("ERROR: export snapshots out of order - pre_saving {}, saving slot {}, axle {}, saving minutes {}, overrides {}".format(export_pre_saving, export_saving_slot, export_axle_slot, export_saving_minutes, export_basic))
         failed = True
 
     if not axle_slot < saving_minutes < basic:
-        print("ERROR: rate_import_saving_minutes must be snapshotted after the session loaders and before basic_rates() - got axle at {}, snapshot at {}, basic_rates at {}".format(axle_slot, saving_minutes, basic))
+        print("ERROR: rate_import_saving_minutes must be snapshotted after the session loaders and before the overrides - got axle at {}, snapshot at {}, overrides at {}".format(axle_slot, saving_minutes, basic))
         failed = True
 
     if not failed:
@@ -746,6 +794,53 @@ def test_compare_reused_live_rates_keep_saving_minutes(my_predbat):
     return failed
 
 
+def test_compare_override_reaches_kept_pre_saving_snapshot(my_predbat):
+    """A compare tariff's own override on reused live rates must also go on the kept pre-saving snapshot.
+
+    Otherwise the cap takes the overridden session minute back to the live tariff, as it did in
+    fetch_sensor_data() before the #5163 review.
+    """
+    print("**** test_compare_override_reaches_kept_pre_saving_snapshot ****")
+    failed = False
+
+    from compare import Compare
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    rate_import_pre_saving = {minute: (30.0 if 6 <= (minute // 60) % 24 < 22 else 7.0) for minute in range(0, 48 * 60)}
+    rate_import_live = rate_import_pre_saving.copy()
+    session = set(range(17 * 60, 18 * 60))
+    for minute in session:
+        rate_import_live[minute] += 300.0
+    rate_export_live = {minute: 15.0 for minute in range(0, 48 * 60)}
+
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.num_cars = 0
+
+    compare = Compare(my_predbat)
+    compare.live_saving_state = {
+        "import_minutes": set(session),
+        "export_minutes": set(),
+        "import_pre_saving": rate_import_pre_saving,
+        "export_pre_saving": dict(rate_export_live),
+    }
+    tariff = {"id": "test", "name": "test", "rates_import_override": [{"start": "17:00:00", "end": "18:00:00", "rate": 40.0}]}
+    compare.fetch_rates(tariff, rate_import_live, rate_export_live)
+
+    rate_min, rate_max, _ = my_predbat.rate_minmax_excluding_saving(my_predbat.rate_import, my_predbat.rate_import_saving_minutes, my_predbat.rate_import_pre_saving)
+    if rate_max != 40.0:
+        print("ERROR: the tariff's 40p override on the session hour should be the threshold max, got {} (capped back to the live tariff)".format(rate_max))
+        failed = True
+    if rate_import_pre_saving[17 * 60] != 30.0:
+        print("ERROR: fetch_rates() modified the caller's live pre-saving snapshot in place")
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 _SNAPSHOT_FIELDS = (
     "minutes_now",
     "forecast_minutes",
@@ -811,9 +906,11 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table(my_predbat)
         failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)
         failed |= test_saving_minute_capped_against_post_io_rates(my_predbat)
+        failed |= test_saving_minute_keeps_user_override(my_predbat)
         failed |= test_fetch_snapshots_are_taken_in_the_right_order(my_predbat)
         failed |= test_compare_and_annual_clear_stale_saving_minutes(my_predbat)
         failed |= test_compare_reused_live_rates_keep_saving_minutes(my_predbat)
+        failed |= test_compare_override_reaches_kept_pre_saving_snapshot(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():

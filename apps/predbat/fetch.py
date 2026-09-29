@@ -1251,7 +1251,8 @@ class Fetch:
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
             # Snapshot the tariff as it stands AFTER the IOG/SmartFlex dispatch overlay but BEFORE any
-            # saving/free/Axle session or override distorts it. rate_import_base is built further up
+            # saving/free/Axle session distorts it (the overrides below are applied to it too).
+            # rate_import_base is built further up
             # (ahead of rate_add_io_slots), so capping a saving minute against that would discard a
             # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
             # threshold scan could then miss a genuinely cheap slot (#5163 review).
@@ -1266,8 +1267,9 @@ class Fetch:
             # not the live rate_import_replicated dict, so a later overwrite here can't erase the
             # "this was a saving minute" provenance it depends on (GH#5050, #5052 review).
             self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
-            import_rates = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", import_rates, self.rate_import_replicated)
-            import_rates = self.apply_manual_rates(import_rates, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
+            import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
+                import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated
+            )
             self.rate_scan(import_rates, print=True)
         else:
             self.rate_import_no_io = {}
@@ -1294,8 +1296,9 @@ class Fetch:
             load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             # See the import block's equivalent comment above (GH#5050, #5052 review).
             self.rate_export_saving_minutes = {minute for minute, tag in self.rate_export_replicated.items() if tag == "saving"}
-            export_rates = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", export_rates, self.rate_export_replicated)
-            export_rates = self.apply_manual_rates(export_rates, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
+            export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(
+                export_rates, self.rate_export_pre_saving, self.rate_export_saving_minutes, self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.manual_export_rates, False, self.rate_export_replicated
+            )
             self.rate_scan_export(export_rates, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -2134,6 +2137,26 @@ class Fetch:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
+    def apply_rate_overrides(self, rates, pre_saving, saving_minutes, override_items, rtype, manual_items, is_import, rate_replicate):
+        """
+        Apply the configured rate overrides and then the manual rates on top of rates, tagging each
+        overridden minute in rate_replicate. Returns (rates, pre_saving).
+
+        When there are saving minutes the same overrides also go on pre_saving - the rates without
+        any saving/free/Axle session - so it stays "these rates without the session". Otherwise
+        rate_minmax_excluding_saving() would cap an overridden session minute (a fixed 50p to
+        discourage charging in the session, say) back to the bare tariff and the override would
+        drop out of the threshold stats (#5163 review). With no saving minutes nothing reads
+        pre_saving, so it is left alone rather than logging every override twice each cycle.
+        """
+        rates = self.basic_rates(override_items, rtype, rates, rate_replicate)
+        rates = self.apply_manual_rates(rates, manual_items, is_import=is_import, rate_replicate=rate_replicate)
+        if saving_minutes and pre_saving:
+            self.log("Applying {} to the rates without the saving session too, for the rate thresholds".format(rtype))
+            pre_saving = self.basic_rates(override_items, rtype, pre_saving, {})
+            pre_saving = self.apply_manual_rates(pre_saving, manual_items, is_import=is_import, rate_replicate={})
+        return rates, pre_saving
+
     def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate=None):
         """
         Apply manual rates to the rates dictionary
@@ -2433,14 +2456,17 @@ class Fetch:
         same session (a documented, supported combination) can overwrite on the very same minute,
         losing the "this was a saving minute" provenance a live-dict check would need (#5052 review).
 
-        rate_base (rate_import_pre_saving/rate_export_pre_saving) is the tariff curve as it stands
-        before any saving/free/Axle/override distortion runs - already computed on every real fetch
-        cycle whenever `rates` is non-empty, so this is a straight lookup rather than a second pass
-        over `rates` to reconstruct it. On the import side that snapshot is taken AFTER the IOG
-        dispatch overlay, not from rate_import_base which predates rate_add_io_slots(): capping a
-        saving minute against the pre-IOG curve would discard a legitimate dispatch discount wherever
-        a session and a dispatch slot overlap (#5163 review). Export has no IOG overlay, so its
-        snapshot is simply rate_export_base.
+        rate_base (rate_import_pre_saving/rate_export_pre_saving) is `rates` as it would be with no
+        saving/free/Axle session: snapshotted just before the session loaders run, then given the same
+        overrides and manual rates as `rates` by apply_rate_overrides() - already computed on every real fetch cycle whenever
+        `rates` is non-empty, so this is a straight lookup rather than a second pass over `rates` to
+        reconstruct it. Carrying the overrides matters: a user who overrides a session minute (a fixed
+        50p to discourage charging, or an increment on top of the event) must see that override in the
+        threshold stats, not have it capped back to the bare tariff (#5163 review). On the import side
+        the snapshot is taken AFTER the IOG dispatch overlay, not from rate_import_base which predates
+        rate_add_io_slots(): capping a saving minute against the pre-IOG curve would discard a
+        legitimate dispatch discount wherever a session and a dispatch slot overlap (#5163 review).
+        Export has no IOG overlay, so its snapshot starts from rate_export_base.
 
         Only ever caps a tagged minute DOWN to its base rate, never raises it - the "saving" tag
         covers two economically opposite things: an event REWARD added on top of the tariff rate (a

@@ -421,7 +421,8 @@ If you set this too high you might not get any export slots. If it's too low you
 
 Both thresholds, automatic or set by you, ignore an event price that is above the tariff's own rate (an Octopus saving session
 or Axle event reward): those slots count at the tariff's own rate when the thresholds are worked out, so the event does not
-stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot.
+stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot,
+and a rate override you put on an event slot (rates_import_override, rates_export_override or a manual rate) is kept.
 The event rates themselves are still used when planning.
 
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are

@@ -180,6 +180,9 @@ class Compare:
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True)
             if "rates_import_override" in tariff:
                 pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated, include_manual_api=False)
+                # A kept pre-saving snapshot must carry the same override, as fetch_sensor_data()'s does
+                if pb.rate_import_saving_minutes and pb.rate_import_pre_saving:
+                    pb.rate_import_pre_saving = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import_pre_saving, {}, include_manual_api=False)
             pb.rate_scan(pb.rate_import, print=True)
 
         # Replicate and scan export rates
@@ -188,6 +191,8 @@ class Compare:
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False)
             if "rates_export_override" in tariff:
                 pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated, include_manual_api=False)
+                if pb.rate_export_saving_minutes and pb.rate_export_pre_saving:
+                    pb.rate_export_pre_saving = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export_pre_saving, {}, include_manual_api=False)
             pb.rate_scan_export(pb.rate_export, print=True)
 
         # Set rate thresholds
