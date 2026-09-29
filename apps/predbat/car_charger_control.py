@@ -12,7 +12,27 @@ read only mode or its control switch is turned off. CarChargerControl owns that 
 once; a component supplies only what is specific to its charger.
 """
 
+from datetime import datetime
+
 from utils import parse_car_plan_windows, in_car_plan_window
+
+
+def parse_dispatch_time(value):
+    """Parse a dispatch start or end from an Octopus or Kraken dispatch sensor, or None.
+
+    Octopus writes "2026-06-01T01:00:00+0000", Kraken ISO with a trailing Z.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return None
+
 
 # A guest switch left on turns itself off after this long, for chargers that cannot tell a car was unplugged
 GUEST_CHARGING_MAX_HOURS = 12
@@ -67,8 +87,8 @@ class CarChargerControl:
     Predbat was already holding when its car went away is released rather than stranded.
 
     The guest charging switch hands the chargers back so a car Predbat is not planning for
-    can charge. It turns itself off when a connected car is unplugged, on chargers that can
-    tell, and otherwise after GUEST_CHARGING_MAX_HOURS.
+    can charge. It turns itself off when a car plugged in after it was switched on is
+    unplugged again, on chargers that can tell, and otherwise after GUEST_CHARGING_MAX_HOURS.
 
     A car whose Octopus Intelligent dispatches are delivered by Octopus driving the charger
     itself is left to Octopus - see charger_control_octopus_drives_charger(). Where Octopus
@@ -111,8 +131,10 @@ class CarChargerControl:
         self.charger_control_switch_prefix = switch_prefix
         # Guest charging: deliberately not persisted, so a restart puts Predbat back in charge
         self.charger_control_guest = False
-        # When the first control cycle saw guest charging on, and the chargers it has seen connected since
+        # When the first control cycle saw guest charging on; the chargers seen empty since, and those
+        # a car has then been plugged in to - only an unplug from one of those ends guest charging
         self.charger_control_guest_since = None
+        self.charger_control_guest_empty = set()
         self.charger_control_guest_connected = set()
 
     def charger_control_connected(self, handle):
@@ -209,32 +231,37 @@ class CarChargerControl:
         """Handle the guest charging switch, returning True when entity_id was it."""
         if self.charger_control_switch_prefix is None or not entity_id.endswith("_{}_guest_charging".format(self.charger_control_switch_prefix)):
             return False
-        self.charger_control_set_guest(service == "turn_on")
+        self.charger_control_set_guest(not self.charger_control_guest if service == "toggle" else service == "turn_on")
         return True
 
     def charger_control_set_guest(self, on, why=None):
         """Turn guest charging on or off, starting its unplug and time limits afresh."""
         self.charger_control_guest = bool(on)
         self.charger_control_guest_since = None
+        self.charger_control_guest_empty = set()
         self.charger_control_guest_connected = set()
         self.log("Info: {}: guest charging switched {}{}".format(self.charger_control_log_name, "on" if on else "off", " - {}".format(why) if why else ""))
 
     def charger_control_guest_over(self, now):
         """Why guest charging should end now, or None while it should carry on.
 
-        A charger only ends it by going from connected to unplugged, so turning guest charging
-        on before the guest arrives works. Chargers that cannot tell always read as connected,
-        which leaves them to the time limit.
+        A charger only ends it by going empty, then plugged in, then empty again after it was
+        switched on. A car already on a charger at that point may be the owner's, unplugged to
+        make way for the guest, so its unplug must not end it - the cost is that a guest who
+        plugged in first is left to the time limit. Chargers that cannot tell always read as
+        plugged in, which also leaves them to the time limit.
         """
         if self.charger_control_guest_since is None:
             self.charger_control_guest_since = now
         if (now - self.charger_control_guest_since).total_seconds() >= GUEST_CHARGING_MAX_HOURS * 3600:
             return "on for {} hours".format(GUEST_CHARGING_MAX_HOURS)
         for key, handle in self.charger_control_chargers()[: self.charger_control_car_count()]:
-            if self.charger_control_car_plugged(handle):
+            if not self.charger_control_car_plugged(handle):
+                if key in self.charger_control_guest_connected:
+                    return "the guest's car was unplugged from {} {}".format(self.charger_control_noun, key)
+                self.charger_control_guest_empty.add(key)
+            elif key in self.charger_control_guest_empty:
                 self.charger_control_guest_connected.add(key)
-            elif key in self.charger_control_guest_connected:
-                return "the car was unplugged from {} {}".format(self.charger_control_noun, key)
         return None
 
     def charger_control_read_only_now(self):
@@ -315,9 +342,9 @@ class CarChargerControl:
 
     def charger_control_should_charge(self, car_n, now):
         """Is now inside one of the planned charging windows for this car, or an Octopus dispatch."""
-        return in_car_plan_window(self.charger_control_windows.get(car_n, []), now) or self.charger_control_dispatch_active(car_n)
+        return in_car_plan_window(self.charger_control_windows.get(car_n, []), now) or self.charger_control_dispatch_active(car_n, now)
 
-    def charger_control_dispatch_active(self, car_n):
+    def charger_control_dispatch_active(self, car_n, now):
         """Is an Octopus Intelligent dispatch running for this car right now?
 
         Only reached for a charger Predbat drives, so here Octopus drives the car. The plan
@@ -325,11 +352,31 @@ class CarChargerControl:
         dispatch Octopus has not given any energy yet - following the dispatch sensor as well
         stops the charger holding the car off for the first minutes of a new dispatch. With
         octopus_intelligent_charging off Predbat follows only its own plan.
+
+        The dispatch times on the sensor are judged against the clock rather than its on/off
+        state, which only refreshes every couple of minutes and would run the charger on past
+        the end of a dispatch. A sensor with no dispatch times falls back to its state.
         """
         if not self.get_arg("octopus_intelligent_charging", True):
             return False
         slot = self.charger_control_dispatch_sensor(car_n)
-        return bool(slot) and self.get_state_wrapper(slot) == "on"
+        if not slot:
+            return False
+        dispatches = []
+        for attribute in ("planned_dispatches", "completed_dispatches"):
+            value = self.get_state_wrapper(slot, attribute=attribute)
+            if isinstance(value, list):
+                dispatches.extend(value)
+        if not dispatches:
+            return self.get_state_wrapper(slot) == "on"
+        for dispatch in dispatches:
+            if not isinstance(dispatch, dict):
+                continue
+            start = parse_dispatch_time(dispatch.get("start"))
+            end = parse_dispatch_time(dispatch.get("end"))
+            if start and end and start <= now < end:
+                return True
+        return False
 
     def charger_control_dispatch_sensor(self, car_n):
         """The Octopus Intelligent dispatch sensor wired to this car, or None."""
