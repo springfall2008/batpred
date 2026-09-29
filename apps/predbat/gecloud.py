@@ -17,7 +17,7 @@ import aiohttp
 import pytz
 from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1, dp2, dp4
-from car_charger_control import CarChargerControl
+from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 import asyncio
 import math
@@ -593,10 +593,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # chargers into the car planning registers a car and moves num_cars, so it has to
         # be something a user turns on rather than something an upgrade does to them.
         self.automatic_evc = automatic_evc
-        self.evc_control = evc_control
+        self.evc_control = parse_control_setting(evc_control)
         # Remembering what each charger was last asked to do means a poll that changes nothing
         # sends nothing - every command goes through async_send_evc_command's retry loop.
-        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=evc_control)
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control)
         self.register_list = {}
         self.settings = {}
         self.status = {}

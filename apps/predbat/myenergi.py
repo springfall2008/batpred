@@ -36,7 +36,7 @@ from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
-from car_charger_control import CarChargerControl
+from car_charger_control import CarChargerControl, parse_control_setting
 
 MYENERGI_DIRECTOR_URL = "https://director.myenergi.net"
 MYENERGI_CLOUD_URL = "https://api.s18.myenergi.net"
@@ -777,7 +777,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.automatic_eddi = automatic_eddi
         self.enable_controls = enable_controls
         # Tri-state: None (unset) follows the automatic setup, see enable_control()
-        self.zappi_control = None if zappi_control is None else bool(zappi_control)
+        self.zappi_control = parse_control_setting(zappi_control)
         # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
         # interval can only be a whole number of those intervals.
         self.poll_seconds = min(MAX_POLL_SECONDS, max(MIN_POLL_SECONDS, int(round(_to_float(poll_seconds, MIN_POLL_SECONDS) / 60.0)) * 60))
@@ -970,6 +970,19 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
         await self.transport.set_mode(device, mode)
         # Only once it has gone through: a Zappi taken back later must snapshot its mode afresh
+        self.control_saved_modes.pop(device.device_id, None)
+
+    async def charger_control_hand_to_octopus(self, device, charge):
+        """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast.
+
+        Fast would start a grid charge outside Octopus's dispatches. Eco+ in its place only
+        diverts surplus solar, so the Zappi is not left Stopped either.
+        """
+        mode = self.control_saved_modes.get(device.device_id)
+        if mode not in ZAPPI_MODE_TO_CLOUD or mode == ZAPPI_MODE_CHARGING:
+            mode = ZAPPI_MODE_RELEASE
+        self.log("Info: myenergi: handing {} to Octopus in {}".format(device.name, mode))
+        await self.transport.set_mode(device, mode)
         self.control_saved_modes.pop(device.device_id, None)
 
     async def charger_control_release(self):
