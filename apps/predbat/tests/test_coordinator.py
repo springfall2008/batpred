@@ -1529,6 +1529,28 @@ def test_misfiled_identifier_warns_once_per_process():
     return 0
 
 
+def test_short_or_unrelated_identities_do_not_hide_misfiled_values():
+    """Suppression is for a value wholly explained by an account identifier: a short identifier
+    must not split a longer number's digit run, a device_id that embeds no account identifier is
+    not identity-derived, and a numeric identifier is judged by its integer part."""
+    messages = []
+    redactor = Redactor("test-salt-0001", log=messages.append)
+    redactor.redact(
+        {
+            "meters": [
+                {"device_id": "octopus:9876543210987", "direction": "import", "account_ids": {"site": "1"}, "info": {"long": "1213141516171"}},
+                {"device_id": "octopus:5", "direction": "import", "account_ids": {"site": "1"}, "info": {"big": 1213141516171}},
+            ]
+        }
+    )
+    warnings = sorted(message for message in messages if "identifier" in message)
+    assert any("info.long" in message for message in warnings), warnings
+    assert any("info.big" in message for message in warnings), warnings
+    assert any("device_id" in message for message in warnings), warnings
+    print("PASS: short or unrelated identities do not hide genuinely misfiled values")
+    return 0
+
+
 # --- Review round 3: Task 7 review - a case/separator-transformed echo of a pseudonymised value ---
 
 
@@ -2056,6 +2078,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_guard_key_does_not_log_the_raw_value()
     failures += test_identity_derived_values_do_not_warn()
     failures += test_misfiled_identifier_warns_once_per_process()
+    failures += test_short_or_unrelated_identities_do_not_hide_misfiled_values()
     failures += test_identifier_variants_registered_for_case_and_separator_transforms()
     failures += test_identifier_variants_fold_up_as_well_as_down()
     failures += test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id()

@@ -567,20 +567,41 @@ class Redactor:
         about it on every debug dump is noise, not advice. The message itself never holds the
         value (see _guard_key), so deduplicating on it groups hits by container and field.
         """
-        identities = sorted(self._identity_variants, key=len, reverse=True)
+        identities = [self._whole_token(identity) for identity in sorted(self._identity_variants, key=len, reverse=True)]
         for message, value, strict_numeric in self._pending_warnings:
-            if value is not None:
-                remaining = str(value)
-                for identity in identities:
-                    remaining = remaining.replace(identity, "")
-                if not self._misfiled(remaining, strict_numeric=strict_numeric):
-                    continue
+            if value is not None and self._explained_by_identity(value, identities, strict_numeric):
+                continue
             if message in self.warned:
                 continue
             self.warned.add(message)
             if self.log:
                 self.log(message)
         self._pending_warnings = []
+
+    def _explained_by_identity(self, value, identities, strict_numeric):
+        """Whether a shape-guard hit is wholly an account identifier reported where one belongs.
+
+        `identities` are whole-token patterns (see _whole_token), so a short identifier never
+        splits a longer number's digit run and hides a genuine misfiling. A number is judged by
+        its integer part, as _misfiled does, and is only explained when that IS an identifier -
+        a numeric echo - since stripping digits out of it would rewrite it into something else.
+        """
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            try:
+                text = str(abs(int(value)))
+            except (ValueError, OverflowError):
+                return False
+            return any(identity.fullmatch(text) for identity in identities)
+        remaining = str(value)
+        for identity in identities:
+            remaining = identity.sub("", remaining)
+        return not self._misfiled(remaining, strict_numeric=strict_numeric)
+
+    def _embeds_account_id(self, record):
+        """Whether a record's device_id carries one of its own account identifiers as a whole token."""
+        return any(self._whole_token(value).search(record["device_id"]) for value in self._pseudonym_values(record) if value)
 
     def _has_pseudonym_container(self, node):
         """Whether a pseudonym container (account_ids) sits anywhere in this record - the record
@@ -622,7 +643,7 @@ class Redactor:
         """
         if isinstance(node, dict):
             if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
-                self._note(node["device_id"], substring=True, identity=True)
+                self._note(node["device_id"], substring=True, identity=self._embeds_account_id(node))
             out = {}
             for key, value in node.items():
                 if key in PSEUDONYM_CONTAINERS:
