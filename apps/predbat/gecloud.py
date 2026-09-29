@@ -596,7 +596,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.evc_control = parse_control_setting(evc_control)
         # Remembering what each charger was last asked to do means a poll that changes nothing
         # sends nothing - every command goes through async_send_evc_command's retry loop.
-        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control)
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control, switch_prefix="gecloud")
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -732,6 +732,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """
         if entity_id.endswith("_gecloud_evc_control"):
             await self.charger_control_set_enabled(service == "turn_on")
+            return
+        if await self.charger_control_guest_event(entity_id, service):
             return
 
         mapping = self.register_entity_map.get(entity_id, None)
@@ -2417,6 +2419,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     attributes={"friendly_name": "EV Charger Control", "icon": "mdi:ev-station"},
                     app="gecloud",
                 )
+                self.charger_control_publish_guest("gecloud")
                 try:
                     await self.charger_control_tick(self.now_utc_exact)
                 except EVCCommandFailed as exc:

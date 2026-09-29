@@ -229,7 +229,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
         # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control)
+        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme")
         # The charger's own target percent as it was before Predbat took control, restored on release
         self.control_saved_target = None
         self.energy_today = 0.0
@@ -290,6 +290,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.refresh_discovery()
 
         if self.charger_control_active and (seconds % CONTROL_INTERVAL_SECONDS) == 0:
+            self.charger_control_publish_guest("ohme")
             try:
                 await self.charger_control_tick(self.now_utc_exact)
             except ApiException as exc:
@@ -831,6 +832,8 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         Switch event
         """
+        if await self.charger_control_guest_event(entity_id, service):
+            return
         if entity_id.endswith("_max_charge"):
             if service == "turn_on":
                 await self.client.async_max_charge(True)
