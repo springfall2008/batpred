@@ -585,7 +585,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
     WRITE_AND_POLL_SLEEP = 10
 
-    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=None):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
@@ -596,7 +596,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.evc_control = evc_control
         # Remembering what each charger was last asked to do means a poll that changes nothing
         # sends nothing - every command goes through async_send_evc_command's retry loop.
-        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled")
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=evc_control)
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -2093,12 +2093,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Control needs the EVC automatic configuration because a charger is driven from its
         own car's plan, and it is that configuration which establishes which charger is
         which car - without it, charger 1 could be told to follow a car it is not attached to.
+
+        ge_cloud_evc_control left unset turns control on with ge_cloud_automatic_evc, since
+        setting that is the user asking Predbat to plan for the car. False keeps it off.
         """
         self.charger_control_active = False
-        if not self.evc_control:
+        if self.evc_control is False:
             return
         if not self.automatic_evc:
-            self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
+            # Unset control just follows the automatic setting, so only an explicit request is worth a warning
+            if self.evc_control:
+                self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
             return
         self.charger_control_active = True
         self.log("GECloud: Predbat-led EV charger control enabled")
