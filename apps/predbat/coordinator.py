@@ -269,10 +269,19 @@ class Redactor:
     # a false-positive rewrite of unrelated data.
     MIN_SUBSTITUTE = 6
 
-    def __init__(self, salt, log=None):
-        """Hold the installation salt and an optional logger for misfiled values."""
+    def __init__(self, salt, log=None, warned=None):
+        """Hold the installation salt, an optional logger for misfiled values, and the set of
+        warnings already logged - owned by the caller so a warning is logged once per process
+        rather than on every redaction (every debug dump and publish)."""
         self.salt = salt
         self.log = log
+        self.warned = warned if warned is not None else set()
+        # Shape-guard hits, held until the walk is done - see _flush_warnings
+        self._pending_warnings = []
+        # Every variant of an account identifier noted from a pseudonym container or an
+        # identity-derived device_id: a guard hit wholly explained by one of these is the
+        # redaction working as designed, not a misfiling, so it is not warned about
+        self._identity_variants = set()
         self.originals = {}
         # Subset of self.originals eligible for substring replacement inside a VALUE (never a
         # dict key - see _substitute_key) - true identifiers: account_ids values, an
@@ -290,7 +299,7 @@ class Redactor:
         digest = hashlib.sha256((self.salt + str(value)).encode("utf-8")).hexdigest()
         return "#" + digest[:8]
 
-    def _note(self, value, substring=False):
+    def _note(self, value, substring=False, identity=False):
         """Record an original so it can later be swapped for its token wherever it appears.
 
         Builds the FULL variant set (see _numeric_variants/_identifier_variants) before minting
@@ -315,7 +324,8 @@ class Redactor:
         replacement inside a VALUE (never a dict key - see _substitute_key); otherwise each is
         only ever matched by whole-string equality. Registering a variant here unconditionally,
         even one shorter than MIN_SUBSTITUTE, is safe: nothing is ever matched against it below
-        that floor - see _exact_match/_substitute_text.
+        that floor - see _exact_match/_substitute_text. identity=True marks the value as an account
+        identifier reported where one belongs - see _flush_warnings.
         """
         text = str(value)
         variants = {text} | self._numeric_variants(text)
@@ -327,6 +337,8 @@ class Redactor:
             self.originals[variant] = token
             if substring:
                 self.substring_ok.add(variant)
+            if identity:
+                self._identity_variants.add(variant)
         return token
 
     def _identifier_variants(self, text):
@@ -498,11 +510,14 @@ class Redactor:
 
     def _guard_scalar(self, container, name, value):
         """Pseudonymise one scalar value if it looks misfiled or sits under a location-named field, logging where it was found."""
-        if not (self._misfiled(value, strict_numeric=(container == "hardware_ids")) or self._is_location_key(name)):
+        strict_numeric = container == "hardware_ids"
+        location = self._is_location_key(name)
+        if not (location or self._misfiled(value, strict_numeric=strict_numeric)):
             return value
-        if self.log:
-            label = container if container == name else "{}.{}".format(container, name)
-            self.log("Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label))
+        label = container if container == name else "{}.{}".format(container, name)
+        message = "Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label)
+        # A location-named field is flagged by its name, whatever the value, so it is always warned about
+        self._pending_warnings.append((message, None if location else value, strict_numeric))
         return self._note(value, substring=True)
 
     def _guard_value(self, container, name, value):
@@ -535,11 +550,37 @@ class Redactor:
         file, exactly what this guard exists to keep out of the debug dump attached to the same
         public issue. Matches _guard_scalar, which never logs the raw value it pseudonymises either.
         """
-        if not self._misfiled(name, strict_numeric=(container == "hardware_ids")):
+        strict_numeric = container == "hardware_ids"
+        if not self._misfiled(name, strict_numeric=strict_numeric):
             return name
-        if self.log:
-            self.log("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container))
+        self._pending_warnings.append(("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container), name, strict_numeric))
         return self._note(name, substring=True)
+
+    def _flush_warnings(self):
+        """Log the shape-guard hits that are genuinely misfiled values, each at most once per process.
+
+        Runs after the walk, once every account identifier in the document has been noted, so a
+        hit can be judged against all of them whatever order the records were walked in. A value
+        that stops looking like an identifier once those are removed - Octopus's
+        "octopus:{mpan}" device_id, a programme's cross-link to it, a station id echoed as a
+        number - is the redaction working as designed: it is still pseudonymised, but warning
+        about it on every debug dump is noise, not advice. The message itself never holds the
+        value (see _guard_key), so deduplicating on it groups hits by container and field.
+        """
+        identities = sorted(self._identity_variants, key=len, reverse=True)
+        for message, value, strict_numeric in self._pending_warnings:
+            if value is not None:
+                remaining = str(value)
+                for identity in identities:
+                    remaining = remaining.replace(identity, "")
+                if not self._misfiled(remaining, strict_numeric=strict_numeric):
+                    continue
+            if message in self.warned:
+                continue
+            self.warned.add(message)
+            if self.log:
+                self.log(message)
+        self._pending_warnings = []
 
     def _has_pseudonym_container(self, node):
         """Whether a pseudonym container (account_ids) sits anywhere in this record - the record
@@ -581,11 +622,11 @@ class Redactor:
         """
         if isinstance(node, dict):
             if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
-                self._note(node["device_id"], substring=True)
+                self._note(node["device_id"], substring=True, identity=True)
             out = {}
             for key, value in node.items():
                 if key in PSEUDONYM_CONTAINERS:
-                    out[key] = {self._guard_key(key, name): self._note(entry, substring=True) for name, entry in value.items()}
+                    out[key] = {self._guard_key(key, name): self._note(entry, substring=True, identity=True) for name, entry in value.items()}
                 elif key in CLEAR_CONTAINERS and isinstance(value, dict):
                     out[key] = {self._guard_key(key, name): self._guard_value(key, name, entry) for name, entry in value.items()}
                 elif key in VOCAB_CONTAINERS:
@@ -697,6 +738,7 @@ class Redactor:
         serials = sorted(self._collect_serials(catalogue), key=len, reverse=True)
         self._serial_patterns = [self._whole_token(serial) for serial in serials]
         walked = self._walk(catalogue)
+        self._flush_warnings()
         self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
         substituted = self._substitute(walked)
         if "generated" in catalogue:
@@ -728,6 +770,8 @@ class Coordinator:
         # the original startup-barrier assemble() call).
         self.assembled = None
         self.salt = None
+        # Redaction warnings already logged - see Redactor._flush_warnings
+        self.redaction_warned = set()
 
     def report(self, component_name, report):
         """Validate and store one component's discovery report, replacing any previous one."""
@@ -905,7 +949,7 @@ class Coordinator:
         dicts under a lock briefly held to copy self.reports, so redoing it on every debug dump or
         publish() call - its only two callers - costs milliseconds, not a measurable resource.
         """
-        return Redactor(self.load_salt(), log=self.log).redact(self.assemble())
+        return Redactor(self.load_salt(), log=self.log, warned=self.redaction_warned).redact(self.assemble())
 
     def catalogue_raw(self):
         """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere.

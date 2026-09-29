@@ -1480,9 +1480,52 @@ def test_guard_key_does_not_log_the_raw_value():
     messages = []
     redactor = Redactor("test-salt-0001", log=messages.append)
     redactor._guard_key("hardware_ids", "1234567890123")
+    redactor._flush_warnings()
     assert any("hardware_ids" in message for message in messages), "expected a warning naming the container: {}".format(messages)
     assert not any("1234567890123" in message for message in messages), "the raw identifier must never reach the log: {}".format(messages)
     print("PASS: _guard_key logs only the container, never the raw key text it is hiding")
+    return 0
+
+
+def test_identity_derived_values_do_not_warn():
+    """Octopus reports each meter as "octopus:{mpan}" with the MPAN in account_ids, and a programme
+    cross-links to it. That is the redaction working as designed - every one of those is still
+    pseudonymised - so it must not log a warning on every debug dump, whichever record is walked first."""
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+    coordinator.report(
+        "octopus",
+        {
+            "programmes": [{"device_id": "axle:site1", "kind": "vpp", "meter": "octopus:1234567890123"}],
+            "meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123", "station": 61234567890}}],
+        },
+    )
+    coordinator.report("solis", {"inverters": [{"device_id": "solis:x1", "ratings": {"echo": 61234567890}}]})
+    catalogue = coordinator.catalogue()
+    text = str(catalogue)
+    assert "1234567890123" not in text and "61234567890" not in text, text
+    assert not [message for message in messages if "identifier" in message], messages
+    print("PASS: an identifier redacted where it belongs, and its echoes, are not warned about")
+    return 0
+
+
+def test_misfiled_identifier_warns_once_per_process():
+    """A genuine misfiling warns, but once - not again on every later debug dump or publish - and an
+    account identifier alongside it does not hide an unrelated identifier sharing the same value."""
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+    coordinator.report(
+        "octopus",
+        {"meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123"}, "info": {"note": "1234567890123 and 9876543210987"}}]},
+    )
+    for _ in range(3):
+        catalogue = coordinator.catalogue()
+        assert "9876543210987" not in str(catalogue)
+    warnings = [message for message in messages if "identifier" in message]
+    assert warnings == ["Warn: Coordinator: info.note looks like an identifier in a clear container - pseudonymised"], warnings
+    print("PASS: a genuine misfiling warns exactly once across repeated redactions")
     return 0
 
 
@@ -2011,6 +2054,8 @@ def test_coordinator_all(my_predbat=None):
     failures += test_shorter_original_does_not_fragment_a_longer_one()
     failures += test_misfiled_identifier_used_as_a_container_key_caught()
     failures += test_guard_key_does_not_log_the_raw_value()
+    failures += test_identity_derived_values_do_not_warn()
+    failures += test_misfiled_identifier_warns_once_per_process()
     failures += test_identifier_variants_registered_for_case_and_separator_transforms()
     failures += test_identifier_variants_fold_up_as_well_as_down()
     failures += test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id()
