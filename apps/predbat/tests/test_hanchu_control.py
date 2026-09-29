@@ -9,14 +9,17 @@
 """Tests for the Hanchu component's control path: clamping, slot building and batched writes."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
+import asyncio
 import time
 from hanchu_const import (
     HANCHU_KEY_CHARGE_END,
     HANCHU_KEY_CHARGE_POWER,
     HANCHU_KEY_CHARGE_SOC,
     HANCHU_KEY_CHARGE_START,
+    HANCHU_KEY_DISCHARGE_END,
     HANCHU_KEY_DISCHARGE_POWER,
     HANCHU_KEY_DISCHARGE_SOC,
+    HANCHU_KEY_DISCHARGE_START,
     HANCHU_KEY_WORK_MODE,
     HANCHU_SECONDS_PER_DAY,
     HANCHU_SLOT_DISABLED,
@@ -71,12 +74,13 @@ def test_hanchu_charge_window_fills_slot_one():
     if payload.get(HANCHU_KEY_DISCHARGE_SOC) != 10:
         print(f"ERROR: discharge floor {payload.get(HANCHU_KEY_DISCHARGE_SOC)} should be the reserve, 10")
         failed = True
-    # Slots 2 and 3 are untouched: this component has never written them, so they are left as the
-    # user configured them rather than zeroed.
+    # Slots 2 and 3 are written as disabled: User-defined mode runs all three, so a slot left over
+    # from the Hanchu app must not keep running against the plan.
     for index in (2, 3):
-        if HANCHU_KEY_CHARGE_START.format(index) in payload:
-            print(f"ERROR: charge slot {index} was written although this component has never filled it")
-            failed = True
+        for key in (HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END):
+            if payload.get(key.format(index)) != HANCHU_SLOT_DISABLED:
+                print(f"ERROR: {key.format(index)} = {payload.get(key.format(index))}, expected disabled")
+                failed = True
     assert not failed, "test_hanchu_charge_window_fills_slot_one"
 
 
@@ -172,37 +176,66 @@ def test_hanchu_discharge_floor_tracks_the_active_export_window():
     assert not failed, "test_hanchu_discharge_floor_tracks_the_active_export_window"
 
 
-def test_hanchu_only_our_own_slots_are_ever_zeroed():
-    """A slot this component filled is retracted; one it never touched is left alone.
+def test_hanchu_every_unused_slot_is_disabled():
+    """Predbat owns all six slots: a superseded window is retracted and unused slots are disabled.
 
-    Nothing documents how a slot is switched off, so zeroing one is an inference. Retracting our
-    OWN superseded window is still mandatory - leaving it running is worse - but a slot the user
-    configured themselves must never be cleared.
+    User-defined mode runs all three charge and all three discharge slots, and 00:00-00:00 is how a
+    slot is switched off (confirmed on hardware, batpred#5305). A slot left over from the Hanchu app
+    would otherwise keep running against the plan.
     """
     failed = False
     client = ready()
-    # First cycle: a real window goes into slot 1.
     first = client.build_write_payload(SN, schedule(charge={"enable": True, "soc": 90, "power": 2000, "start": "01:00:00", "end": "04:00:00"}))
     client.applied_payload[SN] = dict(first)
 
-    # Second cycle: Predbat no longer wants a charge window. Slot 1 must be zeroed, because we put
-    # the window there; slots 2 and 3 must still be absent, because we never did.
+    # Predbat no longer wants a window: every slot, including the one we filled, is disabled.
     second = client.build_write_payload(SN, schedule())
-    if second.get(HANCHU_KEY_CHARGE_START.format(1)) != HANCHU_SLOT_DISABLED or second.get(HANCHU_KEY_CHARGE_END.format(1)) != HANCHU_SLOT_DISABLED:
-        print(f"ERROR: our own slot 1 was not retracted: {second.get(HANCHU_KEY_CHARGE_START.format(1))}-{second.get(HANCHU_KEY_CHARGE_END.format(1))}")
-        failed = True
-    for index in (2, 3):
-        if HANCHU_KEY_CHARGE_START.format(index) in second:
-            print(f"ERROR: slot {index} was zeroed although this component never wrote it")
-            failed = True
-    # A cold start with no plan at all writes no slot keys whatsoever.
+    for index in (1, 2, 3):
+        for key in (HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END):
+            if second.get(key.format(index)) != HANCHU_SLOT_DISABLED:
+                print(f"ERROR: {key.format(index)} = {second.get(key.format(index))}, expected disabled")
+                failed = True
+    # A cold start with no plan still disables every slot, so an app slot cannot run.
     cold = MockHanchu()
     empty = cold.build_write_payload(SN, schedule())
-    slot_keys = [key for key in empty if key.startswith(("TCT_", "TDT_"))]
-    if slot_keys:
-        print(f"ERROR: a cold start with no plan wrote slot keys {slot_keys}")
+    slot_keys = sorted(key for key in empty if key.startswith(("TCT_", "TDT_")))
+    if len(slot_keys) != 12 or any(empty[key] != HANCHU_SLOT_DISABLED for key in slot_keys):
+        print(f"ERROR: a cold start should disable all twelve slot keys, got {slot_keys}")
         failed = True
-    assert not failed, "test_hanchu_only_our_own_slots_are_ever_zeroed"
+    assert not failed, "test_hanchu_every_unused_slot_is_disabled"
+
+
+def test_hanchu_concurrent_writes_are_serialised():
+    """Two writes started together never overlap on the wire: the cloud refuses concurrent control
+    calls with error 300004 (batpred#5305)."""
+    failed = False
+    client = ready()
+    client.min_write_interval = 0
+    in_flight = {"now": 0, "max": 0, "calls": 0}
+
+    async def slow_post(endpoint_key, body=None, anonymous=False):
+        in_flight["now"] += 1
+        in_flight["calls"] += 1
+        in_flight["max"] = max(in_flight["max"], in_flight["now"])
+        await asyncio.sleep(0.05)
+        in_flight["now"] -= 1
+        return True, {}
+
+    client._post = slow_post
+    one = client.build_write_payload(SN, schedule(charge={"enable": True, "soc": 90, "power": 2000, "start": "01:00:00", "end": "04:00:00"}))
+    two = client.build_write_payload(SN, schedule(export={"enable": True, "soc": 20, "power": 2000, "start": "17:00:00", "end": "19:00:00"}))
+
+    async def both():
+        return await asyncio.gather(client._write_payload(SN, one), client._write_payload(SN, two))
+
+    results = run_async_local(both())
+    if in_flight["max"] != 1:
+        print(f"ERROR: {in_flight['max']} writes were in flight at once")
+        failed = True
+    if in_flight["calls"] != 2 or results != [True, True]:
+        print(f"ERROR: expected two sequential accepted writes, got calls={in_flight['calls']} results={results}")
+        failed = True
+    assert not failed, "test_hanchu_concurrent_writes_are_serialised"
 
 
 def test_hanchu_work_mode_is_asserted_only_with_a_window_and_only_when_enabled():
@@ -612,7 +645,8 @@ def run_hanchu_control_tests(my_predbat):
         ("soc_clamping", test_hanchu_soc_limits_are_clamped_and_explained_once),
         ("freeze_rate", test_hanchu_freeze_sends_a_zero_rate_unclamped),
         ("discharge_floor", test_hanchu_discharge_floor_tracks_the_active_export_window),
-        ("slot_ownership", test_hanchu_only_our_own_slots_are_ever_zeroed),
+        ("slot_ownership", test_hanchu_every_unused_slot_is_disabled),
+        ("write_serialised", test_hanchu_concurrent_writes_are_serialised),
         ("work_mode", test_hanchu_work_mode_is_asserted_only_with_a_window_and_only_when_enabled),
         ("batched_write", test_hanchu_write_is_one_call_carrying_every_setting),
         ("change_detection", test_hanchu_unchanged_payload_sends_nothing),

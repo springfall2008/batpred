@@ -30,8 +30,15 @@ The sources, and the short names used in the annotations below:
             agrees on a PARAMETER NAME that is strong independent corroboration - the same
             control key reached over a different path.
 
-Every entry carries one of three markers:
+GUOXIA is Hanchu's OWN integration (Guoxiatech is the company trading as Hanchu), so the shared
+login and request layer in GUOXIA and UPTON is the vendor's code, not a third-party guess. It was
+read-only; UPTON added the control side. (Confirmed by UPTON's maintainer on
+springfall2008/batpred#5305.)
 
+Every entry carries one of four markers:
+
+  HARDWARE    confirmed on a real Hanchu iESS system running Predbat, by UPTON's maintainer on
+              springfall2008/batpred#5305. One system only, so other models may still differ.
   OBSERVED    read in exactly one repo, at the file named.
   CORROBORATED read in two or more repos, files named.
   INFERRED    NOT read anywhere. Derived by reasoning, or assumed from how Predbat needs to use
@@ -204,8 +211,9 @@ HANCHU_TELEMETRY_UNIT_FIELD = {
 # is a heuristic, and a real connection may show loadPwr carries a unit field after all.
 HANCHU_WATT_HEURISTIC_THRESHOLD = 10
 
-# OBSERVED (UPTON sensor.py "battery_capacity"). Usable battery capacity in kWh, as the BMS designs
-# it. The only capacity figure on the plain-JSON surface.
+# OBSERVED (UPTON sensor.py "battery_capacity"); HARDWARE: in kWh, usable as soc_max without
+# conversion. Usable battery capacity as the BMS designs it. The only capacity figure on the
+# plain-JSON surface.
 HANCHU_CAPACITY_FIELD = "bmsDesignCap"
 
 # OBSERVED: UPTON __init__.py _resolve_station_id reads getDeviceStatus["stationId"]. Not needed by
@@ -275,16 +283,11 @@ HANCHU_WORK_MODES = {
     HANCHU_WORK_MODE_OFF_GRID: "Off-grid",
 }
 
-# INFERRED - THE SINGLE BIGGEST GUESS IN THIS FILE.
-# No repo states which work mode the TCT_/TDT_ time slots are honoured in. UPTON exposes the mode
-# selector and the slots as independent controls and never links them. "User-defined" is inferred
-# to be the timed-schedule mode from its name and from the fact that the other three
-# (self-consumption, backup, off-grid) are all descriptions of an AUTOMATIC behaviour with no
-# obvious place for a user timetable. So the component drives the mode to User-defined whenever it
-# writes a window, and leaves it alone otherwise.
-# If this is wrong the symptom is precise and recognisable: the slots are written and acknowledged
-# and the inverter simply never acts on them. hanchu_work_mode_control: False disables this and
-# leaves the mode entirely to the user.
+# HARDWARE: work mode 3, "User-defined", is the mode that honours the TCT_/TDT_ timed slots. No
+# repo links the mode to the slots, so this was originally inferred from the name; it has since been
+# confirmed on a real system. The component drives the mode to User-defined whenever it writes a
+# window, and leaves it alone otherwise. hanchu_work_mode_control: False disables this and leaves
+# the mode entirely to the user.
 HANCHU_WORK_MODE_FOR_SCHEDULE = HANCHU_WORK_MODE_USER_DEFINED
 
 # --- Parameter ranges -------------------------------------------------------------------------
@@ -349,20 +352,14 @@ HANCHU_FAST_DISCHARGE_STOP = -3
 # the phone app only offers minutes.
 HANCHU_SECONDS_PER_DAY = 24 * 3600
 
-# INFERRED: a slot with start == end == 0 is treated as disabled. No repo states how a slot is
-# switched off - UPTON's decoder simply returns 00:00 for a missing or unparseable value, and there
-# is no separate per-slot enable key anywhere in the twelve. A zero-length window is the only
-# expression available, so that is what an unused slot is written as.
+# HARDWARE: a slot is disabled by setting both its start and end to 00:00. There is no separate
+# per-slot enable key anywhere in the twelve.
 #
-# If the device instead reads 0-0 as "all day", the symptom is a battery that charges or discharges
-# continuously, which is severe. Two rules in hanchu.py bound that risk without making a stale
-# window un-retractable:
-#   - a slot is only ever zeroed if THIS COMPONENT previously wrote a real window into it (the
-#     applied-payload cache is the record), so a user's own manually configured slots are never
-#     touched;
-#   - nothing at all is written until Predbat presses the schedule write button for that inverter.
-# Retracting our own window is the one case where zeroes must go out: leaving a superseded window
-# running is worse than the risk that zeroes mean something else.
+# User-defined mode runs ALL THREE charge and ALL THREE discharge slots. So once Predbat drives an
+# inverter it owns every slot, and writes 00:00-00:00 into each one its plan does not use. A slot
+# left over from the Hanchu app would otherwise keep charging or discharging the battery on its
+# own timetable, against the plan. Nothing is written until Predbat presses the schedule write
+# button for that inverter, so an inverter Predbat is not driving is never touched.
 HANCHU_SLOT_DISABLED = 0
 
 # --- Caching and pacing -----------------------------------------------------------------------

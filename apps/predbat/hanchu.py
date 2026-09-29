@@ -189,11 +189,14 @@ class HanchuAPI(ComponentBase):
         self.device_ranges = {}
         self.local_schedule = {}
         # The last payload the device ACCEPTED, per serial. Serves three purposes: change
-        # detection (so an unchanged plan sends nothing), the record of which slots this component
-        # has itself written (so only those are ever zeroed - see HANCHU_SLOT_DISABLED), and the
-        # baseline a restart resumes from.
+        # detection (so an unchanged plan sends nothing), the pacing baseline, and the state a
+        # restart resumes from.
         self.applied_payload = {}
         self.last_write_time = {}
+        # One settings write in flight at a time. The schedule button and the reconcile loop can
+        # both reach _write_payload, and a single call can take 15-45s; two overlapping control
+        # writes are refused by the cloud with error 300004 (HARDWARE, batpred#5305).
+        self.write_lock = asyncio.Lock()
         # Serials Predbat has actually been asked to drive, i.e. whose write button has been
         # pressed at least once. The reconcile loop only re-applies for these, so a startup cycle
         # can never clobber an inverter's existing slots before there is a plan to apply.
@@ -1158,7 +1161,7 @@ class HanchuAPI(ComponentBase):
         Predbat drives one window per direction; this device has three slots per direction. Slot 1
         carries the window, slot 2 carries whatever runs past midnight (INVERTER_DEF sets
         can_span_midnight False so Predbat does not ask for a wrap, but it still spells "until
-        midnight" as an end hour of 24), and slot 3 is always spare. A window the split has
+        midnight" as an end hour of 24), and slot 3 is always spare - written as disabled, so a leftover app slot cannot run. A window the split has
         collapsed to nothing is written as disabled rather than as an undocumented wrap-around,
         and that decision is logged - a silently ignored window looks written and never runs.
         """
@@ -1193,10 +1196,9 @@ class HanchuAPI(ComponentBase):
         charge target, the device-wide discharge floor, the work mode (unless the user has turned
         that off) and both slot tables. Every value is clamped to the range this device reports.
 
-        Slots this component has never written are OMITTED rather than zeroed - see
-        HANCHU_SLOT_DISABLED. Only a slot the applied-payload cache shows we previously filled is
-        allowed to be zeroed, which is how a superseded window is retracted without ever touching a
-        slot the user configured themselves.
+        Every one of the three charge and three discharge slots is written, and any the plan does
+        not use is set to 00:00-00:00 - see HANCHU_SLOT_DISABLED. User-defined mode runs all six,
+        so a slot left over from the Hanchu app would otherwise fight the plan.
         """
         ranges = self.ranges_for(sn)
         charge = schedule.get("charge", {})
@@ -1218,20 +1220,13 @@ class HanchuAPI(ComponentBase):
         floor = export.get("soc", 0) if self._window_active_now(export) else schedule.get("reserve", 0)
         payload[HANCHU_KEY_DISCHARGE_SOC] = self._clamp(sn, HANCHU_KEY_DISCHARGE_SOC, floor, ranges)
 
-        previous = self.applied_payload.get(sn) or {}
         for direction, window, start_key, end_key in (
             ("charge", charge, HANCHU_KEY_CHARGE_START, HANCHU_KEY_CHARGE_END),
             ("export", export, HANCHU_KEY_DISCHARGE_START, HANCHU_KEY_DISCHARGE_END),
         ):
             for index, (start, end) in enumerate(self._slot_pairs(sn, direction, window), start=1):
-                start_name = start_key.format(index)
-                end_name = end_key.format(index)
-                if start == HANCHU_SLOT_DISABLED and end == HANCHU_SLOT_DISABLED and start_name not in previous:
-                    # Never written by us, and we have nothing to put in it: leave the user's own
-                    # slot exactly as it is.
-                    continue
-                payload[start_name] = start
-                payload[end_name] = end
+                payload[start_key.format(index)] = start
+                payload[end_key.format(index)] = end
 
         # The work mode is only asserted when there is actually a window to run, and only if the
         # user has not opted out. It is the least well evidenced thing in this component (see
@@ -1285,6 +1280,15 @@ class HanchuAPI(ComponentBase):
         return (time.time() - last) >= self.min_write_interval
 
     async def _write_payload(self, sn, payload, force=False):
+        """Serialise every settings write through one lock, then send it.
+
+        The equality and pacing checks run INSIDE the lock, so a caller that waited sees the write
+        the one before it just made and does not resend the same payload.
+        """
+        async with self.write_lock:
+            return await self._write_payload_locked(sn, payload, force=force)
+
+    async def _write_payload_locked(self, sn, payload, force=False):
         """Send one batched payload if it differs from the last accepted one and pacing allows.
 
         Returns whether the device is now KNOWN TO MATCH this payload, not merely whether an
