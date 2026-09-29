@@ -403,8 +403,8 @@ _ALLOWED_GH_PR_READ = [
     "Bash(gh issue list*)",
     "Bash(gh search*)",
 ]
-# /code-review posts findings as inline PR comments, which needs gh api against the
-# PR-comments endpoint - scoped to this repo only. No write/push/commit access, and
+# /pr-review posts findings as a PR review, which needs gh api against the PR-reviews
+# endpoint - scoped to this repo only. No write/push/commit access, and
 # deliberately no "gh pr review*" either: that would also allow --approve/
 # --request-changes, a governance action beyond "post a comment."
 _REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
@@ -478,6 +478,11 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # /code-review's own instructions live in a skill we don't own, so this prompt is the only
 # lever available for it; /pr-cleanup's SKILL.md already asks for disclosure directly, and
 # this is the belt-and-braces backup for it, same reasoning as the endpoint-first steer.
+# Correction, found on PR #5304 (2026-09-29): none of the above ever reached /code-review.
+# It reviews in a forked subagent, and --append-system-prompt only reaches the main session
+# (checked with a codeword: the main session saw it, the fork did not) - no review comment
+# ever carried the disclosure line. The review flow now runs /pr-review, which runs the
+# review without --comment and posts from the main session, where this prompt does apply.
 # The daily journal flush. This is the only flow that can edit a file AND push, so its edit
 # scope is the narrowest of any: the journal itself, the cspell dictionary (a new vendor term
 # in an entry fails the pre-commit hook without it), and the queue it consumes. It gets no
@@ -513,8 +518,9 @@ DISALLOWED_TOOLS_JOURNAL = ",".join([rule for rule in _DISALLOWED_TOOLS_BASE if 
 
 # Appended to every flow's system prompt. Until this existed no skill asked for a journal
 # finding at all, so upkeep was self-motivated and happened in maybe one run in ten - and
-# /code-review is a built-in skill whose SKILL.md this repo does not own, so an appended
-# system prompt is the only lever that reaches all five flows.
+# a SKILL.md cannot carry it for every flow at once. For the review flow it reaches the
+# /pr-review session, not the forked /code-review subagent that does the reading, so that
+# flow captures only what the returned findings show.
 JOURNAL_CAPTURE_PROMPT = (
     "Before you finish, consider whether this investigation turned up something a future triage run would have wanted to know "
     "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
@@ -686,7 +692,7 @@ def is_actionable(issue_number):
 
 
 def flag_pr_for_review(pr_number, cleanup=False):
-    """Add BOT_REVIEW to a PR, so the next poll cycle runs /code-review against it - and
+    """Add BOT_REVIEW to a PR, so the next poll cycle runs /pr-review against it - and
     with cleanup, BOT_CLEANUP too, so /pr-cleanup then acts on what the review found.
     Both go in one edit: a cycle that saw BOT_CLEANUP alone would run the cleanup before
     the review existed. Idempotent - adding a label the PR already carries is a no-op.
@@ -1772,14 +1778,20 @@ def process_bot_review_issue(issue):
 
 
 def review_pr(pr_number):
-    """Run /code-review against a PR at the "high" effort level, posting findings as
-    inline PR comments. Read-only otherwise: no code changes, no push, no PR actions.
+    """Run the /pr-review skill against a PR: /code-review at the "high" effort level finds
+    the issues, and the skill posts them as one review. Read-only otherwise: no code
+    changes, no push, no PR actions.
+
+    Not "/code-review --comment" directly: the built-in skill reviews in a forked subagent,
+    which sees neither a SKILL.md we own nor the appended system prompt below, so it posted
+    with whatever gh api spelling it chose - PR #5304's run passed `-f body="$(cat ...)"` and
+    every call was denied. The wrapper runs in the main session, where both do reach it.
     """
     cmd = (
         [
             "claude",
             "-p",
-            f"/code-review {pr_number} high --comment",
+            f"/pr-review {pr_number} scratch={SCRATCH_DIR}",
         ]
         + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
         + [
@@ -1827,7 +1839,7 @@ def pr_review_activity_count(pr_number):
 
 
 def process_bot_review_pr(pr):
-    """Run the BOT_REVIEW flow for one PR: /code-review posts findings as comments,
+    """Run the BOT_REVIEW flow for one PR: /pr-review posts findings as a review,
     nothing here ever touches the PR's code. On success, remove BOT_REVIEW - the
     posted review is the artifact, there's no separate "done" state to track. A
     failed invocation swaps to BOT_FAILED instead, with an explanatory comment, as
