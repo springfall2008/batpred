@@ -145,6 +145,10 @@ EVC_CONNECTED_STATUSES = {"preparing", "charging", "suspendedev", "suspendedevse
 # which would look exactly like a working charger that Predbat quietly ignores.
 EVC_DISCONNECTED_STATUSES = {"available", "idle", "offline", "unavailable", "faulted", "reserved", "unknown"}
 
+# The subset of those that positively mean nothing is plugged in, rather than that the charger
+# cannot say - used to end guest charging, which a comms blip must not do
+EVC_EMPTY_STATUSES = {"available", "idle"}
+
 
 def evc_status_key(status):
     """Normalise a charger status into the form the status tables use.
@@ -2134,6 +2138,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     def charger_control_chargers(self):
         """The chargers to drive, in car order - see controlled_evc_devices()."""
         return [(uuid, uuid) for uuid in self.controlled_evc_devices()]
+
+    def charger_control_car_plugged(self, uuid):
+        """Is a car plugged in, for ending guest charging - only a status known to mean an empty
+        charger counts as unplugged, so an offline or unknown blip does not end it."""
+        return evc_status_key(self.evc_device[uuid].get("status", None)) not in EVC_EMPTY_STATUSES
 
     def charger_control_connected(self, uuid):
         """A charger with no car plugged in is left alone - commanding it would achieve nothing and every command costs a retry loop."""

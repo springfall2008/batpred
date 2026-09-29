@@ -1384,7 +1384,10 @@ def test_guest_charging_ends_when_the_zappi_is_unplugged():
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
     device = component.devices["Z12345678"]
     assert component.charger_control_car_plugged(device) is True, device.plug_status
+    device.plug_status = "EV Disconnected"
     component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    device.plug_status = "EV Connected"
     run_async(component.charger_control_tick(OUT_OF_WINDOW))
     assert component.charger_control_guest is True
 
