@@ -14,6 +14,9 @@ once; a component supplies only what is specific to its charger.
 
 from utils import parse_car_plan_windows, in_car_plan_window
 
+# A guest switch left on turns itself off after this long, for chargers that cannot tell a car was unplugged
+GUEST_CHARGING_MAX_HOURS = 12
+
 # The strings get_arg() reads as true for a boolean setting
 CONTROL_TRUE_STRINGS = ("on", "true", "yes", "enabled", "enable", "connected")
 
@@ -61,6 +64,10 @@ class CarChargerControl:
     car has no plan would otherwise read as "not planned" and be stopped mid-charge. One
     Predbat was already holding when its car went away is released rather than stranded.
 
+    The guest charging switch hands the chargers back so a car Predbat is not planning for
+    can charge. It turns itself off when a connected car is unplugged, on chargers that can
+    tell, and otherwise after GUEST_CHARGING_MAX_HOURS.
+
     A car whose Octopus Intelligent dispatches are delivered by Octopus driving the charger
     itself is left to Octopus - see charger_control_octopus_drives_charger(). Where Octopus
     instead drives the car, Predbat still drives the charger, from the slot sensor that then
@@ -81,6 +88,8 @@ class CarChargerControl:
             control: The component's control setting from apps.yaml. None (unset) lets control
                 run wherever the component's automatic setup maps chargers to cars; False turns
                 it off; True also drives a charger whose Octopus arrangement cannot be told.
+            switch_prefix: The component's entity name, e.g. "gecloud", for its guest charging
+                switch. Left as None the component has no guest switch.
         """
         self.charger_control_config = control
         self.charger_control_log_name = log_name
@@ -97,6 +106,12 @@ class CarChargerControl:
         self.charger_control_state = {}
         # Cars currently left to Octopus, so the hand-over is logged once rather than every cycle
         self.charger_control_octopus_cars = set()
+        self.charger_control_switch_prefix = switch_prefix
+        # Guest charging: deliberately not persisted, so a restart puts Predbat back in charge
+        self.charger_control_guest = False
+        # When the first control cycle saw guest charging on, and the chargers it has seen connected since
+        self.charger_control_guest_since = None
+        self.charger_control_guest_connected = set()
 
     def charger_control_connected(self, handle):
         """Is a car on the cable - chargers that cannot tell are always treated as connected."""
@@ -161,6 +176,56 @@ class CarChargerControl:
         """
         if charge:
             await self.charger_control_release_one(handle, charge)
+
+    def charger_control_guest_entity(self):
+        """The guest charging switch's entity id, or None for a component without one."""
+        if self.charger_control_switch_prefix is None:
+            return None
+        return "switch.{}_{}_guest_charging".format(self.prefix, self.charger_control_switch_prefix)
+
+    def charger_control_publish_guest(self, app):
+        """Publish the guest charging switch - called only while control is active."""
+        entity = self.charger_control_guest_entity()
+        if entity is None:
+            return
+        self.dashboard_item(
+            entity,
+            state="on" if self.charger_control_guest else "off",
+            attributes={"friendly_name": "{} Guest Charging".format(self.charger_control_noun), "icon": "mdi:account-arrow-right"},
+            app=app,
+        )
+
+    async def charger_control_guest_event(self, entity_id, service):
+        """Handle the guest charging switch, returning True when entity_id was it."""
+        if self.charger_control_switch_prefix is None or not entity_id.endswith("_{}_guest_charging".format(self.charger_control_switch_prefix)):
+            return False
+        self.charger_control_set_guest(service == "turn_on")
+        return True
+
+    def charger_control_set_guest(self, on, why=None):
+        """Turn guest charging on or off, starting its unplug and time limits afresh."""
+        self.charger_control_guest = bool(on)
+        self.charger_control_guest_since = None
+        self.charger_control_guest_connected = set()
+        self.log("Info: {}: guest charging switched {}{}".format(self.charger_control_log_name, "on" if on else "off", " - {}".format(why) if why else ""))
+
+    def charger_control_guest_over(self, now):
+        """Why guest charging should end now, or None while it should carry on.
+
+        A charger only ends it by going from connected to unplugged, so turning guest charging
+        on before the guest arrives works. Chargers that cannot tell always read as connected,
+        which leaves them to the time limit.
+        """
+        if self.charger_control_guest_since is None:
+            self.charger_control_guest_since = now
+        if (now - self.charger_control_guest_since).total_seconds() >= GUEST_CHARGING_MAX_HOURS * 3600:
+            return "on for {} hours".format(GUEST_CHARGING_MAX_HOURS)
+        for key, handle in self.charger_control_chargers()[: self.charger_control_car_count()]:
+            if self.charger_control_connected(handle):
+                self.charger_control_guest_connected.add(key)
+            elif key in self.charger_control_guest_connected:
+                return "the car was unplugged from {} {}".format(self.charger_control_noun, key)
+        return None
 
     def charger_control_read_only_now(self):
         """Is Predbat in read only mode - the live attribute rather than just the config arg.
@@ -268,8 +333,9 @@ class CarChargerControl:
     async def charger_control_tick(self, now):
         """Run one cycle of charger control, releasing rather than just going quiet.
 
-        Read only mode and the control switch are both releases: Predbat may have left a
-        charger stopped, and walking away from that would strand the car unable to charge.
+        Read only mode, the control switch and guest charging are all releases: Predbat may
+        have left a charger stopped, and walking away from that would strand the car unable
+        to charge - or leave the guest unable to.
         A component stop deliberately does not release, as that is nearly always a restart
         and releasing would glitch an in-progress charge.
 
@@ -277,11 +343,17 @@ class CarChargerControl:
         """
         if not self.charger_control_active:
             return
+        if self.charger_control_guest:
+            why = self.charger_control_guest_over(now)
+            if why:
+                self.charger_control_set_guest(False, why)
         reason = None
         if self.charger_control_read_only_now():
             reason = "Read only mode"
         elif not self.charger_control_enabled:
             reason = "The {} control switch".format(self.charger_control_noun)
+        elif self.charger_control_guest:
+            reason = "Guest charging"
         if reason:
             if self.charger_control_released is None:
                 self.log("Info: {}: releasing the {} because of: {}".format(self.charger_control_log_name, self.charger_control_noun, reason))

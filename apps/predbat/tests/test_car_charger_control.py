@@ -14,7 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
-from car_charger_control import CarChargerControl, parse_control_setting
+from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, parse_control_setting
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -542,6 +542,67 @@ def test_octopus_rule_per_car():
     assert component.commands == [("b", "off", 1)], component.commands
 
 
+def _guest_component():
+    """A component with a guest switch, holding its charger stopped outside any window."""
+    component = FakeComponent([FakeCharger("a")])
+    component.charger_control_switch_prefix = "fake"
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    return component
+
+
+def test_guest_charging_releases_and_resumes():
+    """Guest charging hands the charger back so the guest can charge, and Predbat takes it back after."""
+    component = _guest_component()
+    assert run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on")) is True
+    assert run_async(component.charger_control_guest_event("switch.predbat_fake_other", "turn_on")) is False
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("a", "release", False)], component.commands
+
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_off"))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0), component.commands
+
+
+def test_guest_charging_ends_when_the_car_is_unplugged():
+    """A charger that can tell ends guest charging when a connected car is unplugged - but not
+    before the guest has plugged in."""
+    component = _guest_component()
+    charger = component.chargers[0]
+    charger.connected = False
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is True, "Turned on before the guest arrived, so nothing has been unplugged yet"
+
+    charger.connected = True
+    run_async(component.charger_control_tick(_now()))
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is False
+    assert any("the car was unplugged" in line for line in component.logs), component.logs
+
+
+def test_guest_charging_times_out():
+    """A charger that cannot tell a car was unplugged ends guest charging after the time limit."""
+    component = _guest_component()
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now() + datetime.timedelta(hours=GUEST_CHARGING_MAX_HOURS - 1)))
+    assert component.charger_control_guest is True
+    run_async(component.charger_control_tick(_now() + datetime.timedelta(hours=GUEST_CHARGING_MAX_HOURS)))
+    assert component.charger_control_guest is False
+    assert component.commands[-1] == ("a", "off", 0), "Predbat drives the charger again: {}".format(component.commands)
+
+
+def test_no_guest_switch_without_a_prefix():
+    """A component that did not ask for a guest switch has none."""
+    component = FakeComponent([FakeCharger("a")])
+    assert component.charger_control_guest_entity() is None
+    assert run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on")) is False
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -573,4 +634,8 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_does_not_wait_without_octopus_automatic()
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
+    test_guest_charging_releases_and_resumes()
+    test_guest_charging_ends_when_the_car_is_unplugged()
+    test_guest_charging_times_out()
+    test_no_guest_switch_without_a_prefix()
     return False

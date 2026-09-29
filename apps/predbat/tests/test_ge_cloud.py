@@ -59,7 +59,7 @@ class MockGECloudDirect(GECloudDirect):
         self.automatic_evc = False
         # Unset, as components.py leaves it when apps.yaml does not mention it
         self.evc_control = None
-        self.charger_control_setup("GECloud", "EV charger", "gecloud", "evc_control_state", "evc_control_enabled")
+        self.charger_control_setup("GECloud", "EV charger", "gecloud", "evc_control_state", "evc_control_enabled", switch_prefix="gecloud")
         self.entity_states = {}
         self.entity_attributes = {}
         self.pending_writes = {}
@@ -6387,6 +6387,22 @@ def _test_evc_control(my_predbat):
         assert ge.charger_control_enabled is False, "The switch should turn control off"
         await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Switching control off should release the charger, got {}".format(commands)
+
+        # Test 6b: the guest charging switch releases in the same way, and ends when the guest unplugs
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(outside)
+        commands.clear()
+        await ge.switch_event("switch.predbat_gecloud_guest_charging", "turn_on")
+        assert ge.charger_control_guest is True, "The guest switch should turn guest charging on"
+        await ge.charger_control_tick(outside)
+        assert commands == [("evc-001", "start-charge")], "Guest charging should release the charger, got {}".format(commands)
+        ge.evc_device["evc-001"]["status"] = "idle"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is False, "Unplugging the guest's car should end guest charging"
 
         # Test 7: nothing is commanded while no car is plugged in
         commands = []
