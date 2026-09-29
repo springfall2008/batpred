@@ -309,6 +309,7 @@ def test_ohme(my_predbat=None):
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
         ("control_release_retry", _test_ohme_control_failed_release_retries, "a refused release is retried without failing the run"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
+        ("control_hand_to_octopus", _test_ohme_control_hand_to_octopus, "handing to Octopus turns max charge off first"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
         ("auto_config_keeps_now", _test_ohme_auto_config_keeps_user_car_charging_now, "auto config keeps the user's car_charging_now"),
         ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
@@ -1999,6 +2000,21 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert any("Read only mode cleared" in msg for msg in api.log_messages), f"Expected a resume log, got {api.log_messages}"
 
     print("PASS: read only released and resumed the charger")
+    return 0
+
+
+def _test_ohme_control_hand_to_octopus(my_predbat=None):
+    """Test handing a paused charger to Octopus turns max charge off before resuming it"""
+    print("**** Running test_ohme_control_hand_to_octopus ****")
+
+    api = _ohme_control_api()
+    api.control_saved_target = 70
+    run_async(api.charger_control_hand_to_octopus(api.client, False))
+    urls = [request["url"] for request in api.client.request_log]
+    max_off = next(i for i, url in enumerate(urls) if "max-charge?enabled=false" in url)
+    resume = next(i for i, url in enumerate(urls) if url.endswith("/resume"))
+    assert max_off < resume, f"Max charge must be off before the charger is resumed, got {urls}"
+    assert api.control_saved_target is None, "Expected the saved target to be restored and cleared"
     return 0
 
 
