@@ -53,6 +53,10 @@ function loadPlanTable() {
         return loadTypeScriptModule(currencyUtilityPath)
       }
 
+      if (specifier === './NordPoolIcon') {
+        return (props) => React.createElement('svg', { ...props, 'data-icon': 'nord-pool' })
+      }
+
       return require(specifier)
     }
   })
@@ -159,6 +163,7 @@ test('future rates show a prediction indicator', () => {
 
   assert.match(html, /aria-label="Predicted rate"/)
   assert.match(html, /Predbat is using Nord Pool data/)
+  assert.match(html, /data-icon="nord-pool"/)
 })
 
 test('normal mode keeps diagnostic plan values hidden', () => {

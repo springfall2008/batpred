@@ -17,13 +17,14 @@ import {
   faPause,
   faSnowflake,
   faWater,
-  faWandMagicSparkles,
   faCheck,
   faChevronDown,
   faRotateLeft
 } from '@fortawesome/free-solid-svg-icons'
 
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
+
+import NordPoolIcon from './NordPoolIcon'
 
 import type { Plan, PlanOverrides } from '../types/plan'
 import { formatMajorCurrency, resolveCurrencySymbols } from '../utils/currency'
@@ -348,7 +349,7 @@ function RateCell({
                   data-tooltip="Predicted rate: Predbat is using Nord Pool data until the tariff publishes this period’s rate."
                   aria-label="Predicted rate"
                 >
-                  <FontAwesomeIcon icon={faWandMagicSparkles} aria-hidden="true" />
+                  <NordPoolIcon />
                 </span>
               )}
             </span>
