@@ -6747,6 +6747,11 @@ async def test_publish_slot_power_limits_follow_the_cap():
     assert published() == {"slot_charge_power_max": 2880, "slot_discharge_power_max": 2880, "battery_rate_max": 2880, "max_charge_power": 4800}, f"after the probe 60A should apply, got {published()}"
     slider = api.dashboard_items[f"number.{prefix}_solis_{lower}_discharge_slot1_power"]["attributes"]["max"]
     assert slider == 2880, f"the slot power slider should stop at what the slot accepts, got {slider}"
+
+    # A measured ceiling above the rated estimate is what gets planned with
+    api.slot_current_probed[sn] = {"charge": 100.0, "discharge": 90.0, "probed_at": "2026-09-29T20:00:00+00:00"}
+    await api.publish_entities()
+    assert published() == {"slot_charge_power_max": 4800, "slot_discharge_power_max": 4320, "battery_rate_max": 4800, "max_charge_power": 4800}, f"a probed ceiling above the rated 75A should be used, got {published()}"
     print("PASSED: published slot power limits follow the slot current cap")
     return False
 
@@ -6826,7 +6831,7 @@ async def test_slot_probe_finds_exact_ceiling():
     assert probed == {"charge": 60.0, "discharge": 60.0} and probed_at, f"expected 60A both ways with a probe time, got {api.slot_current_probed.get(sn)}"
     discharge_cid = SOLIS_CID_DISCHARGE_CURRENT[5]
     discharge_writes = [value for cid, value in inverter.writes if cid == discharge_cid]
-    assert discharge_writes == ["75", "70", "65", "60", "61", "50"], f"expected 75 (rated), down 5 to 60, up to 61, then restore 50; got {discharge_writes}"
+    assert discharge_writes == ["100", "95", "90", "85", "80", "75", "70", "65", "60", "61", "50"], f"expected 100 (the battery limit), down 5 to 60, up to 61, then restore 50; got {discharge_writes}"
     assert {cid for cid, _ in inverter.writes} == {SOLIS_CID_CHARGE_CURRENT[5], discharge_cid}, f"only disabled slot 6 may be written, got {inverter.writes}"
     assert inverter.registers[discharge_cid] == "50" and inverter.registers[SOLIS_CID_CHARGE_CURRENT[5]] == "50", "slot 6 must be restored in both directions"
     assert storage.contents.get(("solis", "slot_current_limits")) == {sn: {"charge": 60.0, "discharge": 60.0, "probed_at": probed_at}}, f"the ceiling should be saved, got {storage.contents}"
@@ -6836,7 +6841,7 @@ async def test_slot_probe_finds_exact_ceiling():
     assert (limits["charge"], limits["discharge"]) == (60.0, 60.0), f"slot writes should be capped at 60A, got {limits}"
     text = api.describe_slot_current_limits(sn, limits)
     assert "charge 60.0A from the probed ceiling (register 100A, no slot metadata max, probed max 60.0A)" in text, f"the limits line should say the probed ceiling set the cap: {text}"
-    assert "from the rated current" not in text, f"the rated 75A must not read as the cap once the probe has lowered it: {text}"
+    assert "from the rated current" not in text and "not used once probed" in text, f"the rated 75A must not read as the cap once probed: {text}"
     assert any("probe discharge slot 6 current 61A on SN0PROBE: refused, still 60" in m for m in api.log_messages), "each refusal should be logged with the value kept"
     assert any("probe discharge slot 6 current 60A on SN0PROBE: kept" in m for m in api.log_messages), "each accepted value should be logged"
     print("PASSED: slot probe finds the exact ceiling")
@@ -6844,14 +6849,22 @@ async def test_slot_probe_finds_exact_ceiling():
 
 
 async def test_slot_probe_expected_maximum_accepted():
-    """When the inverter keeps the expected maximum, that is the ceiling - one write each way plus the restore."""
-    print("\n=== Test: slot probe keeps an accepted expected maximum ===")
+    """When the inverter keeps its battery limit, that is the ceiling - and it replaces a lower rated estimate.
+
+    An 8kW hybrid reading 180A is rated for only 156A at 51.2V, yet takes 180A (charging from PV
+    above the AC rating); the rated estimate must not hold it below what was measured. One write
+    each way plus the restore.
+    """
+    print("\n=== Test: slot probe keeps an accepted battery limit ===")
     api, sn = _probe_api(storage=_FakeStorage())
     inverter = _ProbeInverter(api, ceiling=100)
+    assert api.slot_current_limits(sn)["discharge"] == 75.0, "before probing, the 75A rated estimate should apply"
     await api.ensure_slot_current_probed(sn)
-    assert (api.slot_current_probed[sn]["charge"], api.slot_current_probed[sn]["discharge"]) == (75.0, 75.0), f"expected the 75A rated cap to stand, got {api.slot_current_probed.get(sn)}"
+    assert (api.slot_current_probed[sn]["charge"], api.slot_current_probed[sn]["discharge"]) == (100.0, 100.0), f"expected the 100A battery limit to be kept, got {api.slot_current_probed.get(sn)}"
     assert len(inverter.writes) == 4, f"expected one probe write and one restore per direction, got {inverter.writes}"
-    print("PASSED: slot probe keeps an accepted expected maximum")
+    limits = api.slot_current_limits(sn)
+    assert (limits["charge"], limits["discharge"]) == (100.0, 100.0) and not limits["rated_capped"], f"a measured ceiling above the rated estimate should replace it, got {limits}"
+    print("PASSED: slot probe keeps an accepted battery limit")
     return False
 
 
@@ -6902,6 +6915,17 @@ async def test_slot_probe_reloaded_not_repeated():
     assert inverter.requests == 0, f"a ceiling under a day old must not be probed again, made {inverter.requests} requests"
     limits = api.slot_current_limits(sn)
     assert (limits["charge"], limits["discharge"]) == (60.0, 58.0), f"the saved ceilings should cap the slots, got {limits}"
+
+    # A day old with the ceiling unchanged: the re-check starts at the known ceiling, so it costs two writes and the restore
+    unchanged = {"SN0PROBE": {"charge": 60, "discharge": 60, "probed_at": (now - timedelta(hours=25)).isoformat()}}
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): unchanged}))
+    api._test_now_utc_exact = now
+    inverter = _ProbeInverter(api, ceiling=60)
+    await api.load_slot_current_probes()
+    await api.ensure_slot_current_probed(sn)
+    discharge_writes = [value for cid, value in inverter.writes if cid == SOLIS_CID_DISCHARGE_CURRENT[5]]
+    assert discharge_writes == ["60", "61", "50"], f"an unchanged re-check should write the ceiling, one above, then restore; got {discharge_writes}"
+    assert api.slot_current_probed[sn]["probed_at"] == now.isoformat(), "the re-check should refresh the probe time"
 
     # A day old: checked again, and the fresh result replaces it
     stale = {"SN0PROBE": {"charge": 60, "discharge": 58, "probed_at": (now - timedelta(hours=25)).isoformat()}}

@@ -1188,15 +1188,21 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         The cap starts from the battery limit register (CID 7224 charge, 7226 discharge - read as is,
         not multiplied by the pack count, and SOLIS_SLOT_CURRENT_DEFAULT_AMPS when it has not been
-        read), is lowered to the smallest sysCommand max SolisCloud advertises across the six slot
-        CIDs - slot 1 advertising more than the others is not accepted - and then to the rated current
-        (issue #5187). Returns a dict: for each of "charge" and "discharge", "<direction>_register"
-        (the raw register value, None when not read), "<direction>_base" (the starting point),
-        "<direction>_metadata" (the smallest advertised max, None when none was returned) and
-        "<direction>" (the cap); plus "rated" (None when the size is unknown) and "rated_capped".
-        Finally each direction is held to the ceiling learned by ensure_slot_current_probed(), which
-        "<direction>_probed" reports (None when not probed); include_probed=False leaves it out,
-        which is what the probe itself starts from.
+        read) and is lowered to the smallest sysCommand max SolisCloud advertises across the six slot
+        CIDs - slot 1 advertising more than the others is not accepted. That is the battery-side cap.
+
+        Then, once ensure_slot_current_probed() has measured what the slots really accept, the cap is
+        held to that ceiling. Until then it is held to the rated current instead - an estimate that
+        can be too high (a 3.6kW inverter rated for 75A keeps only 60A, issue #5187) or too low (an
+        8kW hybrid rated for 156A takes 180A, charging from PV), so a measured ceiling replaces it.
+
+        Returns a dict: for each of "charge" and "discharge", "<direction>_register" (the raw register
+        value, None when not read), "<direction>_base" (the starting point), "<direction>_metadata"
+        (the smallest advertised max, None when none was returned), "<direction>_battery" (the
+        battery-side cap), "<direction>_probed" (the measured ceiling, None when not probed) and
+        "<direction>" (the cap); plus "rated" (None when the size is unknown) and "rated_capped"
+        (whether the rated current lowered a cap). include_probed=False leaves the measured ceiling
+        out, which is what the probe itself starts from.
         """
         values = self.cached_values.get(inverter_sn, {})
         infos = self.cached_infos.get(inverter_sn, {})
@@ -1213,20 +1219,24 @@ class SolisAPI(ComponentBase, OAuthMixin):
             limits[direction + "_register"] = values.get(register_cid)
             limits[direction + "_base"] = base
             limits[direction + "_metadata"] = min(advertised) if advertised else None
+            limits[direction + "_battery"] = cap
             limits[direction] = cap
 
         rated = self.get_rated_current(inverter_sn)
         limits["rated"] = rated
-        limits["rated_capped"] = rated is not None and rated < max(limits["charge"], limits["discharge"])
-        if limits["rated_capped"]:
-            limits["charge"] = min(limits["charge"], rated)
-            limits["discharge"] = min(limits["discharge"], rated)
-
         probed = self.slot_current_probed.get(inverter_sn, {}) if include_probed else {}
         for direction in ("charge", "discharge"):
             limits[direction + "_probed"] = probed.get(direction)
-            if probed.get(direction) is not None:
-                limits[direction] = min(limits[direction], probed[direction])
+        if limits["charge_probed"] is not None and limits["discharge_probed"] is not None:
+            # Measured, so the rated estimate no longer applies
+            limits["rated_capped"] = False
+            for direction in ("charge", "discharge"):
+                limits[direction] = min(limits[direction], limits[direction + "_probed"])
+        else:
+            limits["rated_capped"] = rated is not None and rated < max(limits["charge"], limits["discharge"])
+            if limits["rated_capped"]:
+                limits["charge"] = min(limits["charge"], rated)
+                limits["discharge"] = min(limits["discharge"], rated)
         return limits
 
     def describe_slot_current_limits(self, inverter_sn, limits):
@@ -1253,7 +1263,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 inputs.append(f"probed max {probed}A")
             parts.append(f"{direction} {cap}A from the {source} ({', '.join(inputs)})")
         if limits["rated"] is not None:
-            rated_text = f"rated {limits['rated']}A from {detail.get('power')}{detail.get('powerStr') or 'kW'} at {self.get_nominal_voltage(inverter_sn)}V"
+            superseded = ", not used once probed" if limits.get("charge_probed") is not None and limits.get("discharge_probed") is not None else ""
+            rated_text = f"rated {limits['rated']}A from {detail.get('power')}{detail.get('powerStr') or 'kW'} at {self.get_nominal_voltage(inverter_sn)}V{superseded}"
         else:
             rated_text = "rated current unknown"
         return f"Solis API: Slot current limits for {inverter_sn}: {', '.join(parts)}; {rated_text}"
@@ -1364,14 +1375,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log(f"Warn: Solis API: Probe of CID {cid} on {inverter_sn} got no answer: {e}")
             return None
 
-    async def probe_slot_current_ceiling(self, inverter_sn, direction, slot, expected):
+    async def probe_slot_current_ceiling(self, inverter_sn, direction, slot, start, upper):
         """Find the most one direction's slot current may be set to, on a disabled slot, then restore it.
 
-        Writes the expected maximum first; if it is refused, steps down SOLIS_SLOT_PROBE_STEP_DOWN_AMPS
-        at a time until one is kept, then up 1A at a time until one is refused, so the result is the
-        exact ceiling in whole amps. Returns None - nothing learned - if any write gets no verdict,
-        or if every current down to SOLIS_SLOT_PROBE_MIN_AMPS is refused, which is not a ceiling
-        any real inverter has.
+        Writes start first - the battery-side cap on a first probe, the known ceiling on a re-check.
+        If it is refused, steps down SOLIS_SLOT_PROBE_STEP_DOWN_AMPS at a time until one is kept;
+        then steps up 1A at a time until one is refused or upper (the battery-side cap, never
+        exceeded) is reached, so the result is the exact ceiling in whole amps. A first probe whose
+        start is kept is done in one write, and a re-check that finds the ceiling unchanged in two.
+        Returns None - nothing learned - if any write gets no verdict, or if every current down to
+        SOLIS_SLOT_PROBE_MIN_AMPS is refused, which is not a ceiling any real inverter has.
         """
         cid = (SOLIS_CID_CHARGE_CURRENT if direction == "charge" else SOLIS_CID_DISCHARGE_CURRENT)[slot - 1]
         try:
@@ -1385,14 +1398,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
             return await self.probe_slot_write(inverter_sn, cid, amps, f"probe {direction} slot {slot} current {amps}A")
 
         try:
-            amps = int(expected)
+            upper = int(upper)
+            amps = min(int(start), upper)
             verdict = await attempt(amps)
             if verdict is None:
                 return None
             if verdict:
-                return float(amps)
-            refused = amps
-            while True:
+                refused = upper + 1  # Nothing above the battery-side cap is tried
+            else:
+                refused = amps
+            while not verdict:
                 amps -= SOLIS_SLOT_PROBE_STEP_DOWN_AMPS
                 if amps < SOLIS_SLOT_PROBE_MIN_AMPS:
                     self.log(f"Warn: Solis API: {inverter_sn} refused every {direction} slot current down to {amps + SOLIS_SLOT_PROBE_STEP_DOWN_AMPS}A - not a real ceiling, nothing learned")
@@ -1433,7 +1448,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             return
         limits = self.slot_current_limits(inverter_sn, include_probed=False)
         if limits["charge_register"] is None or limits["discharge_register"] is None:
-            return  # The expected maximum starts from the registers, so wait until they have been read
+            return  # The probe starts from the registers, so wait until they have been read
         slot = self.find_probe_slot(inverter_sn)
         if slot is None:
             if inverter_sn not in self.slot_probe_no_slot_logged:
@@ -1441,10 +1456,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log(f"Solis API: No disabled slot on {inverter_sn} to probe the slot current ceiling on, keeping the {limits['charge']}A/{limits['discharge']}A caps")
             return
 
-        self.log(f"Solis API: Probing the slot current ceiling on {inverter_sn} using disabled slot {slot}, expecting charge {limits['charge']}A and discharge {limits['discharge']}A")
+        # A first probe starts at the battery-side cap, not the rated estimate, which can be below
+        # what the inverter really takes; a re-check starts at the known ceiling, so an unchanged
+        # one costs two writes rather than a fresh search
+        known = self.slot_current_probed.get(inverter_sn) or {}
+        starts = {direction: known.get(direction, limits[direction + "_battery"]) for direction in ("charge", "discharge")}
+        self.log(f"Solis API: {'Re-checking' if known else 'Probing'} the slot current ceiling on {inverter_sn} using disabled slot {slot}, starting at charge {starts['charge']}A and discharge {starts['discharge']}A (battery limits {limits['charge_battery']}A/{limits['discharge_battery']}A)")
         probed = {}
         for direction in ("charge", "discharge"):
-            ceiling = await self.probe_slot_current_ceiling(inverter_sn, direction, slot, limits[direction])
+            ceiling = await self.probe_slot_current_ceiling(inverter_sn, direction, slot, starts[direction], limits[direction + "_battery"])
             if ceiling is None:
                 kept = self.slot_current_probed.get(inverter_sn)
                 keeping = f", keeping charge {kept['charge']}A, discharge {kept['discharge']}A" if kept else ""
