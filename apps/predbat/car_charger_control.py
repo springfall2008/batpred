@@ -70,7 +70,7 @@ class CarChargerControl:
     done and the next cycle tries again; the component catches it in its run loop.
     """
 
-    def charger_control_setup(self, log_name, noun, storage_module=None, storage_key=None, storage_field=None, control=None):
+    def charger_control_setup(self, log_name, noun, storage_module=None, storage_key=None, storage_field=None, control=None, switch_prefix=None):
         """Initialise the shared control state.
 
         Args:
@@ -114,28 +114,26 @@ class CarChargerControl:
         """Does Octopus Intelligent deliver this car's dispatches by driving its charger?
 
         True: Octopus switches the charger itself, so Predbat must leave it alone or the two
-        would fight. False: there is no Octopus Intelligent car here, Predbat has been told to
-        ignore it (octopus_intelligent_charging off), or Octopus drives the car rather than the
-        charger - Predbat then drives the charger to match the dispatches. None: the car is on
-        Octopus Intelligent but which device Octopus drives cannot be told, or not yet.
+        would fight - whatever octopus_intelligent_charging says, as that switch only changes
+        Predbat's own planning and Octopus goes on driving the charger regardless. False: there
+        is no Octopus Intelligent car here, or Octopus drives the car rather than the charger -
+        Predbat then drives the charger, from the dispatches or, with octopus_intelligent_charging
+        off, from its own plan. None: the car is on Octopus Intelligent but which device Octopus
+        drives cannot be told, or not yet.
 
         Read from the car's own wired dispatch sensor rather than from any one component:
         the Octopus and Kraken components both publish the device's is_charger on it, and
         reading it there cannot pair a car with some other car's device.
         """
-        if not self.get_arg("octopus_intelligent_charging", True):
-            return False
-        slots = self.get_arg("octopus_intelligent_slot", None, indirect=False)
-        if slots and not isinstance(slots, list):
-            slots = [slots]
-        if not slots or car_n >= len(slots) or not slots[car_n]:
+        slot = self.charger_control_dispatch_sensor(car_n)
+        if not slot:
             # Not wired for this car - but the Octopus component may simply not have got there yet
             return None if self.charger_control_octopus_discovering() else False
         owner = getattr(self.base, "car_slot_owner", None)
         if owner and owner != "octopus":
             # Another charger component (Ohme) supplies the Intelligent slots from the charger itself
             return True
-        is_charger = self.get_state_wrapper(slots[car_n], attribute="is_charger")
+        is_charger = self.get_state_wrapper(slot, attribute="is_charger")
         if is_charger is None:
             # Not published yet, or a sensor that does not say (the Octopus Energy HA integration)
             return None
@@ -241,8 +239,31 @@ class CarChargerControl:
         return found
 
     def charger_control_should_charge(self, car_n, now):
-        """Is now inside one of the planned charging windows for this car."""
-        return in_car_plan_window(self.charger_control_windows.get(car_n, []), now)
+        """Is now inside one of the planned charging windows for this car, or an Octopus dispatch."""
+        return in_car_plan_window(self.charger_control_windows.get(car_n, []), now) or self.charger_control_dispatch_active(car_n)
+
+    def charger_control_dispatch_active(self, car_n):
+        """Is an Octopus Intelligent dispatch running for this car right now?
+
+        Only reached for a charger Predbat drives, so here Octopus drives the car. The plan
+        carries the dispatches too, but is only republished every 5 minutes and leaves out a
+        dispatch Octopus has not given any energy yet - following the dispatch sensor as well
+        stops the charger holding the car off for the first minutes of a new dispatch. With
+        octopus_intelligent_charging off Predbat follows only its own plan.
+        """
+        if not self.get_arg("octopus_intelligent_charging", True):
+            return False
+        slot = self.charger_control_dispatch_sensor(car_n)
+        return bool(slot) and self.get_state_wrapper(slot) == "on"
+
+    def charger_control_dispatch_sensor(self, car_n):
+        """The Octopus Intelligent dispatch sensor wired to this car, or None."""
+        slots = self.get_arg("octopus_intelligent_slot", None, indirect=False)
+        if slots and not isinstance(slots, list):
+            slots = [slots]
+        if not slots or car_n >= len(slots):
+            return None
+        return slots[car_n] or None
 
     async def charger_control_tick(self, now):
         """Run one cycle of charger control, releasing rather than just going quiet.
