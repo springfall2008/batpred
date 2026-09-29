@@ -79,6 +79,9 @@ class MockSolisAPI(SolisAPI):
         self.detail_summary_logged = {}
         self.slot_limits_logged = {}
         self.response_observer = None
+        self.slot_current_probed = {}
+        self.slot_current_probes_loaded = False
+        self.slot_probe_no_slot_logged = set()
         self.mode_asserted_for = {}
         self.control_enable = True
         self.configured_inverter_sn = []
@@ -2373,6 +2376,13 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_inverter_details_logs_summary_on_change())
         failed |= test_calculated_max_currents_names_inputs()
         failed |= asyncio.run(test_response_observer_sees_whole_reply())
+        failed |= asyncio.run(test_slot_probe_finds_exact_ceiling())
+        failed |= asyncio.run(test_slot_probe_expected_maximum_accepted())
+        failed |= asyncio.run(test_slot_probe_offline_learns_nothing())
+        failed |= asyncio.run(test_slot_probe_refusing_everything_learns_nothing())
+        failed |= asyncio.run(test_slot_probe_reloaded_not_repeated())
+        failed |= asyncio.run(test_slot_probe_skips())
+        failed |= asyncio.run(test_publish_slot_power_limits_follow_the_cap())
         failed |= asyncio.run(test_automatic_config_keeps_apps_yaml_inverter_limits())
         failed |= asyncio.run(test_publish_battery_rate_max_is_larger_limit())
         failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
@@ -3531,7 +3541,7 @@ async def test_v2_slot_currents_capped_at_inverter_rating():
     api.cached_values[sn][SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
     assert await api.write_time_windows_if_changed(sn) is True, "write_time_windows_if_changed should succeed"
     assert _written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0]) == "75.0", f"Discharge current should be capped at 75.0A, got {_written_value(api, SOLIS_CID_DISCHARGE_CURRENT[0])}"
-    assert any("Capping slot currents on TEST123 at 75.0A" in m for m in api.log_messages), "The cap should be logged"
+    assert any("Slot current limits for TEST123" in m and "discharge 75.0A from the rated current" in m for m in api.log_messages), "The cap and what set it should be logged"
 
     # The same cap applies to a charge slot
     api = _rated_inverter_api(inverter_sn=sn)
@@ -6328,7 +6338,7 @@ async def test_automatic_config_keeps_apps_yaml_inverter_limits():
 
     assert "inverter_limit_discharge" not in set_arg_calls, f"The apps.yaml inverter_limit_discharge must be left as written, got {set_arg_calls.get('inverter_limit_discharge')}"
     assert any("keeping your apps.yaml setting" in msg and "inverter_limit_discharge" in msg for msg in api.log_messages), "Keeping the user's inverter_limit_discharge should be logged"
-    assert set_arg_calls.get("inverter_limit_charge") == ["number.predbat_solis_abc123_max_charge_power"], f"An unset inverter_limit_charge must still be auto-bound, got {set_arg_calls.get('inverter_limit_charge')}"
+    assert set_arg_calls.get("inverter_limit_charge") == ["sensor.predbat_solis_abc123_slot_charge_power_max"], f"An unset inverter_limit_charge must still be auto-bound, got {set_arg_calls.get('inverter_limit_charge')}"
     assert set_arg_calls.get("battery_rate_max") == ["sensor.predbat_solis_abc123_battery_rate_max"], f"battery_rate_max keeps auto-discovery precedence, got {set_arg_calls.get('battery_rate_max')}"
     print("PASSED: apps.yaml inverter limits win, unset ones are auto-bound")
     return False
@@ -6592,9 +6602,9 @@ def test_slot_current_limits_logged_on_change():
     api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100"}, {SOLIS_CID_DISCHARGE_CURRENT[0]: {"sysCommand": {"max": 100}}})
     text = api.describe_slot_current_limits(sn, api.slot_current_limits(sn))
     print(text)
-    assert "charge 75.0A (register 100A, no slot metadata max)" in text, f"charge inputs missing: {text}"
-    assert "discharge 60.0A (register not read, default 60.0A, slot metadata max 100A)" in text, f"discharge inputs missing: {text}"
-    assert "rated 75.0A from 3.6kW at 48.0V - applied" in text, f"rated inputs missing: {text}"
+    assert "charge 75.0A from the rated current (register 100A, no slot metadata max)" in text, f"charge inputs missing: {text}"
+    assert "discharge 60.0A from the default (register not read, default 60.0A, slot metadata max 100A)" in text, f"discharge inputs missing: {text}"
+    assert "rated 75.0A from 3.6kW at 48.0V" in text and "applied" not in text, f"rated inputs missing: {text}"
 
     for _ in range(3):
         api.log_slot_current_limits(sn, api.slot_current_limits(sn))
@@ -6711,6 +6721,255 @@ async def test_response_observer_sees_whole_reply():
     return False
 
 
+async def test_publish_slot_power_limits_follow_the_cap():
+    """The planner's limits are what a slot can be set to, not the raw battery limit registers (issue #5187).
+
+    A 3.6kW inverter reads 100A in CID 7224/7226 - 4800W at 48V - but a slot can be set to 75A by its
+    rating, and only 60A once probed. battery_rate_max, the slot power limits and the slot power
+    sliders must all follow that, while max_charge_power keeps showing the register itself.
+    """
+    print("\n=== Test: published slot power limits follow the slot current cap ===")
+    from solis import SOLIS_CID_STORAGE_MODE
+
+    api, sn = _probe_api()
+    api.cached_values[sn][SOLIS_CID_STORAGE_MODE] = "33"
+    prefix, lower = api.prefix, sn.lower()
+
+    def published():
+        """The published limits, in watts."""
+        return {name: api.dashboard_items[f"{kind}.{prefix}_solis_{lower}_{name}"]["state"] for kind, name in (("sensor", "slot_charge_power_max"), ("sensor", "slot_discharge_power_max"), ("sensor", "battery_rate_max"), ("number", "max_charge_power"))}
+
+    await api.publish_entities()
+    assert published() == {"slot_charge_power_max": 3600, "slot_discharge_power_max": 3600, "battery_rate_max": 3600, "max_charge_power": 4800}, f"before a probe the 75A rated cap should apply, got {published()}"
+
+    api.slot_current_probed[sn] = {"charge": 60.0, "discharge": 60.0, "probed_at": "2026-09-29T20:00:00+00:00"}
+    await api.publish_entities()
+    assert published() == {"slot_charge_power_max": 2880, "slot_discharge_power_max": 2880, "battery_rate_max": 2880, "max_charge_power": 4800}, f"after the probe 60A should apply, got {published()}"
+    slider = api.dashboard_items[f"number.{prefix}_solis_{lower}_discharge_slot1_power"]["attributes"]["max"]
+    assert slider == 2880, f"the slot power slider should stop at what the slot accepts, got {slider}"
+    print("PASSED: published slot power limits follow the slot current cap")
+    return False
+
+
+class _ProbeInverter:
+    """A simulated inverter for the slot current probe: it keeps a current up to its ceiling and leaves the old value on refusal.
+
+    offline_after makes every request after that many fail as an offline datalogger does; write_error
+    makes the control endpoint report an error instead.
+    """
+
+    def __init__(self, api, ceiling=60, offline_after=None, write_error=False, held="50"):
+        from solis import SolisAPIError
+
+        self.error_class = SolisAPIError
+        self.registers = {cid: held for cid in SOLIS_CID_CHARGE_CURRENT + SOLIS_CID_DISCHARGE_CURRENT}
+        self.registers[SOLIS_CID_DISCHARGE_CURRENT[0]] = "0"
+        self.ceiling = ceiling
+        self.offline_after = offline_after
+        self.write_error = write_error
+        self.requests = 0
+        self.writes = []
+        api.read_cid = self.read_cid
+        api.write_cid = self.write_cid
+
+    def _offline(self):
+        """Count a request and say whether it goes unanswered."""
+        self.requests += 1
+        return self.offline_after is not None and self.requests > self.offline_after
+
+    async def read_cid(self, inverter_sn, cid):
+        """Read a simulated register."""
+        if self._offline():
+            raise self.error_class("Datalogger offline or disconnected", response_code="B0115")
+        return self.registers.get(cid), {}
+
+    async def write_cid(self, inverter_sn, cid, value, old_value=None, field_description=None):
+        """Write a simulated register, keeping only a current at or below the ceiling."""
+        if self._offline() or self.write_error:
+            return False
+        self.writes.append((cid, value))
+        if float(value) <= self.ceiling:
+            self.registers[cid] = value
+        return True
+
+
+def _probe_api(storage=None, control_enable=True, v2=True, slot6_enabled=False):
+    """A MockSolisAPI for one 3.6kW V2 battery inverter (48V pack) reading 100A limits, with slot 1 discharging and slots 2-6 disabled."""
+    api = MockSolisAPI()
+    if storage is not None:
+        # ComponentBase.storage reads through base.components, which MockBase does not have
+        api.__class__ = type("MockSolisAPIWithStorage", (MockSolisAPI,), {"storage": property(lambda self: storage)})
+    sn = "SN0PROBE"
+    api.inverter_sn = [sn]
+    api.control_enable = control_enable
+    api._test_v2_mode = v2
+    api.inverter_details[sn] = {"power": 3.6, "powerStr": "kW", "batteryAcvSet": 53.2, "batteryType": "PYLON_LV"}
+    api.cached_values[sn] = {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "100"}
+    windows = {slot: {"charge_enable": 0, "discharge_enable": 0, "charge_current": 50.0, "discharge_current": 50.0} for slot in range(1, 7)}
+    windows[1]["discharge_enable"] = 1
+    windows[6]["charge_enable"] = 1 if slot6_enabled else 0
+    api.charge_discharge_time_windows[sn] = windows
+    return api, sn
+
+
+async def test_slot_probe_finds_exact_ceiling():
+    """Issue #5187: the probe writes the expected maximum, steps down 5A until kept, then up 1A to the exact ceiling, and restores the slot."""
+    print("\n=== Test: slot probe finds the exact ceiling ===")
+    storage = _FakeStorage()
+    api, sn = _probe_api(storage=storage)
+    inverter = _ProbeInverter(api, ceiling=60)
+
+    await api.ensure_slot_current_probed(sn)
+
+    probed = dict(api.slot_current_probed.get(sn, {}))
+    probed_at = probed.pop("probed_at", None)
+    assert probed == {"charge": 60.0, "discharge": 60.0} and probed_at, f"expected 60A both ways with a probe time, got {api.slot_current_probed.get(sn)}"
+    discharge_cid = SOLIS_CID_DISCHARGE_CURRENT[5]
+    discharge_writes = [value for cid, value in inverter.writes if cid == discharge_cid]
+    assert discharge_writes == ["75", "70", "65", "60", "61", "50"], f"expected 75 (rated), down 5 to 60, up to 61, then restore 50; got {discharge_writes}"
+    assert {cid for cid, _ in inverter.writes} == {SOLIS_CID_CHARGE_CURRENT[5], discharge_cid}, f"only disabled slot 6 may be written, got {inverter.writes}"
+    assert inverter.registers[discharge_cid] == "50" and inverter.registers[SOLIS_CID_CHARGE_CURRENT[5]] == "50", "slot 6 must be restored in both directions"
+    assert storage.contents.get(("solis", "slot_current_limits")) == {sn: {"charge": 60.0, "discharge": 60.0, "probed_at": probed_at}}, f"the ceiling should be saved, got {storage.contents}"
+
+    # The learned ceiling now caps every slot write, and the limits line says where it came from
+    limits = api.slot_current_limits(sn)
+    assert (limits["charge"], limits["discharge"]) == (60.0, 60.0), f"slot writes should be capped at 60A, got {limits}"
+    text = api.describe_slot_current_limits(sn, limits)
+    assert "charge 60.0A from the probed ceiling (register 100A, no slot metadata max, probed max 60.0A)" in text, f"the limits line should say the probed ceiling set the cap: {text}"
+    assert "from the rated current" not in text, f"the rated 75A must not read as the cap once the probe has lowered it: {text}"
+    assert any("probe discharge slot 6 current 61A on SN0PROBE: refused, still 60" in m for m in api.log_messages), "each refusal should be logged with the value kept"
+    assert any("probe discharge slot 6 current 60A on SN0PROBE: kept" in m for m in api.log_messages), "each accepted value should be logged"
+    print("PASSED: slot probe finds the exact ceiling")
+    return False
+
+
+async def test_slot_probe_expected_maximum_accepted():
+    """When the inverter keeps the expected maximum, that is the ceiling - one write each way plus the restore."""
+    print("\n=== Test: slot probe keeps an accepted expected maximum ===")
+    api, sn = _probe_api(storage=_FakeStorage())
+    inverter = _ProbeInverter(api, ceiling=100)
+    await api.ensure_slot_current_probed(sn)
+    assert (api.slot_current_probed[sn]["charge"], api.slot_current_probed[sn]["discharge"]) == (75.0, 75.0), f"expected the 75A rated cap to stand, got {api.slot_current_probed.get(sn)}"
+    assert len(inverter.writes) == 4, f"expected one probe write and one restore per direction, got {inverter.writes}"
+    print("PASSED: slot probe keeps an accepted expected maximum")
+    return False
+
+
+async def test_slot_probe_offline_learns_nothing():
+    """An inverter that stops answering must not be read as one that refuses every current - nothing is learned or saved."""
+    print("\n=== Test: slot probe learns nothing from an offline inverter ===")
+    for label, kwargs in (("offline from the start", {"offline_after": 0}), ("offline mid-probe", {"offline_after": 6}), ("control endpoint erroring", {"write_error": True})):
+        storage = _FakeStorage()
+        api, sn = _probe_api(storage=storage)
+        inverter = _ProbeInverter(api, ceiling=60, **kwargs)
+        await api.ensure_slot_current_probed(sn)
+        assert sn not in api.slot_current_probed, f"{label}: nothing should be learned, got {api.slot_current_probed}"
+        assert not storage.contents, f"{label}: nothing should be saved, got {storage.contents}"
+        assert any("abandoned" in m for m in api.log_messages), f"{label}: the abandoned probe should be logged"
+        limits = api.slot_current_limits(sn)
+        assert limits["discharge"] == 75.0, f"{label}: the cap must stay at the rated 75A, not fall to a minimum, got {limits}"
+        if label == "offline mid-probe":
+            assert inverter.registers[SOLIS_CID_CHARGE_CURRENT[5]] == "50", "a probe that gets no answer must not leave slot 6 changed where it could restore it"
+    print("PASSED: slot probe learns nothing from an offline inverter")
+    return False
+
+
+async def test_slot_probe_refusing_everything_learns_nothing():
+    """Refusing every current down to the floor is not a ceiling, so nothing is learned."""
+    print("\n=== Test: slot probe gives up when everything is refused ===")
+    storage = _FakeStorage()
+    api, sn = _probe_api(storage=storage)
+    # The slots hold 0A: a current the inverter already holds counts as accepted without a write
+    inverter = _ProbeInverter(api, ceiling=0, held="0")
+    await api.ensure_slot_current_probed(sn)
+    assert sn not in api.slot_current_probed and not storage.contents, f"nothing should be learned, got {api.slot_current_probed}"
+    tried = [float(value) for cid, value in inverter.writes if cid == SOLIS_CID_CHARGE_CURRENT[5]]
+    assert min(tried[:-1]) >= 10, f"the probe should stop at the 10A floor, tried {tried}"
+    print("PASSED: slot probe gives up when everything is refused")
+    return False
+
+
+async def test_slot_probe_reloaded_not_repeated():
+    """A saved ceiling is loaded and used; it is only probed again once a day old, and a failed re-check keeps it."""
+    print("\n=== Test: slot probe result reloaded from storage ===")
+    now = datetime(2026, 9, 29, 20, 0, 0, tzinfo=UTC)
+    recent = {"SN0PROBE": {"charge": 60, "discharge": 58, "probed_at": (now - timedelta(hours=23)).isoformat()}}
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): recent}))
+    api._test_now_utc_exact = now
+    inverter = _ProbeInverter(api, ceiling=60)
+    await api.load_slot_current_probes()
+    await api.ensure_slot_current_probed(sn)
+    assert inverter.requests == 0, f"a ceiling under a day old must not be probed again, made {inverter.requests} requests"
+    limits = api.slot_current_limits(sn)
+    assert (limits["charge"], limits["discharge"]) == (60.0, 58.0), f"the saved ceilings should cap the slots, got {limits}"
+
+    # A day old: checked again, and the fresh result replaces it
+    stale = {"SN0PROBE": {"charge": 60, "discharge": 58, "probed_at": (now - timedelta(hours=25)).isoformat()}}
+    storage = _FakeStorage({("solis", "slot_current_limits"): stale})
+    api, sn = _probe_api(storage=storage)
+    api._test_now_utc_exact = now
+    inverter = _ProbeInverter(api, ceiling=62)
+    await api.load_slot_current_probes()
+    await api.ensure_slot_current_probed(sn)
+    assert inverter.requests > 0, "a ceiling a day old should be probed again"
+    assert api.slot_current_probed[sn]["discharge"] == 62.0 and api.slot_current_probed[sn]["probed_at"] == now.isoformat(), f"the re-check should replace it, got {api.slot_current_probed[sn]}"
+    assert storage.contents[("solis", "slot_current_limits")][sn]["discharge"] == 62.0, "the re-check should be saved"
+
+    # A re-check that gets no answer keeps the ceiling already known
+    storage = _FakeStorage({("solis", "slot_current_limits"): stale})
+    api, sn = _probe_api(storage=storage)
+    api._test_now_utc_exact = now
+    _ProbeInverter(api, offline_after=0)
+    await api.load_slot_current_probes()
+    await api.ensure_slot_current_probed(sn)
+    assert (api.slot_current_probed[sn]["charge"], api.slot_current_probed[sn]["discharge"]) == (60.0, 58.0), f"a failed re-check must keep the known ceiling, got {api.slot_current_probed[sn]}"
+    assert storage.contents[("solis", "slot_current_limits")] == stale, "a failed re-check must not change what is saved"
+    assert any("keeping charge 60.0A, discharge 58.0A" in m for m in api.log_messages), "keeping the known ceiling should be logged"
+
+    # No probe time at all counts as due
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): {"SN0PROBE": {"charge": 60, "discharge": 58}}}))
+    await api.load_slot_current_probes()
+    assert api.slot_probe_due(sn), "a saved ceiling with no probe time should be due for a check"
+
+    # An unreadable saved entry is ignored rather than trusted
+    api, sn = _probe_api(storage=_FakeStorage({("solis", "slot_current_limits"): {"SN0PROBE": {"charge": "junk"}}}))
+    await api.load_slot_current_probes()
+    assert sn not in api.slot_current_probed, f"an unreadable saved ceiling should be ignored, got {api.slot_current_probed}"
+    print("PASSED: slot probe result reloaded from storage")
+    return False
+
+
+async def test_slot_probe_skips():
+    """No probe without control, on V1 firmware, before the limit registers are read, or with no disabled slot to use."""
+    print("\n=== Test: slot probe skip conditions ===")
+    for label, kwargs in (("control disabled", {"control_enable": False}), ("V1 firmware", {"v2": False})):
+        api, sn = _probe_api(**kwargs)
+        inverter = _ProbeInverter(api)
+        await api.ensure_slot_current_probed(sn)
+        assert inverter.requests == 0 and sn not in api.slot_current_probed, f"{label}: no probe expected"
+
+    api, sn = _probe_api()
+    api.cached_values[sn].pop(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT)
+    inverter = _ProbeInverter(api)
+    await api.ensure_slot_current_probed(sn)
+    assert inverter.requests == 0, "the probe must wait for the limit registers to be read"
+
+    api, sn = _probe_api()
+    for slot in range(2, 7):
+        api.charge_discharge_time_windows[sn][slot]["discharge_enable"] = 1
+    inverter = _ProbeInverter(api)
+    for _ in range(2):
+        await api.ensure_slot_current_probed(sn)
+    assert inverter.requests == 0, "with no disabled slot nothing may be written"
+    assert sum("No disabled slot" in m for m in api.log_messages) == 1, "the missing slot should be logged once"
+
+    # A slot with only one direction disabled is not used; the next one down is
+    api, sn = _probe_api(slot6_enabled=True)
+    assert api.find_probe_slot(sn) == 5, f"slot 6 has charge enabled, so slot 5 should be chosen, got {api.find_probe_slot(sn)}"
+    print("PASSED: slot probe skip conditions")
+    return False
+
+
 async def test_automatic_config():
     """Test automatic_config method configures Predbat correctly"""
     print("Testing automatic_config...")
@@ -6793,9 +7052,9 @@ async def test_automatic_config():
     # direction gets its own limit, as the battery can discharge faster than it charges (GH#4940)
     expected_rate_max = ["sensor.predbat_solis_abc123_battery_rate_max", "sensor.predbat_solis_def456_battery_rate_max"]
     assert set_arg_calls.get("battery_rate_max") == expected_rate_max, f"Expected {expected_rate_max}, got {set_arg_calls.get('battery_rate_max')}"
-    expected_limit_charge = ["number.predbat_solis_abc123_max_charge_power", "number.predbat_solis_def456_max_charge_power"]
+    expected_limit_charge = ["sensor.predbat_solis_abc123_slot_charge_power_max", "sensor.predbat_solis_def456_slot_charge_power_max"]
     assert set_arg_calls.get("inverter_limit_charge") == expected_limit_charge, f"Expected {expected_limit_charge}, got {set_arg_calls.get('inverter_limit_charge')}"
-    expected_limit_discharge = ["number.predbat_solis_abc123_max_discharge_power", "number.predbat_solis_def456_max_discharge_power"]
+    expected_limit_discharge = ["sensor.predbat_solis_abc123_slot_discharge_power_max", "sensor.predbat_solis_def456_slot_discharge_power_max"]
     assert set_arg_calls.get("inverter_limit_discharge") == expected_limit_discharge, f"Expected {expected_limit_discharge}, got {set_arg_calls.get('inverter_limit_discharge')}"
     assert "inverter_limit" in set_arg_calls, "inverter_limit not configured"
     assert "export_limit" in set_arg_calls, "export_limit not configured"
