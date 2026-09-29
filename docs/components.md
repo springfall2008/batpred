@@ -900,7 +900,7 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
 | `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car |
-| `ohme_control` | Boolean | No | unset | `ohme_control` | Lets Predbat start and stop the charger from its own plan. Unset follows `ohme_automatic`; `false` keeps it off; released by read only mode |
+| `ohme_control` | Boolean | No | unset | `ohme_control` | Lets Predbat start and stop the charger from its own plan. Unset follows `ohme_automatic` once `car_charging_battery_size` and `car_charging_limit` are set; `false` keeps it off; released by read only mode |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on, or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
 
 ---
