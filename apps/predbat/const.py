@@ -70,6 +70,13 @@ INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
 INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
+# Per-control write backoff, for inverter types that opt in with write_backoff in INVERTER_DEF (only
+# GWMQTT). A control whose write of the same target has failed to verify this many times in a row
+# (one write per plan cycle) is degraded: it is sent once rather than retried in a burst, and at most
+# once per INVERTER_WRITE_DEGRADED_INTERVAL seconds, until a write verifies, it reads back as wanted,
+# or the target changes. Every call still checks the read-back and reports a mismatch as a failure.
+INVERTER_WRITE_BACKOFF_FAILURES = 2
+INVERTER_WRITE_DEGRADED_INTERVAL = 300
 # Inverter clock skew bands, measured as (inverter time - Predbat computer time) in minutes.
 # At or above the restart threshold Predbat warns loudly and triggers auto_restart. Between the warn
 # and restart thresholds nothing used to be said at all, yet the drift still shifts every charge and

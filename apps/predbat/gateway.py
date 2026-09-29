@@ -57,8 +57,9 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 _TELEMETRY_STALE_THRESHOLD = 120
 
 # How long an identical control command waits for the hub's ack (or, after an ack,
-# for telemetry to catch up) before it may be published again (seconds). Longer than
-# the generic write_and_poll loop (10 x 2 s), so one write sends the command once.
+# for telemetry to catch up) before it may be published again (seconds). Covers the
+# GWMQTT write_and_poll loop (3 attempts of up to 10 s each, see INVERTER_DEF), so one
+# write sends the command once.
 _COMMAND_ACK_WINDOW = 30
 
 # Ids kept per tracked command, so an ack for an earlier send of the same value still
@@ -1989,8 +1990,8 @@ class GatewayMQTT(ComponentBase):
     async def _send_control(self, entity_id, command, **kwargs):
         """Publish a control write once and let the hub's ack confirm it.
 
-        The generic write_and_poll loop calls the event handlers again every couple of
-        seconds until the read-back matches. Publishing on every call queued a fresh
+        The generic write_and_poll loop calls the event handlers again on every retry
+        until the read-back matches. Publishing on every call queued a fresh
         Modbus write on the hub each time, so a slow dongle write turned into a storm.
         Once the hub has shown it acks commands on this connection, an identical command
         (same entity, command and payload) is published only once per _COMMAND_ACK_WINDOW:
