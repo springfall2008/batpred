@@ -308,6 +308,7 @@ def test_ohme(my_predbat=None):
         ("control_release_retry", _test_ohme_control_failed_release_retries, "a refused release is retried without failing the run"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
         ("control_hand_to_octopus", _test_ohme_control_hand_to_octopus, "handing to Octopus turns max charge off first"),
+        ("control_car_plugged", _test_ohme_control_car_plugged, "plug state for ending guest charging"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
         ("auto_config_keeps_now", _test_ohme_auto_config_keeps_user_car_charging_now, "auto config keeps the user's car_charging_now"),
         ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
@@ -1990,6 +1991,20 @@ def _test_ohme_control_hand_to_octopus(my_predbat=None):
     resume = next(i for i, url in enumerate(urls) if url.endswith("/resume"))
     assert max_off < resume, f"Max charge must be off before the charger is resumed, got {urls}"
     assert api.control_saved_target is None, "Expected the saved target to be restored and cleared"
+    return 0
+
+
+def _test_ohme_control_car_plugged(my_predbat=None):
+    """Test the Ohme's plug state, used to end guest charging"""
+    print("**** Running test_ohme_control_car_plugged ****")
+
+    api = _ohme_control_api()
+    api.client._charge_session = {}
+    assert api.charger_control_car_plugged(api.client) is True, "No session yet should read as plugged in"
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}}
+    assert api.charger_control_car_plugged(api.client) is True
+    api.client._charge_session = {"mode": "DISCONNECTED"}
+    assert api.charger_control_car_plugged(api.client) is False
     return 0
 
 
