@@ -1213,6 +1213,30 @@ def test_unset_control_follows_automatic_written_by_the_user():
     print("  ✓ Unset Zappi control follows myenergi_automatic only when the user wrote it")
 
 
+def test_control_setting_strings_are_read_as_booleans():
+    """myenergi_zappi_control has no default, so a quoted value must still read as the boolean it names."""
+    assert _make_component(zappi_control="false").zappi_control is False
+    assert _make_component(zappi_control="true").zappi_control is True
+    assert _make_component(zappi_control=0).zappi_control is False
+    assert _make_component().zappi_control is None
+    print("  ✓ Quoted and numeric myenergi_zappi_control values read as booleans")
+
+
+def test_control_hand_to_octopus_never_fast():
+    """Handing a Zappi to Octopus restores its saved mode, but never Fast - that would start a charge."""
+    component = _controlling_component()
+    device = component.devices["Z12345678"]
+    component.control_saved_modes[device.device_id] = "Fast"
+    run_async(component.charger_control_hand_to_octopus(device, False))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
+    assert device.device_id not in component.control_saved_modes
+
+    component.control_saved_modes[device.device_id] = "Eco"
+    run_async(component.charger_control_hand_to_octopus(device, False))
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    print("  ✓ A Zappi handed to Octopus goes back to its own mode, never Fast")
+
+
 def test_control_releases_to_the_saved_mode():
     """Releasing puts the Zappi back where it was before Predbat first moved it."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
@@ -2633,6 +2657,8 @@ def test_myenergi(my_predbat=None):
     test_control_charge_does_nothing_before_a_plan_exists()
     test_control_gating_refuses_with_a_reason()
     test_unset_control_follows_automatic_written_by_the_user()
+    test_control_setting_strings_are_read_as_booleans()
+    test_control_hand_to_octopus_never_fast()
     test_control_releases_to_the_saved_mode()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()

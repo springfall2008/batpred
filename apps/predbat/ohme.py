@@ -27,7 +27,7 @@ from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from component_base import ComponentBase
-from car_charger_control import CarChargerControl
+from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
@@ -234,9 +234,9 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.ohme_automatic = ohme_automatic
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
-        self.ohme_control = ohme_control
+        self.ohme_control = parse_control_setting(ohme_control)
         # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=ohme_control)
+        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control)
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so
@@ -418,6 +418,20 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             await client.async_set_target(target_percent=self.control_saved_target)
             self.log("Info: Ohme API: Restored the charger target to {}%".format(self.control_saved_target))
             self.control_saved_target = None
+
+    async def charger_control_hand_to_octopus(self, client, charge):
+        """Hand the charger to Octopus without starting a charge.
+
+        Max charge is what forces a charge now, so it goes first; resuming a paused charger then
+        only returns it to Ohme's smart schedule, which Octopus drives.
+        """
+        self.log("Info: Ohme API: Octopus Intelligent drives the charger, handing it back")
+        await client.async_max_charge(False)
+        if self.control_saved_target is not None:
+            await client.async_set_target(target_percent=self.control_saved_target)
+            self.control_saved_target = None
+        if not charge:
+            await client.async_resume_charge()
 
     def octopus_intelligent_wanted(self):
         """

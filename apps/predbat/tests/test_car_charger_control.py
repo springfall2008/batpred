@@ -14,7 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
-from car_charger_control import CarChargerControl
+from car_charger_control import CarChargerControl, parse_control_setting
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -72,6 +72,8 @@ class FakeComponent(CarChargerControl):
         self.drift_aware = drift_aware
         self.args = {}
         self.plans = {}
+        # entity id -> attributes of the Intelligent dispatch sensors
+        self.sensors = {}
         self.logs = []
         self.commands = []
         # Chargers whose commands are refused
@@ -93,8 +95,10 @@ class FakeComponent(CarChargerControl):
         return self.args.get(name, default)
 
     def get_state_wrapper(self, entity_id, default=None, attribute=None):
-        """Only the car charging slot sensors are read."""
-        return self.plans.get(entity_id, default)
+        """The car charging slot plans, or an attribute of a dispatch sensor."""
+        if attribute == "planned":
+            return self.plans.get(entity_id, default)
+        return self.sensors.get(entity_id, {}).get(attribute, default)
 
     def charger_control_chargers(self):
         """Chargers in car order."""
@@ -353,18 +357,10 @@ def test_inactive_does_nothing():
 class FakeOctopus:
     """The parts of the Octopus component the Octopus rule reads."""
 
-    def __init__(self, devices=None, configured=True):
-        """devices maps device id to its record; configured False means discovery has not run."""
-        self.devices = devices or {}
-        self.intelligent_config_devices = sorted(self.devices) if configured else None
-
-    def get_active_intelligent_device_ids(self):
-        """Sorted non-suspended device ids, as the real component."""
-        return sorted(device_id for device_id, device in self.devices.items() if not device.get("suspended"))
-
-    def get_intelligent_devices(self):
-        """All devices."""
-        return self.devices
+    def __init__(self, configured=True, automatic=True):
+        """configured False means discovery has not wired the car slots yet."""
+        self.automatic = automatic
+        self.intelligent_config_devices = [] if configured else None
 
 
 class FakeComponents:
@@ -379,21 +375,34 @@ class FakeComponents:
         return self.octopus if name == "octopus" else None
 
 
-def _octopus_component(octopus=None, slots=None, control=None):
-    """A component holding car 0's charger off, with the given Octopus arrangement."""
+DISPATCH = "binary_sensor.predbat_octopus_intelligent_dispatch"
+
+
+def _octopus_component(octopus=None, is_charger=None, control=None, wired=True):
+    """A component for car 0's charger with the given Octopus arrangement.
+
+    is_charger is what car 0's dispatch sensor says, None for a sensor that does not say.
+    """
     component = FakeComponent([FakeCharger("a")])
     component.charger_control_config = control
     component.base.components = FakeComponents(octopus)
     component.base.car_slot_owner = None
-    if slots is not None:
-        component.args["octopus_intelligent_slot"] = slots
+    if wired:
+        component.args["octopus_intelligent_slot"] = [DISPATCH]
+        component.sensors[DISPATCH] = {} if is_charger is None else {"is_charger": is_charger}
     _plan(component, 0, [])
     return component
 
 
+def test_parse_control_setting():
+    """Control settings arrive unconverted, so quoted and numeric values must still read right."""
+    for value, expected in ((None, None), (True, True), (False, False), ("false", False), ("False", False), ("off", False), ("true", True), ("on", True), (0, False), (1, True)):
+        assert parse_control_setting(value) is expected, (value, parse_control_setting(value))
+
+
 def test_octopus_rule_without_octopus_drives():
     """No Octopus Intelligent car at all - Predbat drives the charger."""
-    component = _octopus_component()
+    component = _octopus_component(wired=False)
     assert component.charger_control_octopus_drives_charger(0) is False
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], component.commands
@@ -401,24 +410,24 @@ def test_octopus_rule_without_octopus_drives():
 
 def test_octopus_rule_car_integrated_drives():
     """Octopus drives the car, not the charger - Predbat drives the charger to match the dispatches."""
-    octopus = FakeOctopus({"dev-1": {"is_charger": False}})
-    component = _octopus_component(octopus, slots=["binary_sensor.octopus_dispatch"])
+    component = _octopus_component(FakeOctopus(), is_charger=False)
     assert component.charger_control_octopus_drives_charger(0) is False
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], component.commands
 
 
-def test_octopus_rule_charge_point_hands_off_and_releases():
-    """Octopus drives the charger itself - Predbat lets go, releasing a charger it was holding, and says so once."""
-    component = _octopus_component()
+def test_octopus_rule_charge_point_hands_off_without_starting():
+    """Octopus drives the charger itself - Predbat lets go of a charger it had stopped without
+    starting it, and says so once."""
+    component = _octopus_component(wired=False)
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], component.commands
 
-    component.base.components = FakeComponents(FakeOctopus({"dev-1": {"is_charger": True}}))
-    component.args["octopus_intelligent_slot"] = ["binary_sensor.octopus_dispatch"]
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {"is_charger": True}
     run_async(component.charger_control_tick(_now()))
     run_async(component.charger_control_tick(_now()))
-    assert component.commands == [("a", "off", 0), ("a", "release", False)], component.commands
+    assert component.commands == [("a", "off", 0)], "A stopped charger is left for Octopus, not started: {}".format(component.commands)
     assert component.charger_control_state == {}
     assert sum("leaving it to Octopus" in line for line in component.logs) == 1, component.logs
 
@@ -429,29 +438,43 @@ def test_octopus_rule_charge_point_hands_off_and_releases():
     assert any("no longer left to Octopus" in line for line in component.logs), component.logs
 
 
+def test_octopus_rule_charge_point_releases_a_running_charger():
+    """A charger Predbat had running is released as usual when Octopus takes it over."""
+    component = _octopus_component(wired=False)
+    _plan(component, 0, [("06-01 01:00:00", "06-01 02:00:00")])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0)], component.commands
+
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {"is_charger": True}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0), ("a", "release", True)], component.commands
+
+
 def test_octopus_rule_explicit_true_never_overrides_a_charge_point():
     """control: true does not make Predbat fight Octopus for a charger Octopus is known to drive."""
-    octopus = FakeOctopus({"dev-1": {"is_charger": True}})
-    component = _octopus_component(octopus, slots=["binary_sensor.octopus_dispatch"], control=True)
+    component = _octopus_component(FakeOctopus(), is_charger=True, control=True)
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
 
 
 def test_octopus_rule_unknown_hands_off_unless_told():
-    """Slots from somewhere other than the Octopus component - cannot tell, so hands off unless control: true."""
-    component = _octopus_component(None, slots=["binary_sensor.octopus_energy_intelligent_dispatching"])
+    """A dispatch sensor that does not say (the Octopus Energy integration) - hands off unless control: true."""
+    component = _octopus_component(None)
     assert component.charger_control_octopus_drives_charger(0) is None
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
+    assert any("cannot tell yet" in line for line in component.logs), component.logs
+    assert not any("leaving it to Octopus" in line for line in component.logs), component.logs
 
-    told = _octopus_component(None, slots=["binary_sensor.octopus_energy_intelligent_dispatching"], control=True)
+    told = _octopus_component(None, control=True)
     run_async(told.charger_control_tick(_now()))
     assert told.commands == [("a", "off", 0)], told.commands
 
 
 def test_octopus_rule_waits_for_octopus_discovery():
     """The Octopus component has not wired its devices yet - nothing is commanded until it has."""
-    component = _octopus_component(FakeOctopus(configured=False))
+    component = _octopus_component(FakeOctopus(configured=False), wired=False)
     assert component.charger_control_octopus_drives_charger(0) is None
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
@@ -462,21 +485,33 @@ def test_octopus_rule_waits_for_octopus_discovery():
     assert component.commands == [("a", "off", 0)], component.commands
 
 
+def test_octopus_rule_does_not_wait_without_octopus_automatic():
+    """With octopus_automatic off the Octopus component never wires the slots, so there is nothing to wait for."""
+    component = _octopus_component(FakeOctopus(configured=False, automatic=False), wired=False)
+    assert component.charger_control_octopus_drives_charger(0) is False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+
 def test_octopus_rule_other_slot_owner_hands_off():
     """Another component (Ohme) supplies the Intelligent slots from the charger itself."""
-    component = _octopus_component(None, slots=["binary_sensor.predbat_ohme_slot_active"])
+    component = _octopus_component(None)
     component.base.car_slot_owner = "ohme"
     assert component.charger_control_octopus_drives_charger(0) is True
 
 
 def test_octopus_rule_per_car():
-    """Each car is judged on its own Octopus device, by position."""
-    octopus = FakeOctopus({"dev-1": {"is_charger": True}, "dev-2": {"is_charger": False}})
+    """Each car is judged on its own wired dispatch sensor, whatever order the slots are listed in
+    and whichever component (Octopus or Kraken) published them."""
     component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
     component.base.num_cars = 2
-    component.base.components = FakeComponents(octopus)
+    component.base.components = FakeComponents(None)
     component.base.car_slot_owner = None
-    component.args["octopus_intelligent_slot"] = ["binary_sensor.dispatch_1", "binary_sensor.dispatch_2"]
+    component.args["octopus_intelligent_slot"] = ["binary_sensor.predbat_kraken_intelligent_dispatch_z", "binary_sensor.predbat_kraken_intelligent_dispatch_a"]
+    component.sensors = {
+        "binary_sensor.predbat_kraken_intelligent_dispatch_z": {"is_charger": True},
+        "binary_sensor.predbat_kraken_intelligent_dispatch_a": {"is_charger": False},
+    }
     _plan(component, 0, [])
     _plan(component, 1, [])
     run_async(component.charger_control_tick(_now()))
@@ -502,12 +537,15 @@ def run_car_charger_control_tests(my_predbat=None):
     test_failed_release_is_retried()
     test_one_refusing_charger_does_not_block_the_others()
     test_inactive_does_nothing()
+    test_parse_control_setting()
     test_octopus_rule_without_octopus_drives()
     test_octopus_rule_car_integrated_drives()
-    test_octopus_rule_charge_point_hands_off_and_releases()
+    test_octopus_rule_charge_point_hands_off_without_starting()
+    test_octopus_rule_charge_point_releases_a_running_charger()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()
     test_octopus_rule_unknown_hands_off_unless_told()
     test_octopus_rule_waits_for_octopus_discovery()
+    test_octopus_rule_does_not_wait_without_octopus_automatic()
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
     return False
