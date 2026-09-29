@@ -90,6 +90,7 @@ chargepower
 CHECKCODE
 Chrg
 citem
+clearsky
 cloudfront
 cmpl
 cobat
@@ -461,6 +462,7 @@ oninput
 onmouseout
 onmouseover
 openapi
+openmeteo
 openrouter
 openweathermap
 Opticaster

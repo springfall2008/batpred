@@ -169,6 +169,14 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Failed to load model, reinitialising predictor")
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
+    def is_alive(self):
+        """
+        Override ComponentBase to prevent Read-Only mode during long initial training.
+        Returns True if we have fully started, OR if we are still starting up but
+        haven't encountered any actual errors yet.
+        """
+        return self.api_started or (self.count_errors == 0 and not self.fatal_error)
+
     def is_calculating(self):
         """Return whether the component is currently calculating predictions."""
         return self.load_ml_calculating
@@ -409,7 +417,12 @@ class LoadMLComponent(ComponentBase):
                 energy = self.get_from_incrementing(pv_data_cumulative, m, PREDICT_STEP, backwards=True)
                 pv_data[m] = dp4(energy)
 
-            pv_forecast_minute, pv_forecast_minute10, _ = self.base.fetch_pv_forecast()
+            pv_res = self.base.fetch_pv_forecast()
+            pv_forecast_minute = pv_res[0] if len(pv_res) > 0 else {}
+            pv_forecast_minute10 = pv_res[1] if len(pv_res) > 1 else {}
+            pv_forecast_minute90 = pv_res[2] if len(pv_res) > 2 else {}
+            pv_forecast_minuteCS = pv_res[3] if len(pv_res) > 3 else {}
+            pv_forecast_minuteHIST = pv_res[4] if len(pv_res) > 4 else {}
             # Add future PV forecast as per-5-min energy with negative keys (negative = future)
             # key -5 = first future step, -10 = second, etc.
             if pv_forecast_minute:
@@ -869,7 +882,8 @@ class LoadMLComponent(ComponentBase):
             import_rate=dict_to_array(self.import_rates_data),
             export_rate=dict_to_array(self.export_rates_data),
         )
-        np.savez_compressed(self.database_filepath, **save_kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: np.savez_compressed(self.database_filepath, **save_kwargs))
         self.log("ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, self.database_filepath))
 
     async def load_database_history(self):

@@ -221,7 +221,13 @@ class Hass(LogRedaction):
             rotate_predbat_logs(max_logs)
 
             self.logfile.close()
-            os.rename("predbat.log", predbat_log_name(1))
+            try:
+                dest = predbat_log_name(1)
+                if os.path.isfile(dest):
+                    os.remove(dest)
+                os.rename("predbat.log", dest)
+            except OSError:
+                pass
             self.logfile = open("predbat.log", "w")
 
     async def run_in_executor(self, callback, *args):
