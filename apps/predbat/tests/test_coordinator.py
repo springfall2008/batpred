@@ -1551,6 +1551,30 @@ def test_short_or_unrelated_identities_do_not_hide_misfiled_values():
     return 0
 
 
+def test_warning_is_once_per_record_and_ignores_joined_digit_runs():
+    """A second record misfiling the same field is a new leak and warns too (once per record, not
+    once per field); and removing an explained identifier must not join the digit runs either side
+    of it into one that looks like an identifier."""
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+
+    def meter(device_id, mpan, note):
+        """One Octopus-shaped meter record with a note in its clear info container."""
+        return {"device_id": device_id, "direction": "import", "account_ids": {"mpan": mpan}, "info": {"note": note}}
+
+    coordinator.report(
+        "octopus",
+        {"meters": [meter("octopus:1111111111111", "1111111111111", "9876543210987"), meter("octopus:2222222222222", "2222222222222", "9876543210988"), meter("octopus:3333333333333", "3333333333333", "ref 12345 3333333333333 67890")]},
+    )
+    for _ in range(2):
+        coordinator.catalogue()
+    warnings = [message for message in messages if "info.note" in message]
+    assert len(warnings) == 2, warnings
+    print("PASS: a warning is once per record, and an explained identifier does not join digit runs")
+    return 0
+
+
 # --- Review round 3: Task 7 review - a case/separator-transformed echo of a pseudonymised value ---
 
 
@@ -2079,6 +2103,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_identity_derived_values_do_not_warn()
     failures += test_misfiled_identifier_warns_once_per_process()
     failures += test_short_or_unrelated_identities_do_not_hide_misfiled_values()
+    failures += test_warning_is_once_per_record_and_ignores_joined_digit_runs()
     failures += test_identifier_variants_registered_for_case_and_separator_transforms()
     failures += test_identifier_variants_fold_up_as_well_as_down()
     failures += test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id()

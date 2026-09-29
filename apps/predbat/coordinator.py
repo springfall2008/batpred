@@ -278,6 +278,9 @@ class Redactor:
         self.warned = warned if warned is not None else set()
         # Shape-guard hits, held until the walk is done - see _flush_warnings
         self._pending_warnings = []
+        # device_id of the record being walked, so a warning is deduplicated per record rather
+        # than per field - see _flush_warnings
+        self._record_device_id = None
         # Every variant of an account identifier noted from a pseudonym container or an
         # identity-derived device_id: a guard hit wholly explained by one of these is the
         # redaction working as designed, not a misfiling, so it is not warned about
@@ -517,7 +520,7 @@ class Redactor:
         label = container if container == name else "{}.{}".format(container, name)
         message = "Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label)
         # A location-named field is flagged by its name, whatever the value, so it is always warned about
-        self._pending_warnings.append((message, None if location else value, strict_numeric))
+        self._pending_warnings.append((message, None if location else value, strict_numeric, self._record_device_id))
         return self._note(value, substring=True)
 
     def _guard_value(self, container, name, value):
@@ -553,7 +556,7 @@ class Redactor:
         strict_numeric = container == "hardware_ids"
         if not self._misfiled(name, strict_numeric=strict_numeric):
             return name
-        self._pending_warnings.append(("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container), name, strict_numeric))
+        self._pending_warnings.append(("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container), name, strict_numeric, self._record_device_id))
         return self._note(name, substring=True)
 
     def _flush_warnings(self):
@@ -565,15 +568,20 @@ class Redactor:
         "octopus:{mpan}" device_id, a programme's cross-link to it, a station id echoed as a
         number - is the redaction working as designed: it is still pseudonymised, but warning
         about it on every debug dump is noise, not advice. The message itself never holds the
-        value (see _guard_key), so deduplicating on it groups hits by container and field.
+        value (see _guard_key), so it is deduplicated on the message plus the pseudonym of the
+        record's device_id: a second record misfiling the same field is a new leak and warns
+        too, while the same record on the next dump does not.
         """
+        if not self._pending_warnings:
+            return
         identities = [self._whole_token(identity) for identity in sorted(self._identity_variants, key=len, reverse=True)]
-        for message, value, strict_numeric in self._pending_warnings:
+        for message, value, strict_numeric, device_id in self._pending_warnings:
             if value is not None and self._explained_by_identity(value, identities, strict_numeric):
                 continue
-            if message in self.warned:
+            key = (message, None if device_id is None else self.token(device_id))
+            if key in self.warned:
                 continue
-            self.warned.add(message)
+            self.warned.add(key)
             if self.log:
                 self.log(message)
         self._pending_warnings = []
@@ -594,9 +602,11 @@ class Redactor:
             except (ValueError, OverflowError):
                 return False
             return any(identity.fullmatch(text) for identity in identities)
+        # Replaced by a non-digit, non-separator placeholder, not removed: removing it would join
+        # the digit runs either side of it into one that looks like an identifier
         remaining = str(value)
         for identity in identities:
-            remaining = identity.sub("", remaining)
+            remaining = identity.sub("|", remaining)
         return not self._misfiled(remaining, strict_numeric=strict_numeric)
 
     def _embeds_account_id(self, record):
@@ -644,6 +654,9 @@ class Redactor:
         if isinstance(node, dict):
             if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
                 self._note(node["device_id"], substring=True, identity=self._embeds_account_id(node))
+            outer_device_id = self._record_device_id
+            if isinstance(node.get("device_id"), str):
+                self._record_device_id = node["device_id"]
             out = {}
             for key, value in node.items():
                 if key in PSEUDONYM_CONTAINERS:
@@ -656,6 +669,7 @@ class Redactor:
                     out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
                 else:
                     out[key] = self._walk(value, container=key)
+            self._record_device_id = outer_device_id
             return out
         if isinstance(node, list):
             return [self._walk(entry, container=container) for entry in node]
