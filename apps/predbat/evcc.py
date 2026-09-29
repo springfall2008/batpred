@@ -426,6 +426,8 @@ class EvccAPI(ComponentBase):
         self.override_until = {}
         self.last_connected = {}
         self.guest_charging = {}
+        # The mode each car was last warned about sitting in with no borrow on record, so it is said once
+        self.stranded_warned = {}
         # Borrows recorded before the last shutdown, read once on the first cycle. None until then,
         # so the read is not mistaken for "nothing was owed"
         self.saved_takeovers = None
@@ -985,7 +987,7 @@ class EvccAPI(ComponentBase):
                 # A key that is not a car index is not ours to interpret - skip it rather than fail
                 continue
 
-    def restore_saved_mode(self, car_n, observed):
+    def restore_saved_mode(self, car_n, observed, connected=True):
         """
         Recover a borrow left unfinished by a restart, so the loadpoint is still handed back.
 
@@ -1019,13 +1021,21 @@ class EvccAPI(ComponentBase):
             source = "published sensor"
 
         if saved not in EVCC_RESTING_MODES:
-            if observed in EVCC_TAKEOVER_MODES:
+            if connected and observed in EVCC_TAKEOVER_MODES:
                 # Only Predbat writes these two, so one with nothing owed back is either a borrow that
                 # was lost or a deliberate setting of the user's. It cannot tell which, and it leaves
-                # the loadpoint alone either way - but left unsaid the car just quietly never charges
-                self.log("Warn: EvccAPI: car {} loadpoint is in '{}' with no record of what it was borrowed from - leaving it to evcc, which will refuse to take it over".format(car_n, observed))
+                # the loadpoint alone either way - but left unsaid the car just quietly never charges.
+                # Only with a car plugged in, since an evcc whose default is off sits there between
+                # every session with nothing to charge, and only once per arrival so it does not
+                # bury the rest of the log
+                if self.stranded_warned.get(car_n) != observed:
+                    self.log("Warn: EvccAPI: car {} loadpoint is in '{}' with no record of what it was borrowed from - leaving it to evcc, which will refuse to take it over".format(car_n, observed))
+                    self.stranded_warned[car_n] = observed
+            else:
+                self.stranded_warned.pop(car_n, None)
             return
 
+        self.stranded_warned.pop(car_n, None)
         if written and observed and observed != written:
             self.log("EvccAPI: car {} was borrowed but the mode has moved to '{}' since (Predbat left '{}') - not resuming".format(car_n, observed, written))
             return
@@ -1101,13 +1111,13 @@ class EvccAPI(ComponentBase):
                 continue
             loadpoint = loadpoints[lp_index]
             observed = loadpoint.get("mode")
+            connected = bool(loadpoint.get("connected"))
 
             # Seeded before any gate: plan_valid is False on the first cycle after a restart, which is
             # exactly the cycle where an unfinished takeover has to be recovered rather than published away
-            self.restore_saved_mode(car_n, observed)
+            self.restore_saved_mode(car_n, observed, connected)
 
             # A new session clears any standing override
-            connected = bool(loadpoint.get("connected"))
             if connected and not self.last_connected.get(car_n, False):
                 self.override_until.pop(car_n, None)
             self.last_connected[car_n] = connected

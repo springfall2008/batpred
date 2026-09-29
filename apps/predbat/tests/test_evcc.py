@@ -702,6 +702,34 @@ def test_only_borrows_a_resting_loadpoint():
     # It cannot recover on its own, but it must say so rather than sit there silently
     check("stranded_warns", any("no record of what it was borrowed from" in message for message in stranded.log_messages), True, failures)
 
+    # An evcc whose default mode is off sits there between every session - said once, not every cycle
+    def stranded_warnings():
+        """Count the stranded-loadpoint warnings logged so far."""
+        return sum("no record of what it was borrowed from" in message for message in stranded.log_messages)
+
+    run_async(stranded.apply_modes())
+    check("stranded_warns_once", stranded_warnings(), 1, failures)
+    # Leaving the mode and landing back in it is a new arrival, and is said again. Idle, so the
+    # spell in pv is not borrowed - a borrow would own the mode and nothing would be stranded
+    stranded.entities["sensor.predbat_car_charging_mode"] = {"state": "solar", "attributes": {"reason": "idle"}}
+    stranded.state["loadpoints"][0]["mode"] = EVCC_MODE_PV
+    run_async(stranded.apply_modes())
+    stranded.state["loadpoints"][0]["mode"] = EVCC_MODE_OFF
+    run_async(stranded.apply_modes())
+    check("stranded_warns_again", stranded_warnings(), 2, failures)
+    # Unplugged, off is just where evcc's default parks it with nothing to charge - not worth a warning,
+    # even arriving there fresh from pv
+    stranded.state["loadpoints"][0]["mode"] = EVCC_MODE_PV
+    run_async(stranded.apply_modes())
+    stranded.state["loadpoints"][0].update(connected=False, mode=EVCC_MODE_OFF)
+    run_async(stranded.apply_modes())
+    run_async(stranded.apply_modes())
+    check("stranded_quiet_unplugged", stranded_warnings(), 2, failures)
+    # Plugged back in and still off, the car really will not charge, so it is said again
+    stranded.state["loadpoints"][0]["connected"] = True
+    run_async(stranded.apply_modes())
+    check("stranded_warns_on_plug_in", stranded_warnings(), 3, failures)
+
     # With the borrow recovered from the saved state, the same slot is taken over as it should be
     recovered = MockEvccAPI(host="http://evcc", control=True)
     recovered.state = {"loadpoints": [dict(SAMPLE_STATE["loadpoints"][0], mode=EVCC_MODE_OFF, connected=True)]}
