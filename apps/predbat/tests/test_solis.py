@@ -2368,8 +2368,6 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_cli_config_keys_match_component()
         failed |= test_merge_solis_cli_settings()
         failed |= test_load_solis_cli_config_resolves_secrets()
-        failed |= test_solis_slot_current_report()
-        failed |= asyncio.run(test_probe_slot_current_restores_original())
         failed |= test_slot_current_limits_inputs()
         failed |= test_slot_current_limits_logged_on_change()
         failed |= test_describe_inverter_detail_allow_list()
@@ -6477,78 +6475,6 @@ def test_load_solis_cli_config_resolves_secrets():
         if saved_env is not None:
             os.environ["PREDBAT_SECRETS_FILE"] = saved_env
     print("PASSED: Solis CLI config resolves secrets")
-    return False
-
-
-def test_solis_slot_current_report():
-    """The CLI report shows every input to the slot-current cap: CID 7224/7226, the rated current and each slot's advertised limit."""
-    print("\n=== Test: Solis slot current report ===")
-    from solis import solis_slot_current_report
-
-    api = MockSolisAPI()
-    sn = "SN0REPORT"
-    api.inverter_sn = [sn]
-    # A 3.6kW inverter on a 15S LV pack (batteryAcvSet 53.2V -> 48V), the issue #5187 shape
-    api.inverter_details[sn] = {"power": 3.6, "powerStr": "kW", "batteryAcvSet": 53.2}
-    api.cached_values[sn] = {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "100", SOLIS_CID_DISCHARGE_CURRENT[0]: "0", SOLIS_CID_DISCHARGE_CURRENT[1]: "50"}
-    api.cached_infos[sn] = {SOLIS_CID_DISCHARGE_CURRENT[0]: {"sysCommand": {"min": 0, "max": 100}}}
-
-    report = "\n".join(solis_slot_current_report(api, sn))
-    print(report)
-    assert f"(CID {SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT}) = '100'" in report, "CID 7226 should be reported"
-    assert "rated current cap = 75.0A" in report and "converted at 48.0V" in report, "the rated cap and its voltage should be reported"
-    assert f"discharge slot 1 current (CID {SOLIS_CID_DISCHARGE_CURRENT[0]}) = '0', advertised min=0 max=100" in report, "slot 1's value and advertised limit should be reported"
-    assert f"discharge slot 2 current (CID {SOLIS_CID_DISCHARGE_CURRENT[1]}) = '50', advertised none returned" in report, "a slot with no metadata should say so"
-    assert f"charge slot 1 current (CID {SOLIS_CID_CHARGE_CURRENT[0]}) = None" in report, "an unread slot should show as None"
-    print("PASSED: Solis slot current report")
-    return False
-
-
-async def test_probe_slot_current_restores_original():
-    """The live probe records which currents the inverter keeps, then writes the original value back."""
-    print("\n=== Test: Solis slot current probe ===")
-    from solis import probe_slot_current
-
-    api = MockSolisAPI()
-    sn = "SN0PROBE"
-    cid = SOLIS_CID_DISCHARGE_CURRENT[0]
-    # An inverter that keeps up to 70A and reads back 0 for anything higher, as seen in the field
-    device = {"value": "0"}
-    writes = []
-
-    async def fake_read_cid(inverter_sn, read_cid):
-        """Return the simulated register."""
-        return device["value"], {}
-
-    async def fake_read_and_write_cid(inverter_sn, write_cid, value, field_description=None):
-        """Keep values up to 70A, refuse anything higher by reading back 0."""
-        writes.append(str(value))
-        device["value"] = str(value) if float(value) <= 70 else "0"
-        api.cached_values.setdefault(inverter_sn, {})[write_cid] = device["value"]
-        return device["value"] == str(value)
-
-    api.read_cid = fake_read_cid
-    api.read_and_write_cid = fake_read_and_write_cid
-
-    results, original, restored = await probe_slot_current(api, sn, [62.5, 70.0, 75.0])
-    assert results == [(62.5, True, "62.5"), (70.0, True, "70.0"), (75.0, False, "0")], f"unexpected probe results {results}"
-    assert original == "0" and restored, f"original should be read first and restored, got original={original!r} restored={restored}"
-    assert writes == ["62.5", "70.0", "75.0", "0"], f"the original must be written back last, writes were {writes}"
-    assert device["value"] == "0", "the register should end on its original value"
-
-    # Another slot and direction probe their own register and leave slot 1 discharge alone
-    touched = []
-
-    async def recording_read_and_write_cid(inverter_sn, write_cid, value, field_description=None):
-        """Record which register each write goes to."""
-        touched.append((write_cid, field_description))
-        return True
-
-    api.read_and_write_cid = recording_read_and_write_cid
-    await probe_slot_current(api, sn, [60.0], direction="charge", slot=6)
-    assert {write_cid for write_cid, _ in touched} == {SOLIS_CID_CHARGE_CURRENT[5]}, f"charge slot 6 should probe CID {SOLIS_CID_CHARGE_CURRENT[5]} only, got {touched}"
-    assert touched[0][1] == "probe charge slot 6 current 60.0A", f"the write should be described by slot and direction, got {touched[0][1]}"
-    print("PASSED: Solis slot current probe")
     return False
 
 

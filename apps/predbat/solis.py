@@ -4815,51 +4815,6 @@ def merge_solis_cli_settings(cli, config):
     return merged, used
 
 
-def solis_slot_current_report(solis_api, inverter_sn):
-    """
-    Describe what bounds the slot currents on one inverter, as lines of text
-
-    Everything the slot-current cap in write_time_windows_if_changed() is built from (issue #5187):
-    the battery limits in CID 7224/7226, the rated power and the voltage it is converted at, and each
-    slot current with the sysCommand metadata SolisCloud returned for it. Read from what run() already
-    fetched, so it costs no requests.
-    """
-    values = solis_api.cached_values.get(inverter_sn, {})
-    infos = solis_api.cached_infos.get(inverter_sn, {})
-    detail = solis_api.inverter_details.get(inverter_sn, {})
-    lines = [f"SLOT CURRENTS: {inverter_sn}"]
-    lines.append(f"  battery max charge current (CID {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT}) = {values.get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT)!r}")
-    lines.append(f"  battery max discharge current (CID {SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT}) = {values.get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT)!r}")
-    lines.append(f"  rated power = {detail.get('power')!r} {detail.get('powerStr')!r}, converted at {solis_api.get_nominal_voltage(inverter_sn)}V, rated current cap = {solis_api.get_rated_current(inverter_sn)!r}A")
-    lines.append("  " + solis_api.describe_slot_current_limits(inverter_sn, solis_api.slot_current_limits(inverter_sn)))
-    for direction, cids in (("charge", SOLIS_CID_CHARGE_CURRENT), ("discharge", SOLIS_CID_DISCHARGE_CURRENT)):
-        for slot, cid in enumerate(cids, start=1):
-            command = infos.get(cid, {}).get("sysCommand")
-            advertised = "none returned" if not command else f"min={command.get('min')!r} max={command.get('max')!r}" if isinstance(command, dict) else repr(command)
-            lines.append(f"  {direction} slot {slot} current (CID {cid}) = {values.get(cid)!r}, advertised {advertised}")
-    return lines
-
-
-async def probe_slot_current(solis_api, inverter_sn, currents, direction="discharge", slot=1):
-    """
-    Try each current in turn on one slot's charge or discharge current register, then put the original value back
-
-    Answers "what is the most this inverter accepts" directly (issue #5187: a 3.6kW inverter refused
-    100A, then the 75A rated cap, reading back 0 each time). Any slot can be probed, so a disabled
-    slot can be compared with the enabled one Predbat drives. Each value goes through
-    read_and_write_cid(), so a refusal is judged on the settled read-back exactly as a real write is.
-    Returns [(amps, accepted, read_back)], the original value and whether it was restored.
-    """
-    cid = (SOLIS_CID_CHARGE_CURRENT if direction == "charge" else SOLIS_CID_DISCHARGE_CURRENT)[slot - 1]
-    original, _ = await solis_api.read_cid(inverter_sn, cid)
-    results = []
-    for amps in currents:
-        accepted = await solis_api.read_and_write_cid(inverter_sn, cid, amps, field_description=f"probe {direction} slot {slot} current {amps}A")
-        results.append((amps, accepted, solis_api.cached_values.get(inverter_sn, {}).get(cid)))
-    restored = await solis_api.read_and_write_cid(inverter_sn, cid, original, field_description=f"restore {direction} slot {slot} current")
-    return results, original, restored
-
-
 def print_raw_response(endpoint, payload, reply):  # pragma: no cover
     """Print one request and its whole reply, for --dump-raw."""
     print(f"RAW {endpoint} {json.dumps(payload)}")
@@ -4879,13 +4834,12 @@ async def read_limit_registers(solis_api, inverter_sn):  # pragma: no cover
             print(f"Single read of CID {cid} failed: {exc}")
 
 
-async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=None, supabase_key=None, probes=None, probe_slot=1, dump_raw=False, probe_ceiling=False):  # pragma: no cover
+async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=None, supabase_key=None, dump_raw=False, probe_ceiling=False):  # pragma: no cover
     """
     Run a test of Solis API
 
     solis_args are SolisAPI keyword arguments. For OAuth, user_id and the Supabase settings are put
-    where oauth_mixin looks for them: base.args and the environment. probes is a list of
-    (direction, currents) to try on slot probe_slot.
+    where oauth_mixin looks for them: base.args and the environment.
     """
     if supabase_url:
         os.environ["SUPABASE_URL"] = supabase_url
@@ -4899,9 +4853,9 @@ async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=Non
         print(f"Testing Solis API with key_id: {str(solis_args.get('api_key'))[:10]}...")
     # Read-only unless asked: with control enabled run() does the startup register reset and the
     # control-path writes against the real inverter, which reprogrammed the storage mode of an
-    # inverter that was only being inspected (issue #5279). A probe writes only its own register,
-    # so run() stays read-only for it.
-    control_enable = write and not probes and not probe_ceiling
+    # inverter that was only being inspected (issue #5279). The ceiling probe writes only its own
+    # registers, so run() stays read-only for it.
+    control_enable = write and not probe_ceiling
     print("Control writes ENABLED - this run will write to the inverter" if control_enable else "Read-only - no control writes (pass --write to enable them)")
 
     # Create a mock base object
@@ -4945,23 +4899,8 @@ async def test_solis_api(solis_args, write=False, user_id=None, supabase_url=Non
             if dump_raw:
                 print(f"Reading the limit and slot current CIDs on {device_sn} one at a time...")
                 await read_limit_registers(solis_api, device_sn)
-            for line in solis_slot_current_report(solis_api, device_sn):
-                print(line)
+            print("  " + solis_api.describe_slot_current_limits(device_sn, solis_api.slot_current_limits(device_sn)))
 
-    if probes:
-        battery_sns = [sn for sn in solis_api.inverter_sn if solis_api.is_battery_inverter(sn)]
-        if len(battery_sns) != 1:
-            print(f"Probe skipped: it needs exactly one battery inverter, found {battery_sns} - narrow it with --inverter-sn")
-        else:
-            inverter_sn = battery_sns[0]
-            window = solis_api.charge_discharge_time_windows.get(inverter_sn, {}).get(probe_slot, {})
-            for direction, currents in probes:
-                # Whether the slot is enabled, and whether its window is open now, may change what it accepts
-                print(f"PROBE: {inverter_sn} {direction} slot {probe_slot} {window.get(direction + '_start_time')}-{window.get(direction + '_end_time')} enable={window.get(direction + '_enable')}, now {datetime.now().strftime('%H:%M')}")
-                results, original, restored = await probe_slot_current(solis_api, inverter_sn, currents, direction=direction, slot=probe_slot)
-                for amps, accepted, read_back in results:
-                    print(f"  {amps}A: {'accepted' if accepted else 'REFUSED'} (read back {read_back!r})")
-                print(f"  original value {original!r} {'restored' if restored else 'NOT restored - check the inverter'}")
     if probe_ceiling:
         # The same probe Predbat runs on discovery, with only its own writes enabled; the CLI has no
         # storage, so the result is shown rather than saved
@@ -4997,10 +4936,7 @@ def main():  # pragma: no cover
     parser.add_argument("--inverter-sn", help="Only use this inverter serial number")
     parser.add_argument("--write", action="store_true", help="Allow control writes to the inverter (default: read-only)")
     parser.add_argument("--dump-raw", action="store_true", help="Print every request and its whole reply, and read the battery limit and slot current CIDs one at a time (14 extra requests) so their single-read replies are shown too. The inverter detail reply includes the owner's station and address")
-    parser.add_argument("--probe-discharge-current", type=float, nargs="+", metavar="AMPS", help="With --write: write each value to the --probe-slot discharge current in turn, report whether the inverter kept it, then restore the original. run() stays read-only")
-    parser.add_argument("--probe-charge-current", type=float, nargs="+", metavar="AMPS", help="As --probe-discharge-current, for the slot's charge current")
     parser.add_argument("--probe-ceiling", action="store_true", help="With --write: run Predbat's own slot current ceiling probe (on a disabled slot, restored afterwards) and show what it learns. run() stays read-only")
-    parser.add_argument("--probe-slot", type=int, choices=range(1, 7), default=1, metavar="SLOT", help="Which time-of-use slot (1-6) to probe (default 1, the slot Predbat drives; a disabled slot 2-6 leaves the running schedule alone)")
 
     args = parser.parse_args()
     cli = {
@@ -5031,15 +4967,14 @@ def main():  # pragma: no cover
             parser.error("OAuth needs --access-token or --token-hash, or --config pointing at an apps.yaml holding solis_access_token or solis_token_hash")
     elif not (settings.get("api_key") and settings.get("api_secret")):
         parser.error("no Solis credentials: pass --key-id and --secret, or --config pointing at an apps.yaml holding solis_api_key and solis_api_secret")
-    probes = [(direction, currents) for direction, currents in (("discharge", args.probe_discharge_current), ("charge", args.probe_charge_current)) if currents]
-    if (probes or args.probe_ceiling) and not args.write:
-        parser.error("--probe-discharge-current, --probe-charge-current and --probe-ceiling write to the inverter, so they need --write as well")
+    if args.probe_ceiling and not args.write:
+        parser.error("--probe-ceiling writes to the inverter, so it needs --write as well")
 
     oauth_settings = {name: settings.pop(name, None) for name in SOLIS_CLI_OAUTH_KEYS}
     solis_args = {name: value for name, value in settings.items() if value not in (None, "")}
 
     # Run the test
-    asyncio.run(test_solis_api(solis_args, write=args.write, probes=probes, probe_slot=args.probe_slot, dump_raw=args.dump_raw, probe_ceiling=args.probe_ceiling, **oauth_settings))
+    asyncio.run(test_solis_api(solis_args, write=args.write, dump_raw=args.dump_raw, probe_ceiling=args.probe_ceiling, **oauth_settings))
 
 
 if __name__ == "__main__":
