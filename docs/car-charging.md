@@ -550,7 +550,7 @@ On Octopus Intelligent (or E.ON/EDF SmartFlex through the Kraken component), wha
 
 While Predbat drives a charger it holds it off outside the planned windows, so a visitor's car would not charge. Turn on the charger's guest charging switch - `switch.predbat_gecloud_guest_charging`, `switch.predbat_myenergi_guest_charging` or `switch.predbat_ohme_guest_charging` - and Predbat hands the charger back, as it does for read only mode. Choose how the guest charges (boost, solar only and so on) on the charger itself.
 
-Guest charging turns itself off when the guest's car is unplugged, on chargers that report a plugged-in car (the GivEnergy EV charger), and otherwise after 12 hours. It is not remembered across a restart, which puts Predbat back in charge.
+Guest charging turns itself off when the guest's car is unplugged, or after 12 hours if it never is. It is not remembered across a restart, which puts Predbat back in charge.
 
 While it is on, the guest's charging is counted as your car's charging - Predbat has no way to tell the two apart.
 
