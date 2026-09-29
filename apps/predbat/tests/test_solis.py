@@ -76,6 +76,9 @@ class MockSolisAPI(SolisAPI):
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
         # care about it, and every other test would just be waiting for nothing.
         self.verify_settle_seconds = 0
+        self.detail_summary_logged = {}
+        self.slot_limits_logged = {}
+        self.response_observer = None
         self.mode_asserted_for = {}
         self.control_enable = True
         self.configured_inverter_sn = []
@@ -2359,6 +2362,17 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
         failed |= asyncio.run(test_set_arg_auto_warns_once_on_apps_yaml_override())
         failed |= asyncio.run(test_automatic_config())
+        failed |= test_solis_cli_config_keys_match_component()
+        failed |= test_merge_solis_cli_settings()
+        failed |= test_load_solis_cli_config_resolves_secrets()
+        failed |= test_solis_slot_current_report()
+        failed |= asyncio.run(test_probe_slot_current_restores_original())
+        failed |= test_slot_current_limits_inputs()
+        failed |= test_slot_current_limits_logged_on_change()
+        failed |= test_describe_inverter_detail_allow_list()
+        failed |= asyncio.run(test_fetch_inverter_details_logs_summary_on_change())
+        failed |= test_calculated_max_currents_names_inputs()
+        failed |= asyncio.run(test_response_observer_sees_whole_reply())
         failed |= asyncio.run(test_automatic_config_keeps_apps_yaml_inverter_limits())
         failed |= asyncio.run(test_publish_battery_rate_max_is_larger_limit())
         failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
@@ -6359,6 +6373,341 @@ async def test_publish_battery_rate_max_is_larger_limit():
         assert rate_max["state"] == expected, f"{label}: expected battery_rate_max {expected}W, got {rate_max['state']}"
         assert rate_max["attributes"]["unit_of_measurement"] == "W", f"{label}: battery_rate_max should be in W"
     print("PASSED: battery_rate_max is the larger of the two limits")
+    return False
+
+
+def test_solis_cli_config_keys_match_component():
+    """The CLI's apps.yaml key names are the ones the Solis component declares, and it reads every one it needs.
+
+    The CLI maps its argument names onto apps.yaml keys by hand, because components.py imports
+    solis.py. This keeps that copy honest if a key is renamed or a new one added in COMPONENT_LIST.
+    """
+    print("\n=== Test: Solis CLI config keys match the component ===")
+    from components import COMPONENT_LIST
+    from solis import SOLIS_CLI_CONFIG_KEYS
+
+    declared = {name: spec["config"] for name, spec in COMPONENT_LIST["solis"]["args"].items() if spec.get("config")}
+    for name, config_key in SOLIS_CLI_CONFIG_KEYS.items():
+        assert declared.get(name) == config_key, f"CLI maps {name} to {config_key}, the component declares {declared.get(name)}"
+    # automatic and control_enable are the CLI's own decision (--write), everything else it must read
+    unread = set(declared) - set(SOLIS_CLI_CONFIG_KEYS) - {"automatic", "control_enable"}
+    assert not unread, f"component args the CLI --config does not read: {sorted(unread)}"
+    print("PASSED: Solis CLI config keys match the component")
+    return False
+
+
+def test_merge_solis_cli_settings():
+    """--config fills in what the command line left unset, the command line wins, and the auth method follows the credentials."""
+    print("\n=== Test: merge Solis CLI settings ===")
+    from solis import merge_solis_cli_settings
+
+    blank_cli = {"api_key": None, "api_secret": None, "auth_method": None, "access_token": None, "token_hash": None, "user_id": None, "supabase_url": None, "supabase_key": None}
+
+    # An api-key config: taken as is, and the used list names the keys (never values)
+    config = {"solis_api_key": "cfg_key", "solis_api_secret": "cfg_secret", "solis_inverter_sn": ["SN1"], "solis_nominal_voltage": 51.2, "solis_automatic": True}
+    merged, used = merge_solis_cli_settings(blank_cli, config)
+    assert merged["api_key"] == "cfg_key" and merged["api_secret"] == "cfg_secret", f"credentials not taken from config: {merged}"
+    assert merged["inverter_sn"] == ["SN1"] and merged["nominal_voltage"] == 51.2, f"inverter settings not taken from config: {merged}"
+    assert merged["auth_method"] == "api_key", f"api-key config should resolve to api_key, got {merged['auth_method']}"
+    assert set(used) == {"solis_api_key", "solis_api_secret", "solis_inverter_sn", "solis_nominal_voltage"}, f"unexpected used keys {used}"
+    assert "solis_automatic" not in used, "solis_automatic is the CLI's own decision and must not be read"
+
+    # The command line wins over the config
+    merged, used = merge_solis_cli_settings(dict(blank_cli, api_key="cli_key"), config)
+    assert merged["api_key"] == "cli_key" and "solis_api_key" not in used, f"command line api_key should win, got {merged['api_key']} with used {used}"
+
+    # A predbat.com OAuth config: token plus the refresh settings, and OAuth chosen from the token alone
+    oauth_config = {"solis_token_hash": "hash", "solis_token_expires_at": "2026-10-01T00:00:00Z", "user_id": "instance", "supabase_url": "https://example.supabase.co", "supabase_key": "anon"}
+    merged, used = merge_solis_cli_settings(blank_cli, oauth_config)
+    assert merged["auth_method"] == "oauth", f"a token with no api key should resolve to oauth, got {merged['auth_method']}"
+    assert merged["user_id"] == "instance" and merged["supabase_url"] == "https://example.supabase.co" and merged["supabase_key"] == "anon", f"OAuth refresh settings not taken: {merged}"
+    assert merged["token_hash"] == "hash" and merged["token_expires_at"] == "2026-10-01T00:00:00Z", f"token not taken: {merged}"
+
+    # Both present and no declared method: the component's api_key default, unless solis_auth_method says otherwise
+    both = dict(config, solis_access_token="token")
+    assert merge_solis_cli_settings(blank_cli, both)[0]["auth_method"] == "api_key", "with both credentials and no declared method, api_key is the default"
+    assert merge_solis_cli_settings(blank_cli, dict(both, solis_auth_method="oauth"))[0]["auth_method"] == "oauth", "solis_auth_method must decide when declared"
+    assert merge_solis_cli_settings(dict(blank_cli, auth_method="oauth"), config)[0]["auth_method"] == "oauth", "--auth-method must win over the config"
+
+    # Empty values in the config are not taken
+    merged, used = merge_solis_cli_settings(blank_cli, {"solis_api_key": "", "solis_inverter_sn": []})
+    assert not used and not merged.get("api_key"), f"empty config values should be skipped, got {merged} with used {used}"
+    print("PASSED: Solis CLI settings merge")
+    return False
+
+
+def test_load_solis_cli_config_resolves_secrets():
+    """--config resolves !secret against a secrets.yaml beside the file, unless PREDBAT_SECRETS_FILE names another."""
+    print("\n=== Test: Solis CLI config resolves secrets ===")
+    import os
+    import tempfile
+    from solis import load_solis_cli_config
+
+    saved_env = os.environ.pop("PREDBAT_SECRETS_FILE", None)
+    try:
+        with tempfile.TemporaryDirectory() as config_dir, tempfile.TemporaryDirectory() as other_dir:
+            apps_path = os.path.join(config_dir, "apps.yaml")
+            with open(apps_path, "w") as handle:
+                handle.write("pred_bat:\n  module: predbat\n  solis_api_key: !secret solis_key\n  solis_inverter_sn: SN1\n")
+            with open(os.path.join(config_dir, "secrets.yaml"), "w") as handle:
+                handle.write("solis_key: beside_value\n")
+            other_secrets = os.path.join(other_dir, "secrets.yaml")
+            with open(other_secrets, "w") as handle:
+                handle.write("solis_key: env_value\n")
+
+            config = load_solis_cli_config(apps_path)
+            assert config.get("solis_api_key") == "beside_value", f"secret should resolve from the secrets.yaml beside the config, got {config.get('solis_api_key')!r}"
+            assert config.get("solis_inverter_sn") == "SN1", f"plain values should load, got {config.get('solis_inverter_sn')!r}"
+
+            os.environ["PREDBAT_SECRETS_FILE"] = other_secrets
+            config = load_solis_cli_config(apps_path)
+            assert config.get("solis_api_key") == "env_value", f"PREDBAT_SECRETS_FILE should win over the file beside the config, got {config.get('solis_api_key')!r}"
+    finally:
+        os.environ.pop("PREDBAT_SECRETS_FILE", None)
+        if saved_env is not None:
+            os.environ["PREDBAT_SECRETS_FILE"] = saved_env
+    print("PASSED: Solis CLI config resolves secrets")
+    return False
+
+
+def test_solis_slot_current_report():
+    """The CLI report shows every input to the slot-current cap: CID 7224/7226, the rated current and each slot's advertised limit."""
+    print("\n=== Test: Solis slot current report ===")
+    from solis import solis_slot_current_report
+
+    api = MockSolisAPI()
+    sn = "SN0REPORT"
+    api.inverter_sn = [sn]
+    # A 3.6kW inverter on a 15S LV pack (batteryAcvSet 53.2V -> 48V), the issue #5187 shape
+    api.inverter_details[sn] = {"power": 3.6, "powerStr": "kW", "batteryAcvSet": 53.2}
+    api.cached_values[sn] = {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "100", SOLIS_CID_DISCHARGE_CURRENT[0]: "0", SOLIS_CID_DISCHARGE_CURRENT[1]: "50"}
+    api.cached_infos[sn] = {SOLIS_CID_DISCHARGE_CURRENT[0]: {"sysCommand": {"min": 0, "max": 100}}}
+
+    report = "\n".join(solis_slot_current_report(api, sn))
+    print(report)
+    assert f"(CID {SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT}) = '100'" in report, "CID 7226 should be reported"
+    assert "rated current cap = 75.0A" in report and "converted at 48.0V" in report, "the rated cap and its voltage should be reported"
+    assert f"discharge slot 1 current (CID {SOLIS_CID_DISCHARGE_CURRENT[0]}) = '0', advertised min=0 max=100" in report, "slot 1's value and advertised limit should be reported"
+    assert f"discharge slot 2 current (CID {SOLIS_CID_DISCHARGE_CURRENT[1]}) = '50', advertised none returned" in report, "a slot with no metadata should say so"
+    assert f"charge slot 1 current (CID {SOLIS_CID_CHARGE_CURRENT[0]}) = None" in report, "an unread slot should show as None"
+    print("PASSED: Solis slot current report")
+    return False
+
+
+async def test_probe_slot_current_restores_original():
+    """The live probe records which currents the inverter keeps, then writes the original value back."""
+    print("\n=== Test: Solis slot current probe ===")
+    from solis import probe_slot_current
+
+    api = MockSolisAPI()
+    sn = "SN0PROBE"
+    cid = SOLIS_CID_DISCHARGE_CURRENT[0]
+    # An inverter that keeps up to 70A and reads back 0 for anything higher, as seen in the field
+    device = {"value": "0"}
+    writes = []
+
+    async def fake_read_cid(inverter_sn, read_cid):
+        """Return the simulated register."""
+        return device["value"], {}
+
+    async def fake_read_and_write_cid(inverter_sn, write_cid, value, field_description=None):
+        """Keep values up to 70A, refuse anything higher by reading back 0."""
+        writes.append(str(value))
+        device["value"] = str(value) if float(value) <= 70 else "0"
+        api.cached_values.setdefault(inverter_sn, {})[write_cid] = device["value"]
+        return device["value"] == str(value)
+
+    api.read_cid = fake_read_cid
+    api.read_and_write_cid = fake_read_and_write_cid
+
+    results, original, restored = await probe_slot_current(api, sn, [62.5, 70.0, 75.0])
+    assert results == [(62.5, True, "62.5"), (70.0, True, "70.0"), (75.0, False, "0")], f"unexpected probe results {results}"
+    assert original == "0" and restored, f"original should be read first and restored, got original={original!r} restored={restored}"
+    assert writes == ["62.5", "70.0", "75.0", "0"], f"the original must be written back last, writes were {writes}"
+    assert device["value"] == "0", "the register should end on its original value"
+
+    # Another slot and direction probe their own register and leave slot 1 discharge alone
+    touched = []
+
+    async def recording_read_and_write_cid(inverter_sn, write_cid, value, field_description=None):
+        """Record which register each write goes to."""
+        touched.append((write_cid, field_description))
+        return True
+
+    api.read_and_write_cid = recording_read_and_write_cid
+    await probe_slot_current(api, sn, [60.0], direction="charge", slot=6)
+    assert {write_cid for write_cid, _ in touched} == {SOLIS_CID_CHARGE_CURRENT[5]}, f"charge slot 6 should probe CID {SOLIS_CID_CHARGE_CURRENT[5]} only, got {touched}"
+    assert touched[0][1] == "probe charge slot 6 current 60.0A", f"the write should be described by slot and direction, got {touched[0][1]}"
+    print("PASSED: Solis slot current probe")
+    return False
+
+
+def _limits_api(values, infos=None, power=3.6):
+    """A MockSolisAPI holding one 15S LV inverter (48V) with the given registers and slot metadata."""
+    api = MockSolisAPI()
+    sn = "SN0LIMITS"
+    api.inverter_sn = [sn]
+    api.inverter_details[sn] = {"power": power, "powerStr": "kW", "batteryAcvSet": 53.2}
+    api.cached_values[sn] = dict(values)
+    api.cached_infos[sn] = dict(infos or {})
+    return api, sn
+
+
+def test_slot_current_limits_inputs():
+    """slot_current_limits() keeps the write path's cap and reports each input to it (issue #5187)."""
+    print("\n=== Test: slot current limits and their inputs ===")
+
+    # The issue #5187 shape: 100A registers on a 3.6kW inverter, capped at the 75A rated current
+    api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "100"})
+    limits = api.slot_current_limits(sn)
+    assert (limits["charge"], limits["discharge"]) == (75.0, 75.0), f"expected both capped at 75A, got {limits}"
+    assert limits["rated"] == 75.0 and limits["rated_capped"], f"the rated cap should apply, got {limits}"
+    assert (limits["charge_register"], limits["discharge_register"]) == ("100", "100"), f"raw registers should be reported, got {limits}"
+    assert limits["charge_metadata"] is None and limits["discharge_metadata"] is None, f"no metadata was returned, got {limits}"
+
+    # A lower limit advertised on one slot binds that direction, and the smallest across slots wins
+    infos = {SOLIS_CID_DISCHARGE_CURRENT[2]: {"sysCommand": {"max": 62.5}}, SOLIS_CID_DISCHARGE_CURRENT[0]: {"sysCommand": {"max": 100}}}
+    api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "100"}, infos)
+    limits = api.slot_current_limits(sn)
+    assert limits["discharge"] == 62.5 and limits["discharge_metadata"] == 62.5, f"slot metadata 62.5A should bind discharge, got {limits}"
+    assert limits["charge"] == 75.0, f"charge should still be rated-capped, got {limits}"
+
+    # Registers not read: the 60A default is the starting point, below the rated current so nothing caps it
+    api, sn = _limits_api({})
+    limits = api.slot_current_limits(sn)
+    assert limits["charge_register"] is None and limits["charge_base"] == 60.0 and limits["charge"] == 60.0, f"unread register should start from the 60A default, got {limits}"
+    assert not limits["rated_capped"], f"75A rated should not cap a 60A default, got {limits}"
+
+    # Unknown size: no rated cap at all
+    api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT: "100"}, power=None)
+    limits = api.slot_current_limits(sn)
+    assert limits["rated"] is None and not limits["rated_capped"] and limits["discharge"] == 100.0, f"no rating should leave 100A, got {limits}"  # encoding-ok: slot current in amps, not an export limit
+    print("PASSED: slot current limits and their inputs")
+    return False
+
+
+def test_slot_current_limits_logged_on_change():
+    """The limits line names every input, and is logged once per change rather than every cycle."""
+    print("\n=== Test: slot current limits logged on change ===")
+    api, sn = _limits_api({SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "100"}, {SOLIS_CID_DISCHARGE_CURRENT[0]: {"sysCommand": {"max": 100}}})
+    text = api.describe_slot_current_limits(sn, api.slot_current_limits(sn))
+    print(text)
+    assert "charge 75.0A (register 100A, no slot metadata max)" in text, f"charge inputs missing: {text}"
+    assert "discharge 60.0A (register not read, default 60.0A, slot metadata max 100A)" in text, f"discharge inputs missing: {text}"
+    assert "rated 75.0A from 3.6kW at 48.0V - applied" in text, f"rated inputs missing: {text}"
+
+    for _ in range(3):
+        api.log_slot_current_limits(sn, api.slot_current_limits(sn))
+    assert sum("Slot current limits for" in m for m in api.log_messages) == 1, "unchanged limits should be logged once"
+    api.cached_values[sn][SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT] = "62.5"
+    api.log_slot_current_limits(sn, api.slot_current_limits(sn))
+    assert sum("Slot current limits for" in m for m in api.log_messages) == 2, "changed limits should be logged again"
+    print("PASSED: slot current limits logged on change")
+    return False
+
+
+def test_describe_inverter_detail_allow_list():
+    """The inverter summary carries model, rating, firmware and packs, and none of the owner's details."""
+    print("\n=== Test: inverter detail summary allow-list ===")
+    api = MockSolisAPI()
+    sn = "SN0DETAIL"
+    api.parallel_battery_count[sn] = 2
+    detail = {
+        "productModel": "3102",
+        "power": 3.6,
+        "powerStr": "kW",
+        "parallelBattery": "1.0",
+        "batteryType": "PYLON_LV",
+        "version": "3F0075",
+        "inverterSoftwareVersion": "0075",
+        "stationName": "Home",
+        "address": "1 Private Road",
+        "sn": sn,
+        "userId": "12345",
+        "batteryJump": {"canJump": True, "batteryCount": 1, "batterySn": "PRIVATE-PACK-SERIAL"},
+        "batteryVoltage": 52.1,
+    }
+    text = api.describe_inverter_detail(sn, detail)
+    print(text)
+    for expected in ("productModel='3102'", "power=3.6", "powerStr='kW'", "parallelBattery='1.0'", "batteryType='PYLON_LV'", "version='3F0075'", "inverterSoftwareVersion='0075'", "2 battery pack(s)"):
+        assert expected in text, f"{expected} missing from {text}"
+    for private in ("Home", "Private Road", "12345", "PRIVATE-PACK-SERIAL", "batteryVoltage"):
+        assert private not in text, f"{private} must not be logged: {text}"
+    print("PASSED: inverter detail summary allow-list")
+    return False
+
+
+async def test_fetch_inverter_details_logs_summary_on_change():
+    """fetch_inverter_details() logs the inverter summary the first time and whenever it changes."""
+    print("\n=== Test: inverter detail summary logged on change ===")
+    api = MockSolisAPI()
+    sn = "SN0FETCH"
+    detail = {"productModel": "3102", "power": 3.6, "powerStr": "kW", "parallelBattery": "0.0"}
+
+    async def fake_get_inverter_detail(inverter_sn):
+        """Return the current simulated detail."""
+        return dict(detail)
+
+    api.get_inverter_detail = fake_get_inverter_detail
+    for _ in range(3):
+        assert await api.fetch_inverter_details(sn)
+    lines = [m for m in api.log_messages if f"Inverter {sn} details:" in m]
+    assert len(lines) == 1 and "1 battery pack(s)" in lines[0], f"expected one summary line, got {lines}"
+    detail["parallelBattery"] = "1.0"
+    await api.fetch_inverter_details(sn)
+    lines = [m for m in api.log_messages if f"Inverter {sn} details:" in m]
+    assert len(lines) == 2 and "2 battery pack(s)" in lines[1], f"a changed pack count should be logged, got {lines}"
+    print("PASSED: inverter detail summary logged on change")
+    return False
+
+
+def test_calculated_max_currents_names_inputs():
+    """The max currents line separates a register x pack count from the default used when it was never read."""
+    print("\n=== Test: calculated max currents names its inputs ===")
+    api = MockSolisAPI()
+    sn = "SN0CURRENTS"
+    api.parallel_battery_count[sn] = 2
+    api.cached_values[sn] = {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT: "50"}
+    api._calculate_max_currents(sn)
+    line = [m for m in api.log_messages if "Calculated max currents" in m][-1]
+    print(line)
+    assert "charge=100.0A (register 50A x 2 pack(s))" in line, f"charge inputs missing: {line}"
+    assert "discharge=100.0A (register not read, default)" in line, f"discharge default not named: {line}"
+    print("PASSED: calculated max currents names its inputs")
+    return False
+
+
+async def test_response_observer_sees_whole_reply():
+    """response_observer is handed every reply in full - error replies and HTTP failures included - and is off by default."""
+    print("\n=== Test: response observer sees the whole reply ===")
+    from solis import SolisAPIError
+
+    reply = {"code": "0", "msg": "success", "data": {"msg": "60", "yuanzhi": "60", "extra": {"min": 0, "max": 60}}}
+    api = MockSolisAPI()
+    assert api.response_observer is None, "the observer must be off by default"
+    api.session = _RecordingSession(_FakeResponse(status=200, payload=reply))
+    seen = []
+    api.response_observer = lambda endpoint, payload, received: seen.append((endpoint, payload, received))
+    data = await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": "SN1", "cid": 5967})
+    assert data == reply["data"], f"the data field should still be returned, got {data}"
+    assert seen == [(SOLIS_READ_ENDPOINT, {"inverterSn": "SN1", "cid": 5967}, reply)], f"the observer should get the whole reply, got {seen}"
+
+    # A refused request is observed before it raises - its reply is what explains the refusal
+    refused = {"code": "B0107", "msg": "value out of range"}
+    api.session = _RecordingSession(_FakeResponse(status=200, payload=refused))
+    try:
+        await api._execute_request(SOLIS_CONTROL_ENDPOINT, {"inverterSn": "SN1", "cid": 5967, "value": "75"})
+    except SolisAPIError:
+        pass
+    assert seen[-1][2] == refused, f"an error reply should be observed, got {seen[-1]}"
+
+    api.session = _RecordingSession(_FakeResponse(status=500, payload={"oops": 1}))
+    try:
+        await api._execute_request(SOLIS_READ_ENDPOINT, {"inverterSn": "SN1", "cid": 5967})
+    except SolisAPIError:
+        pass
+    assert seen[-1][2].get("http_status") == 500, f"an HTTP failure should be observed, got {seen[-1]}"
+    print("PASSED: response observer sees the whole reply")
     return False
 
 
