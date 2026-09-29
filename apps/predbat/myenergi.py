@@ -786,7 +786,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.boost_amounts = {}
         # The mode each Zappi was in before Predbat first moved it, restored on release
         self.control_saved_modes = {}
-        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled", control=self.zappi_control, switch_prefix="myenergi")
+        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled", control=self.zappi_control, switch_prefix="myenergi", control_setting="myenergi_zappi_control")
         self.queued_events = []
         self._auto_configured = False
         self.transport = None

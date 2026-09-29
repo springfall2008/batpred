@@ -600,7 +600,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.evc_control = parse_control_setting(evc_control)
         # Remembering what each charger was last asked to do means a poll that changes nothing
         # sends nothing - every command goes through async_send_evc_command's retry loop.
-        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control, switch_prefix="gecloud")
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control, switch_prefix="gecloud", control_setting="ge_cloud_evc_control")
         self.register_list = {}
         self.settings = {}
         self.status = {}

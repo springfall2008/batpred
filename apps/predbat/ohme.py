@@ -229,7 +229,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
         # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme")
+        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
         # The charger's own target percent as it was before Predbat took control, restored on release
         self.control_saved_target = None
         self.energy_today = 0.0
