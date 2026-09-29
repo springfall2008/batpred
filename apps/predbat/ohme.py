@@ -218,7 +218,7 @@ class ChargerPower:
 class OhmeAPI(ComponentBase, CarChargerControl):
     """Ohme API component for EV charger integration."""
 
-    def initialize(self, email, password, ohme_automatic=False, ohme_automatic_octopus_intelligent=None, ohme_control=False):
+    def initialize(self, email, password, ohme_automatic=False, ohme_automatic_octopus_intelligent=None, ohme_control=None):
         """Initialise the Ohme API component"""
         self.email = email
         self.password = password
@@ -229,7 +229,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = ohme_control
         # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger")
+        self.charger_control_setup("Ohme API", "charger", control=ohme_control)
         # The charger's own target percent as it was before Predbat took control, restored on release
         self.control_saved_target = None
         self.energy_today = 0.0
@@ -305,14 +305,23 @@ class OhmeAPI(ComponentBase, CarChargerControl):
     def enable_control(self, octopus_intelligent):
         """
         Decide whether Predbat-led charge control should run, and say why when it will not.
+
+        ohme_control left unset turns control on with ohme_automatic, since setting that is the
+        user asking Predbat to plan for the car. False keeps it off. Only an explicit true is
+        worth a warning when it cannot run - unset just follows the other settings.
         """
-        if not self.ohme_control:
+        if self.ohme_control is False:
             return
         if not self.ohme_automatic:
-            self.log("Warn: Ohme API: ohme_control needs ohme_automatic set to register the car, charge control is disabled")
+            if self.ohme_control:
+                self.log("Warn: Ohme API: ohme_control needs ohme_automatic set to register the car, charge control is disabled")
             return
         if octopus_intelligent:
-            self.log("Warn: Ohme API: ohme_control is ignored while the Intelligent slots come from Ohme - Octopus already schedules the charge")
+            # Octopus drives the Ohme itself, so Predbat stays out of it however ohme_control is set
+            if self.ohme_control:
+                self.log("Warn: Ohme API: ohme_control is ignored while the Intelligent slots come from Ohme - Octopus already schedules the charge")
+            else:
+                self.log("Info: Ohme API: The Intelligent slots come from Ohme, so Octopus drives the charger and Predbat leaves it alone")
             return
         self.charger_control_active = True
         self.log("Info: Ohme API: Predbat-led charge control enabled")

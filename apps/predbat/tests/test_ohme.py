@@ -1616,7 +1616,8 @@ class MockOhmeAPI(OhmeAPI):
         self.queued_events = []
         self.ohme_automatic = False
         self.ohme_automatic_octopus_intelligent = None
-        self.ohme_control = False
+        # Unset, as components.py leaves it when apps.yaml does not mention it
+        self.ohme_control = None
         self.charger_control_setup("Ohme API", "charger")
         self.control_saved_target = None
         self.prefix = "predbat"
@@ -1703,10 +1704,31 @@ def _test_ohme_control_enable_rules(my_predbat=None):
     """Test when Predbat-led charge control is allowed to run"""
     print("**** Running test_ohme_control_enable_rules ****")
 
-    # Off by default
+    # Unset control follows ohme_automatic: off without it, and without a warning
     api = MockOhmeAPI()
     api.enable_control(False)
-    assert api.charger_control_active is False, "Expected control off when ohme_control is not set"
+    assert api.charger_control_active is False, "Expected unset control off without ohme_automatic"
+    assert not any("Warn" in msg for msg in api.log_messages), f"Unset control is not a request, got {api.log_messages}"
+
+    # ... on with it
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.charger_control_active is True, "Expected unset control to turn on with ohme_automatic"
+
+    # ... but left to Octopus when the Intelligent slots come from the Ohme, again without a warning
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.enable_control(True)
+    assert api.charger_control_active is False, "Expected unset control to leave an Octopus-driven Ohme alone"
+    assert not any("Warn" in msg for msg in api.log_messages), f"Expected an Info, not a warning, got {api.log_messages}"
+
+    # An explicit false keeps it off even with ohme_automatic
+    api = MockOhmeAPI()
+    api.ohme_control = False
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.charger_control_active is False, "Expected ohme_control: false to keep control off"
 
     # Needs the car registered, or there is no plan to enforce
     api = MockOhmeAPI()
