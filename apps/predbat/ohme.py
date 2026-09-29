@@ -236,7 +236,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
         # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme")
+        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so

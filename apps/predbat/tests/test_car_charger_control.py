@@ -516,8 +516,16 @@ def test_octopus_rule_unknown_hands_off_unless_told():
     assert component.charger_control_octopus_drives_charger(0) is None
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
-    assert any("cannot tell yet" in line for line in component.logs), component.logs
+    warnings = [line for line in component.logs if line.startswith("Warn") and "cannot tell" in line]
+    assert len(warnings) == 1, component.logs
     assert not any("leaving it to Octopus" in line for line in component.logs), component.logs
+    run_async(component.charger_control_tick(_now()))
+    assert sum(line.startswith("Warn") for line in component.logs) == 1, "Warned once, not every cycle: {}".format(component.logs)
+
+    named = _octopus_component(None)
+    named.charger_control_setting = "ge_cloud_evc_control"
+    run_async(named.charger_control_tick(_now()))
+    assert any("Set ge_cloud_evc_control: true" in line for line in named.logs), named.logs
 
     told = _octopus_component(None, control=True)
     run_async(told.charger_control_tick(_now()))
@@ -530,6 +538,8 @@ def test_octopus_rule_waits_for_octopus_discovery():
     assert component.charger_control_octopus_drives_charger(0) is None
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
+    assert any("waiting for the Octopus component" in line for line in component.logs), component.logs
+    assert not any(line.startswith("Warn") for line in component.logs), "Waiting for discovery is not worth a warning: {}".format(component.logs)
 
     # Discovery found no Intelligent devices - there is nothing for Octopus to drive
     component.base.components = FakeComponents(FakeOctopus())
