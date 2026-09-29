@@ -786,7 +786,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.boost_amounts = {}
         # The mode each Zappi was in before Predbat first moved it, restored on release
         self.control_saved_modes = {}
-        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled", control=self.zappi_control)
+        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled", control=self.zappi_control, switch_prefix="myenergi")
         self.queued_events = []
         self._auto_configured = False
         self.transport = None
@@ -1129,6 +1129,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         if entity_id.endswith("_myenergi_zappi_control"):
             await self.charger_control_set_enabled(service == "turn_on")
             return True
+        if await self.charger_control_guest_event(entity_id, service):
+            return True
         if not entity_id.endswith("_boost"):
             return False
         device = self.device_for_entity(entity_id)
@@ -1162,6 +1164,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 attributes=myenergi_attribute_table["zappi_control"],
                 app="myenergi",
             )
+            self.charger_control_publish_guest("myenergi")
         for device in self.devices.values():
             prefix = self.entity_prefix(device)
             self.dashboard_item("sensor.{}_status".format(prefix), state=device.status, attributes=myenergi_attribute_table["status"], app="myenergi")

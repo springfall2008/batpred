@@ -236,7 +236,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
         # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control)
+        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
         # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so
@@ -320,6 +320,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.refresh_discovery()
 
         if self.charger_control_active and (seconds % CONTROL_INTERVAL_SECONDS) == 0:
+            self.charger_control_publish_guest("ohme")
             try:
                 await self.charger_control_tick(self.now_utc_exact)
             except ApiException as exc:
@@ -1032,6 +1033,8 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         Switch event
         """
+        if await self.charger_control_guest_event(entity_id, service):
+            return
         if entity_id.endswith("_max_charge"):
             if service == "turn_on":
                 await self.client.async_max_charge(True)
