@@ -163,6 +163,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+dschg
 dstamp
 dstart
 dtype
@@ -266,6 +267,7 @@ gridconsumptionpower
 Groq
 growatt
 growattsph
+guoxia
 GWMQTT
 HACS
 hadashboard
