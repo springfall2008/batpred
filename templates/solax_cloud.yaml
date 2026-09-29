@@ -389,4 +389,3 @@ pred_bat:
   #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'
