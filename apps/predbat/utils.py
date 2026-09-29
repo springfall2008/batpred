@@ -1181,10 +1181,20 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
 
 def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     """
-    Convert a time string like "Sun 13:00" into a datetime object
+    Convert a time string into a datetime object, rounded down to the plan interval.
+
+    Accepted formats: "Sun 13:00" (next occurrence of that weekday/time), "13:00" (today or
+    tomorrow) or an absolute "2025-12-19 13:00".
     """
-    # Parse the time string into a datetime object
-    # Format is Sun 13:00
+    # Absolute date/time - no day-of-week resolution needed
+    try:
+        override_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+        override_time = override_time.replace(tzinfo=now_utc.tzinfo)
+        minute = (override_time.minute // plan_interval_minutes) * plan_interval_minutes
+        return override_time.replace(minute=minute)
+    except ValueError:
+        pass
+
     try:
         override_time = datetime.strptime(time_str, "%a %H:%M")
         day_of_week_text = time_str.split()[0].lower()

@@ -153,5 +153,21 @@ def test_get_override_time_from_string(my_predbat):
         print("ERROR: Test 15 failed - expected {} got {}".format(expected, result))
         failed = True
 
+    # Test 16: Absolute date format is rounded to the plan interval
+    print("Test 16: Absolute date format - rounded down to plan interval")
+    result = get_override_time_from_string(now, "2025-12-19 13:47", 15)
+    expected = datetime(2025, 12, 19, 13, 45, 0, tzinfo=utc)
+    if result != expected:
+        print("ERROR: Test 16 failed - expected {} got {}".format(expected, result))
+        failed = True
+
+    # Test 17: Absolute date in the past is returned as-is, not moved forward
+    print("Test 17: Absolute date format - past date is not rolled forward")
+    result = get_override_time_from_string(now, "2024-11-25 10:00", 30)
+    expected = datetime(2024, 11, 25, 10, 0, 0, tzinfo=utc)
+    if result != expected:
+        print("ERROR: Test 17 failed - expected {} got {}".format(expected, result))
+        failed = True
+
     print("**** get_override_time_from_string tests completed ****")
     return failed
