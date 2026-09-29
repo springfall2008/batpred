@@ -9,5 +9,5 @@ export type LogLine = {
 export function mergeLogLines(current: LogLine[], incoming: LogLine[], limit = 1024) {
   const lines = new Map(current.map((line) => [line.line_number, line]))
   incoming.forEach((line) => lines.set(line.line_number, line))
-  return [...lines.values()].sort((a, b) => a.line_number - b.line_number).slice(-limit)
+  return [...lines.values()].sort((a, b) => b.line_number - a.line_number).slice(0, limit)
 }

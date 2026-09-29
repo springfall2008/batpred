@@ -61,7 +61,7 @@ export default function LogPage() {
         if (data.status !== 'success') throw new Error(data.message ?? 'Unable to load the log')
         if (cancelled) return
 
-        setLines((current) => reset ? data.lines : mergeLogLines(current, data.lines))
+        setLines((current) => mergeLogLines(reset ? [] : current, data.lines))
         lastLine = Math.max(lastLine, ...data.lines.map((line) => line.line_number), 0)
         setTotalLines(data.total_lines)
         setSearchMatches(search.trim() ? (data.search_matches ?? data.returned_lines) : null)
@@ -87,7 +87,7 @@ export default function LogPage() {
   }, [filter, search, paused, refreshKey])
 
   useEffect(() => {
-    if (autoScroll && viewerRef.current) viewerRef.current.scrollTop = viewerRef.current.scrollHeight
+    if (autoScroll && viewerRef.current) viewerRef.current.scrollTop = 0
   }, [lines, autoScroll])
 
   return (
