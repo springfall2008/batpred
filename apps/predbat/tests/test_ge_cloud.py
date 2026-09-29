@@ -57,7 +57,8 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_sessions = {}
         self.evc_status_unknown = set()
         self.automatic_evc = False
-        self.evc_control = False
+        # Unset, as components.py leaves it when apps.yaml does not mention it
+        self.evc_control = None
         self.charger_control_setup("GECloud", "EV charger", "gecloud", "evc_control_state", "evc_control_enabled")
         self.entity_states = {}
         self.entity_attributes = {}
@@ -6322,13 +6323,22 @@ def _test_evc_control(my_predbat):
         outside = tz.localize(datetime(2026, 8, 23, 6, 0))
         plan = {EVC_PLAN_SENSOR: {"planned": [{"start": "08-22 23:00:00", "end": "08-23 05:00:00"}]}}
 
-        # Test 1: control stays off unless it is asked for
+        # Test 1: unset control follows ge_cloud_automatic_evc, and an explicit false keeps it off
         ge = MockGECloudDirect()
         ge.automatic_evc = True
         ge.evc_control_enable()
-        assert ge.charger_control_active is False, "Control should be off without ge_cloud_evc_control"
+        assert ge.charger_control_active is True, "Unset ge_cloud_evc_control should turn on with ge_cloud_automatic_evc"
+        ge = MockGECloudDirect()
+        ge.automatic_evc = True
+        ge.evc_control = False
+        ge.evc_control_enable()
+        assert ge.charger_control_active is False, "An explicit ge_cloud_evc_control: false keeps control off"
+        ge = MockGECloudDirect()
+        ge.evc_control_enable()
+        assert ge.charger_control_active is False, "Unset control stays off without ge_cloud_automatic_evc"
+        assert not any("Warn" in message for message in ge.log_messages), "Unset control is not a request, so its absence is not warned about"
 
-        # Test 2: and refuses to run without the auto-config that maps chargers to cars
+        # Test 2: an explicit request refuses to run without the auto-config that maps chargers to cars
         ge = MockGECloudDirect()
         ge.evc_control = True
         ge.evc_control_enable()

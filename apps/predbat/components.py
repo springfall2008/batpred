@@ -164,9 +164,10 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_automatic_evc",
             },
+            # No default: unset means "on when ge_cloud_automatic_evc maps the chargers to cars",
+            # distinct from an explicit False (never) or True (also when the Octopus side is unknown)
             "evc_control": {
                 "required": False,
-                "default": False,
                 "config": "ge_cloud_evc_control",
             },
         },
