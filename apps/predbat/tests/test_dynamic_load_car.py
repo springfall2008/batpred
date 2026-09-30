@@ -967,6 +967,16 @@ def _run_confirmed_half_hour(my_predbat):
         failed |= _check("t43 cancelled", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
         failed |= _check("t43 07:00-07:30 not kept", my_predbat.dynamic_load_car_strip_from(0) == 435, "strip from {}".format(my_predbat.dynamic_load_car_strip_from(0)))
 
+        print("Test 44: load that is not low but below the car's charging rate trusts the slot without keeping the half hour")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        # 2.8 kW: not low (the car threshold here is 3 kW, low is under 90% of it) - a cooker, not a car
+        my_predbat.load_last_period = 2.8
+        _cycle(my_predbat, 400, slots=long_slots)
+        failed |= _check("t44 trusted", not my_predbat.dynamic_load_car_cancelled.get(0, False) and _kwh(my_predbat) == [6.0], "kwh {}".format(_kwh(my_predbat)))
+        failed |= _check("t44 not confirmed", my_predbat.dynamic_load_car_confirmed.get(0) is None, "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+
         print("Test 42: a comparison run does not record the confirmation")
         _reset(my_predbat)
         _sensor(my_predbat, "on")
