@@ -3654,6 +3654,22 @@ If however, you want the service to be called on each Predbat run then you shoul
       repeat: True
 ```
 
+Some inverters revert to a default mode when a command is not refreshed within a timeout (for example the SolarEdge storage command timeout), which makes **repeat** necessary as a keepalive.
+Repeating on every Predbat run can however cause a large number of identical register writes to the inverter.
+Set **repeat_interval** to a number of minutes to rate-limit these repeats: an identical call is then only re-issued once the interval has passed, so pick a value comfortably below the inverter's own command timeout (e.g. half of it).
+
+```yaml
+  charge_start_service:
+    - service: select.select_option
+      entity_id: select.solaredge_i1_storage_command_mode
+      option: "Charge from Solar Power and Grid"
+      repeat_interval: 30
+```
+
+For `select.select_option` based services Predbat also checks the select entity while inside the interval: the repeat is only skipped when the entity already reports the requested option, and is re-issued immediately when the inverter reports something else (for example after silently reverting to its default mode).
+A changed request (a different service or different data) is always sent straight away, so real mode changes are never delayed.
+**repeat_interval** takes precedence over **repeat**/**always** for identical repeated calls, and when Predbat cannot determine the current state it fails safe by calling the service.
+
 #### charge_start_service
 
 Called to start a charge
