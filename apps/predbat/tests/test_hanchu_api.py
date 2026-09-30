@@ -546,6 +546,45 @@ def test_hanchu_battery_rate_max_override_wins():
     assert not failed, "test_hanchu_battery_rate_max_override_wins"
 
 
+def test_hanchu_inverter_limit_override_wins():
+    """Hanchu units come in 3.68, 5, 6 and 10 kW; a user who knows theirs overrides the derived one."""
+    failed = False
+    client = MockHanchu()
+    client.device_ranges["HC240100001"] = {"DSCHG_PWR_LMT": (0, 5000)}
+    if client.inverter_limit("HC240100001") != 5000.0:
+        print(f"ERROR: derived limit wrong: {client.inverter_limit('HC240100001')}")
+        failed = True
+    client.inverter_limit_override = 3680.0
+    if client.inverter_limit("HC240100001") != 3680.0:
+        print(f"ERROR: override ignored: {client.inverter_limit('HC240100001')}")
+        failed = True
+    assert not failed, "test_hanchu_inverter_limit_override_wins"
+
+
+def test_hanchu_default_power_limit_is_warned_once():
+    """A menu that answers without usable power bounds leaves the 5 kW default in force - say so, once."""
+    failed = False
+    client = MockHanchu()
+    client._token = "tok"
+    client._token_time = time.time()
+    client.device_list = ["HC240100001"]
+    # MENU_SAMPLE carries a charge power bound but an unparseable discharge one.
+    for _ in range(2):
+        with patched_session([(200, envelope(data=MENU_SAMPLE["data"])), (200, envelope(data={}))]):
+            run_async_local(client.refresh_config())
+    warnings = [message for message in client.log_messages if "did not report its power limits" in message]
+    if len(warnings) != 1 or "DSCHG_PWR_LMT" not in warnings[0] or "hanchu_inverter_limit" not in warnings[0]:
+        print(f"ERROR: expected one warning naming DSCHG_PWR_LMT and the override, got {warnings}")
+        failed = True
+    # A device whose menu reports both bounds is not warned about.
+    quiet = MockHanchu()
+    quiet._warn_if_default_power("HC240100002", {"CHG_PWR_LMT": (0, 6000), "DSCHG_PWR_LMT": (0, 6000)})
+    if logged(quiet, "did not report its power limits"):
+        print("ERROR: warned although both power bounds were reported")
+        failed = True
+    assert not failed, "test_hanchu_default_power_limit_is_warned_once"
+
+
 def test_hanchu_config_read_is_one_call_per_device():
     """Nineteen keys are read in ONE iotGet - the same batching rationale as the write path."""
     failed = False
@@ -650,6 +689,8 @@ def run_hanchu_api_tests(my_predbat):
         ("energy", test_hanchu_energy_counters_are_mapped),
         ("menu_ranges", test_hanchu_menu_ranges_override_the_defaults),
         ("rate_max_override", test_hanchu_battery_rate_max_override_wins),
+        ("inverter_limit_override", test_hanchu_inverter_limit_override_wins),
+        ("default_power_warning", test_hanchu_default_power_limit_is_warned_once),
         ("config_batched_read", test_hanchu_config_read_is_one_call_per_device),
         ("transport_failure", test_hanchu_transport_failure_is_retried_then_reported),
         ("no_credentials", test_hanchu_run_refuses_to_start_without_credentials),

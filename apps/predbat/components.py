@@ -479,6 +479,9 @@ COMPONENT_LIST = {
             # setting's own upper bound. This is the escape hatch for a user who knows their pack's
             # real limit.
             "battery_rate_max": {"required": False, "config": "hanchu_battery_rate_max"},
+            # Same idea for the inverter's AC rating, which is taken from the discharge power
+            # setting's upper bound. Hanchu units come in 3.68, 5, 6 and 10 kW.
+            "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
             "api_delay": {"required": False, "default": 1, "config": "hanchu_api_delay"},
             "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
         },

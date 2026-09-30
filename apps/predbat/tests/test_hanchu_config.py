@@ -49,6 +49,7 @@ def test_hanchu_component_registered():
         ("control_enable", "hanchu_control_enable", True),
         ("work_mode_control", "hanchu_work_mode_control", True),
         ("battery_rate_max", "hanchu_battery_rate_max", None),
+        ("inverter_limit", "hanchu_inverter_limit", None),
         ("api_delay", "hanchu_api_delay", 1),
         ("min_write_interval", "hanchu_min_write_interval", 60),
     ]:
@@ -157,6 +158,7 @@ def test_hanchu_apps_schema_keys():
         "hanchu_control_enable": "boolean",
         "hanchu_work_mode_control": "boolean",
         "hanchu_battery_rate_max": "float",
+        "hanchu_inverter_limit": "float",
         "hanchu_api_delay": "float",
         "hanchu_min_write_interval": "integer",
     }

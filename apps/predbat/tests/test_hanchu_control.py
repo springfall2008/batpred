@@ -636,6 +636,108 @@ def test_hanchu_empty_payload_sends_nothing():
     assert not failed, "test_hanchu_empty_payload_sends_nothing"
 
 
+def test_hanchu_mid_window_end_changes_are_sent():
+    """Predbat moves a running window's end time; each change must reach the inverter.
+
+    On hardware (batpred#5305) rewriting a slot mid-window works, and 00:00-00:00 stops a running
+    window at once. A shorten that were deduplicated away would run the battery past the plan.
+    """
+    failed = False
+    client = ready()
+    client.set_mock_clock(13 * 60)
+    start = 12 * 3600
+
+    def write(end, enable=True):
+        client.local_schedule[SN] = schedule(export={"enable": enable, "soc": 20, "power": 3000, "start": "12:00:00", "end": end})
+        with patched_session([(200, envelope(data={}))]) as session_cls:
+            ok = run_async_local(client.apply_schedule(SN))
+        body = session_cls.return_value.post.call_args
+        sent = (body.kwargs.get("json") or {}).get("value", {}) if body else {}
+        return ok, session_cls.return_value.post.call_count, sent
+
+    for label, end, expected in (
+        ("initial", "16:00:00", (start, 16 * 3600)),
+        ("shortened", "14:00:00", (start, 14 * 3600)),
+        ("lengthened", "17:00:00", (start, 17 * 3600)),
+        ("ended now", "13:00:00", (start, 13 * 3600)),
+    ):
+        ok, calls, sent = write(end)
+        got = (sent.get(HANCHU_KEY_DISCHARGE_START.format(1)), sent.get(HANCHU_KEY_DISCHARGE_END.format(1)))
+        if not ok or calls != 1 or got != expected:
+            print(f"ERROR: {label}: ok={ok} calls={calls} slot 1 = {got}, expected {expected}")
+            failed = True
+
+    # Cancelling the running window disables its slot outright.
+    ok, calls, sent = write("17:00:00", enable=False)
+    got = (sent.get(HANCHU_KEY_DISCHARGE_START.format(1)), sent.get(HANCHU_KEY_DISCHARGE_END.format(1)))
+    if not ok or calls != 1 or got != (HANCHU_SLOT_DISABLED, HANCHU_SLOT_DISABLED):
+        print(f"ERROR: cancelled window: ok={ok} calls={calls} slot 1 = {got}")
+        failed = True
+    assert not failed, "test_hanchu_mid_window_end_changes_are_sent"
+
+
+def test_hanchu_persistent_write_failure_notifies_once():
+    """Three rejected writes in a row notify the user once; an accepted write clears the streak."""
+    failed = False
+    client = ready()
+    client.write_retry_delay = 0
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    busy = (200, envelope(success=False, code=300004, msg="device busy"))
+    for attempt in range(1, 5):
+        with patched_session([busy, busy]):
+            run_async_local(client.apply_schedule(SN))
+        notified = client.base.call_notify.call_count
+        expected = 0 if attempt < 3 else 1
+        if notified != expected:
+            print(f"ERROR: after {attempt} failures, {notified} notification(s), expected {expected}")
+            failed = True
+    if client.base.had_errors is not True:
+        print("ERROR: a persistent write failure did not flag a non-fatal error")
+        failed = True
+
+    with patched_session([(200, envelope(data={}))]):
+        ok = run_async_local(client.apply_schedule(SN))
+    if not ok or client.write_failures.get(SN) or SN in client.write_failure_notified:
+        print(f"ERROR: an accepted write did not clear the failure streak: {client.write_failures}")
+        failed = True
+    if not logged(client, "accepted again"):
+        print("ERROR: recovery after a notified failure was not logged")
+        failed = True
+    assert not failed, "test_hanchu_persistent_write_failure_notifies_once"
+
+
+def test_hanchu_failed_write_is_retried_before_the_pacing_interval():
+    """A failed write is retried on the next cycle, not held for the full pacing interval.
+
+    A rejected shorten leaves the inverter running past the plan, so waiting the full interval
+    costs real energy. A write that SUCCEEDED is still paced normally.
+    """
+    failed = False
+    client = ready(client=MockHanchu(min_write_interval=300))
+    client.write_retry_delay = 0
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    busy = (200, envelope(success=False, code=300004, msg="device busy"))
+    with patched_session([busy, busy]):
+        run_async_local(client.apply_schedule(SN))
+    # One cycle later: well inside 300s, but past the failed-write interval.
+    client.last_write_time[SN] = time.time() - 31
+    with patched_session([(200, envelope(data={}))]) as session_cls:
+        ok = run_async_local(client.apply_schedule(SN))
+    if not ok or session_cls.return_value.post.call_count != 1:
+        print(f"ERROR: a failed write was held by pacing: ok={ok} calls={session_cls.return_value.post.call_count}")
+        failed = True
+
+    # After that success, an ordinary change is paced for the full interval again.
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 80, "power": 3000, "start": "01:00:00", "end": "04:00:00"})
+    client.last_write_time[SN] = time.time() - 31
+    with patched_session([(200, envelope(data={}))]) as session_cls:
+        ok = run_async_local(client.apply_schedule(SN))
+    if ok or session_cls.return_value.post.call_count:
+        print(f"ERROR: a normal change escaped the 300s pacing: ok={ok} calls={session_cls.return_value.post.call_count}")
+        failed = True
+    assert not failed, "test_hanchu_failed_write_is_retried_before_the_pacing_interval"
+
+
 def run_hanchu_control_tests(my_predbat):
     """Run all Hanchu control-logic tests."""
     failed = False
@@ -647,6 +749,9 @@ def run_hanchu_control_tests(my_predbat):
         ("discharge_floor", test_hanchu_discharge_floor_tracks_the_active_export_window),
         ("slot_ownership", test_hanchu_every_unused_slot_is_disabled),
         ("write_serialised", test_hanchu_concurrent_writes_are_serialised),
+        ("mid_window_changes", test_hanchu_mid_window_end_changes_are_sent),
+        ("failure_notify", test_hanchu_persistent_write_failure_notifies_once),
+        ("failed_write_retry", test_hanchu_failed_write_is_retried_before_the_pacing_interval),
         ("work_mode", test_hanchu_work_mode_is_asserted_only_with_a_window_and_only_when_enabled),
         ("batched_write", test_hanchu_write_is_one_call_carrying_every_setting),
         ("change_detection", test_hanchu_unchanged_payload_sends_nothing),

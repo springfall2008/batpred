@@ -70,6 +70,11 @@ pred_bat:
   # your pack's real limit.
   #hanchu_battery_rate_max: 5000
 
+  # Optional: the inverter's AC rating, taken from the discharge power setting's upper
+  # limit. Hanchu units come in 3.68, 5, 6 and 10 kW; set this if Predbat's value is wrong
+  # for yours (a warning is logged when the device does not report its limits).
+  #hanchu_inverter_limit: 5000
+
   # Optional pacing. Predbat batches every setting change into ONE write per cycle, which
   # is what the reference integration does to avoid being rate limited. There is no
   # published rate limit, so this default is deliberately mild.

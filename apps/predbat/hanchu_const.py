@@ -390,6 +390,15 @@ HANCHU_MIN_WRITE_INTERVAL = 60
 # giving up and leaving the staged changes intact for the user to retry.
 HANCHU_WRITE_RETRY_DELAY = 5
 
+# A write that FAILED is retried on the next cycle rather than held for the full pacing interval:
+# a rejected shorten leaves the inverter running past the plan, so waiting costs real energy. The
+# reconcile loop runs about once a minute, so this still means at most one attempt per cycle.
+HANCHU_FAILED_WRITE_INTERVAL = 30
+
+# HARDWARE (batpred#5305): after this many consecutive rejected writes the user is notified,
+# because the inverter may no longer match the plan and may need stepping in on by hand.
+HANCHU_WRITE_FAILURE_NOTIFY = 3
+
 # Keys never written to the log. The login body's password, and the token in every header and in
 # both auth responses. `msg`, `code` and `data` for non-auth endpoints are always logged: nobody on
 # the project has Hanchu hardware, so a tester's log is the only evidence available.

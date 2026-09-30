@@ -2853,6 +2853,7 @@ APPS_SCHEMA = {
     "hanchu_control_enable": {"type": "boolean"},
     "hanchu_work_mode_control": {"type": "boolean"},
     "hanchu_battery_rate_max": {"type": "float"},
+    "hanchu_inverter_limit": {"type": "float"},
     "hanchu_api_delay": {"type": "float"},
     "hanchu_min_write_interval": {"type": "integer"},
     "alphaess_app_id": {"type": "string", "empty": False},

@@ -103,6 +103,8 @@ from hanchu_const import (
     HANCHU_TTL_STATIC,
     HANCHU_WORK_MODE_FOR_SCHEDULE,
     HANCHU_WORK_MODES,
+    HANCHU_FAILED_WRITE_INTERVAL,
+    HANCHU_WRITE_FAILURE_NOTIFY,
     HANCHU_WRITE_RETRY_DELAY,
     clamp_range,
     hhmmss_to_seconds,
@@ -150,6 +152,7 @@ class HanchuAPI(ComponentBase):
         control_enable=True,
         work_mode_control=True,
         battery_rate_max=None,
+        inverter_limit=None,
         api_delay=1,
         min_write_interval=60,
         **kwargs,
@@ -171,6 +174,12 @@ class HanchuAPI(ComponentBase):
         self.work_mode_control = work_mode_control
         self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.battery_rate_max_override = float(battery_rate_max) if battery_rate_max else 0.0
+        self.inverter_limit_override = float(inverter_limit) if inverter_limit else 0.0
+        # Devices already warned that the menu gave no power bounds, so the warning is said once.
+        self.warned_default_power = set()
+        # Consecutive rejected settings writes per serial, and whether the user has been told.
+        self.write_failures = {}
+        self.write_failure_notified = set()
         self.api_delay = max(0, float(api_delay or 0))
         self.min_write_interval = max(0, int(min_write_interval or 0))
         # An instance attribute rather than the constant used inline, so the unit tests can zero it:
@@ -617,6 +626,22 @@ class HanchuAPI(ComponentBase):
         merged.update(self.device_ranges.get(sn) or {})
         return merged
 
+    def _warn_if_default_power(self, sn, ranges):
+        """Warn once when a menu that DID answer gave no power bounds, so the 5 kW default applies.
+
+        Hanchu units come in 3.68, 5, 6 and 10 kW, so the default is wrong for most of them. Only
+        called after a successful menu read, so a slow first poll does not raise a false warning.
+        """
+        missing = [key for key in (HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_DISCHARGE_POWER) if key not in ranges]
+        if not missing or sn in self.warned_default_power:
+            return
+        self.warned_default_power.add(sn)
+        self.log(
+            "Warn: Hanchu {} did not report its power limits ({}), so the {} W default is in use. Set hanchu_battery_rate_max and hanchu_inverter_limit if that is not your unit's rating".format(
+                sn, ", ".join(missing), HANCHU_RANGES[HANCHU_KEY_CHARGE_POWER][1]
+            )
+        )
+
     async def refresh_config(self):
         """Read each device's parameter ranges and current control values. True when any answered.
 
@@ -632,6 +657,7 @@ class HanchuAPI(ComponentBase):
                 ranges = self._parse_menu_ranges(menu)
                 if ranges:
                     self.device_ranges[sn] = ranges
+                self._warn_if_default_power(sn, self.device_ranges.get(sn) or {})
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
             ok, data = await self._post("iot_get", body={"sn": sn, "devType": HANCHU_DEV_TYPE_DTU, "keys": list(HANCHU_CONTROL_KEYS)})
@@ -668,8 +694,10 @@ class HanchuAPI(ComponentBase):
         The API reports no inverter rating, so the discharge power ceiling stands in for it: it is
         the largest AC figure the device will accept and on a matched package the two are close.
         Deliberately the DISCHARGE bound rather than the charge one, because that is the direction
-        the inverter's AC rating actually limits.
+        the inverter's AC rating actually limits. The user's override wins.
         """
+        if self.inverter_limit_override > 0:
+            return self.inverter_limit_override
         return float(self.ranges_for(sn).get(HANCHU_KEY_DISCHARGE_POWER, (0, 0))[1])
 
     # ------------------------------------------------------------------
@@ -1277,7 +1305,10 @@ class HanchuAPI(ComponentBase):
         last = self.last_write_time.get(sn)
         if last is None:
             return True
-        return (time.time() - last) >= self.min_write_interval
+        interval = self.min_write_interval
+        if self.write_failures.get(sn):
+            interval = min(interval, HANCHU_FAILED_WRITE_INTERVAL)
+        return (time.time() - last) >= interval
 
     async def _write_payload(self, sn, payload, force=False):
         """Serialise every settings write through one lock, then send it.
@@ -1323,6 +1354,7 @@ class HanchuAPI(ComponentBase):
         self.last_write_time[sn] = now
         if not ok:
             self.log("Warn: Hanchu {} settings write was rejected after a retry: {}".format(sn, self.last_api_error or "no reason given"))
+            self._record_write_failure(sn)
             # Saved inline so a container kill right after a write does not lose the pacing
             # timestamp just stamped above and reopen the retry storm this guards against.
             await self.save_control()
@@ -1333,13 +1365,35 @@ class HanchuAPI(ComponentBase):
             # A partial accept is NOT cached as applied: the next cycle must rebuild and resend,
             # or the rejected keys would be assumed to be in force forever.
             self.log("Warn: Hanchu {} accepted the write but refused {}; it will be rebuilt and resent on the next eligible cycle".format(sn, ", ".join(rejected)))
+            self._record_write_failure(sn)
             await self.save_control()
             return False
 
         self.applied_payload[sn] = dict(payload)
         self.log("Info: Hanchu wrote {} setting(s) for {} in one call".format(len(payload), sn))
+        self._record_write_success(sn)
         await self.save_control()
         return True
+
+    def _record_write_failure(self, sn):
+        """Count a rejected write; after several in a row, tell the user once.
+
+        A log line alone is not enough here: a rejected shorten leaves the inverter running past
+        the plan, and a rejected lengthen ends a window early. Both need a person to notice.
+        """
+        count = self.write_failures.get(sn, 0) + 1
+        self.write_failures[sn] = count
+        if count >= HANCHU_WRITE_FAILURE_NOTIFY and sn not in self.write_failure_notified:
+            self.write_failure_notified.add(sn)
+            self.non_fatal_error_occurred()
+            self.call_notify("Predbat: Hanchu {} has rejected {} settings writes in a row ({}). The inverter may not be following the plan - check it in the Hanchu app".format(sn, count, self.last_api_error or "no reason given"))
+
+    def _record_write_success(self, sn):
+        """Clear the failure streak, and say so if the user was told about it."""
+        if sn in self.write_failure_notified:
+            self.log("Info: Hanchu {} settings writes are being accepted again after {} failures".format(sn, self.write_failures.get(sn, 0)))
+            self.write_failure_notified.discard(sn)
+        self.write_failures.pop(sn, None)
 
     async def apply_schedule(self, sn, force=False):
         """Build and send the locally held schedule for one device."""
