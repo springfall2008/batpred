@@ -140,6 +140,7 @@
 
 .log-line time {
   color: #94a3b8;
+  text-wrap: nowrap;
 }
 
 .log-line-message {
