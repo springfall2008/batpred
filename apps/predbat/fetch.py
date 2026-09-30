@@ -2497,7 +2497,11 @@ class Fetch:
             if minute not in rates:
                 continue
             rate = rates[minute]
-            if minute in saving_minutes and minute in rate_base:
+            if minute in saving_minutes:
+                if minute not in rate_base:
+                    # A session created this minute (load_axle_slot() adds to rate_dict.get(minute, 0)),
+                    # so the tariff has no rate of its own here and the synthetic reward is not one.
+                    continue
                 rate = min(rate, rate_base[minute])
             rate_min = min(rate_min, rate)
             rate_max = max(rate_max, rate)

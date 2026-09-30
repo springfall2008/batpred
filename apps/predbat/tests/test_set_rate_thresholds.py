@@ -29,6 +29,9 @@ untouched - they feed dashboard sensors, graph scaling, and plan.py pricing, whe
 price is what should be shown.
 """
 
+from datetime import timedelta
+from axle import load_axle_slot
+
 
 def _setup_two_rate_tariff(my_predbat, event_start, event_end, event_boost=100.0):
     """Build a 48h two-rate import tariff (25.95p day 06:00-22:00, 3.49p night) plus a flat 15.0p
@@ -158,6 +161,27 @@ def test_rate_minmax_excluding_saving_falls_back_without_a_base_curve(my_predbat
     expected_min, expected_max, expected_average, _, _ = my_predbat.rate_minmax(rate_import)
     if (rate_min, rate_max, rate_average) != (expected_min, expected_max, expected_average):
         print("ERROR: no-base-curve call should fall back to the plain scan {}, got {}".format((expected_min, expected_max, expected_average), (rate_min, rate_max, rate_average)))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_rate_minmax_excluding_saving_skips_session_minute_with_no_tariff_rate(my_predbat):
+    """A session minute the tariff has no rate for (load_axle_slot() builds it from rate_dict.get(minute, 0))
+    has no pre-event rate to cap to, so it must not count its synthetic reward as a tariff rate (#5163 review)."""
+    print("**** test_rate_minmax_excluding_saving_skips_session_minute_with_no_tariff_rate ****")
+    failed = False
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    rate_base = {minute: 20.0 for minute in range(0, 24 * 60) if minute != 600}
+    rates = rate_base.copy()
+    rates[600] = 100.0
+    rate_min, rate_max, rate_average = my_predbat.rate_minmax_excluding_saving(rates, {600}, rate_base)
+    if (rate_min, rate_max, rate_average) != (20.0, 20.0, 20.0):
+        print("ERROR: a session minute missing from the base tariff should be ignored, expected (20.0, 20.0, 20.0), got {}".format((rate_min, rate_max, rate_average)))
         failed = True
 
     if not failed:
@@ -515,6 +539,75 @@ def test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_pr
         failed = True
     if abs(my_predbat.rate_import_cost_threshold - 29.5) > 0.01:
         print("ERROR: import threshold should be 29.5 (clean import max 30 - 0.5), got {} - the export boost leaked into the export-beats-import branch".format(my_predbat.rate_import_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat):
+    """A real Axle export event on a flat 20p export tariff must not hide the ordinary windows (#4036, #5221).
+
+    Built through load_axle_slot() (not hand-seeded tags), then run through the same
+    set_rate_thresholds() -> rate_scan_window() -> ratchet sequence as fetch_sensor_data()
+    (fetch.py "Find discharging windows"). Without the saving-excluded stats the +100p event makes
+    export max != min, so the automatic threshold is min + 0.5 = 20.5p, every ordinary 20p window
+    sits below it, only the two event windows are candidates and the ratchet lifts the threshold
+    to the event rate. With them the tariff is flat again: threshold min - 0.1 = 19.9p, the
+    ordinary windows are candidates and the ratchet settles on the tariff's own 20p. The last
+    block clears the saving state to prove the test would fail on the unfixed behaviour.
+    """
+    print("**** test_axle_event_on_flat_export_tariff_admits_ordinary_windows ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    event_start, event_end = 600, 720
+    rate_export_base = {minute: 20.0 for minute in range(0, 48 * 60)}
+    session = {
+        "start_time": (my_predbat.midnight_utc + timedelta(minutes=event_start)).isoformat(),
+        "end_time": (my_predbat.midnight_utc + timedelta(minutes=event_end)).isoformat(),
+        "import_export": "export",
+        "pence_per_kwh": 100.0,
+    }
+
+    def run_sequence(with_saving_state):
+        """Mirror fetch_sensor_data(): pre-saving snapshot, Axle loader, saving-minute snapshot, thresholds, window scan, ratchet."""
+        rate_export = rate_export_base.copy()
+        replicated = {}
+        pre_saving = rate_export_base.copy()
+        load_axle_slot(my_predbat, [session], rate_export, export=True, rate_replicate=replicated)
+        saving_minutes = {minute for minute, tag in replicated.items() if tag == "saving"}
+        my_predbat.rate_export = rate_export
+        my_predbat.rate_export_base = rate_export_base.copy()
+        my_predbat.rate_export_replicated = replicated
+        my_predbat.rate_export_saving_minutes = saving_minutes if with_saving_state else set()
+        my_predbat.rate_export_pre_saving = pre_saving if with_saving_state else {}
+        my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
+        my_predbat.set_rate_thresholds()
+        after_thresholds = my_predbat.rate_export_cost_threshold
+        windows, lowest, _ = my_predbat.rate_scan_window(my_predbat.rate_export, 5, after_thresholds, True, alt_rates=my_predbat.rate_import)
+        if my_predbat.rate_high_threshold == 0 and lowest <= my_predbat.rate_export_max:
+            my_predbat.rate_export_cost_threshold = lowest
+        return saving_minutes, after_thresholds, windows, my_predbat.rate_export_cost_threshold
+
+    saving_minutes, threshold, windows, ratcheted = run_sequence(True)
+    if saving_minutes != set(range(event_start, event_end)):
+        print("ERROR: load_axle_slot() should tag exactly minutes {}-{} as saving, got {} minutes".format(event_start, event_end, len(saving_minutes)))
+        failed = True
+    if abs(threshold - 19.9) > 0.01:
+        print("ERROR: threshold with the event capped should be 19.9 (flat 20p: min - 0.1), got {}".format(threshold))
+        failed = True
+    if not any(window["end"] <= event_start for window in windows):
+        print("ERROR: no ordinary export window before the event was admitted - candidates were {}".format([(w["start"], w["end"]) for w in windows]))
+        failed = True
+    if abs(ratcheted - 20.0) > 0.01:
+        print("ERROR: ratchet should settle on the tariff's own 20p, got {}".format(ratcheted))
+        failed = True
+
+    _, threshold, windows, ratcheted = run_sequence(False)
+    if abs(threshold - 20.5) > 0.01 or any(window["end"] <= event_start for window in windows) or ratcheted < 90:
+        print("ERROR: control run without the saving state should reproduce the unfixed behaviour (20.5p, event windows only, ratchet to event rate) - got threshold {}, ratchet {}, {} windows".format(threshold, ratcheted, len(windows)))
         failed = True
 
     if not failed:
@@ -899,10 +992,12 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_rate_minmax_excluding_saving_maps_boosted_minutes_to_base(my_predbat)
         failed |= test_rate_minmax_excluding_saving_keeps_genuine_free_slots(my_predbat)
         failed |= test_rate_minmax_excluding_saving_falls_back_without_a_base_curve(my_predbat)
+        failed |= test_rate_minmax_excluding_saving_skips_session_minute_with_no_tariff_rate(my_predbat)
         failed |= test_set_rate_thresholds_ignores_saving_boost_in_automatic_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_predbat)
+        failed |= test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat)
         failed |= test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table(my_predbat)
         failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)
         failed |= test_saving_minute_capped_against_post_io_rates(my_predbat)
