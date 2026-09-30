@@ -17,6 +17,7 @@ import type { SavingsChartData, SavingsChartSeries } from '../types/charts'
 import { useStoredState } from '../hooks/useStoredState'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 import { formatMajorCurrency } from '../utils/currency'
+import { alignedSavingsAxisBounds } from '../utils/savingsChart'
 
 import './BatteryChart.css'
 
@@ -136,10 +137,9 @@ export default function SavingsChart({ data }: { data: SavingsChartData }) {
       order: 1,
       yAxisID: 'y1'
     }))
+    const dailyValues = dailyDatasets.flatMap((dataset) => dataset.data.map((point) => point.y))
     const totalValues = totalDatasets.flatMap((dataset) => dataset.data.map((point) => point.y))
-    const totalMin = Math.min(0, ...totalValues)
-    const totalMax = Math.max(0, ...totalValues)
-    const totalPadding = Math.max((totalMax - totalMin) * 0.08, 1)
+    const axisBounds = alignedSavingsAxisBounds(dailyValues, totalValues)
     const configuration: ChartConfiguration<'bar' | 'line', ChartPoint[]> = {
       type: 'bar',
       data: { datasets: [...dailyDatasets, ...totalDatasets] },
@@ -165,14 +165,16 @@ export default function SavingsChart({ data }: { data: SavingsChartData }) {
             }
           },
           y: {
+            min: axisBounds.daily.min,
+            max: axisBounds.daily.max,
             grid: { color: gridColour },
             ticks: { color: textColour, callback: (value) => formatMajorCurrency(Number(value), data.currency_symbol) },
             title: { display: true, text: 'Daily', color: textColour }
           },
           y1: {
             position: 'right',
-            min: totalMin < 0 ? totalMin - totalPadding : 0,
-            max: totalMax > 0 ? totalMax + totalPadding : totalPadding,
+            min: axisBounds.total.min,
+            max: axisBounds.total.max,
             grid: { drawOnChartArea: false },
             ticks: { color: textColour, callback: (value) => formatMajorCurrency(Number(value), data.currency_symbol) },
             title: { display: true, text: 'Running total', color: textColour }
