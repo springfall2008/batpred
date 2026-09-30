@@ -3754,17 +3754,26 @@ class Octopus:
                         slot_start = (minute // 30) * 30
 
                         # At the start of each 30-min slot, decide if we can add it
+                        apply_rate = False
                         if minute % 30 == 0:
                             if slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
-                                rates[minute] = assumed_price
+                                apply_rate = True
                             else:
                                 assumed_price = self.rate_max_base
                         else:
                             # For minutes within a 30-min slot, only apply if the slot was added
-                            if slot_start in slots_added_set:
-                                rates[minute] = assumed_price
+                            apply_rate = slot_start in slots_added_set
+
+                        if apply_rate:
+                            # Mark the minutes this dispatch made cheaper in io_adjusted, as the Octopus Energy
+                            # integration's feed does with is_intelligent_adjusted, so the plan treats them as a
+                            # dispatch that may still move or vanish. A minute already off-peak by tariff is
+                            # certain and stays unmarked.
+                            if assumed_price < rates.get(minute, assumed_price):
+                                self.io_adjusted[minute] = True
+                            rates[minute] = assumed_price
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
