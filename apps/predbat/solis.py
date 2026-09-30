@@ -247,6 +247,8 @@ SOLIS_SLOT_CURRENT_DEFAULT_AMPS = 60.0
 # Slot current ceiling probe (issue #5187): how far each refused probe steps down, and the lowest
 # current worth trying - refusing everything down to it is not a ceiling, so the probe gives up
 SOLIS_SLOT_PROBE_STEP_DOWN_AMPS = 5
+# The finest step tried once 1A up has been refused - some ceilings are on a half amp (62.5A is seen)
+SOLIS_SLOT_PROBE_FINE_STEP_AMPS = 0.5
 SOLIS_SLOT_PROBE_MIN_AMPS = 10
 # A learned ceiling is semi-static: checked again once it is this old, keeping the old one until a new probe succeeds
 SOLIS_SLOT_PROBE_REFRESH_SECONDS = 24 * 60 * 60
@@ -1194,8 +1196,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         The cap starts from the battery limit register (CID 7224 charge, 7226 discharge - read as is,
         not multiplied by the pack count, and SOLIS_SLOT_CURRENT_DEFAULT_AMPS when it has not been
-        read) and is lowered to the smallest sysCommand max SolisCloud advertises across the six slot
-        CIDs - slot 1 advertising more than the others is not accepted. That is the battery-side cap.
+        read). That is the battery-side cap.
+
+        The sysCommand min/max SolisCloud returns with each slot register is deliberately not used
+        (issue #5068). It is a UI definition for a list of model codes (its productModel), and the
+        cloud hands back one for other models: an S5-EH1P5K-L (model 3104) was given the 60A limit
+        of models 3101/3102 while its slots 2-6 held 100A, which held its exports to about 3.6kW.
+        The probe measures what the slots really accept instead.
 
         Then, once ensure_slot_current_probed() has measured what the slots really accept, the cap is
         held to that ceiling. Until then it is held to the rated current instead - an estimate that
@@ -1203,17 +1210,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
         8kW hybrid rated for 156A takes 180A, charging from PV), so a measured ceiling replaces it.
 
         Returns a dict: for each of "charge" and "discharge", "<direction>_register" (the raw register
-        value, None when not read), "<direction>_base" (the starting point), "<direction>_metadata"
-        (the smallest advertised max, None when none was returned), "<direction>_battery" (the
+        value, None when not read), "<direction>_base" (the starting point), "<direction>_battery" (the
         battery-side cap), "<direction>_probed" (the measured ceiling, None when not probed) and
         "<direction>" (the cap); plus "rated" (None when the size is unknown) and "rated_capped"
         (whether the rated current lowered a cap). include_probed=False leaves the measured ceiling
         out, which is what the probe itself starts from.
         """
         values = self.cached_values.get(inverter_sn, {})
-        infos = self.cached_infos.get(inverter_sn, {})
         limits = {}
-        for direction, register_cid, slot_cids in (("charge", SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_CHARGE_CURRENT), ("discharge", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, SOLIS_CID_DISCHARGE_CURRENT)):
+        for direction, register_cid in (("charge", SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT), ("discharge", SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT)):
             # This feeds publish_entities() as well as the write path, so an unreadable register is
             # treated as not read rather than raising and stopping everything from being published
             register = values.get(register_cid)
@@ -1221,22 +1226,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 base = float(register) if register is not None else SOLIS_SLOT_CURRENT_DEFAULT_AMPS
             except (TypeError, ValueError):
                 register, base = None, SOLIS_SLOT_CURRENT_DEFAULT_AMPS
-            cap = base
-            advertised = []
-            for cid in slot_cids:
-                command = infos.get(cid, {}).get("sysCommand")
-                try:
-                    slot_max = float(command.get("max")) if isinstance(command, dict) and command.get("max") is not None else None
-                except (TypeError, ValueError):
-                    slot_max = None
-                if slot_max is not None:
-                    advertised.append(slot_max)
-                    cap = min(slot_max, cap)
             limits[direction + "_register"] = register
             limits[direction + "_base"] = base
-            limits[direction + "_metadata"] = min(advertised) if advertised else None
-            limits[direction + "_battery"] = cap
-            limits[direction] = cap
+            limits[direction + "_battery"] = base
+            limits[direction] = base
 
         rated = self.get_rated_current(inverter_sn)
         limits["rated"] = rated
@@ -1262,19 +1255,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
         for direction in ("charge", "discharge"):
             cap = limits[direction]
             register = limits[direction + "_register"]
-            metadata = limits[direction + "_metadata"]
             probed = limits.get(direction + "_probed")
             # The lowest input wins; name it, most specific first when two agree
             if probed is not None and cap == probed:
                 source = "probed ceiling"
             elif limits["rated_capped"] and cap == limits["rated"]:
                 source = "rated current"
-            elif metadata is not None and cap == metadata:
-                source = "slot metadata"
             else:
                 source = "register" if register is not None else "default"
             inputs = [f"register {register}A" if register is not None else f"register not read, default {limits[direction + '_base']}A"]
-            inputs.append(f"slot metadata max {metadata}A" if metadata is not None else "no slot metadata max")
             if probed is not None:
                 inputs.append(f"probed max {probed}A")
             parts.append(f"{direction} {cap}A from the {source} ({', '.join(inputs)})")
@@ -1387,7 +1376,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
             old_value, _ = await self.read_cid(inverter_sn, cid)
             if cid_value_matches(old_value, value):
                 return True
-            if not await self.write_cid(inverter_sn, cid, str(value), old_value=old_value, field_description=field_description):
+            # A candidate current is written as the inverter shows it: "60", or "62.5" on a half amp
+            written = f"{value:g}" if isinstance(value, float) else str(value)
+            if not await self.write_cid(inverter_sn, cid, written, old_value=old_value, field_description=field_description):
                 return None
             read_back, _ = await self.read_cid(inverter_sn, cid)
             if not cid_value_matches(read_back, value):
@@ -1418,8 +1409,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         Writes start first - the battery-side cap on a first probe, the known ceiling on a re-check.
         If it is refused, steps down SOLIS_SLOT_PROBE_STEP_DOWN_AMPS at a time until one is kept;
         then steps up 1A at a time until one is refused or upper (the battery-side cap, never
-        exceeded) is reached, so the result is the exact ceiling in whole amps. A first probe whose
-        start is kept is done in one write, and a re-check that finds the ceiling unchanged in two.
+        exceeded) is reached, and finally tries SOLIS_SLOT_PROBE_FINE_STEP_AMPS above that, so a
+        ceiling on a half amp (62.5A) is found too. A first probe whose start is kept is done in one
+        write, and a re-check that finds the ceiling unchanged in three.
         Returns None - nothing learned - if any write gets no verdict, or if every current down to
         SOLIS_SLOT_PROBE_MIN_AMPS is refused, which is not a ceiling any real inverter has.
         """
@@ -1432,11 +1424,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
         async def attempt(amps):
             """Write one candidate current."""
-            return await self.probe_slot_write(inverter_sn, cid, amps, f"probe {direction} slot {slot} current {amps}A")
+            return await self.probe_slot_write(inverter_sn, cid, amps, f"probe {direction} slot {slot} current {amps:g}A")
 
         try:
-            upper = int(upper)
-            amps = min(int(start), upper)
+            upper = float(upper)
+            amps = min(float(start), upper)
             verdict = await attempt(amps)
             if verdict is None:
                 return None
@@ -1447,7 +1439,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             while not verdict:
                 amps -= SOLIS_SLOT_PROBE_STEP_DOWN_AMPS
                 if amps < SOLIS_SLOT_PROBE_MIN_AMPS:
-                    self.log(f"Warn: Solis API: {inverter_sn} refused every {direction} slot current down to {amps + SOLIS_SLOT_PROBE_STEP_DOWN_AMPS}A - not a real ceiling, nothing learned")
+                    self.log(f"Warn: Solis API: {inverter_sn} refused every {direction} slot current down to {amps + SOLIS_SLOT_PROBE_STEP_DOWN_AMPS:g}A - not a real ceiling, nothing learned")
                     return None
                 verdict = await attempt(amps)
                 if verdict is None:
@@ -1460,9 +1452,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if verdict is None:
                     return None
                 if not verdict:
+                    refused = amps + 1
                     break
                 amps += 1
-            return float(amps)
+            # Some ceilings sit on a half amp, so one step finer before settling
+            fine = amps + SOLIS_SLOT_PROBE_FINE_STEP_AMPS
+            if fine < refused and fine <= upper:
+                verdict = await attempt(fine)
+                if verdict is None:
+                    return None
+                if verdict:
+                    amps = fine
+            return amps
         finally:
             if await self.probe_slot_write(inverter_sn, cid, original, f"restore {direction} slot {slot} current") is not True:
                 self.log(f"Warn: Solis API: Could not restore {direction} slot {slot} current on {inverter_sn} to {original} after probing it")
