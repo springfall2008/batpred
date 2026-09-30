@@ -946,8 +946,28 @@ def _run_confirmed_half_hour(my_predbat):
         print("Test 41: once that half hour is over the rate is stripped from now")
         _cycle(my_predbat, 425, slots=slots)
         failed |= _check("t41 strip from now", my_predbat.dynamic_load_car_strip_from(0) == 425, "strip from {}".format(my_predbat.dynamic_load_car_strip_from(0)))
+        rates = {minute: 10.0 for minute in range(0, 2 * 24 * 60)}
+        rates = my_predbat.rate_add_io_slots(0, rates, [_dispatch(my_predbat, 390, 450)])
+        failed |= _check("t41 rest of the dispatch not cheap", all(rates[minute] == 10.0 for minute in range(425, 450)), "rates {}".format(sorted(set(rates[minute] for minute in range(425, 450)))))
+        _cycle(my_predbat, 460, slots=slots)
+        failed |= _check("t41 cleared once the dispatch is over", my_predbat.dynamic_load_car_confirmed.get(0) is None, "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
 
-        print("Test 42: a comparison run reads the confirmation but does not record it")
+        print("Test 43: the load test confirms the half hour its reading covers, not the one it is read in")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        # Dispatch 06:30-08:00; the car charges until 07:00, and the 07:00:20 cycle reads 06:55-07:00's load
+        long_slots = [{"start": 390, "end": 480, "kwh": 6.0, "octopus": True}]
+        my_predbat.load_last_period = 4.0
+        _cycle(my_predbat, 420, 20, slots=long_slots)
+        failed |= _check("t43 confirms 06:30-07:00", my_predbat.dynamic_load_car_confirmed.get(0) == my_predbat.midnight_utc + timedelta(minutes=420), "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+        my_predbat.load_last_period = 0.5
+        _cycle(my_predbat, 425, slots=long_slots)
+        changed = _cycle(my_predbat, 435, slots=long_slots)
+        failed |= _check("t43 cancelled", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+        failed |= _check("t43 07:00-07:30 not kept", my_predbat.dynamic_load_car_strip_from(0) == 435, "strip from {}".format(my_predbat.dynamic_load_car_strip_from(0)))
+
+        print("Test 42: a comparison run does not record the confirmation")
         _reset(my_predbat)
         _sensor(my_predbat, "on")
         _cycle(my_predbat, 395, slots=slots, save=False)

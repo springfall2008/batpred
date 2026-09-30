@@ -3690,7 +3690,7 @@ class Octopus:
         # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
         # what the tariff charged, and today's cost is built from them.
         car_cancelled = self.dynamic_load_car_effective.get(car_n, False)
-        strip_from = self.dynamic_load_car_strip_from(car_n) if car_cancelled else self.minutes_now
+        strip_from = self.dynamic_load_car_strip_from(car_n)
 
         if octopus_slots:
             # Add in IO slots
@@ -3816,13 +3816,13 @@ class Octopus:
         trusted_minutes = set()
         for car_n in range(min(self.num_cars, len(self.octopus_slots))):
             covered = cancelled_minutes if car_n in cancelled_cars else trusted_minutes
+            from_minute = self.dynamic_load_car_strip_from(car_n) if car_n in cancelled_cars else self.minutes_now
             for slot in self.octopus_slots[car_n]:
                 start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
                 if start_minutes == end_minutes:
                     continue
                 start_minutes = (start_minutes // 30) * 30
                 end_minutes = ((end_minutes + 29) // 30) * 30
-                from_minute = self.dynamic_load_car_strip_from(car_n) if car_n in cancelled_cars else self.minutes_now
                 covered.update(range(max(start_minutes, from_minute), end_minutes))
 
         window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
