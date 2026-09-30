@@ -541,7 +541,7 @@ With **car_charging_now**, Predbat checks the sensor every 15 seconds between pl
 **What happens when the car is not charging**
 
 - That dispatch slot and every later one for the car are cancelled: Predbat no longer holds the battery for the car ("Hold for car"), no longer predicts the car's load, and no longer uses the dispatch's cheap rate for the house battery. The overnight 23:30-05:30 rate stays cheap, as that is part of the tariff.
-- If the car was seen charging earlier in the same half hour, and has simply finished its planned kWh early, the house keeps the cheap rate until the end of that half hour: once a dispatch has started, Octopus bills the whole half hour off-peak. Later half hours of the dispatch lose it as above.
+- If the car was seen charging earlier in the same half hour (for example it finished its planned kWh early), the house keeps the cheap rate until the end of that half hour: once a dispatch has started, Octopus bills the whole half hour off-peak. Later half hours of the dispatch lose it as above.
 - The slots come back as soon as the car starts charging again, or the dispatch ends.
 - Cancelled slots are still shown in the car column of the plan with a question mark after the kWh (e.g. **3.5?**), so you can see the car's schedule even though the plan is not counting on it.
 - The log shows `Octopus Intelligent: car 0 is in a dispatch but not charging, cancelling its slots`, and later `Octopus Intelligent: car 0 slots resumed`.

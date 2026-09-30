@@ -520,6 +520,7 @@ class Plan:
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
                 self.dynamic_load_car_run.pop(car_n, None)
+                self.dynamic_load_car_confirmed.pop(car_n, None)
             return default_cancelled
 
         # An in-progress dispatch's start can be advanced to now each cycle, so keep the earliest start seen
@@ -536,8 +537,11 @@ class Plan:
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
                 # The dispatch has started, so Octopus bills the whole of this half hour off-peak even if the car
-                # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows
-                period_end = self.midnight_utc + timedelta(minutes=(int(minute) // 30 + 1) * 30)
+                # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows.
+                # The half hour is the one the evidence covers: a sensor reads now, but the load test averages the
+                # PREDICT_STEP minutes before minutes_now, so a cycle just past a boundary saw the previous one
+                seen_minute = minute if car_n in self.dynamic_load_car_sensors else self.minutes_now - 1
+                period_end = self.midnight_utc + timedelta(minutes=(int(seen_minute) // 30 + 1) * 30)
                 self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
             return False
         if not_charging:
