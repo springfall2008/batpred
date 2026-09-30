@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import type { DashboardMetrics } from '../types/metrics'
 import { formatMajorCurrency } from '../utils/currency'
+import MetricsCharts from './MetricsCharts'
 import { formatMetricAge, metricVersion, sumMetricValues } from '../utils/metrics'
 
 import './MetricsPanel.css'
@@ -79,25 +80,15 @@ export default function MetricsPanel() {
         </div>
       </div>
 
-      <div className="metrics-section-row">
-        <div className="metrics-section">
-          <h3>Energy today</h3>
-          <div className="metrics-grid metrics-grid-compact">
-            <MetricCard label="Home load" value={`${metrics.load_today_kwh.toFixed(1)} kWh`} />
-            <MetricCard label="Grid import" value={`${metrics.import_today_kwh.toFixed(1)} kWh`} />
-            <MetricCard label="Grid export" value={`${metrics.export_today_kwh.toFixed(1)} kWh`} />
-            <MetricCard label="Solar generation" value={`${metrics.pv_today_kwh.toFixed(1)} kWh`} />
-          </div>
-        </div>
+      <MetricsCharts metrics={metrics} />
 
-        <div className="metrics-section">
-          <h3>Cost and savings</h3>
-          <div className="metrics-grid metrics-grid-compact">
-            <MetricCard label="Cost today" value={formatMajorCurrency(metrics.cost_today / 100, metrics.currency_symbol)} />
-            <MetricCard label="Solar and battery saving" value={formatMajorCurrency(metrics.savings_today_pvbat / 100, metrics.currency_symbol)} tone="good" />
-            <MetricCard label="Predbat saving" value={formatMajorCurrency(metrics.savings_today_predbat / 100, metrics.currency_symbol)} tone="good" />
-            <MetricCard label="Yesterday's actual cost" value={formatMajorCurrency(metrics.savings_today_actual / 100, metrics.currency_symbol)} />
-          </div>
+      <div className="metrics-section">
+        <h3>Cost and savings</h3>
+        <div className="metrics-grid metrics-grid-compact">
+          <MetricCard label="Cost today" value={formatMajorCurrency(metrics.cost_today / 100, metrics.currency_symbol)} />
+          <MetricCard label="Solar and battery saving" value={formatMajorCurrency(metrics.savings_today_pvbat / 100, metrics.currency_symbol)} tone="good" />
+          <MetricCard label="Predbat saving" value={formatMajorCurrency(metrics.savings_today_predbat / 100, metrics.currency_symbol)} tone="good" />
+          <MetricCard label="Yesterday's actual cost" value={formatMajorCurrency(metrics.savings_today_actual / 100, metrics.currency_symbol)} />
         </div>
       </div>
 

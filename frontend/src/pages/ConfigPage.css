@@ -43,17 +43,17 @@
 .tariff-helper-result { padding: 0.85rem 1rem; color: var(--color-text-secondary); font-size: 0.75rem; }
 .config-groups { display: grid; gap: 1rem; min-width: 0; max-width: 100%; }
 .config-group { min-width: 0; max-width: 100%; overflow: hidden; }
-.config-group > header { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--color-border); background: var(--color-bg); }
-.config-group h2 { margin: 0; color: var(--color-text); font-size: 0.92rem; }
-.config-group > header span { color: var(--color-text-muted); font-size: 0.68rem; }
+.config-group > header { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0.8rem; border-bottom: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-current) 7%, var(--color-bg)); }
+.config-group h2 { margin: 0; color: var(--color-text); font-size: 1.08rem; }
+.config-group > header span { color: var(--color-text-muted); font-size: 0.85rem; }
 .config-table-wrap { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
-.config-table { width: 100%; min-width: 44rem; table-layout: fixed; border-collapse: collapse; color: var(--color-text-secondary); font-size: 0.76rem; }
+.config-table { width: 100%; min-width: 44rem; table-layout: fixed; border-collapse: collapse; color: var(--color-text-secondary); font-size: 0.93rem; line-height: 1.4; }
 .config-table th:nth-child(1) { width: 34%; }
 .config-table th:nth-child(2), .config-table th:nth-child(3) { width: 18%; }
 .config-table th:nth-child(4) { width: 30%; }
 .config-table th, .config-table td { padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--color-border); text-align: left; }
 .config-table td { vertical-align: middle; }
-.config-table th { position: sticky; top: 0; background: var(--color-surface); color: var(--color-text-muted); font-size: 0.65rem; text-transform: uppercase; }
+.config-table th { position: sticky; top: 0; background: var(--color-surface); color: var(--color-text-muted); font-size: 0.82rem; text-transform: uppercase; }
 .config-table tbody tr:last-child td { border-bottom: 0; }
 .config-table strong, .config-table small { display: block; }
 .config-table strong { color: var(--color-text); }
@@ -63,10 +63,10 @@
   position: absolute; left: 0; bottom: calc(100% + 0.45rem); z-index: 20; display: none;
   width: max-content; max-width: min(22rem, 70vw); padding: 0.55rem 0.65rem;
   border-radius: 7px; background: var(--color-text); color: var(--color-surface);
-  box-shadow: var(--shadow-tooltip); content: attr(data-tooltip); font-size: 0.7rem; font-weight: 400; line-height: 1.35;
+  box-shadow: var(--shadow-tooltip); content: attr(data-tooltip); font-size: 0.87rem; font-weight: 400; line-height: 1.35;
 }
 .config-help:hover::after, .config-help:focus::after { display: block; }
-.config-table small { margin-top: 0.15rem; color: var(--color-text-muted); font-size: 0.65rem; }
+.config-table small { margin-top: 0.2rem; color: var(--color-text-muted); font-size: 0.82rem; line-height: 1.4; }
 .config-table td.is-changed { color: var(--color-warning); font-weight: 700; }
 .config-table select, .config-table input[type='number'] { width: min(16rem, 100%); padding: 0.42rem 0.5rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); color: var(--color-text); font: inherit; }
 .config-switch {

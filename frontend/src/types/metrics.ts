@@ -22,6 +22,13 @@ export type DashboardMetrics = {
   config_warnings: number
   plan_valid: number
   plan_age_minutes: number
+  battery_soc_percent: number
+  battery_soc_kwh: number
+  battery_max_kwh: number
+  battery_power: number
+  grid_power: number
+  load_power: number
+  pv_power: number
   load_today_kwh: number
   import_today_kwh: number
   export_today_kwh: number
