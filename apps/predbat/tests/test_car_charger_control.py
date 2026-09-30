@@ -74,6 +74,8 @@ class FakeComponent(CarChargerControl):
         self.plans = {}
         self.logs = []
         self.commands = []
+        # Chargers whose commands are refused
+        self.refusing = set()
         self.charger_control_setup("Fake", "charger", "fake", "control_state", "enabled")
         self.charger_control_active = True
 
@@ -107,12 +109,16 @@ class FakeComponent(CarChargerControl):
         return self.drift_aware and handle.charging != charge
 
     async def charger_control_send(self, handle, charge, car_n):
-        """Record and apply the command."""
+        """Record and apply the command, unless this charger refuses it."""
+        if handle.key in self.refusing:
+            raise RuntimeError("charger {} refused".format(handle.key))
         self.commands.append((handle.key, "on" if charge else "off", car_n))
         handle.charging = charge
 
     async def charger_control_release_one(self, handle, charge):
-        """Record the release."""
+        """Record the release, unless this charger refuses it."""
+        if handle.key in self.refusing:
+            raise RuntimeError("charger {} refused".format(handle.key))
         self.commands.append((handle.key, "release", charge))
 
 
@@ -272,8 +278,8 @@ def test_no_switch_without_storage_settings():
 def test_failed_release_is_retried():
     """A release that raises propagates to the component and is tried again next cycle.
 
-    Nothing is forgotten until the release has gone through, so the retry still knows which
-    chargers Predbat was holding. A charger released before the failure is released again.
+    A charger is only forgotten once its release has gone through, so the retry still knows
+    which chargers Predbat was holding - and only the one that refused is released again.
     """
     component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
     component.base.num_cars = 2
@@ -297,13 +303,39 @@ def test_failed_release_is_retried():
     except OSError:
         pass
     assert component.charger_control_released is None, "A failed release is not recorded as done"
-    assert set(component.charger_control_state) == {"a", "b"}, component.charger_control_state
+    assert set(component.charger_control_state) == {"b"}, component.charger_control_state
 
     component.charger_control_release_one = real_release
     run_async(component.charger_control_tick(_now()))
     releases = [command for command in component.commands if command[1] == "release"]
-    assert releases == [("a", "release", False), ("a", "release", False), ("b", "release", False)], releases
+    assert releases == [("a", "release", False), ("b", "release", False)], releases
     assert component.charger_control_state == {} and component.charger_control_released is not None
+
+
+def test_one_refusing_charger_does_not_block_the_others():
+    """A charger that refuses is retried on its own - the others are still driven and released."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    _plan(component, 0, [])
+    _plan(component, 1, [])
+    component.refusing = {"a"}
+    try:
+        run_async(component.charger_control_tick(_now()))
+        raise AssertionError("The refusal should still be raised for the run loop to log")
+    except RuntimeError:
+        pass
+    assert component.commands == [("b", "off", 1)], component.commands
+
+    component.refusing = set()
+    run_async(component.charger_control_tick(_now()))
+    component.refusing = {"a"}
+    component.base.set_read_only = True
+    try:
+        run_async(component.charger_control_tick(_now()))
+    except RuntimeError:
+        pass
+    assert ("b", "release", False) in component.commands, component.commands
+    assert list(component.charger_control_state) == ["a"], "Only the refusing charger is still held: {}".format(component.charger_control_state)
 
 
 def test_inactive_does_nothing():
@@ -335,5 +367,6 @@ def run_car_charger_control_tests(my_predbat=None):
     test_storage_failures_fail_soft()
     test_no_switch_without_storage_settings()
     test_failed_release_is_retried()
+    test_one_refusing_charger_does_not_block_the_others()
     test_inactive_does_nothing()
     return False
