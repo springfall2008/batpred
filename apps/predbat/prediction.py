@@ -889,8 +889,9 @@ class Prediction(PredictionBatch):
 
                         if self.car_energy_reported_load:
                             # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
+                            # Each car adds its own energy; car_amount_premium is the running total across cars
                             car_amount_premium += car_load_scale / self.car_charging_loss
-                            load_yesterday += car_amount_premium
+                            load_yesterday += car_load_scale / self.car_charging_loss
                         else:
                             car_load_energy_bypass += car_load_scale / self.car_charging_loss
 

@@ -57,7 +57,9 @@
 // Parity 15: in PV10, an Intelligent dispatch minute assumed gone (io_flag, beyond 30 minutes) no longer
 // holds the battery for the car. The car still charges at the rate nominal pays, kept off the battery
 // by adding it to the grid balance after the battery has acted; the rest of the import pays rate_max.
-#define PK_PARITY_REVISION 15
+// Parity 16: each car charging in a step adds its own energy to the house load, not the running total
+// across cars, which counted the first car once per car (GH#5313).
+#define PK_PARITY_REVISION 16
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -899,9 +901,9 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     car_rate_premium = std::max(car_rate_premium, std::max(0.0, c->car_rate_flat[car_n * n_steps + k] - import_rate));
 
                     if (c->car_energy_reported_load) {
-                        // Note: mirrors the Python engine exactly - the cumulative premium amount is added per car
+                        // Each car adds its own energy; car_amount_premium is the running total across cars
                         car_amount_premium += car_load_scale / c->car_charging_loss;
-                        load_yesterday += car_amount_premium;
+                        load_yesterday += car_load_scale / c->car_charging_loss;
                     } else {
                         car_load_energy_bypass += car_load_scale / c->car_charging_loss;
                     }
