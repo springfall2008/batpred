@@ -484,6 +484,20 @@ class Plan:
         """
         return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n)
 
+    def dynamic_load_car_strip_from(self, car_n):
+        """
+        The first minute (since midnight_utc) from which a cancelled car_n's dispatch loses its cheap rate.
+
+        Normally now, but not before the end of the half hour the car was last seen charging in: once a
+        dispatch has started, Octopus bills that whole half hour off-peak, so a car that reaches its
+        planned kWh and stops part-way through it leaves the rest still cheap for the house (GH#5316).
+        The car's own slots are cancelled as usual - it is no longer charging.
+        """
+        confirmed = self.dynamic_load_car_confirmed.get(car_n)
+        if confirmed is None or self.midnight_utc is None:
+            return self.minutes_now
+        return max(self.minutes_now, int((confirmed - self.midnight_utc).total_seconds() // 60))
+
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
         Whether car_n's slots should be cancelled at minute and now (both on the exact clock).
@@ -521,6 +535,10 @@ class Plan:
         if not_charging is False:
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
+                # The dispatch has started, so Octopus bills the whole of this half hour off-peak even if the car
+                # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows
+                period_end = self.midnight_utc + timedelta(minutes=(int(minute) // 30 + 1) * 30)
+                self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
             return False
         if not_charging:
             since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)
@@ -618,6 +636,9 @@ class Plan:
                     changed = True
                     if cancelled and self.dynamic_load_car_dispatch(car_n, minute) is not None:
                         reason = "is in a dispatch but not charging, cancelling its slots"
+                        strip_from = self.dynamic_load_car_strip_from(car_n)
+                        if strip_from > self.minutes_now:
+                            reason += " - keeping the dispatch rate until {} as it charged in this half hour".format(self.time_abs_str(strip_from))
                     elif cancelled:
                         reason = "has not been seen charging in its dispatches yet, not trusting them"
                     else:

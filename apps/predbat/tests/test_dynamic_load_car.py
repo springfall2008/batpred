@@ -38,6 +38,7 @@ STATE_FIELDS = (
     "metric_dynamic_load_adjust",
     "octopus_intelligent_dynamic",
     "dynamic_load_car_run",
+    "dynamic_load_car_confirmed",
     "octopus_slots",
     "io_adjusted",
     "rate_max_base",
@@ -105,6 +106,7 @@ def _reset(my_predbat):
     my_predbat.metric_dynamic_load_adjust = False
     my_predbat.octopus_intelligent_dynamic = True
     my_predbat.dynamic_load_car_run = {}
+    my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.car_energy_reported_load = False
     my_predbat.car_charging_threshold = 3.0 / 60.0
     my_predbat.battery_rate_max_discharge = 5.0 / 60.0
@@ -358,6 +360,7 @@ def _run(my_predbat):
         failed |= _run_poll(my_predbat)
         failed |= _run_untrusted(my_predbat)
         failed |= _run_kwh_cancelled(my_predbat)
+        failed |= _run_confirmed_half_hour(my_predbat)
     finally:
         if had_sensor:
             my_predbat.args["car_charging_now"] = saved_sensor
@@ -885,6 +888,76 @@ def _run_kwh_cancelled(my_predbat):
     planned = my_predbat.get_state_wrapper("binary_sensor." + my_predbat.prefix + "_car_charging_slot", attribute="planned") or []
     first = planned[0] if planned else {}
     failed |= _check("t26b published", first.get("kwh") == 0 and first.get("cost") == 0 and first.get("kwh_cancelled") == 3.5, "planned {}".format(planned))
+    return failed
+
+
+def _run_confirmed_half_hour(my_predbat):
+    """
+    A car seen charging in a dispatch that then stops part-way through a half hour - it reached its
+    planned kWh - still has its slots cancelled, but the house keeps the cheap rate to the end of that
+    half hour, which Octopus bills off-peak once the dispatch has started (GH#5316). Later half hours of
+    the dispatch lose it as before.
+    """
+    failed = False
+    saved_low_rate = my_predbat.args.get("octopus_slot_low_rate", None)
+    saved_slot_max = my_predbat.args.get("octopus_slot_max", None)
+    try:
+        print("Test 40: a car that charged then stopped in a half hour keeps that half hour cheap")
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.forecast_minutes = 2 * 24 * 60
+        my_predbat.args["octopus_slot_low_rate"] = True
+        my_predbat.args["octopus_slot_max"] = 48
+        my_predbat.rate_min_base = 4.0
+        my_predbat.rate_max_base = 30.0
+        # One dispatch 06:30-07:30, as Octopus plans a long one
+        slots = [{"start": 390, "end": 450, "kwh": 3.0, "octopus": True}]
+        _cycle(my_predbat, 395, slots=slots)
+        failed |= _check("t40 charging trusted", not my_predbat.dynamic_load_car_cancelled.get(0, False))
+        _sensor(my_predbat, "off")
+        _cycle(my_predbat, 402, slots=slots)
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+        try:
+            changed = _cycle(my_predbat, 404, 30, slots=slots)
+        finally:
+            my_predbat.log = saved_log
+        keep_logs = [message for message in logged if "keeping the dispatch rate until" in message]
+        failed |= _check("t40 logs the kept half hour", len(keep_logs) == 1, "logged {}".format(logged))
+        failed |= _check("t40 car's slots still cancelled", changed and my_predbat.dynamic_load_car_cancelled.get(0) and _kwh(my_predbat) == [0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        failed |= _check("t40 strip from 07:00", my_predbat.dynamic_load_car_strip_from(0) == 420, "strip from {}".format(my_predbat.dynamic_load_car_strip_from(0)))
+
+        rates = {minute: 10.0 for minute in range(0, 2 * 24 * 60)}
+        rates = my_predbat.rate_add_io_slots(0, rates, [_dispatch(my_predbat, 390, 450)])
+        failed |= _check("t40 rest of the half hour cheap", all(rates[minute] == 4.0 for minute in range(400, 420)), "rates {}".format(sorted(set(rates[minute] for minute in range(400, 420)))))
+        failed |= _check("t40 next half hour not cheap", all(rates[minute] == 10.0 for minute in range(420, 450)), "rates {}".format(sorted(set(rates[minute] for minute in range(420, 450)))))
+
+        my_predbat.octopus_slots = [[_dispatch(my_predbat, 390, 450)]]
+        rates = {minute: 25.0 for minute in range(0, 2 * 24 * 60)}
+        my_predbat.io_adjusted = {}
+        for minute in range(390, 450):
+            rates[minute] = 7.0
+            my_predbat.io_adjusted[minute] = True
+        rates = my_predbat.dynamic_load_car_strip_feed_rates(rates)
+        failed |= _check("t40 feed keeps the rest of the half hour", rates[410] == 7.0 and my_predbat.io_adjusted.get(410), "rate {}".format(rates[410]))
+        failed |= _check("t40 feed strips the next half hour", rates[425] == 30.0 and 425 not in my_predbat.io_adjusted, "rate {}".format(rates[425]))
+
+        print("Test 41: once that half hour is over the rate is stripped from now")
+        _cycle(my_predbat, 425, slots=slots)
+        failed |= _check("t41 strip from now", my_predbat.dynamic_load_car_strip_from(0) == 425, "strip from {}".format(my_predbat.dynamic_load_car_strip_from(0)))
+
+        print("Test 42: a comparison run reads the confirmation but does not record it")
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 395, slots=slots, save=False)
+        failed |= _check("t42 not recorded", my_predbat.dynamic_load_car_confirmed.get(0) is None, "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+    finally:
+        for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
     return failed
 
 
