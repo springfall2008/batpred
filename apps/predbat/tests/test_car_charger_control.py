@@ -363,16 +363,25 @@ class FakeOctopus:
         self.intelligent_config_devices = [] if configured else None
 
 
-class FakeComponents:
-    """Component registry holding at most an Octopus component."""
+class FakeKraken:
+    """The part of the Kraken component the Octopus rule reads."""
 
-    def __init__(self, octopus):
-        """Wrap the given Octopus component, or None."""
+    def __init__(self, started):
+        """started False means its first run has not succeeded yet."""
+        self.api_started = started
+
+
+class FakeComponents:
+    """Component registry holding at most an Octopus and a Kraken component."""
+
+    def __init__(self, octopus, kraken=None):
+        """Wrap the given components, or None."""
         self.octopus = octopus
+        self.kraken = kraken
 
     def get_component(self, name):
-        """Only Octopus is known."""
-        return self.octopus if name == "octopus" else None
+        """Only Octopus and Kraken are known."""
+        return {"octopus": self.octopus, "kraken": self.kraken}.get(name)
 
 
 DISPATCH = "binary_sensor.predbat_octopus_intelligent_dispatch"
@@ -547,6 +556,19 @@ def test_octopus_rule_waits_for_octopus_discovery():
     assert component.commands == [("a", "off", 0)], component.commands
 
 
+def test_octopus_rule_waits_for_kraken():
+    """Kraken wires its slots in its first successful run - until then nothing is commanded."""
+    component = _octopus_component(None, wired=False)
+    component.base.components = FakeComponents(None, FakeKraken(started=False))
+    assert component.charger_control_octopus_drives_charger(0) is None
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+
+    component.base.components = FakeComponents(None, FakeKraken(started=True))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "Kraken started and wired nothing for this car: {}".format(component.commands)
+
+
 def test_octopus_rule_does_not_wait_without_octopus_automatic():
     """With octopus_automatic off the Octopus component never wires the slots, so there is nothing to wait for."""
     component = _octopus_component(FakeOctopus(configured=False, automatic=False), wired=False)
@@ -691,6 +713,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_unknown_hands_off_unless_told()
     test_octopus_rule_waits_for_octopus_discovery()
     test_octopus_rule_does_not_wait_without_octopus_automatic()
+    test_octopus_rule_waits_for_kraken()
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
     test_guest_charging_releases_and_resumes()

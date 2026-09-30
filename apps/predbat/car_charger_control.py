@@ -191,17 +191,22 @@ class CarChargerControl:
         return parse_control_setting(is_charger)
 
     def charger_control_octopus_discovering(self):
-        """Is the Octopus component still to wire its Intelligent devices into the car slots?
+        """Is the Octopus or Kraken component still to wire its Intelligent devices into the car slots?
 
         Only a component running its automatic setup ever wires them, so one with
         octopus_automatic off is never "still discovering" - waiting on it would leave the
         charger alone for good.
         """
         components = getattr(self.base, "components", None)
-        octopus = components.get_component("octopus") if components else None
-        if octopus is None or not octopus.automatic:
+        if not components:
             return False
-        return octopus.intelligent_config_devices is None
+        octopus = components.get_component("octopus")
+        if octopus is not None and octopus.automatic and octopus.intelligent_config_devices is None:
+            return True
+        # Kraken wires its SmartFlex devices in the same run that first succeeds - from its cache,
+        # or from a fresh discovery - so until then its slots may simply not be there yet
+        kraken = components.get_component("kraken")
+        return kraken is not None and not kraken.api_started
 
     def charger_control_log_left_alone(self, car_n, why):
         """Say why a car's charger is being left alone.
