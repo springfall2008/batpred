@@ -48,8 +48,8 @@ high battery charge levels when the car was charged previously (e.g. last week).
         - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
         - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
 
-    If the switch is On but **car_charging_energy** records more energy than your house load in at least two half hours of the last day, your load sensor cannot include the charger. Predbat then logs a warning,
-    `Warn: car_charging_energy recorded more than the house load ...`, suggesting you turn this switch Off and set **car_charging_now** to the charger's charging power or status sensor.
+    If the switch is On but **car_charging_energy** records more than twice your house load in at least two half hours of the last day, your load sensor cannot include the charger. Predbat then logs a warning,
+    `Warn: car_charging_energy recorded more than twice the house load ...`, suggesting you turn this switch Off and set **car_charging_now** to the charger's charging power or status sensor.
 
 - **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 

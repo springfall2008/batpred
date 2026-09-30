@@ -31,22 +31,28 @@ def _incrementing(per_minute_kwh, minutes):
     return series
 
 
-def _charging(minute, start=60, end=180):
+def _charging(minute, sessions):
     """
-    The car charges from end to start minutes ago (two hours, by default one to three hours ago).
+    Whether the car is charging the given number of minutes ago, for sessions of (start, end) minutes ago.
     """
-    return start <= minute < end
+    return any(start <= minute < end for start, end in sessions)
 
 
-def _setup(my_predbat, load_includes_car, lag=0, charge_end=180, history=24 * 60 + 60):
+def _setup(my_predbat, load_includes_car, lag=0, sessions=((60, 180),), car_kw=CAR_KW, history=24 * 60 + 60, load_gap=None):
     """
-    Give my_predbat a car_charging_energy series and a load series, with the car charging for charge_end - 60 minutes.
+    Give my_predbat a car_charging_energy series and a load series. By default the car charges from one to three hours ago.
+    lag shifts the load sensor's view of the charge by that many minutes, and load_gap is a (start, end) stretch where
+    the load sensor reported nothing.
     """
-    my_predbat.car_charging_energy = _incrementing(lambda minute: CAR_KW / 60 if _charging(minute, end=charge_end) else 0.0, history)
-    if load_includes_car:
-        my_predbat.load_minutes = _incrementing(lambda minute: (HOUSE_KW + (CAR_KW if _charging(minute + lag, end=charge_end) else 0.0)) / 60, history)
-    else:
-        my_predbat.load_minutes = _incrementing(lambda minute: HOUSE_KW / 60, history)
+    my_predbat.car_charging_energy = _incrementing(lambda minute: car_kw / 60 if _charging(minute, sessions) else 0.0, history)
+
+    def load(minute):
+        if load_gap and load_gap[0] <= minute < load_gap[1]:
+            return 0.0
+        car = car_kw if (load_includes_car and _charging(minute + lag, sessions)) else 0.0
+        return (HOUSE_KW + car) / 60
+
+    my_predbat.load_minutes = _incrementing(load, history)
 
 
 def _warnings(logged):
@@ -114,12 +120,11 @@ def test_car_energy_reported_load(my_predbat):
         my_predbat.car_energy_reported_load = True
 
         print("Test 5: a single mismatched half hour is not enough")
-        _setup(my_predbat, load_includes_car=False, charge_end=90)
+        _setup(my_predbat, load_includes_car=False, sessions=((60, 90),))
         my_predbat.check_car_energy_reported_load()
         check("t5 silent", not _warnings(logged), "logged {}".format(logged))
 
         print("Test 6: no load or car data is silent, and a short load history is scanned only as far as it goes")
-        my_predbat.car_charging_energy = {}
         _setup(my_predbat, load_includes_car=False)
         my_predbat.car_charging_energy = {}
         my_predbat.check_car_energy_reported_load()
@@ -129,6 +134,27 @@ def test_car_energy_reported_load(my_predbat):
         check("t6 silent without data", not _warnings(logged), "logged {}".format(logged))
         _setup(my_predbat, load_includes_car=False, history=130)
         check("t6 short history", my_predbat.car_energy_exceeds_load_windows() == 2, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
+
+        print("Test 7: an 11 kW charger over two sessions, with the load sensor lagging 5 or 10 minutes, is silent")
+        for lag in (5, 10, -5, -10):
+            _setup(my_predbat, load_includes_car=True, lag=lag, sessions=((60, 120), (300, 360)), car_kw=11.0)
+            check("t7 lag {}".format(lag), my_predbat.car_energy_exceeds_load_windows() == 0, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
+        check("t7 silent", not _warnings(logged), "logged {}".format(logged))
+
+        print("Test 8: a stretch where the load sensor reported nothing is not evidence")
+        _setup(my_predbat, load_includes_car=True, load_gap=(30, 210))
+        check("t8 gap skipped", my_predbat.car_energy_exceeds_load_windows() == 0, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
+
+        print("Test 9: once warned, a count that dips below the threshold does not re-arm the warning; none at all does")
+        _setup(my_predbat, load_includes_car=False)
+        my_predbat.check_car_energy_reported_load()
+        count = len(_warnings(logged))
+        _setup(my_predbat, load_includes_car=False, sessions=((60, 90),))
+        my_predbat.check_car_energy_reported_load()
+        check("t9 still warned on one window", my_predbat.car_energy_reported_load_warned)
+        _setup(my_predbat, load_includes_car=False)
+        my_predbat.check_car_energy_reported_load()
+        check("t9 not repeated", len(_warnings(logged)) == count, "logged {}".format(logged))
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)
