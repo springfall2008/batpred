@@ -420,21 +420,23 @@
  */
 .plan-row.is-past td {
   background: color-mix(in srgb, var(--color-bg) 80%, var(--color-surface));
-  color: color-mix(in srgb, var(--color-text-secondary) 45%, var(--color-bg));
+  color: color-mix(in srgb, var(--color-text-secondary) 68%, var(--color-bg));
 }
 
 .plan-row.is-past .plan-time,
 .plan-row.is-past .plan-soc {
-  color: color-mix(in srgb, var(--color-text) 45%, var(--color-bg));
+  color: color-mix(in srgb, var(--color-text) 75%, var(--color-bg));
+}
+
+.plan-row.is-past .plan-pv-value.is-generating {
+  color: color-mix(in srgb, var(--color-flow-solar) 78%, var(--color-bg));
 }
 
 /*
- * Past action pills remain identifiable but lose emphasis.
+ * Keep the semantic action colour while making completed actions quieter.
  */
 .plan-row.is-past .plan-action {
-  background: color-mix(in srgb, currentColor 7%, var(--color-surface));
-  color: color-mix(in srgb, currentColor 45%, var(--color-bg));
-  border-color: color-mix(in srgb, currentColor 20%, transparent);
+  opacity: 0.82;
 }
 
 .plan-action-control {
