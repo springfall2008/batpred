@@ -845,6 +845,8 @@ When `automatic: true` (recommended), Predbat will automatically create and conf
 
 No manual entity configuration is required when using automatic mode.
 
+Automatic mode plans each direction at the most a charge or discharge slot can actually be set to. Some inverters refuse slot currents well below the maximum current they report, with no way to read the real limit. For example, a 3.6kW inverter reports 100A but only accepts 60A. So when Predbat first sees an inverter, it measures the ceiling itself. It writes test currents to one of slots 2-6 that is not in use: first the inverter's reported maximum charge or discharge current, then lower values until one is accepted. It then puts back the value that slot held. It saves the result, and checks it again at most once a day, starting from the saved value. Until an inverter has been measured, the current it can deliver at its rated power is used as an estimate. Once measured, the measured ceiling replaces that estimate, so a hybrid that can charge from PV above its AC rating is not held back. Predbat only uses slot 1 itself, so the test does not touch the schedule. The results are published as `sensor.predbat_solis_<serial>_slot_charge_power_max` and `..._slot_discharge_power_max`, and used for `inverter_limit_charge` and `inverter_limit_discharge`. `battery_rate_max` is set to the larger of the two, so a battery allowed to discharge faster than it charges is planned at both rates. An `inverter_limit_charge` or `inverter_limit_discharge` you set in `apps.yaml` takes precedence - use it to state a lower limit such as your inverter's AC rating.
+
 #### Manual configuration (solis_automatic: false)
 
 If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
@@ -2281,11 +2283,12 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_saving_session}'
     - '+[car_charging_planned]'
     - '+[car_charging_soc]'
-    - '{car_charging_now}'
 ```
 
 Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
 but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+
+**car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
 
 ## Load Forecast
 

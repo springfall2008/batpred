@@ -434,6 +434,48 @@ def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charg
     return failed
 
 
+def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_charge, expect_discharge, expect_export):
+    """
+    Test
+       Inverter.__init__ plans each direction at its own limit with the SolisCloud automatic bindings.
+
+    GH#4940: Solis automatic config binds battery_rate_max to the larger of the inverter's max charge
+    and discharge power and inverter_limit_charge/_discharge to each one, so the reporter's battery
+    (2647W charge, 5559W discharge) is no longer planned discharging at its charge limit. user_limits
+    are apps.yaml values, which automatic config leaves in place of the bindings.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    entities = {"sensor.solis_battery_rate_max": 5559, "number.solis_max_charge_power": 2647, "number.solis_max_discharge_power": 5559}
+    bindings = {"battery_rate_max": "sensor.solis_battery_rate_max", "inverter_limit_charge": "number.solis_max_charge_power", "inverter_limit_discharge": "number.solis_max_discharge_power"}
+    saved_args = ("inverter_type", "charge_rate", "battery_rate_max", "inverter_limit_charge", "inverter_limit_discharge", "inverter_limit_export", "inverter_limit_override")
+    saved = {arg: my_predbat.args.get(arg, None) for arg in saved_args}
+    try:
+        for arg in saved_args:
+            my_predbat.args.pop(arg, None)
+        my_predbat.args["inverter_type"] = ["SolisCloud"]
+        my_predbat.args.update(bindings)
+        my_predbat.args.update(user_limits)
+        ha.dummy_items.update(entities)
+
+        inv = Inverter(my_predbat, 0)
+        for label, value, expect in (("charge", inv.battery_rate_max_charge, expect_charge), ("discharge", inv.battery_rate_max_discharge, expect_discharge), ("export", inv.battery_rate_max_export, expect_export)):
+            if round(value * MINUTE_WATT) != expect:
+                print("ERROR: battery_rate_max_{} should be {}W got {}W".format(label, expect, round(value * MINUTE_WATT)))
+                failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+        for entity_id in entities:
+            ha.dummy_items.pop(entity_id, None)
+
+    return failed
+
+
 def test_reserve_model_device_bounds(test_name, my_predbat, ha, set_reserve_min, device_min, device_max, expect_reserve_percent, set_reserve_enable=True):
     """
     Test
@@ -5149,6 +5191,13 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
+    if failed:
+        return failed
+
+    # GH#4940: with the SolisCloud automatic bindings each direction is planned at its own limit, and
+    # an apps.yaml limit (the reporter's own 2500/5000) still caps it
+    failed |= test_solis_cloud_rate_limits("solis_cloud_rate_limits_auto", my_predbat, ha, {}, expect_charge=2647, expect_discharge=5559, expect_export=5559)
+    failed |= test_solis_cloud_rate_limits("solis_cloud_rate_limits_user", my_predbat, ha, {"inverter_limit_charge": 2500, "inverter_limit_discharge": 5000}, expect_charge=2500, expect_discharge=5000, expect_export=5000)
     if failed:
         return failed
 
