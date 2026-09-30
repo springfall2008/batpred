@@ -120,7 +120,38 @@ def run_rate_add_io_slots_tests(my_predbat):
     """
     Test for rate_add_io_slots - the function that adds Octopus Intelligent slots to rates
     and enforces the 6-hour (12 x 30-min slot) daily limit
+
+    Every case overwrites the octopus_slot_* args and, now that the overlay marks the minutes it
+    lowers, adds to io_adjusted. All tests share one PredBat fixture, so start from a clean
+    io_adjusted and put everything back afterwards (#5079).
     """
+    saved_args = {key: my_predbat.args[key] for key in ("octopus_slot_low_rate", "octopus_slot_max") if key in my_predbat.args}
+    saved_io_adjusted = my_predbat.io_adjusted
+    saved_effective = my_predbat.dynamic_load_car_effective
+    original_forecast_minutes = my_predbat.forecast_minutes
+    my_predbat.io_adjusted = {}
+    try:
+        failed = run_rate_add_io_slots_cases(my_predbat)
+    finally:
+        for key in ("octopus_slot_low_rate", "octopus_slot_max"):
+            if key in saved_args:
+                my_predbat.args[key] = saved_args[key]
+            else:
+                my_predbat.args.pop(key, None)
+        my_predbat.io_adjusted = saved_io_adjusted
+        my_predbat.dynamic_load_car_effective = saved_effective
+        my_predbat.forecast_minutes = original_forecast_minutes
+
+    if failed:
+        print("\n**** rate_add_io_slots tests: FAILED ****")
+    else:
+        print("\n**** rate_add_io_slots tests: PASSED ****")
+
+    return failed
+
+
+def run_rate_add_io_slots_cases(my_predbat):
+    """Run every rate_add_io_slots case; run_rate_add_io_slots_tests() owns the fixture state."""
     failed = 0
 
     TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -129,8 +160,7 @@ def run_rate_add_io_slots_tests(my_predbat):
     my_predbat.minutes_now = int((now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     midnight_utc = my_predbat.midnight_utc
 
-    # Save original forecast_minutes and extend it for multi-day tests
-    original_forecast_minutes = my_predbat.forecast_minutes
+    # Extend forecast_minutes for multi-day tests
     my_predbat.forecast_minutes = 3 * 24 * 60  # 3 days
 
     reset_rates(my_predbat, 10, 5)
@@ -575,13 +605,4 @@ def run_rate_add_io_slots_tests(my_predbat):
     failed |= run_rate_add_io_slots_test("test25_completed_away_consumes_cap", my_predbat, slots, True, 2, expected_rates)
 
     failed |= run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, TIME_FORMAT)
-
-    # Restore original forecast_minutes
-    my_predbat.forecast_minutes = original_forecast_minutes
-
-    if failed:
-        print("\n**** rate_add_io_slots tests: FAILED ****")
-    else:
-        print("\n**** rate_add_io_slots tests: PASSED ****")
-
     return failed

@@ -680,8 +680,10 @@ def run_edge_case_tests(my_predbat):
     ]
 
     # An Intelligent dispatch assumed gone in PV10: the car keeps charging at the slot rate but no longer
-    # holds the battery, and joins the grid balance after the battery has acted. Kept last because the
-    # overrides persist into later cases; io_adjusted is cleared after the loop.
+    # holds the battery, and joins the grid balance after the battery has acted. Kept last because some
+    # overrides persist into later cases: reset_inverter() removes the car (num_cars 0, slots cleared) at
+    # the start of every case, including the pv90 block below, but car_charging_loss and
+    # car_charging_limit_model stay set, harmless without a car. io_adjusted is cleared after the loop.
     dispatch_car = {
         "num_cars": 1,
         "car_charging_from_battery": False,

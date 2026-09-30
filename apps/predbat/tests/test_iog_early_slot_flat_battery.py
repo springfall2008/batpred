@@ -173,7 +173,8 @@ def _optimise(my_predbat, charge_windows):
 def _run_case(my_predbat, name, source, pv_metric10_weight, overrides=None):
     """
     Run one case and print the evidence. Returns (highest charge target in the dispatch-only windows,
-    PV10 saving of topping up in the first dispatch window before the night charge).
+    PV10 saving of topping up in the first dispatch window before the night charge, the whole optimised
+    plan, the future minutes flagged io_adjusted).
 
     The first dispatch window is inside the 30 minutes the PV10 case still trusts, so the top-up costs
     the dispatch rate in both scenarios; the saving is what it is worth if the rest of the dispatch
@@ -199,7 +200,7 @@ def _run_case(my_predbat, name, source, pv_metric10_weight, overrides=None):
     iog_limits = [limits[n] for n in iog_indices]
     night_limits = [limits[n] for n in night_indices]
     print("     optimised dispatch limits {} night limits {}".format(iog_limits, night_limits))
-    return (max(iog_limits) if iog_limits else 0.0), cost10_night - cost10_top_up
+    return (max(iog_limits) if iog_limits else 0.0), cost10_night - cost10_top_up, limits, flagged
 
 
 def run_iog_early_slot_flat_battery_tests(my_predbat):
@@ -236,9 +237,9 @@ def run_iog_early_slot_flat_battery_tests(my_predbat):
     try:
         load_to_night = DEFAULT_SCENARIO["load_kw"] * (DEFAULT_SCENARIO["night_start"] - DEFAULT_SCENARIO["minutes_now"]) / 60.0
 
-        slot_path, _ = _run_case(my_predbat, "dispatch from octopus_intelligent_slot", "slot", 0.15)
-        feed_path, _ = _run_case(my_predbat, "same dispatch flagged by the rate feed", "feed", 0.15)
-        peak_gap, _ = _run_case(
+        slot_path, _, slot_plan, slot_flagged = _run_case(my_predbat, "dispatch from octopus_intelligent_slot", "slot", 0.15)
+        feed_path, _, feed_plan, feed_flagged = _run_case(my_predbat, "same dispatch flagged by the rate feed", "feed", 0.15)
+        peak_gap, _, _, _ = _run_case(
             my_predbat,
             "bonus dispatch 19:00-21:00 then peak until 23:30, 17:00 now",
             "feed",
@@ -247,8 +248,8 @@ def run_iog_early_slot_flat_battery_tests(my_predbat):
         )
 
         car_hold = {"car_kw": 7.0}
-        _, car_python = _run_case(my_predbat, "slot path, 7 kW car in the dispatch, car_charging_from_battery off", "slot", 0.15, car_hold)
-        _, car_kernel = _run_case(my_predbat, "same with the C++ kernel", "slot", 0.15, dict(car_hold, kernel=True))
+        _, car_python, _, _ = _run_case(my_predbat, "slot path, 7 kW car in the dispatch, car_charging_from_battery off", "slot", 0.15, car_hold)
+        _, car_kernel, _, _ = _run_case(my_predbat, "same with the C++ kernel", "slot", 0.15, dict(car_hold, kernel=True))
 
         if slot_path < load_to_night:
             print("  ERROR: octopus_intelligent_slot path: battery targets {} kWh in the dispatch-only slots, needs {} kWh to carry the house to 23:30 if the dispatch goes away".format(slot_path, load_to_night))
@@ -260,6 +261,16 @@ def run_iog_early_slot_flat_battery_tests(my_predbat):
             failed += 1
         else:
             print("  OK: rate feed path charges {} kWh in the dispatch before 23:30".format(feed_path))
+        # The two paths must agree, not just each clear the bar: the overlay has to flag exactly the
+        # minutes the feed flags, and the same dispatch must then produce the same plan
+        if slot_flagged != feed_flagged:
+            print("  ERROR: io_adjusted differs between paths: overlay flags {} future minutes, feed flags {}".format(len(slot_flagged), len(feed_flagged)))
+            failed += 1
+        elif slot_plan != feed_plan:
+            print("  ERROR: the same dispatch plans differently by path: overlay {} feed {}".format(slot_plan, feed_plan))
+            failed += 1
+        else:
+            print("  OK: overlay and rate feed paths flag the same minutes and plan the same charge")
         for engine, saving in (("python", car_python), ("kernel", car_kernel)):
             if saving < 1.0:
                 print("  ERROR: car holding the battery ({}): a top-up in the first dispatch slot saves {:.2f}p in PV10 - a dispatch that goes away must release the hold so it can carry the house to 23:30".format(engine, saving))
