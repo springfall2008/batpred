@@ -124,7 +124,7 @@ def test_car_energy_reported_load(my_predbat):
         my_predbat.check_car_energy_reported_load()
         check("t5 silent", not _warnings(logged), "logged {}".format(logged))
 
-        print("Test 6: no load or car data is silent, and a short load history is scanned only as far as it goes")
+        print("Test 6: no load or car data is silent, and minutes past the end of the load history are not evidence")
         _setup(my_predbat, load_includes_car=False)
         my_predbat.car_charging_energy = {}
         my_predbat.check_car_energy_reported_load()
@@ -132,8 +132,8 @@ def test_car_energy_reported_load(my_predbat):
         my_predbat.load_minutes = {}
         my_predbat.check_car_energy_reported_load()
         check("t6 silent without data", not _warnings(logged), "logged {}".format(logged))
-        _setup(my_predbat, load_includes_car=False, history=130)
-        check("t6 short history", my_predbat.car_energy_exceeds_load_windows() == 2, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
+        _setup(my_predbat, load_includes_car=False, history=120)
+        check("t6 end of history", my_predbat.car_energy_exceeds_load_windows() == 2, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
 
         print("Test 7: an 11 kW charger over two sessions, with the load sensor lagging 5 or 10 minutes, is silent")
         for lag in (5, 10, -5, -10):
@@ -155,6 +155,12 @@ def test_car_energy_reported_load(my_predbat):
         _setup(my_predbat, load_includes_car=False)
         my_predbat.check_car_energy_reported_load()
         check("t9 not repeated", len(_warnings(logged)) == count, "logged {}".format(logged))
+
+        print("Test 10: the window in progress is left out, as a cloud load sensor can lag it")
+        _setup(my_predbat, load_includes_car=True, sessions=((0, 30), (120, 150)), load_gap=None)
+        # The load sensor has not reported the last 20 minutes of the charge yet
+        my_predbat.load_minutes = {minute: (value if minute >= 20 else my_predbat.load_minutes[20]) for minute, value in my_predbat.load_minutes.items()}
+        check("t10 skipped", my_predbat.car_energy_exceeds_load_windows() == 0, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)

@@ -3446,15 +3446,15 @@ class Fetch:
 
         A load sensor that includes the charger can never read less than the charger's own energy over the same window,
         so each such window is evidence it does not (see CAR_ENERGY_LOAD_CHECK_* in const.py). Both series are the raw
-        incrementing data, indexed in minutes back from now - load_minutes has nothing subtracted from it yet. The scan
-        stops where the load history does, and a window with no load at all is skipped: a house always draws something,
-        so a flat stretch is the load sensor missing data, not evidence.
+        incrementing data, indexed in minutes back from now - load_minutes has nothing subtracted from it yet.
+
+        The window in progress is left out: a cloud-polled load sensor can be many minutes behind the charger's, so it
+        reads short there. A window with no load at all is skipped - a house always draws something, so a flat stretch
+        is the load sensor missing data (the history is padded, so missing minutes read as no increment), not evidence.
         """
         windows = 0
         window = CAR_ENERGY_LOAD_CHECK_WINDOW
-        for start in range(0, 24 * 60, window):
-            if (start + window) not in self.load_minutes:
-                break
+        for start in range(window, 24 * 60 + window, window):
             car_energy = sum(self.get_from_incrementing(self.car_charging_energy, minute) for minute in range(start, start + window))
             load_energy = sum(self.get_from_incrementing(self.load_minutes, minute) for minute in range(start, start + window))
             if load_energy > 0 and car_energy >= CAR_ENERGY_LOAD_CHECK_MIN_KWH and car_energy > load_energy * CAR_ENERGY_LOAD_CHECK_RATIO:
@@ -3477,7 +3477,7 @@ class Fetch:
             if windows >= CAR_ENERGY_LOAD_CHECK_WINDOWS and not self.car_energy_reported_load_warned:
                 self.log(
                     "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor cannot include that charging, "
-                    "but switch.predbat_car_energy_reported_load is On. Turn it Off if your load sensor excludes the charger, and set car_charging_now to the charger's "
+                    "but switch.predbat_car_energy_reported_load is On. If car_charging_energy is only the car charger, turn the switch Off, and set car_charging_now to the charger's "
                     "charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
                 )
                 self.car_energy_reported_load_warned = True
