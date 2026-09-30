@@ -197,6 +197,8 @@ const navigationGroups: NavigationGroup[] = [
   }
 ]
 
+const horizontalShortcuts = navigationGroups[0].items.slice(0, 2)
+
 function getBatteryIcon(soc: number) {
   if (soc >= 88) {
     return faBatteryFull
@@ -428,6 +430,28 @@ export default function AppNavigation({
         </div>
 
         <nav className="navigation-menu">
+          <div className="navigation-horizontal-shortcuts">
+            {horizontalShortcuts.map((item) => {
+              const active = item.href === `./${currentPage}` || item.href.endsWith(`?page=${currentPage}`)
+
+              return (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  className={['navigation-item', active ? 'is-active' : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                >
+                  <span className="navigation-item-icon">
+                    <FontAwesomeIcon icon={item.icon} />
+                  </span>
+
+                  <span className="navigation-item-label">{item.label}</span>
+                </a>
+              )
+            })}
+          </div>
+
           {navigationGroups.map((group) => (
             <details
               className="navigation-group"
@@ -446,7 +470,11 @@ export default function AppNavigation({
                       key={item.href}
                       href={item.href}
                       target={item.external ? '_blank' : undefined}
-                      className={['navigation-item', active ? 'is-active' : '']
+                      className={[
+                        'navigation-item',
+                        horizontalShortcuts.includes(item) ? 'navigation-horizontal-shortcut-source' : '',
+                        active ? 'is-active' : ''
+                      ]
                         .filter(Boolean)
                         .join(' ')}
                       title={collapsed && layout === 'side' ? item.label : undefined}

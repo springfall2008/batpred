@@ -202,6 +202,10 @@
   padding: 0.65rem;
 }
 
+.navigation-horizontal-shortcuts {
+  display: none;
+}
+
 .navigation-group {
   margin-bottom: 0.9rem;
 }
@@ -886,7 +890,7 @@
     font-size: 0.62rem;
   }
 
-  .app-navigation.is-horizontal .navigation-group:has(.navigation-item.is-active) > .navigation-group-label,
+  .app-navigation.is-horizontal .navigation-group:has(.navigation-item.is-active:not(.navigation-horizontal-shortcut-source)) > .navigation-group-label,
   .app-navigation.is-horizontal .navigation-group[open] > .navigation-group-label,
   .app-navigation.is-horizontal .navigation-group > .navigation-group-label:hover {
     background: var(--color-bg);
@@ -911,6 +915,20 @@
     justify-content: flex-start;
     width: 100%;
     padding: 0.5rem 0.65rem;
+  }
+
+  .app-navigation.is-horizontal .navigation-horizontal-shortcuts {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+  }
+
+  .app-navigation.is-horizontal .navigation-horizontal-shortcuts .navigation-item {
+    width: auto;
+  }
+
+  .app-navigation.is-horizontal .navigation-horizontal-shortcut-source {
+    display: none;
   }
 
   .app-navigation.is-horizontal .navigation-item-icon,
