@@ -539,10 +539,18 @@ class Plan:
                 # The dispatch has started, so Octopus bills the whole of this half hour off-peak even if the car
                 # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows.
                 # The half hour is the one the evidence covers: a sensor reads now, but the load test averages the
-                # PREDICT_STEP minutes before minutes_now, so a cycle just past a boundary saw the previous one
-                seen_minute = minute if car_n in self.dynamic_load_car_sensors else self.minutes_now - 1
-                period_end = self.midnight_utc + timedelta(minutes=(int(seen_minute) // 30 + 1) * 30)
-                self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
+                # PREDICT_STEP minutes before minutes_now, so a cycle just past a boundary saw the previous one.
+                # The load test only needs load that is not low to trust the slot, which a cooker or hot tub also
+                # gives; keeping the cheap rate needs load at the car's own charging rate
+                if car_n in self.dynamic_load_car_sensors:
+                    seen_minute = minute
+                elif self.load_last_period >= self.car_charging_threshold * 60:
+                    seen_minute = self.minutes_now - 1
+                else:
+                    seen_minute = None
+                if seen_minute is not None:
+                    period_end = self.midnight_utc + timedelta(minutes=(int(seen_minute) // 30 + 1) * 30)
+                    self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
             return False
         if not_charging:
             since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)
