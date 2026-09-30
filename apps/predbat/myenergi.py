@@ -941,6 +941,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             mode = ZAPPI_MODE_RELEASE
         self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
         await self.transport.set_mode(device, mode)
+        # Only once it has gone through: a Zappi taken back later must snapshot its mode afresh
+        self.control_saved_modes.pop(device.device_id, None)
 
     async def charger_control_release(self):
         """Release every held Zappi, then forget every saved mode.

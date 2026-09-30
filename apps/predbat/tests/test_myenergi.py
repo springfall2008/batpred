@@ -1196,6 +1196,26 @@ def test_control_releases_to_the_saved_mode():
     print("  ✓ Releasing restores the mode the Zappi had before Predbat took over")
 
 
+def test_control_release_forgets_the_saved_mode():
+    """A Zappi released on its own (its car gone) forgets the mode it was saved in, so taking it
+    back later snapshots the mode the user has set since."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW], 1: [NIGHT_WINDOW]})
+    second = _zappi(22345678)
+    component.devices[second.device_id] = second
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes[second.device_id] == "Eco+"
+
+    component.base.num_cars = 1
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert second.device_id not in component.control_saved_modes, component.control_saved_modes
+
+    second.mode = "Eco"
+    component.base.num_cars = 2
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes[second.device_id] == "Eco", component.control_saved_modes
+    print("  ✓ A released Zappi snapshots its mode afresh when taken back")
+
+
 def test_control_release_retry_keeps_the_saved_mode():
     """A release that fails is retried next cycle, still restoring the mode the Zappi had before.
 
@@ -2584,6 +2604,7 @@ def test_myenergi(my_predbat=None):
     test_control_releases_to_the_saved_mode()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
+    test_control_release_forgets_the_saved_mode()
     test_control_release_forgets_a_mode_saved_before_a_refused_command()
     test_control_stops_and_resumes_on_read_only()
     test_control_switch_is_published_and_toggles_control()

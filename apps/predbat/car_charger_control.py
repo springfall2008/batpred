@@ -188,13 +188,32 @@ class CarChargerControl:
             self.charger_control_released = None
         await self.charger_control_apply(now)
 
+    async def charger_control_each(self, steps):
+        """Await each step in turn - one coroutine factory per charger - so one charger that
+        refuses a command does not stop the others being handled. The first failure is raised
+        once every step has had its turn, for the component's run loop to log and retry."""
+        failure = None
+        for step in steps:
+            try:
+                await step()
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
+
     async def charger_control_release(self):
-        """Hand back every charger Predbat has moved, then forget them."""
-        for key, handle in self.charger_control_chargers():
-            if key not in self.charger_control_state:
-                continue
-            await self.charger_control_release_one(handle, self.charger_control_state[key])
-        self.charger_control_state = {}
+        """Hand back every charger Predbat has moved, forgetting each once it is released.
+
+        A charger that refuses stays held, so the next cycle retries just that one.
+        """
+        held = [(key, handle) for key, handle in self.charger_control_chargers() if key in self.charger_control_state]
+        await self.charger_control_each([lambda key=key, handle=handle: self.charger_control_release_held(key, handle) for key, handle in held])
+
+    async def charger_control_release_held(self, key, handle):
+        """Release one charger Predbat holds, then forget it."""
+        await self.charger_control_release_one(handle, self.charger_control_state[key])
+        del self.charger_control_state[key]
 
     async def charger_control_apply(self, now):
         """Drive every charger from its car's plan: on inside a planned window, off outside one.
@@ -207,22 +226,29 @@ class CarChargerControl:
             return
         chargers = self.charger_control_chargers()
         car_count = self.charger_control_car_count()
-        # A charger Predbat holds whose car has gone (num_cars dropped) would otherwise never be
-        # commanded again, left charging or stopped with nobody in control - hand it back instead
-        for key, handle in chargers[car_count:]:
-            if key in self.charger_control_state:
-                self.log("Info: {}: {} {} no longer has a car to follow, releasing it".format(self.charger_control_log_name, self.charger_control_noun, key))
-                await self.charger_control_release_one(handle, self.charger_control_state[key])
-                del self.charger_control_state[key]
-        for car_n, (key, handle) in enumerate(chargers[:car_count]):
-            if not self.charger_control_connected(handle):
-                continue
-            charge = self.charger_control_should_charge(car_n, now)
-            last = self.charger_control_state.get(key, None)
-            drifted = self.charger_control_drifted(handle, charge)
-            if last == charge and not drifted:
-                continue
-            if last == charge:
-                self.log("Info: {}: {} {} was changed away from what Predbat set, re-applying".format(self.charger_control_log_name, self.charger_control_noun, key))
-            await self.charger_control_send(handle, charge, car_n)
-            self.charger_control_state[key] = charge
+        steps = [lambda key=key, handle=handle: self.charger_control_car_gone(key, handle) for key, handle in chargers[car_count:]]
+        steps += [lambda car_n=car_n, key=key, handle=handle: self.charger_control_drive_one(car_n, key, handle, now) for car_n, (key, handle) in enumerate(chargers[:car_count])]
+        await self.charger_control_each(steps)
+
+    async def charger_control_car_gone(self, key, handle):
+        """Release a charger Predbat holds whose car has gone (num_cars dropped).
+
+        It would otherwise never be commanded again, left charging or stopped with nobody in control.
+        """
+        if key in self.charger_control_state:
+            self.log("Info: {}: {} {} no longer has a car to follow, releasing it".format(self.charger_control_log_name, self.charger_control_noun, key))
+            await self.charger_control_release_held(key, handle)
+
+    async def charger_control_drive_one(self, car_n, key, handle, now):
+        """Drive one charger from car car_n's plan."""
+        if not self.charger_control_connected(handle):
+            return
+        charge = self.charger_control_should_charge(car_n, now)
+        last = self.charger_control_state.get(key, None)
+        drifted = self.charger_control_drifted(handle, charge)
+        if last == charge and not drifted:
+            return
+        if last == charge:
+            self.log("Info: {}: {} {} was changed away from what Predbat set, re-applying".format(self.charger_control_log_name, self.charger_control_noun, key))
+        await self.charger_control_send(handle, charge, car_n)
+        self.charger_control_state[key] = charge
