@@ -6035,6 +6035,7 @@ class Plan:
                     self.clipping_tomorrow = clipping_tomorrow
                     self.clipping_mitigated_today = clipping_today
                     self.clipping_allocated_today = 0.0
+                    self.clipping_allocated_today_date = None
                 else:
                     self.clipping_mitigated_today = self.clipping_remaining_today
                     self.update_clipping_allocated_today()
@@ -6809,6 +6810,7 @@ class Plan:
         """
         if not getattr(self, "clipping_buffer_enable", False):
             self.clipping_allocated_today = 0.0
+            self.clipping_allocated_today_date = None
             return 0.0
 
         midnight_utc = getattr(self, "midnight_utc", None)
@@ -6817,16 +6819,22 @@ class Plan:
         else:
             current_day = None
 
-        if getattr(self, "clipping_allocated_today_date", None) != current_day:
-            self.clipping_allocated_today = 0.0
-            self.clipping_allocated_today_date = current_day
-            if hasattr(self, "get_state_wrapper") and current_day is not None:
-                prev_date = self.get_state_wrapper(self.prefix + ".clipping_allocated_today", attribute="date", default=None)
-                if prev_date == current_day.strftime("%Y-%m-%d"):
-                    try:
-                        self.clipping_allocated_today = float(self.get_state_wrapper(self.prefix + ".clipping_allocated_today", default=0.0) or 0.0)
-                    except (ValueError, TypeError):
-                        self.clipping_allocated_today = 0.0
+        if current_day is not None:
+            if getattr(self, "clipping_allocated_today_date", None) is None:
+                # Startup / first evaluation: populate tracking date and attempt HA entity state restoration
+                self.clipping_allocated_today_date = current_day
+                if hasattr(self, "get_state_wrapper"):
+                    prev_date = self.get_state_wrapper(self.prefix + ".clipping_allocated_today", attribute="date", default=None)
+                    if prev_date == current_day.strftime("%Y-%m-%d"):
+                        try:
+                            ha_val = float(self.get_state_wrapper(self.prefix + ".clipping_allocated_today", default=0.0) or 0.0)
+                            self.clipping_allocated_today = max(getattr(self, "clipping_allocated_today", 0.0), ha_val)
+                        except (ValueError, TypeError):
+                            pass
+            elif self.clipping_allocated_today_date != current_day:
+                # Midnight rollover to a new day: reset peak buffer for the new day
+                self.clipping_allocated_today = 0.0
+                self.clipping_allocated_today_date = current_day
 
         current_allocated = max(getattr(self, "clipping_allocated_today", 0.0), getattr(self, "clipping_remaining_today", 0.0))
         if getattr(self, "clipping_buffer_kwh", 0) > 0:
