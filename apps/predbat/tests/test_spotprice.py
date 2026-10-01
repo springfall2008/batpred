@@ -882,7 +882,8 @@ def test_spotprice_market_day_polling(my_predbat=None):
         ("IE-SEM", "Europe/Dublin", "2025-12-10T12:30Z", "2025-12-11T23:00Z"),
     ]
     for zone, tz_name, now_text, market_end_text in cases:
-        api = make_api(provider="energycharts", entsoe_token=None, zone=zone, local_tz=pytz.timezone(tz_name))
+        # IE-SEM is ENTSO-E only; the others can use Energy-Charts
+        api = make_api(provider="entsoe" if zone == "IE-SEM" else "energycharts", entsoe_token="token" if zone == "IE-SEM" else None, zone=zone, local_tz=pytz.timezone(tz_name))
         now = dt(now_text)
         market_end = dt(market_end_text)
         start, end = api.fetch_window(now)
@@ -1162,6 +1163,56 @@ def test_spotprice_fetch_error_categories(my_predbat=None):
         spotprice_module.record_api_call = original
 
 
+def test_spotprice_entsoe_only_zone(my_predbat=None):
+    """IE-SEM has no Energy-Charts data: without an ENTSO-E token that is one clear error and no fetching; at runtime an ENTSO-E failure is not 'rescued' by Energy-Charts."""
+    calls = []
+
+    async def entsoe(start, end):
+        """Record and fail."""
+        calls.append("entsoe")
+        raise SpotPriceError("ENTSO-E returned HTTP 503")
+
+    async def energycharts(start, end):
+        """Must never be called for IE-SEM."""
+        calls.append("energycharts")
+        raise SpotPriceError("Energy-Charts does not publish zone IE-SEM")
+
+    api = make_api(provider="entsoe", entsoe_token=None, zone="IE-SEM", local_tz=pytz.timezone("Europe/Dublin"), storage=FakeStorage())
+    api.fetch_entsoe = entsoe
+    api.fetch_energycharts = energycharts
+    assert api.config_error == "spotprice_entsoe_token is required for zone IE-SEM"
+    errors = [line for line in api.base.logs if line.startswith("Error:")]
+    assert errors == ["Error: SpotPrice: spotprice_entsoe_token is required for zone IE-SEM"], api.base.logs
+    now = dt("2025-05-02T08:00Z")
+    assert not api.refresh_due(now) and run(api.refresh(now)) is False
+    for minute in range(0, 300, 60):
+        pin_now(api, now + timedelta(minutes=minute))
+        assert run(api.run(minute, minute == 0)) is True
+    assert calls == [], calls
+    status = api.base.entities["sensor.predbat_spotprice_status"]
+    assert status["state"] == "error" and status["attributes"]["last_error"] == api.config_error, status
+    assert api.health_message() == api.config_error
+    assert not any("refresh failed" in line or "does not publish" in line for line in api.base.logs), api.base.logs
+    assert len([line for line in api.base.logs if line.startswith("Error:")]) == 1
+
+    # Provider energycharts cannot serve IE-SEM at all
+    assert "use spotprice_provider entsoe" in make_api(provider="energycharts", entsoe_token=None, zone="IE-SEM").config_error
+
+    # Tibber with spot export in IE-SEM and no token: keep Tibber import, drop the export once
+    tib = make_api(provider="tibber", tibber_token="t", entsoe_token=None, zone="IE-SEM", export_mode="spot")
+    assert tib.config_error is None and tib.export_mode == "none" and tib.sources_needed() == ["tibber"]
+
+    # With a token, an ENTSO-E failure is recorded as such and Energy-Charts is not tried
+    live = make_api(provider="entsoe", entsoe_token="token", zone="IE-SEM")
+    assert live.config_error is None
+    live.fetch_entsoe = entsoe
+    live.fetch_energycharts = energycharts
+    calls.clear()
+    assert run(live.refresh(now)) is False
+    assert calls == ["entsoe"], calls
+    assert "ENTSO-E returned HTTP 503" in live.last_error and "Energy-Charts" not in live.last_error, live.last_error
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1200,6 +1251,7 @@ SPOTPRICE_TESTS = [
     test_spotprice_mixed_resolution_starts,
     test_spotprice_tibber_token_implies_tibber_with_zone,
     test_spotprice_fetch_error_categories,
+    test_spotprice_entsoe_only_zone,
 ]
 
 

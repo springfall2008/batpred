@@ -649,6 +649,25 @@ class SpotPriceAPI(ComponentBase):
         elif self.needs_spot() and not (self.zone or self.zone_eic):
             self.log("Warn: SpotPrice: spotprice_zone must be set (e.g. DE-LU) to use spot prices")
 
+        # A zone Energy-Charts does not publish (IE-SEM, or a raw EIC code) can only come from ENTSO-E.
+        # When ENTSO-E is not usable either there is nothing to fetch, ever: say so once and stop,
+        # rather than failing every refresh with "Energy-Charts does not publish zone ...".
+        self.config_error = None
+        entsoe_usable = bool(self.entsoe_token) and self.provider in ("entsoe", "tibber")
+        if self.needs_spot() and (self.zone or self.zone_eic) and not self.energycharts_covers_zone() and not entsoe_usable:
+            zone_name = self.zone or self.zone_eic
+            if self.provider == "tibber":
+                # Only the export side needs spot prices - keep Tibber's import prices and drop that export
+                self.log("Warn: SpotPrice: spotprice_entsoe_token is required for spot prices in zone {} - spot-linked export disabled".format(zone_name))
+                self.export_mode = "none"
+                self.export_zero_on_negative = False
+            elif self.provider == "entsoe":
+                self.config_error = "spotprice_entsoe_token is required for zone {}".format(zone_name)
+            else:
+                self.config_error = "Energy-Charts does not publish zone {}, use spotprice_provider entsoe with spotprice_entsoe_token".format(zone_name)
+            if self.config_error:
+                self.log("Error: SpotPrice: {}".format(self.config_error))
+
         # Raw source data, cached to storage. Spot intervals are per-MWh in EUR as published;
         # Tibber intervals are end-user totals in major currency units per kWh.
         self.spot_intervals = []
@@ -690,6 +709,10 @@ class SpotPriceAPI(ComponentBase):
             return None, text
         self.log("Warn: SpotPrice: unknown spotprice_zone '{}', known zones are {}".format(zone, ", ".join(BIDDING_ZONES)))
         return text, None
+
+    def energycharts_covers_zone(self):
+        """True when Energy-Charts publishes prices for the configured zone."""
+        return bool(self.zone) and self.zone in BIDDING_ZONES and self.zone not in ENERGYCHARTS_UNSUPPORTED_ZONES
 
     def needs_spot(self):
         """True when spot prices are needed: for the import price, spot-linked export, or the negative-price export rule."""
@@ -860,7 +883,9 @@ class SpotPriceAPI(ComponentBase):
         sources = []
         if self.entsoe_token and self.provider in ("entsoe", "tibber"):
             sources.append(("entsoe", self.fetch_entsoe))
-        sources.append(("energycharts", self.fetch_energycharts))
+        if self.energycharts_covers_zone():
+            # Energy-Charts does not publish every zone (IE-SEM); there the ENTSO-E error stands alone
+            sources.append(("energycharts", self.fetch_energycharts))
         errors = []
         for name, fetch in sources:
             try:
@@ -966,6 +991,9 @@ class SpotPriceAPI(ComponentBase):
     def sources_needed(self):
         """The price sources this configuration fetches: "spot" and/or "tibber"."""
         needed = []
+        if self.config_error:
+            # Nothing can be fetched until the configuration changes (initialize() has logged why)
+            return needed
         if self.needs_spot():
             needed.append("spot")
         if self.provider == "tibber":
@@ -1092,6 +1120,8 @@ class SpotPriceAPI(ComponentBase):
         straight away - while the spot failure backs off on its own and shows in the status. Called
         with nothing due (start-up, tests), every source not in back-off is fetched.
         """
+        if self.config_error:
+            return False
         needed = [source for source in self.sources_needed() if not self.source_blocked(source, now)]
         due = [source for source in needed if self.source_due(source, now)] or needed
         failed = False
@@ -1215,7 +1245,7 @@ class SpotPriceAPI(ComponentBase):
                 "zone": self.zone or self.zone_eic,
                 "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
                 "prices_until": data_end.isoformat() if data_end else None,
-                "last_error": self.last_error,
+                "last_error": self.config_error or self.last_error,
                 "source_errors": dict(self.source_errors),
                 "failures": dict(self.source_failures),
                 "next_attempt": {source: when.isoformat() for source, when in self.source_next_attempt.items() if when},
@@ -1242,6 +1272,8 @@ class SpotPriceAPI(ComponentBase):
         stale   - a source is failing and its prices run out within SPOTPRICE_STALE_HORIZON_HOURS
         ok      - otherwise
         """
+        if self.config_error:
+            return "error"
         if not import_intervals:
             return "error" if self.source_errors or self.last_error else "waiting"
         if self.current_value(import_intervals, now) is None:
@@ -1255,6 +1287,8 @@ class SpotPriceAPI(ComponentBase):
 
     def health_message(self):
         """Report the last refresh error while prices are failing."""
+        if self.config_error:
+            return self.config_error
         return self.last_error if self.source_errors else None
 
     async def run(self, seconds, first):
@@ -1270,7 +1304,7 @@ class SpotPriceAPI(ComponentBase):
         data_end = self.data_end()
         if data_end is not None and data_end > now:
             self.update_success_timestamp()
-        if first and not self.import_rates:
+        if first and not self.import_rates and not self.config_error:
             return False
         # After start-up a failed refresh is reported through the status sensor and health_message()
         # rather than by returning False, which would flag an error on every 60 second cycle while
