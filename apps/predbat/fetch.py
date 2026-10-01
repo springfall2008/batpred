@@ -32,6 +32,7 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    OCTOPUS_MANUAL_DISPATCH_SOURCES,
     CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
@@ -43,9 +44,6 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import copy
 import re
-
-# Planned dispatch sources the user asks for by hand, which Smart Control being off does not void
-OCTOPUS_MANUAL_DISPATCH_SOURCES = ("bump-charge", "BOOST")
 
 
 class Fetch:
@@ -1541,12 +1539,13 @@ class Fetch:
                 # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
                 # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
                 # the manual bump/boost charges the user asked for themselves
+                planned_used = planned
                 if self.octopus_smart_control_off(car_n, entity_id, save=save):
-                    planned = [slot for slot in (planned or []) if isinstance(slot, dict) and slot.get("source") in OCTOPUS_MANUAL_DISPATCH_SOURCES]
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                    planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES]
+                if planned_used and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
-                    self.octopus_slots[car_n] += planned
+                    self.octopus_slots[car_n] += planned_used
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
