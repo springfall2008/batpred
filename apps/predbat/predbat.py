@@ -597,6 +597,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.clipping_remaining_today = 0.0
         self.clipping_tomorrow = 0.0
         self.clipping_mitigated_today = 0.0
+        self.clipping_allocated_today = 0.0
+        self.clipping_allocated_today_date = None
         self.clipping_mode = "Auto"
         self.savings_today_predbat = 0.0
         self.savings_today_predbat_soc = 0.0

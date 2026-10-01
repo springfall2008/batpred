@@ -7,6 +7,7 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+from datetime import datetime, timezone
 from tests.test_infra import reset_inverter
 from utils import (
     EXPORT_MODE_FREEZE,
@@ -41,6 +42,7 @@ def run_clipping_tests(my_predbat):
     failed |= test_solar_deficit_gated_arbitrage_injection(my_predbat)
     failed |= test_try_socs_includes_clipping_target_kwh(my_predbat)
     failed |= test_multi_car_charging_during_clipping_window(my_predbat)
+    failed |= test_clipping_allocated_today(my_predbat)
     return failed
 
 
@@ -54,6 +56,8 @@ def setup(my_predbat):
     my_predbat.clipping_amplification = 1.0
     my_predbat.minutes_now = 0
     my_predbat.clipping_remaining_today = 2.0
+    my_predbat.clipping_allocated_today = 2.0
+    my_predbat.clipping_allocated_today_date = None
     my_predbat.clipping_tomorrow = 0.0
     my_predbat.clipping_buffer_forecast_kwh = {600: 2.0}
     my_predbat.export_rate = {}
@@ -1291,6 +1295,138 @@ def test_multi_car_charging_during_clipping_window(my_predbat):
     except Exception as e:
         print("ERROR: publish_html_plan crashed on multi-car clipping plan: {}".format(e))
         failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clipping_allocated_today(my_predbat):
+    print("**** test_clipping_allocated_today ****")
+    failed = False
+    setup(my_predbat)
+
+    day1 = datetime(2026, 7, 15, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = day1
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_remaining_today = 2.5
+    my_predbat.clipping_buffer_kwh = 0.0
+
+    # 1. Initial allocation from forecast
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 2.5 or my_predbat.clipping_allocated_today != 2.5:
+        print("ERROR: Initial clipping_allocated_today allocation failed: expected 2.5, got {}".format(val))
+        failed = True
+
+    # 2. Non-decaying retention during afternoon
+    for decaying_val in [1.8, 0.9, 0.2, 0.0]:
+        my_predbat.clipping_remaining_today = decaying_val
+        val = my_predbat.update_clipping_allocated_today()
+        if val != 2.5 or my_predbat.clipping_allocated_today != 2.5:
+            print("ERROR: clipping_allocated_today decayed with remaining={}: got {}".format(decaying_val, val))
+            failed = True
+
+    # 3. Intraday peak increase (e.g. higher morning solar forecast)
+    my_predbat.clipping_remaining_today = 2.8
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 2.8 or my_predbat.clipping_allocated_today != 2.8:
+        print("ERROR: clipping_allocated_today failed to track peak increase: expected 2.8, got {}".format(val))
+        failed = True
+
+    # 4. Manual override tracking
+    my_predbat.clipping_buffer_kwh = 3.5
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 3.5 or my_predbat.clipping_allocated_today != 3.5:
+        print("ERROR: clipping_allocated_today failed to track manual override: expected 3.5, got {}".format(val))
+        failed = True
+
+    # 5. Midnight rollover resets peak for new day
+    day2 = datetime(2026, 7, 16, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = day2
+    my_predbat.clipping_buffer_kwh = 0.0
+    my_predbat.clipping_remaining_today = 1.2
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 1.2 or my_predbat.clipping_allocated_today != 1.2:
+        print("ERROR: Midnight rollover failed to reset clipping_allocated_today: expected 1.2, got {}".format(val))
+        failed = True
+
+    # 6. HA State restoration across daemon/container restarts
+    # Simulate restart at 16:00 when remaining is 0.0, but entity has today's date and value 1.2 in HA
+    my_predbat.clipping_allocated_today = 0.0
+    my_predbat.clipping_allocated_today_date = None
+    my_predbat.clipping_remaining_today = 0.0
+
+    orig_get_state = getattr(my_predbat, "get_state_wrapper", None)
+
+    def mock_get_state(entity_id, attribute=None, default=None):
+        if entity_id == my_predbat.prefix + ".clipping_allocated_today":
+            if attribute == "date":
+                return "2026-07-16"
+            return "1.2"
+        return default
+
+    my_predbat.get_state_wrapper = mock_get_state
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 1.2 or my_predbat.clipping_allocated_today != 1.2:
+        print("ERROR: State restoration from HA entity on restart failed: expected 1.2, got {}".format(val))
+        failed = True
+
+    if orig_get_state:
+        my_predbat.get_state_wrapper = orig_get_state
+    else:
+        delattr(my_predbat, "get_state_wrapper")
+
+    # 7. Gating when clipping_buffer_enable is False
+    my_predbat.clipping_buffer_enable = False
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 0.0 or my_predbat.clipping_allocated_today != 0.0:
+        print("ERROR: clipping_allocated_today was not 0.0 when clipping_buffer_enable is False: got {}".format(val))
+        failed = True
+
+    # 8. Dashboard item publishing verification
+    dashboard_items = {}
+
+    def mock_dashboard_item(entity, state=None, attributes=None, app=None):
+        dashboard_items[entity] = {"state": state, "attributes": attributes}
+
+    orig_dashboard_item = getattr(my_predbat, "dashboard_item", None)
+    my_predbat.dashboard_item = mock_dashboard_item
+
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.midnight_utc = day1
+    my_predbat.clipping_remaining_today = 2.5
+    my_predbat.clipping_allocated_today = 2.5
+    my_predbat.clipping_mitigated_today = 2.5
+    my_predbat.clipping_tomorrow = 1.0
+    my_predbat.predict_clipping_target_soc_best = {0: 7.5}
+    my_predbat.predict_clipping_remaining_best = {0: 2.5}
+    my_predbat.clipping_buffer_kwh = 0.0
+    my_predbat.clipping_mode = "Dynamic ClearSky"
+    my_predbat.inverter_limit = 3600.0
+
+    my_predbat.dashboard_item(
+        my_predbat.prefix + ".clipping_allocated_today",
+        state=str(my_predbat.clipping_allocated_today),
+        attributes={
+            "friendly_name": "Clipping Allocated Today",
+            "unit_of_measurement": "kWh",
+            "device_class": "energy",
+            "icon": "mdi:battery-arrow-down",
+            "date": my_predbat.midnight_utc.strftime("%Y-%m-%d"),
+        },
+    )
+
+    if my_predbat.prefix + ".clipping_allocated_today" not in dashboard_items:
+        print("ERROR: predbat.clipping_allocated_today was not published to dashboard")
+        failed = True
+    else:
+        item = dashboard_items[my_predbat.prefix + ".clipping_allocated_today"]
+        if item["state"] != "2.5" or item["attributes"]["friendly_name"] != "Clipping Allocated Today" or item["attributes"]["date"] != "2026-07-15":
+            print("ERROR: predbat.clipping_allocated_today published incorrect state or attributes: {}".format(item))
+            failed = True
+
+    if orig_dashboard_item:
+        my_predbat.dashboard_item = orig_dashboard_item
 
     if not failed:
         print("PASS")

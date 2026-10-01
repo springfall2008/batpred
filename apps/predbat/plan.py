@@ -2421,6 +2421,8 @@ class Plan:
             if self.clipping_buffer_kwh > 0:
                 self.clipping_remaining_today = max(self.clipping_remaining_today, self.clipping_buffer_kwh)
 
+            self.update_clipping_allocated_today()
+
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
         self.load_minutes_step10 = load_minutes_step10
@@ -6032,8 +6034,10 @@ class Plan:
                     self.clipping_remaining_today = clipping_today
                     self.clipping_tomorrow = clipping_tomorrow
                     self.clipping_mitigated_today = clipping_today
+                    self.clipping_allocated_today = 0.0
                 else:
                     self.clipping_mitigated_today = self.clipping_remaining_today
+                    self.update_clipping_allocated_today()
 
                 # Add Clipping Summary Dashboard Items
                 self.dashboard_item(
@@ -6076,6 +6080,17 @@ class Plan:
                         "unit_of_measurement": "kWh",
                         "device_class": "energy",
                         "icon": "mdi:battery-check",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".clipping_allocated_today",
+                    state=dp2(getattr(self, "clipping_allocated_today", 0.0)),
+                    attributes={
+                        "friendly_name": "Clipping Allocated Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:battery-arrow-down",
+                        "date": self.midnight_utc.strftime("%Y-%m-%d") if getattr(self, "midnight_utc", None) and hasattr(self.midnight_utc, "strftime") else "",
                     },
                 )
 
@@ -6176,6 +6191,7 @@ class Plan:
                         "clipping_remaining_today": dp2(self.clipping_remaining_today),
                         "clipping_tomorrow": dp2(self.clipping_tomorrow),
                         "clipping_mitigated_today": dp2(getattr(self, "clipping_mitigated_today", 0.0)),
+                        "clipping_allocated_today": dp2(getattr(self, "clipping_allocated_today", 0.0)),
                         "clipping_buffer_start_offset": start_offset,
                         "clipping_buffer_end_offset": end_offset,
                         "clipping_amplification": dp2(amplification) if amplification is not None else 1.0,
@@ -6785,3 +6801,36 @@ class Plan:
         # Sort dictionaries to ensure forwards time order for ApexCharts rendering
         self.predict_clipping_remaining_best = dict(sorted(predict_clipping_remaining_best.items()))
         self.predict_clipping_target_soc_best = dict(sorted(predict_clipping_target_soc_best.items()))
+
+    def update_clipping_allocated_today(self):
+        """
+        Update and maintain the non-decaying daily allocated clipping buffer.
+        Holds the total/peak allocated buffer for the 24-hour day until midnight rollover.
+        """
+        if not getattr(self, "clipping_buffer_enable", False):
+            self.clipping_allocated_today = 0.0
+            return 0.0
+
+        midnight_utc = getattr(self, "midnight_utc", None)
+        if midnight_utc and hasattr(midnight_utc, "date"):
+            current_day = midnight_utc.date()
+        else:
+            current_day = None
+
+        if getattr(self, "clipping_allocated_today_date", None) != current_day:
+            self.clipping_allocated_today = 0.0
+            self.clipping_allocated_today_date = current_day
+            if hasattr(self, "get_state_wrapper") and current_day is not None:
+                prev_date = self.get_state_wrapper(self.prefix + ".clipping_allocated_today", attribute="date", default=None)
+                if prev_date == current_day.strftime("%Y-%m-%d"):
+                    try:
+                        self.clipping_allocated_today = float(self.get_state_wrapper(self.prefix + ".clipping_allocated_today", default=0.0) or 0.0)
+                    except (ValueError, TypeError):
+                        self.clipping_allocated_today = 0.0
+
+        current_allocated = max(getattr(self, "clipping_allocated_today", 0.0), getattr(self, "clipping_remaining_today", 0.0))
+        if getattr(self, "clipping_buffer_kwh", 0) > 0:
+            current_allocated = max(current_allocated, float(self.clipping_buffer_kwh))
+
+        self.clipping_allocated_today = round(current_allocated, 4)
+        return self.clipping_allocated_today
