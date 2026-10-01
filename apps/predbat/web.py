@@ -3561,7 +3561,7 @@ chart.render();
 
             clipping_total = 0
             if getattr(self.base, "clipping_buffer_enable", False):
-                clipping_total = getattr(self.base, "clipping_allocated_today", getattr(self.base, "clipping_remaining_today", 0.0)) + getattr(self.base, "clipping_tomorrow", 0.0)
+                clipping_total = max(getattr(self.base, "clipping_allocated_today", 0.0), getattr(self.base, "clipping_remaining_today", 0.0)) + getattr(self.base, "clipping_tomorrow", 0.0)
             elif getattr(self.base, "predict_clipped_best", None):
                 clipping_total = self.base.predict_clipped_best.get(max(self.base.predict_clipped_best.keys()), 0.0)
 

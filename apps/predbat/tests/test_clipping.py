@@ -1350,7 +1350,7 @@ def test_clipping_allocated_today(my_predbat):
         print("ERROR: Midnight rollover failed to reset clipping_allocated_today: expected 1.2, got {}".format(val))
         failed = True
 
-    # 6. HA State restoration across daemon/container restarts
+    # 6. HA State restoration across daemon/container restarts (same day)
     # Simulate restart at 16:00 when remaining is 0.0, but entity has today's date and value 1.2 in HA
     my_predbat.clipping_allocated_today = 0.0
     my_predbat.clipping_allocated_today_date = None
@@ -1371,19 +1371,66 @@ def test_clipping_allocated_today(my_predbat):
         print("ERROR: State restoration from HA entity on restart failed: expected 1.2, got {}".format(val))
         failed = True
 
+    # 7. HA State restoration does NOT restore yesterday's value on next day restart
+    my_predbat.clipping_allocated_today = 0.0
+    my_predbat.clipping_allocated_today_date = None
+    my_predbat.clipping_remaining_today = 0.8
+
+    def mock_get_state_yesterday(entity_id, attribute=None, default=None):
+        if entity_id == my_predbat.prefix + ".clipping_allocated_today":
+            if attribute == "date":
+                return "2026-07-15"  # Yesterday's date
+            return "3.5"
+        return default
+
+    my_predbat.get_state_wrapper = mock_get_state_yesterday
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 0.8 or my_predbat.clipping_allocated_today != 0.8:
+        print("ERROR: Yesterday's HA state was incorrectly restored on new day restart: expected 0.8, got {}".format(val))
+        failed = True
+
+    # 8. Corrupted HA state string ("unavailable") gracefully handled without crash
+    my_predbat.clipping_allocated_today = 0.0
+    my_predbat.clipping_allocated_today_date = None
+    my_predbat.clipping_remaining_today = 0.6
+
+    def mock_get_state_corrupt(entity_id, attribute=None, default=None):
+        if entity_id == my_predbat.prefix + ".clipping_allocated_today":
+            if attribute == "date":
+                return "2026-07-16"
+            return "unavailable"
+        return default
+
+    my_predbat.get_state_wrapper = mock_get_state_corrupt
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 0.6 or my_predbat.clipping_allocated_today != 0.6:
+        print("ERROR: Corrupted HA entity state caused incorrect fallback: expected 0.6, got {}".format(val))
+        failed = True
+
     if orig_get_state:
         my_predbat.get_state_wrapper = orig_get_state
     else:
         delattr(my_predbat, "get_state_wrapper")
 
-    # 7. Gating when clipping_buffer_enable is False
+    # 9. Transient clock uninitialized (midnight_utc is None) preserves in-memory peak
+    my_predbat.clipping_allocated_today = 2.4
+    my_predbat.clipping_allocated_today_date = day2.date()
+    my_predbat.midnight_utc = None
+    my_predbat.clipping_remaining_today = 0.0
+    val = my_predbat.update_clipping_allocated_today()
+    if val != 2.4 or my_predbat.clipping_allocated_today != 2.4 or my_predbat.clipping_allocated_today_date != day2.date():
+        print("ERROR: Transient None midnight_utc wiped allocated buffer: got {}".format(val))
+        failed = True
+    my_predbat.midnight_utc = day2
+
+    # 10. Gating when clipping_buffer_enable is False
     my_predbat.clipping_buffer_enable = False
     val = my_predbat.update_clipping_allocated_today()
-    if val != 0.0 or my_predbat.clipping_allocated_today != 0.0:
+    if val != 0.0 or my_predbat.clipping_allocated_today != 0.0 or my_predbat.clipping_allocated_today_date is not None:
         print("ERROR: clipping_allocated_today was not 0.0 when clipping_buffer_enable is False: got {}".format(val))
         failed = True
 
-    # 8. Dashboard item publishing verification
+    # 11. Real run_prediction() dashboard publication verification
     dashboard_items = {}
 
     def mock_dashboard_item(entity, state=None, attributes=None, app=None):
@@ -1404,29 +1451,42 @@ def test_clipping_allocated_today(my_predbat):
     my_predbat.clipping_mode = "Dynamic ClearSky"
     my_predbat.inverter_limit = 3600.0
 
-    my_predbat.dashboard_item(
-        my_predbat.prefix + ".clipping_allocated_today",
-        state=str(my_predbat.clipping_allocated_today),
-        attributes={
-            "friendly_name": "Clipping Allocated Today",
-            "unit_of_measurement": "kWh",
-            "device_class": "energy",
-            "icon": "mdi:battery-arrow-down",
-            "date": my_predbat.midnight_utc.strftime("%Y-%m-%d"),
-        },
-    )
+    try:
+        my_predbat.run_prediction(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            False,
+            24 * 60,
+            save="best",
+        )
 
-    if my_predbat.prefix + ".clipping_allocated_today" not in dashboard_items:
-        print("ERROR: predbat.clipping_allocated_today was not published to dashboard")
-        failed = True
-    else:
-        item = dashboard_items[my_predbat.prefix + ".clipping_allocated_today"]
-        if item["state"] != "2.5" or item["attributes"]["friendly_name"] != "Clipping Allocated Today" or item["attributes"]["date"] != "2026-07-15":
-            print("ERROR: predbat.clipping_allocated_today published incorrect state or attributes: {}".format(item))
+        allocated_key = my_predbat.prefix + ".clipping_allocated_today"
+        if allocated_key not in dashboard_items:
+            print("ERROR: predbat.clipping_allocated_today was not published by run_prediction")
             failed = True
+        else:
+            item = dashboard_items[allocated_key]
+            if item["state"] != 2.5 or item["attributes"]["friendly_name"] != "Clipping Allocated Today" or item["attributes"]["date"] != "2026-07-15":
+                print("ERROR: predbat.clipping_allocated_today published incorrect state or attributes: {}".format(item))
+                failed = True
+            if item["attributes"].get("unit_of_measurement") != "kWh" or item["attributes"].get("device_class") != "energy":
+                print("ERROR: predbat.clipping_allocated_today published incorrect metadata: {}".format(item["attributes"]))
+                failed = True
 
-    if orig_dashboard_item:
-        my_predbat.dashboard_item = orig_dashboard_item
+        status_key = my_predbat.prefix + ".clipping_status"
+        if status_key not in dashboard_items:
+            print("ERROR: predbat.clipping_status was not published by run_prediction")
+            failed = True
+        else:
+            status_item = dashboard_items[status_key]
+            if status_item["attributes"].get("clipping_allocated_today") != 2.5:
+                print("ERROR: predbat.clipping_status missing clipping_allocated_today attribute: {}".format(status_item["attributes"]))
+                failed = True
+    finally:
+        if orig_dashboard_item:
+            my_predbat.dashboard_item = orig_dashboard_item
 
     if not failed:
         print("PASS")
