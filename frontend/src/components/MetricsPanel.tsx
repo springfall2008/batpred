@@ -7,6 +7,19 @@ import { formatMetricAge, metricVersion, sumMetricValues } from '../utils/metric
 
 import './MetricsPanel.css'
 
+function formatUptime(value: string | null, currentTime: Date | null) {
+  if (!value || !currentTime) return 'Unknown'
+
+  const minutes = Math.max(0, Math.floor((currentTime.getTime() - new Date(value).getTime()) / 60000))
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const mins = minutes % 60
+
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${mins}m`
+  return `${mins}m`
+}
+
 function MetricCard({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: 'good' | 'warning' | 'bad' }) {
   return (
     <div className="metrics-card">
@@ -18,7 +31,7 @@ function MetricCard({ label, value, detail, tone }: { label: string; value: stri
 }
 
 /** Display operational metrics that complement the main dashboard cards. */
-export default function MetricsPanel() {
+export default function MetricsPanel({ lastStarted }: { lastStarted: string | null }) {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null)
   const [error, setError] = useState(false)
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null)
@@ -74,7 +87,7 @@ export default function MetricsPanel() {
           <MetricCard label="Predbat" value={Object.values(metrics.up).some(Boolean) ? 'Running' : 'Stopped'} detail={`Version ${metricVersion(metrics.up)}`} tone={Object.values(metrics.up).some(Boolean) ? 'good' : 'bad'} />
           <MetricCard label="Configuration" value={metrics.config_valid ? 'Valid' : 'Invalid'} detail={metrics.config_warnings ? `${metrics.config_warnings} warnings` : 'No warnings'} tone={metrics.config_valid ? (metrics.config_warnings ? 'warning' : 'good') : 'bad'} />
           <MetricCard label="Plan" value={metrics.plan_valid ? 'Valid' : 'Stale'} detail={`${metrics.plan_age_minutes.toFixed(0)} minutes old`} tone={metrics.plan_valid ? 'good' : 'warning'} />
-          <MetricCard label="Last update" value={formatMetricAge(metrics.last_update_timestamp)} />
+          <MetricCard label="Uptime" value={formatUptime(lastStarted, refreshedAt)} />
           <MetricCard label="Errors" value={errors.toFixed(0)} tone={errors ? 'warning' : 'good'} />
           <MetricCard label="Load history" value={`${metrics.data_age_days.toFixed(1)} days`} detail={`${metrics.data_age_required_days.toFixed(0)} days required`} tone={metrics.data_age_days >= metrics.data_age_required_days ? 'good' : 'warning'} />
         </div>

@@ -543,7 +543,6 @@ function App() {
                   mode={statusData.mode}
                   version={statusData.version}
                   lastUpdated={statusData.last_updated}
-                  lastStarted={statusData.last_started}
                   configOk={statusData.config_ok}
 
                   active={statusData.active}
@@ -567,7 +566,7 @@ function App() {
                   <PowerFlow data={powerFlowData} numCars={planData.plan.num_cars} />
                 )}
 
-                <MetricsPanel />
+                <MetricsPanel lastStarted={statusData.last_started} />
 
                 {statusData.debug_enable && (
                   <DebugPanel

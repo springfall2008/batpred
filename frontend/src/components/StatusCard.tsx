@@ -7,7 +7,6 @@ type StatusCardProps = {
   version: string
 
   lastUpdated: string | null
-  lastStarted: string | null
 
   configOk: boolean
 
@@ -51,29 +50,6 @@ function formatTimeAgo(value: string | null) {
   return `${days}d ago`
 }
 
-function formatUptime(value: string | null) {
-  if (!value) return 'Unknown'
-
-  const started = new Date(value)
-  const now = new Date()
-
-  const minutes = Math.floor((now.getTime() - started.getTime()) / 60000)
-
-  const days = Math.floor(minutes / 1440)
-  const hours = Math.floor((minutes % 1440) / 60)
-  const mins = minutes % 60
-
-  if (days > 0) {
-    return `${days}d ${hours}h`
-  }
-
-  if (hours > 0) {
-    return `${hours}h ${mins}m`
-  }
-
-  return `${mins}m`
-}
-
 function getStatusHealth(status: string) {
   const normalized = status.toLowerCase()
 
@@ -93,7 +69,6 @@ function StatusCard({
   mode,
   version,
   lastUpdated,
-  lastStarted,
   configOk,
   active,
   readOnly,
@@ -162,12 +137,6 @@ function StatusCard({
           <strong>{formatTimeAgo(lastUpdated)}</strong>
         </div>
 
-        {/* Uptime */}
-        <div className="status-card-detail">
-          <span>Uptime</span>
-
-          <strong>{formatUptime(lastStarted)}</strong>
-        </div>
       </div>
 
       {/* Interactive controls */}
