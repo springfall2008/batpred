@@ -143,7 +143,7 @@ For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per c
 
 - **octopus_intelligent_smart_control** - Optional. Points to the Octopus Energy integration 'intelligent smart charge' switch (`switch.octopus_energy_{{DEVICE_ID}}_intelligent_smart_charge`),
 which is on while Octopus Smart Control is on for the car. Octopus keeps reporting the charging plan it had already made after you switch Smart Control off, so while this switch is `off`
-Predbat ignores the *planned* Octopus slots (including any bonus slots) as they will not happen; slots already delivered still count.
+Predbat ignores the *planned* Octopus slots (including any bonus slots) as they will not happen; slots already delivered, and bump/boost charges you asked for yourself, still count.
 You do not normally need to set this: when **octopus_intelligent_slot** is the integration's `intelligent_dispatching` sensor, Predbat derives the switch from it. Only set it if you have renamed the switch.
 For **multiple IOG-enrolled vehicles**, set this to a list with one switch per car.
 

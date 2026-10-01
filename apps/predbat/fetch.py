@@ -44,6 +44,9 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 import copy
 import re
 
+# Planned dispatch sources the user asks for by hand, which Smart Control being off does not void
+OCTOPUS_MANUAL_DISPATCH_SOURCES = ("bump-charge", "BOOST")
+
 
 class Fetch:
     """Data fetching mixin for loading energy rates, consumption, and forecasts.
@@ -1536,8 +1539,11 @@ class Fetch:
                 if completed:
                     self.octopus_slots[car_n] += completed
                 # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
-                # on it (#5339). Slots already delivered (completed) are real, so those are still counted above
-                if planned and not self.octopus_smart_control_off(car_n, entity_id, save=save) and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
+                # the manual bump/boost charges the user asked for themselves
+                if self.octopus_smart_control_off(car_n, entity_id, save=save):
+                    planned = [slot for slot in (planned or []) if isinstance(slot, dict) and slot.get("source") in OCTOPUS_MANUAL_DISPATCH_SOURCES]
+                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned
