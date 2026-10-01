@@ -469,6 +469,8 @@ class Inverter:
         if "inverter" in self.base.args:
             if self.inverter_type not in INVERTER_DEF:
                 INVERTER_DEF[self.inverter_type] = INVERTER_DEF["GE"].copy()
+                # GivEnergy's rate quantisation is a fact about its hardware, not a default for other inverters
+                INVERTER_DEF[self.inverter_type].pop("rate_step_percent_of_capacity", None)
 
             inverter_def = self.base.args["inverter"]
             if isinstance(inverter_def, list):
@@ -523,6 +525,7 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
+        self.inv_rate_step_percent_of_capacity = INVERTER_DEF[self.inverter_type].get("rate_step_percent_of_capacity", 0)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -2078,6 +2081,34 @@ class Inverter:
 
         return current_rate
 
+    def rate_write_tolerance(self, rate_max):
+        """
+        Watts a charge/discharge rate read-back may fall short of the rate written and still count as set.
+
+        5% of rate_max - the rate ceiling, battery_rate_max_charge/discharge per minute - widened to one
+        hardware step on inverters that store the rate coarsely. GivEnergy holds it as a whole percent of
+        nominal battery capacity, rounded down: 1300W on a 13.41kWh battery reads back 1206W, a 94W miss
+        that a 1300W ceiling's 65W tolerance rejected - re-writing it ten times every cycle (#5324).
+        A read-back can fall short by just under one step, plus 1W for the read-back's own truncation.
+        """
+        tolerance = rate_max * MINUTE_WATT / 20
+        if self.inv_rate_step_percent_of_capacity and self.nominal_capacity:
+            step = self.nominal_capacity * 1000 * self.inv_rate_step_percent_of_capacity / 100
+            tolerance = max(tolerance, step + 1)
+        return tolerance
+
+    def rate_needs_write(self, current_rate, new_rate, rate_max):
+        """
+        Whether the rate the inverter holds is far enough from new_rate that new_rate must be written.
+
+        Short of new_rate by up to rate_write_tolerance() is what writing it would leave anyway. Over it
+        is never quantisation, since the step rounds down, so only the plain 5% applies there - a rate
+        held one step up (134W) is still written down to a 0W hold.
+        """
+        if current_rate > new_rate:
+            return current_rate - new_rate > rate_max * MINUTE_WATT / 20
+        return new_rate - current_rate > self.rate_write_tolerance(rate_max)
+
     def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
@@ -2102,10 +2133,17 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 20):
+        if self.rate_needs_write(current_rate, new_rate, self.battery_rate_max_charge):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "charge_rate" in self.base.args:
-                self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
+                self.write_and_poll_value(
+                    "charge_rate",
+                    self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
+                    new_rate,
+                    fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20),
+                    required_unit="W",
+                    fuzzy_below=self.rate_write_tolerance(self.battery_rate_max_charge),
+                )
             if "charge_rate_percent" in self.base.args:
                 self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -2143,10 +2181,17 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_discharge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
+        if self.rate_needs_write(current_rate, new_rate, self.battery_rate_max_discharge):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "discharge_rate" in self.base.args:
-                self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
+                self.write_and_poll_value(
+                    "discharge_rate",
+                    self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                    new_rate,
+                    fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
+                    required_unit="W",
+                    fuzzy_below=self.rate_write_tolerance(self.battery_rate_max_discharge),
+                )
             if "discharge_rate_percent" in self.base.args:
                 self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -2411,9 +2456,10 @@ class Inverter:
             self._write_backoff_result(name, entity_id, new_value, False)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None, fuzzy_below=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
+        # fuzzy_below, when given, replaces fuzzy for a read short of new_value - for a value the device rounds down
         if not self.check_write_entity("write_and_poll_value", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
@@ -2443,6 +2489,8 @@ class Inverter:
             state = value_state(state)
             if isinstance(new_value, str):
                 return state == new_value
+            if fuzzy_below is not None and state < new_value:
+                return new_value - state <= fuzzy_below
             return abs(state - new_value) <= fuzzy
 
         raw_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)

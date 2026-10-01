@@ -3837,4 +3837,9 @@ Defines the units of the SoC setting (currently not used), it defaults to "%".
 
 Sets the number of seconds between polls of inverter settings.
 
+### rate_step_percent_of_capacity
+
+Optional, defaults to 0. Set it when the inverter stores its charge and discharge rates in steps of this percentage of nominal battery capacity (the built-in GivEnergy `GE` type uses 1).
+Predbat then accepts a rate read-back that is up to one step away from the rate it wrote, rather than re-writing it every cycle.
+
 <!-- markdownlint-enable MD046 -->

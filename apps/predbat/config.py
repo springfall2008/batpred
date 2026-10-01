@@ -1852,6 +1852,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
+        "rate_step_percent_of_capacity": 1,
     },
     "GEC": {
         "name": "GivEnergy Cloud",

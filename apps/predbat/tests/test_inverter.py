@@ -843,6 +843,107 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     return failed
 
 
+def test_rate_write_quantised(test_name, ha, inv, prev_rate, rate, expect_writes, expect_rate, discharge=False, rate_max=None):
+    """
+    A rate the inverter stores coarsely must verify from its quantised read-back, not be re-written (#5324).
+
+    The inverter is modelled as GivEnergy holds the rate - a whole percent of nominal battery capacity,
+    rounded down. rate_max is the rate ceiling, defaulting to the request as an inverter_limit_charge override caps it.
+    """
+    failed = False
+    print("Test: {} prev_rate {} rate {} expect_writes {} expect_rate {}".format(test_name, prev_rate, rate, expect_writes, expect_rate))
+    inv.rest_data = None
+    inv.rest_api = None
+    entity = "number.discharge_rate" if discharge else "number.charge_rate"
+    max_attr = "battery_rate_max_discharge" if discharge else "battery_rate_max_charge"
+    percent_arg = "discharge_rate_percent" if discharge else "charge_rate_percent"
+    saved = (inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity, getattr(inv, max_attr))
+    # GivTCP configures the rate in watts only - with a percent entity too, the current rate is read from that instead
+    saved_percent = inv.base.args.pop(percent_arg, None)
+    capacity_wh = 13410
+    writes = []
+    call_service = ha.call_service
+
+    def quantising_call_service(service, **kwargs):
+        """Store a rate write as the inverter would hold it."""
+        if service == "number/set_value" and kwargs.get("entity_id") == entity:
+            writes.append(kwargs.get("value"))
+            kwargs["value"] = int(int(float(kwargs["value"]) * 100 / capacity_wh) * capacity_wh / 100)
+        return call_service(service, **kwargs)
+
+    try:
+        inv.inv_rate_step_percent_of_capacity = 1
+        inv.nominal_capacity = capacity_wh / 1000
+        setattr(inv, max_attr, (rate if rate_max is None else rate_max) / MINUTE_WATT)
+        ha.call_service = quantising_call_service
+        ha.dummy_items[entity] = prev_rate
+        if discharge:
+            inv.adjust_discharge_rate(rate)
+        else:
+            inv.adjust_charge_rate(rate)
+    finally:
+        ha.call_service = call_service
+        if saved_percent is not None:
+            inv.base.args[percent_arg] = saved_percent
+        inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity, _ = saved
+        setattr(inv, max_attr, saved[2])
+
+    if len(writes) != expect_writes:
+        print("ERROR: {} expected {} write(s) got {}: {}".format(test_name, expect_writes, len(writes), writes))
+        failed = True
+    if float(ha.get_state(entity)) != expect_rate:
+        print("ERROR: {} expected rate {} got {}".format(test_name, expect_rate, ha.get_state(entity)))
+        failed = True
+    return failed
+
+
+def test_custom_inverter_def_drops_rate_step(test_name, my_predbat):
+    """
+    A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved = {arg: my_predbat.args.get(arg, None) for arg in ("inverter_type", "inverter")}
+    try:
+        my_predbat.args["inverter_type"] = ["CUSTOM5324"]
+        my_predbat.args["inverter"] = {"name": "Custom", "has_rest_api": False}
+        inv = Inverter(my_predbat, 0, quiet=True)
+        if inv.inv_rate_step_percent_of_capacity != 0:
+            print("ERROR: {} custom inverter inherited rate step {}".format(test_name, inv.inv_rate_step_percent_of_capacity))
+            failed = True
+        if INVERTER_DEF["GE"].get("rate_step_percent_of_capacity") != 1:
+            print("ERROR: {} GE row lost its rate step".format(test_name))
+            failed = True
+    finally:
+        INVERTER_DEF.pop("CUSTOM5324", None)
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+    return failed
+
+
+def test_rate_write_tolerance(test_name, inv):
+    """
+    The rate verify tolerance is 5% of the allocated rate, widened to one step only where the inverter declares one (#5324).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved = (inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity)
+    try:
+        for step_percent, capacity, rate_max_watts, expect in ((0, 13.41, 1300, 65), (1, 13.41, 1300, 135.1), (1, 13.41, 4000, 200), (1, 0, 1300, 65)):
+            inv.inv_rate_step_percent_of_capacity = step_percent
+            inv.nominal_capacity = capacity
+            got = inv.rate_write_tolerance(rate_max_watts / MINUTE_WATT)
+            if abs(got - expect) > 0.01:
+                print("ERROR: {} step {}% capacity {}kWh rate {}W expected tolerance {} got {}".format(test_name, step_percent, capacity, rate_max_watts, expect, got))
+                failed = True
+    finally:
+        inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity = saved
+    return failed
+
+
 def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, rate, discharge=False):
     """
     Test that timed_charge_current / timed_discharge_current is re-asserted on every call to
@@ -5154,6 +5255,21 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 250.1, 250, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 250, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
+    if failed:
+        return failed
+
+    # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
+    failed |= test_rate_write_tolerance("rate_write_tolerance", inv)
+    failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat)
+    failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
+    failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
+    failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)
+    failed |= test_rate_write_quantised("rate_write_quantised_discharge", ha, inv, 2600, 1300, 1, 1206, discharge=True)
+    failed |= test_rate_write_quantised("rate_write_quantised_discharge_settled", ha, inv, 1206, 1300, 0, 1206, discharge=True)
+    # Rounding is always down, so a rate held above the request is never quantisation - still written
+    failed |= test_rate_write_quantised("rate_write_quantised_hold_from_one_step", ha, inv, 134, 0, 1, 0, rate_max=2600)
+    failed |= test_rate_write_quantised("rate_write_quantised_step_down", ha, inv, 1341, 1210, 1, 1206)
+    failed |= test_rate_write_quantised("rate_write_quantised_discharge_hold_from_one_step", ha, inv, 134, 0, 1, 0, discharge=True, rate_max=2600)
     if failed:
         return failed
 
