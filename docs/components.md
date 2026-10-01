@@ -1690,11 +1690,11 @@ import rate = (spot EUR/MWh x spotprice_exchange_rate / 10 + spotprice_markup + 
 With the default exchange rate of 1 the result is in euro cents per kWh. The markup, charge zones and export rates are entered in your minor currency unit per kWh (as set by `currency_symbols`) and **exclude VAT**; `spotprice_vat` is a fraction (`0.19` for 19%).
 
 Prices are kept at their native resolution - 15 minutes for most of Europe since October 2025, 30 minutes for Ireland's SEM, 60 minutes where a market still publishes hourly prices.
-Tomorrow's prices are published around 12:00-13:00 CET; from midday local time the component checks every 15 minutes until it has them, otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours, and the last prices fetched are cached so they survive a restart.
+Tomorrow's prices are published around 12:00-13:00 CET; from 12:00 CET the component checks every 15 minutes until it holds the whole of the next market day (which runs midnight to midnight CET/CEST everywhere - 23:00 to 23:00 local time in Ireland and Portugal, 01:00 to 01:00 in Finland and the Baltics), otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours, and the last prices fetched are cached so they survive a restart.
 
 Price sources (`spotprice_provider`, default `energycharts`):
 
-- `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If the token is missing or ENTSO-E fails, the component falls back to Energy-Charts automatically and logs it once (and again once ENTSO-E recovers).
+- `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If the token is missing or ENTSO-E fails, the component falls back to Energy-Charts automatically and logs it once (and again once ENTSO-E recovers). The fallback only runs this way round: with `energycharts` ENTSO-E is never used, even if a token is set.
 - `energycharts` - [Energy-Charts](https://api.energy-charts.info/) from Fraunhofer ISE, no key needed. Prices for AT, BE, CH, CZ, DE-LU, DK1, DK2, FR, HU, IT-North, NL, NO2, PL, SE4 and SI are licensed CC BY 4.0 (Bundesnetzagentur | SMARD.de); Energy-Charts states that prices for other zones are for private use only. Ireland (IE-SEM) is not available from Energy-Charts.
 - `tibber` - [Tibber](https://developer.tibber.com/)'s own end-user price, read with your personal access token. Tibber's price already includes markup, grid fees and VAT, so `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied to it. Quarter-hourly prices are requested.
 
@@ -1786,7 +1786,7 @@ A commented template is available in [templates/spotprice.yaml](https://raw.gith
 | ------ | ----------- |
 | `sensor.predbat_spotprice_import_rates` | Import rate now; the `rates` attribute holds every interval and is what Predbat reads |
 | `sensor.predbat_spotprice_export_rates` | Export rate now - only present when `spotprice_export_mode` is `fixed` or `spot` |
-| `sensor.predbat_spotprice_status` | `ok`, `waiting` or `error`, with the source used, when prices were fetched, how far ahead they run and the last error |
+| `sensor.predbat_spotprice_status` | `ok`; `stale` when a source is failing and its prices run out within 12 hours; `error` when there is no import price for the current interval; `waiting` before the first fetch. Attributes give the source used, when prices were fetched, how far ahead they run and the last error per source |
 
 ---
 

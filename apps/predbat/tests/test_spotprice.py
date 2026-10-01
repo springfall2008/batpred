@@ -312,14 +312,15 @@ def test_spotprice_entsoe_fetch_http(my_predbat=None):
 
 
 def test_spotprice_energycharts_parse(my_predbat=None):
-    """Energy-Charts gives starts only: ends come from the next start, nulls are skipped, the inclusive end is trimmed."""
+    """Energy-Charts gives starts only: each interval gets the series resolution, a null price leaves a gap, the inclusive end is trimmed."""
     base = int(dt("2025-10-01T22:00Z").timestamp())
     data = {"unix_seconds": [base + 900 * i for i in range(6)], "price": [100.0, 110.0, None, 90.0, -5.0, 80.0], "unit": "EUR / MWh"}
     intervals = parse_energycharts_json(data)
     assert len(intervals) == 5
     assert intervals[0][1] - intervals[0][0] == timedelta(minutes=15)
-    # The null at 22:30 leaves a gap: 22:15 ends at the next known start (22:45 is within an hour)
-    assert intervals[1][0] == dt("2025-10-01T22:15Z") and intervals[1][1] == dt("2025-10-01T22:45Z")
+    # The null at 22:30 leaves a gap: 22:15 is not stretched over it
+    assert intervals[1][0] == dt("2025-10-01T22:15Z") and intervals[1][1] == dt("2025-10-01T22:30Z")
+    assert intervals[2][0] == dt("2025-10-01T22:45Z")
     assert intervals[-1][1] - intervals[-1][0] == timedelta(minutes=15)
     try:
         parse_energycharts_json({"unix_seconds": [1, 2], "price": [1.0]})
@@ -622,20 +623,20 @@ def test_spotprice_error_backoff(my_predbat=None):
 
 
 def test_spotprice_refresh_schedule(my_predbat=None):
-    """Poll for tomorrow's prices only after midday local; otherwise refresh every few hours or when the data runs out."""
+    """Poll for tomorrow's prices only after midday CET; otherwise refresh every few hours or when the data runs out."""
     api = make_api(provider="energycharts", entsoe_token=None)
     fetched = dt("2025-05-02T07:00Z")  # 09:00 CEST
-    api.fetched_at = fetched
+    api.fetched["spot"] = fetched
     api.spot_intervals = spot_fixture(start="2025-05-01T22:00Z", count=96)  # today only (Berlin)
 
     assert not api.refresh_due(dt("2025-05-02T09:00Z"))  # 11:00 local - tomorrow not published yet
-    api.fetched_at = dt("2025-05-02T09:50Z")
+    api.fetched["spot"] = dt("2025-05-02T09:50Z")
     assert not api.refresh_due(dt("2025-05-02T10:00Z"))  # 12:00 local but fetched 10 minutes ago
     assert api.refresh_due(dt("2025-05-02T10:05Z"))  # 12:05 local, 15 minutes since the last fetch
     api.spot_intervals = spot_fixture(start="2025-05-01T22:00Z", count=192)  # tomorrow now held
     assert not api.refresh_due(dt("2025-05-02T10:05Z"))
     assert api.refresh_due(api.fetched_at + timedelta(hours=6))
-    api.fetched_at = dt("2025-05-03T21:00Z")
+    api.fetched["spot"] = dt("2025-05-03T21:00Z")
     assert api.refresh_due(dt("2025-05-03T22:00Z"))  # held data ends now
 
 
@@ -645,7 +646,7 @@ def test_spotprice_cache_round_trip(my_predbat=None):
     api = make_api(provider="energycharts", entsoe_token=None, storage=storage)
     api.spot_intervals = spot_fixture(count=4)
     api.spot_source = "energycharts"
-    api.fetched_at = dt("2025-05-02T08:00Z")
+    api.fetched["spot"] = dt("2025-05-02T08:00Z")
     run(api.save_cache())
     restored = make_api(provider="energycharts", entsoe_token=None, storage=storage)
     run(restored.load_cache())
@@ -751,6 +752,229 @@ def test_spotprice_engine_reads_rates(my_predbat=None):
         my_predbat.args.update(old[3])
 
 
+def test_spotprice_no_stretch_over_missing_points(my_predbat=None):
+    """Missing points stay gaps: a timestamp absent altogether, a null Tibber total, and an A01 hole are never covered by a neighbour."""
+    from spotprice import intervals_from_starts
+
+    t0 = dt("2025-10-01T22:00Z")
+    quarter = timedelta(minutes=15)
+    # 22:30 is absent altogether (not even a timestamp)
+    intervals = intervals_from_starts([(t0, 1.0), (t0 + quarter, 2.0), (t0 + 3 * quarter, 4.0), (t0 + 4 * quarter, 5.0)])
+    assert [(start, end) for start, end, _v in intervals][1] == (t0 + quarter, t0 + 2 * quarter), intervals
+    assert all(end - start == quarter for start, end, _v in intervals)
+    # Tibber null total
+    data = {
+        "data": {
+            "viewer": {
+                "homes": [
+                    {
+                        "id": "h",
+                        "currentSubscription": {
+                            "priceInfo": {"today": [{"total": 0.2, "startsAt": "2025-10-02T00:00:00+02:00"}, {"total": None, "startsAt": "2025-10-02T00:15:00+02:00"}, {"total": 0.3, "startsAt": "2025-10-02T00:30:00+02:00"}], "tomorrow": []}
+                        },
+                    }
+                ]
+            }
+        }
+    }
+    tibber, _currency, _home = parse_tibber_json(data)
+    assert [(start, end) for start, end, _v in tibber] == [(t0, t0 + quarter), (t0 + 2 * quarter, t0 + 3 * quarter)], tibber
+    # A01: the missing position stays missing
+    a01, _ = parse_entsoe_xml(make_a44([("2025-10-01T22:00Z", "2025-10-01T23:00Z", "PT15M", {1: 1, 2: 2, 4: 4})], curve="A01"))
+    assert [(start, end) for start, end, _v in a01] == [(t0, t0 + quarter), (t0 + quarter, t0 + 2 * quarter), (t0 + 3 * quarter, t0 + 4 * quarter)]
+
+
+def test_spotprice_parse_errors_wrapped(my_predbat=None):
+    """Every malformed response becomes SpotPriceError, and a raw exception from a fetch still takes the back-off path."""
+    bad_inputs = [
+        (parse_energycharts_json, ({"unix_seconds": [10**20], "price": [1.0]},)),  # OverflowError/OSError from fromtimestamp
+        (parse_energycharts_json, ({"unix_seconds": ["abc"], "price": [1.0]},)),
+        (parse_energycharts_json, ({"unix_seconds": [1], "price": ["x"]},)),
+        (parse_energycharts_json, ({"unix_seconds": 5, "price": 5},)),
+        (parse_tibber_json, ({"data": {"viewer": {"homes": [{"id": "h", "currentSubscription": {"priceInfo": {"today": [{"total": 0.2, "startsAt": 1759356000}]}}}]}}},)),
+        (parse_tibber_json, ({"data": {"viewer": {"homes": [{"id": "h", "currentSubscription": {"priceInfo": {"today": [{"total": 0.2}]}}}]}}},)),
+        (parse_tibber_json, ({"data": {"viewer": {"homes": "nope"}}},)),
+        (parse_tibber_json, ({"data": {"viewer": {"homes": [{"id": "h", "currentSubscription": {"priceInfo": {"today": "x"}}}]}}},)),
+        (parse_entsoe_xml, (b"\xff\xfe<bad",)),
+        (parse_entsoe_xml, (12345,)),
+    ]
+    for func, args in bad_inputs:
+        try:
+            func(*args)
+        except SpotPriceError:
+            continue
+        raise AssertionError("{}{} did not raise SpotPriceError".format(func.__name__, args))
+
+    api = make_api(provider="energycharts", entsoe_token=None)
+
+    async def undecodable(url, params, expect_json):
+        """A body that will not decode."""
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    api.http_get = undecodable
+    # Each fetch converts it itself, not just refresh()'s safety net
+    entsoe_api = make_api(provider="entsoe", entsoe_token="t")
+    entsoe_api.http_get = undecodable
+    tibber_api = make_api(provider="tibber", tibber_token="t", entsoe_token=None)
+
+    async def undecodable_post(url, payload, headers):
+        """A body that will not decode."""
+        raise UnicodeDecodeError("utf-8", b"\\xff", 0, 1, "invalid start byte")
+
+    tibber_api.http_post_json = undecodable_post
+    for coro in (api.fetch_energycharts(dt("2025-05-01T22:00Z"), dt("2025-05-02T22:00Z")), entsoe_api.fetch_entsoe(dt("2025-05-01T22:00Z"), dt("2025-05-02T22:00Z")), tibber_api.fetch_tibber()):
+        try:
+            run(coro)
+        except SpotPriceError:
+            continue
+        raise AssertionError("fetch did not convert UnicodeDecodeError")
+    now = dt("2025-05-02T08:00Z")
+    assert run(api.refresh(now)) is False
+    assert api.failures == 1 and api.next_attempt == now + timedelta(minutes=5), api.last_error
+
+    async def explodes(start, end):
+        """An unexpected exception type from a fetch."""
+        raise KeyError("price")
+
+    other = make_api(provider="energycharts", entsoe_token=None)
+    other.fetch_energycharts = explodes
+    assert run(other.refresh(now)) is False and other.failures == 1
+
+
+def test_spotprice_energycharts_never_tries_entsoe(my_predbat=None):
+    """Provider energycharts uses Energy-Charts only, even with an ENTSO-E token set; the fallback runs entsoe to energycharts only."""
+    calls = []
+
+    async def entsoe(start, end):
+        """Should not be called."""
+        calls.append("entsoe")
+        return spot_fixture()
+
+    async def energycharts(start, end):
+        """Return prices."""
+        calls.append("energycharts")
+        return spot_fixture()
+
+    async def energycharts_down(start, end):
+        """Energy-Charts outage."""
+        calls.append("energycharts")
+        raise SpotPriceError("Energy-Charts returned HTTP 500")
+
+    api = make_api(provider="energycharts", entsoe_token="token")
+    api.fetch_entsoe = entsoe
+    api.fetch_energycharts = energycharts
+    assert run(api.refresh(dt("2025-05-02T08:00Z"))) is True and calls == ["energycharts"]
+    calls.clear()
+    api.fetch_energycharts = energycharts_down
+    api.next_attempt = None
+    api.fetched["spot"] = None
+    assert run(api.refresh(dt("2025-05-02T15:00Z"))) is False
+    assert calls == ["energycharts"], calls
+
+
+def test_spotprice_market_day_polling(my_predbat=None):
+    """'Have tomorrow' follows the CET market day: IE-SEM ends 23:00 Irish time, ES at local midnight, FI at 01:00 local - and FI's window keeps that last hour."""
+    cases = [
+        # zone, local tz, now (UTC, after 12:00 CET), end of tomorrow's market day (UTC)
+        ("IE-SEM", "Europe/Dublin", "2025-06-10T11:30Z", "2025-06-11T22:00Z"),
+        ("ES", "Europe/Madrid", "2025-06-10T11:30Z", "2025-06-11T22:00Z"),
+        ("FI", "Europe/Helsinki", "2025-06-10T11:30Z", "2025-06-11T22:00Z"),
+        ("IE-SEM", "Europe/Dublin", "2025-12-10T12:30Z", "2025-12-11T23:00Z"),
+    ]
+    for zone, tz_name, now_text, market_end_text in cases:
+        api = make_api(provider="energycharts", entsoe_token=None, zone=zone, local_tz=pytz.timezone(tz_name))
+        now = dt(now_text)
+        market_end = dt(market_end_text)
+        start, end = api.fetch_window(now)
+        assert end >= market_end, (zone, end)
+        # Holding prices up to the end of tomorrow's market day counts as having tomorrow - no more polling
+        api.spot_intervals = [(market_end - timedelta(hours=48), market_end, 50.0)]
+        api.fetched["spot"] = now - timedelta(minutes=30)
+        assert api.has_tomorrow(market_end, now), zone
+        assert not api.refresh_due(now), zone
+        # One quarter short of it is still missing tomorrow - poll
+        api.spot_intervals = [(market_end - timedelta(hours=48), market_end - timedelta(minutes=15), 50.0)]
+        assert api.refresh_due(now), zone
+    # FI: the window must reach 01:00 local the day after tomorrow, not stop at local midnight
+    fi = make_api(provider="energycharts", entsoe_token=None, zone="FI", local_tz=pytz.timezone("Europe/Helsinki"))
+    assert fi.fetch_window(dt("2025-06-10T11:30Z"))[1] == dt("2025-06-11T22:00Z")
+    # Before 12:00 CET there is no polling for tomorrow, whatever the local clock says
+    fi.spot_intervals = [(dt("2025-06-09T22:00Z"), dt("2025-06-10T22:00Z"), 50.0)]
+    fi.fetched["spot"] = dt("2025-06-10T09:00Z")
+    assert not fi.refresh_due(dt("2025-06-10T09:30Z"))  # 12:30 Helsinki, 11:30 CET
+
+
+def test_spotprice_status_states(my_predbat=None):
+    """Status is error with no price for now, stale while a failing source runs out soon, ok otherwise."""
+    api = make_api(provider="energycharts", entsoe_token=None)
+    now = dt("2025-05-02T14:00Z")
+    api.publish(now)
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "waiting"
+    api.spot_intervals = spot_fixture(start="2025-05-01T22:00Z", count=96)  # ends 2025-05-02T22:00Z, 8 hours away
+    api.publish(now)
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "ok"
+    api.source_errors["spot"] = "down"
+    api.last_error = "down"
+    api.publish(now)
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "stale"
+    api.spot_intervals = spot_fixture(start="2025-05-01T22:00Z", count=192)  # through tomorrow
+    api.publish(now)
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "ok"
+    api.publish(dt("2025-05-04T10:00Z"))  # past the held prices
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "error"
+    gap = make_api(provider="energycharts", entsoe_token=None)
+    gap.spot_intervals = [(dt("2025-05-02T13:00Z"), dt("2025-05-02T13:15Z"), 1.0), (dt("2025-05-02T14:15Z"), dt("2025-05-03T22:00Z"), 1.0)]
+    gap.publish(now)  # no price for 14:00 itself
+    assert gap.base.entities["sensor.predbat_spotprice_status"]["state"] == "error"
+
+
+def test_spotprice_tibber_partial_failure(my_predbat=None):
+    """With Tibber plus spot export, a spot failure still stores, timestamps and caches the Tibber prices, and shows as a partial failure."""
+    storage = FakeStorage()
+    api = make_api(provider="tibber", tibber_token="t", entsoe_token=None, zone="NL", export_mode="spot", storage=storage)
+    now = dt("2025-05-02T14:00Z")
+    tibber = [(dt("2025-05-01T22:00Z") + timedelta(minutes=15 * i), dt("2025-05-01T22:00Z") + timedelta(minutes=15 * (i + 1)), 0.25) for i in range(192)]
+
+    async def fetch_tibber():
+        """Tibber works."""
+        return tibber
+
+    async def spot_down(start, end):
+        """Spot source down."""
+        raise SpotPriceError("Energy-Charts returned HTTP 500")
+
+    api.fetch_tibber = fetch_tibber
+    api.fetch_energycharts = spot_down
+    assert run(api.refresh(now)) is False
+    assert api.tibber_intervals == tibber and api.fetched["tibber"] == now and api.fetched["spot"] is None
+    assert "spot" in api.source_errors and api.failures == 1
+    cached = storage.data[("spotprice", api.cache_filename())]
+    assert cached["tibber_fetched_at"] == now.isoformat() and len(cached["tibber_intervals"]) == 192
+    api.publish(now)
+    status = api.base.entities["sensor.predbat_spotprice_status"]
+    assert status["state"] == "stale" and "spot" in status["attributes"]["source_errors"], status
+    # The retry after the back-off fetches only the failing spot source
+    calls = []
+
+    async def fetch_tibber_counted():
+        """Count Tibber calls."""
+        calls.append("tibber")
+        return tibber
+
+    async def spot_up(start, end):
+        """Spot source back."""
+        calls.append("spot")
+        return spot_fixture()
+
+    api.fetch_tibber = fetch_tibber_counted
+    api.fetch_energycharts = spot_up
+    later = api.next_attempt
+    assert api.refresh_due(later)
+    assert run(api.refresh(later)) is True and calls == ["spot"], calls
+    api.publish(later)
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "ok"
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -775,6 +999,12 @@ SPOTPRICE_TESTS = [
     test_spotprice_run_lifecycle,
     test_spotprice_zones_and_registry,
     test_spotprice_engine_reads_rates,
+    test_spotprice_no_stretch_over_missing_points,
+    test_spotprice_parse_errors_wrapped,
+    test_spotprice_energycharts_never_tries_entsoe,
+    test_spotprice_market_day_polling,
+    test_spotprice_status_states,
+    test_spotprice_tibber_partial_failure,
 ]
 
 

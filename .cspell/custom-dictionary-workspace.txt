@@ -51,6 +51,7 @@ Backpropagate
 backpropagation
 backsteps
 backtest
+baltics
 Basepath
 bathighcap
 Batpred
@@ -387,6 +388,7 @@ meterpoint
 meterpower
 metricb
 metricmid
+mibel
 microinverters
 middlebox
 middleboxes
