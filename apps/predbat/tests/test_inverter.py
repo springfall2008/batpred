@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
-from inverter import Inverter
+from inverter import Inverter, within_fuzzy
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
 from const import MINUTE_WATT, TIME_FORMAT_SECONDS
@@ -897,13 +897,17 @@ def test_rate_write_quantised(test_name, ha, inv, prev_rate, rate, expect_writes
     return failed
 
 
-def test_custom_inverter_def_drops_rate_step(test_name, my_predbat):
+def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     """
     A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
+
+    Building an Inverter writes args (soc_max_nominal, battery_scaling_last_known) and publishes entities on
+    the shared fixture, so both are restored whole afterwards rather than just the args this test sets (#5079).
     """
     failed = False
     print("Test: {}".format(test_name))
-    saved = {arg: my_predbat.args.get(arg, None) for arg in ("inverter_type", "inverter")}
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
     try:
         my_predbat.args["inverter_type"] = ["CUSTOM5324"]
         my_predbat.args["inverter"] = {"name": "Custom", "has_rest_api": False}
@@ -916,28 +920,32 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat):
             failed = True
     finally:
         INVERTER_DEF.pop("CUSTOM5324", None)
-        for arg, value in saved.items():
-            if value is None:
-                my_predbat.args.pop(arg, None)
-            else:
-                my_predbat.args[arg] = value
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
     return failed
 
 
-def test_rate_write_tolerance(test_name, inv):
+def test_rate_tolerances(test_name, inv):
     """
-    The rate verify tolerance is 5% of the allocated rate, widened to one step only where the inverter declares one (#5324).
+    A rate read-back gets 5% of the rate ceiling either side, widened below to one step only where the inverter declares one (#5324).
     """
     failed = False
     print("Test: {}".format(test_name))
     saved = (inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity)
     try:
-        for step_percent, capacity, rate_max_watts, expect in ((0, 13.41, 1300, 65), (1, 13.41, 1300, 135.1), (1, 13.41, 4000, 200), (1, 0, 1300, 65)):
+        for step_percent, capacity, rate_max_watts, expect in ((0, 13.41, 1300, (65, None)), (1, 13.41, 1300, (65, 135.1)), (1, 13.41, 4000, (200, 200)), (1, 0, 1300, (65, None))):
             inv.inv_rate_step_percent_of_capacity = step_percent
             inv.nominal_capacity = capacity
-            got = inv.rate_write_tolerance(rate_max_watts / MINUTE_WATT)
-            if abs(got - expect) > 0.01:
-                print("ERROR: {} step {}% capacity {}kWh rate {}W expected tolerance {} got {}".format(test_name, step_percent, capacity, rate_max_watts, expect, got))
+            got = inv.rate_tolerances(rate_max_watts / MINUTE_WATT)
+            if abs(got[0] - expect[0]) > 0.01 or (got[1] is None) != (expect[1] is None) or (got[1] is not None and abs(got[1] - expect[1]) > 0.01):
+                print("ERROR: {} step {}% capacity {}kWh rate {}W expected tolerances {} got {}".format(test_name, step_percent, capacity, rate_max_watts, expect, got))
+                failed = True
+        # value, target, fuzzy, fuzzy_below, expect - fuzzy_below only ever widens a read SHORT of target
+        for value, target, fuzzy, fuzzy_below, expect in ((1206, 1300, 65, 135.1, True), (1206, 1300, 65, None, False), (134, 0, 130, 135.1, False), (1365, 1300, 65, 135.1, True), (1366, 1300, 65, 135.1, False)):
+            if within_fuzzy(value, target, fuzzy, fuzzy_below) != expect:
+                print("ERROR: {} within_fuzzy({}, {}, {}, {}) expected {}".format(test_name, value, target, fuzzy, fuzzy_below, expect))
                 failed = True
     finally:
         inv.inv_rate_step_percent_of_capacity, inv.nominal_capacity = saved
@@ -5259,8 +5267,8 @@ def run_inverter_tests(my_predbat_dummy):
         return failed
 
     # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
-    failed |= test_rate_write_tolerance("rate_write_tolerance", inv)
-    failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat)
+    failed |= test_rate_tolerances("rate_tolerances", inv)
+    failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
     failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)

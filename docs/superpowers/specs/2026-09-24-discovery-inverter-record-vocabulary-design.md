@@ -220,7 +220,7 @@ The definition is built from four sources:
    | `soc_units` | which state-of-charge setting is bound: `soc_percent` -> `%`, `soc_kw` -> `kWh` |
    | `output_charge_control` | `charge_rate`'s `unit`: W -> `power`, A -> `current`; no `charge_rate` but a bound `charge_rate_percent` (GE Cloud's percentage-rate models) -> `power`; neither -> `none` |
    | `current_dp` | the decimal places of `charge_rate`'s `step`, when its unit is A |
-   | `rate_step_percent_of_capacity` | `charge_rate`'s `step_percent_of_capacity`; 0 when absent or `charge_rate` is unbound |
+   | `rate_step_percent_of_capacity` | `charge_rate`'s `step_percent_of_capacity`. Not a gap when absent or `charge_rate` is unbound: base's value stands, else 0 |
    | `time_button_press` | whether a `schedule_write_button` entity is present |
    | `num_load_entities` | 1 plus the number of consecutive `load_power_1`, `load_power_2`, ... entities bound (`inverter.py:1523` adds them into the load reading) |
 

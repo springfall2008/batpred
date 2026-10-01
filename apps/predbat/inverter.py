@@ -55,6 +55,16 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 _NOT_COMMITTED = object()
 
 
+def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
+    """
+    Whether a numeric read counts as target: within fuzzy either side, or within fuzzy_below when it is
+    short of target and fuzzy_below is given - for a value the device rounds down (#5324).
+    """
+    if fuzzy_below is not None and value < target:
+        return target - value <= fuzzy_below
+    return abs(value - target) <= fuzzy
+
+
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
 
@@ -2081,33 +2091,29 @@ class Inverter:
 
         return current_rate
 
-    def rate_write_tolerance(self, rate_max):
+    def rate_tolerances(self, rate_max):
         """
-        Watts a charge/discharge rate read-back may fall short of the rate written and still count as set.
+        (fuzzy, fuzzy_below) in watts for checking a charge/discharge rate read-back against the rate written.
 
-        5% of rate_max - the rate ceiling, battery_rate_max_charge/discharge per minute - widened to one
-        hardware step on inverters that store the rate coarsely. GivEnergy holds it as a whole percent of
-        nominal battery capacity, rounded down: 1300W on a 13.41kWh battery reads back 1206W, a 94W miss
-        that a 1300W ceiling's 65W tolerance rejected - re-writing it ten times every cycle (#5324).
-        A read-back can fall short by just under one step, plus 1W for the read-back's own truncation.
+        fuzzy is 5% of rate_max - the rate ceiling, battery_rate_max_charge/discharge per minute. On an
+        inverter that stores the rate coarsely, fuzzy_below widens a read-back SHORT of the rate to one
+        hardware step. GivEnergy holds it as a whole percent of nominal battery capacity, rounded down:
+        1300W on a 13.41kWh battery reads back 1206W, a 94W miss that a 1300W ceiling's 65W tolerance
+        rejected - re-writing it ten times every cycle (#5324). A read-back over the rate is never that
+        rounding, so it keeps fuzzy: a rate held one step up (134W) is still written down to a 0W hold.
+
+        Deliberately relaxed rather than predicting the exact read-back, which would need Predbat's
+        capacity to match the inverter's to the watt. The cost is a ~1W boundary: a short read-back can
+        miss by just under one step plus 1W of read-back truncation, so a request landing exactly one step
+        above the held rate is taken as already set and the rate stays one step low - the same error the
+        rounding makes anyway. The step is only as right as nominal_capacity; GivTCP supplies its own.
         """
-        tolerance = rate_max * MINUTE_WATT / 20
+        fuzzy = rate_max * MINUTE_WATT / 20
+        fuzzy_below = None
         if self.inv_rate_step_percent_of_capacity and self.nominal_capacity:
             step = self.nominal_capacity * 1000 * self.inv_rate_step_percent_of_capacity / 100
-            tolerance = max(tolerance, step + 1)
-        return tolerance
-
-    def rate_needs_write(self, current_rate, new_rate, rate_max):
-        """
-        Whether the rate the inverter holds is far enough from new_rate that new_rate must be written.
-
-        Short of new_rate by up to rate_write_tolerance() is what writing it would leave anyway. Over it
-        is never quantisation, since the step rounds down, so only the plain 5% applies there - a rate
-        held one step up (134W) is still written down to a 0W hold.
-        """
-        if current_rate > new_rate:
-            return current_rate - new_rate > rate_max * MINUTE_WATT / 20
-        return new_rate - current_rate > self.rate_write_tolerance(rate_max)
+            fuzzy_below = max(fuzzy, step + 1)
+        return fuzzy, fuzzy_below
 
     def adjust_charge_rate(self, new_rate, notify=True):
         """
@@ -2133,16 +2139,17 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if self.rate_needs_write(current_rate, new_rate, self.battery_rate_max_charge):
+        fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
+        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "charge_rate" in self.base.args:
                 self.write_and_poll_value(
                     "charge_rate",
                     self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
                     new_rate,
-                    fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20),
+                    fuzzy=fuzzy,
                     required_unit="W",
-                    fuzzy_below=self.rate_write_tolerance(self.battery_rate_max_charge),
+                    fuzzy_below=fuzzy_below,
                 )
             if "charge_rate_percent" in self.base.args:
                 self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
@@ -2181,16 +2188,17 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_discharge_rate()
 
-        if self.rate_needs_write(current_rate, new_rate, self.battery_rate_max_discharge):
+        fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
+        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "discharge_rate" in self.base.args:
                 self.write_and_poll_value(
                     "discharge_rate",
                     self.base.get_arg("discharge_rate", indirect=False, index=self.id),
                     new_rate,
-                    fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
+                    fuzzy=fuzzy,
                     required_unit="W",
-                    fuzzy_below=self.rate_write_tolerance(self.battery_rate_max_discharge),
+                    fuzzy_below=fuzzy_below,
                 )
             if "discharge_rate_percent" in self.base.args:
                 self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
@@ -2489,9 +2497,7 @@ class Inverter:
             state = value_state(state)
             if isinstance(new_value, str):
                 return state == new_value
-            if fuzzy_below is not None and state < new_value:
-                return new_value - state <= fuzzy_below
-            return abs(state - new_value) <= fuzzy
+            return within_fuzzy(state, new_value, fuzzy, fuzzy_below)
 
         raw_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
         current_state = value_state(raw_state, warn=True)
