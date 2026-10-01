@@ -854,8 +854,7 @@ def _snapshot_inverter_fixture(my_predbat):
     shared HA interface, so restoring args alone still leaks entities (sensor.predbat_GE_1_* and
     friends) into every test that runs afterwards in this module (#4645 review).
     """
-    ha = my_predbat.ha_interface
-    return (copy.deepcopy(my_predbat.args), dict(getattr(ha, "dummy_items", {})))
+    return (copy.deepcopy(my_predbat.args), dict(my_predbat.ha_interface.dummy_items))
 
 
 def _restore_inverter_fixture(my_predbat, snapshot):
@@ -863,11 +862,9 @@ def _restore_inverter_fixture(my_predbat, snapshot):
     saved_args, saved_items = snapshot
     my_predbat.args.clear()
     my_predbat.args.update(saved_args)
-    ha = my_predbat.ha_interface
-    items = getattr(ha, "dummy_items", None)
-    if items is not None:
-        items.clear()
-        items.update(saved_items)
+    items = my_predbat.ha_interface.dummy_items
+    items.clear()
+    items.update(saved_items)
 
 
 def test_low_power_mode_entity_created_for_script_driven_power_inverter(test_name, my_predbat):
