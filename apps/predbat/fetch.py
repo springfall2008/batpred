@@ -42,6 +42,7 @@ from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import copy
+import re
 
 
 class Fetch:
@@ -1445,6 +1446,32 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
+    def octopus_smart_control_off(self, car_n, slot_entity_id):
+        """
+        Whether Octopus Smart Control is explicitly switched off for car_n, so its planned dispatches will not happen.
+
+        The switch is octopus_intelligent_smart_control (one per car), or for the Octopus Energy integration it is
+        derived from the dispatching sensor (binary_sensor.octopus_energy_<id>_intelligent_dispatching ->
+        switch.octopus_energy_<id>_intelligent_smart_charge). Only an explicit "off" counts - a missing or
+        unavailable switch leaves the planned slots trusted as before.
+        """
+        switch_config = self.get_arg("octopus_intelligent_smart_control", None, indirect=False)
+        if switch_config and not isinstance(switch_config, list):
+            switch_config = [switch_config]
+        switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
+        if not switch_id and isinstance(slot_entity_id, str):
+            match = re.fullmatch(r"binary_sensor\.(octopus_energy_.+)_intelligent_dispatching", slot_entity_id)
+            if match:
+                switch_id = "switch.{}_intelligent_smart_charge".format(match.group(1))
+        if not switch_id:
+            return False
+        state = self.get_state_wrapper(entity_id=switch_id)
+        off = isinstance(state, str) and state.lower() == "off"
+        if off != self.octopus_smart_control_off_logged.get(car_n, False):
+            self.octopus_smart_control_off_logged[car_n] = off
+            self.log("Car {} Octopus Smart Control is now {} ({}), planned Octopus dispatches are {}".format(car_n, "Off" if off else "On", switch_id, "ignored" if off else "used"))
+        return off
+
     def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
@@ -1517,7 +1544,12 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                smart_control_off = self.octopus_smart_control_off(car_n, entity_id)
+                if planned and smart_control_off:
+                    # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will
+                    # act on it (#5339). Slots already delivered (completed) are real, so those are still counted above
+                    pass
+                elif planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned

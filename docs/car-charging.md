@@ -141,6 +141,12 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
 For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car (see [Multiple Electric Cars](#multiple-electric-cars)).
 
+- **octopus_intelligent_smart_control** - Optional. Points to the Octopus Energy integration 'intelligent smart charge' switch (`switch.octopus_energy_{{DEVICE_ID}}_intelligent_smart_charge`),
+which is on while Octopus Smart Control is on for the car. Octopus keeps reporting the charging plan it had already made after you switch Smart Control off, so while this switch is `off`
+Predbat ignores the *planned* Octopus slots (including any bonus slots) as they will not happen; slots already delivered still count.
+You do not normally need to set this: when **octopus_intelligent_slot** is the integration's `intelligent_dispatching` sensor, Predbat derives the switch from it. Only set it if you have renamed the switch.
+For **multiple IOG-enrolled vehicles**, set this to a list with one switch per car.
+
 - **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
 *Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
 Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.

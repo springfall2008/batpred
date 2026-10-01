@@ -651,6 +651,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(8)]
+        self.octopus_smart_control_off_logged = {}
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
