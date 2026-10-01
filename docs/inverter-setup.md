@@ -3817,7 +3817,7 @@ Described by @WesSec in [#2846](https://github.com/springfall2008/batpred/issues
 | Freeze exporting | e.g. 50 W | 0 | discharge limit |
 | Demand / anything else | e.g. 50 W | charge limit | discharge limit |
 
-Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. The same flow can lower the charge and discharge limits on battery temperature, and tell Predbat about it through the manual API (`inverter_limit_charge(0)=...`, `inverter_limit_discharge(0)=...`) so the plan matches the real limits.
+Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. This route allows for more extensive integration, for instance lowering the charge and discharge limits on battery temperature and passing them to Predbat through the [manual API](manual-api.md), so the plan matches the real limits.
 
 ## I want to add an unsupported inverter to Predbat
 
