@@ -998,7 +998,7 @@ def test_spotprice_days_follow_engine_numbering(my_predbat=None):
 
 
 def test_spotprice_tibber_token_only(my_predbat=None):
-    """A lone Tibber token implies provider tibber; spot-dependent export without a zone is switched off once, not failed every refresh."""
+    """With spotprice_provider unset, a Tibber token implies provider tibber (zone or not); spot-dependent export without a zone is switched off once, not failed every refresh."""
     api = make_api(provider=None, entsoe_token=None, zone=None, tibber_token="t")
     assert api.provider == "tibber" and api.sources_needed() == ["tibber"]
     assert make_api(provider="energycharts", entsoe_token=None, tibber_token="t").provider == "energycharts"
@@ -1055,6 +1055,113 @@ def test_spotprice_charge_zone_unknown_keys(my_predbat=None):
     assert sum("unknown key" in line for line in api.base.logs) == 1
 
 
+def test_spotprice_backoff_per_source(my_predbat=None):
+    """A spot outage backs off on its own and never holds back Tibber's poll for tomorrow; each source recovers independently."""
+    api = make_api(provider="tibber", tibber_token="t", entsoe_token=None, zone="DE-LU", export_mode="spot")
+    tibber_calls = []
+
+    async def tibber_today_only():
+        """Tibber with today's prices only, so it keeps polling for tomorrow after 12:00 CET."""
+        tibber_calls.append(1)
+        return [(dt("2025-05-01T22:00Z") + timedelta(minutes=15 * i), dt("2025-05-01T22:15Z") + timedelta(minutes=15 * i), 0.3) for i in range(96)]
+
+    async def spot_down(start, end):
+        """Spot source down."""
+        raise SpotPriceError("down")
+
+    api.fetch_tibber = tibber_today_only
+    api.fetch_energycharts = spot_down
+    t = dt("2025-05-02T10:30Z")
+    run(api.refresh(t))
+    while api.source_failures["spot"] < 6:
+        t = api.source_next_attempt["spot"]
+        run(api.refresh(t))
+    assert api.source_failures["tibber"] == 0 and api.source_next_attempt["tibber"] is None
+    spot_retry = api.source_next_attempt["spot"]
+    assert spot_retry - t == timedelta(minutes=120)
+    # Tibber falls due 15 minutes after its last fetch and must be fetched then, deep inside the spot back-off
+    tibber_due = api.fetched["tibber"] + timedelta(minutes=15)
+    assert tibber_due < spot_retry
+    assert api.refresh_due(tibber_due)
+    before = len(tibber_calls)
+    run(api.refresh(tibber_due))
+    assert len(tibber_calls) == before + 1 and api.fetched["tibber"] == tibber_due
+    # ...without touching the spot back-off
+    assert api.source_next_attempt["spot"] == spot_retry and api.source_failures["spot"] == 6
+    # Status attributes show the per-source state
+    api.publish(tibber_due)
+    attrs = api.base.entities["sensor.predbat_spotprice_status"]["attributes"]
+    assert attrs["failures"] == {"spot": 6, "tibber": 0} and set(attrs["next_attempt"]) == {"spot"}, attrs
+
+
+def test_spotprice_mixed_resolution_starts(my_predbat=None):
+    """A start-only response mixing 60 and 15 minute points keeps each at its own length, at both boundaries, without stretching gaps."""
+    base = int(dt("2025-10-01T22:00Z").timestamp())
+    hour, quarter = 3600, 900
+    # UTC: 22:00, 23:00, 00:00 hourly; 01:00..01:45 quarters; 02:00, 03:00, 04:00 hourly again; 05:00 missing;
+    # 06:00 the last point, isolated by that gap, keeps the hourly resolution of the run before it
+    stamps = [base, base + hour, base + 2 * hour] + [base + 3 * hour + quarter * k for k in range(4)] + [base + 4 * hour, base + 5 * hour, base + 6 * hour, base + 8 * hour]
+    intervals = parse_energycharts_json({"unix_seconds": stamps, "price": [float(i) for i in range(len(stamps))]})
+    lengths = [int((end - start).total_seconds() // 60) for start, end, _v in intervals]
+    assert lengths == [60, 60, 60, 15, 15, 15, 15, 60, 60, 60, 60], lengths
+    # 04:00 (index 9) runs to 05:00 only - not stretched over the missing 05:00..06:00 hour - and 06:00 keeps 60
+    assert intervals[9][1] == dt("2025-10-02T05:00Z") and intervals[10][0] == dt("2025-10-02T06:00Z")
+    # A 15 minute run with one quarter missing still leaves that quarter as a gap
+    q = parse_energycharts_json({"unix_seconds": [base + quarter * k for k in (0, 1, 3, 4)], "price": [1.0, 2.0, 3.0, 4.0]})
+    assert [int((e - s_).total_seconds() // 60) for s_, e, _v in q] == [15, 15, 15, 15], q
+
+
+def test_spotprice_tibber_token_implies_tibber_with_zone(my_predbat=None):
+    """With spotprice_provider unset, a Tibber token selects tibber even when a zone is also set; an explicit provider wins."""
+    api = make_api(provider=None, entsoe_token=None, zone="DE-LU", tibber_token="t", export_mode="spot")
+    assert api.provider == "tibber" and api.sources_needed() == ["spot", "tibber"]
+    assert make_api(provider="entsoe", zone="DE-LU", tibber_token="t").provider == "entsoe"
+
+
+def test_spotprice_fetch_error_categories(my_predbat=None):
+    """Fetch failures record connection_error only for network errors; anything else is a decode_error. Both become SpotPriceError."""
+    import aiohttp
+
+    import spotprice as spotprice_module
+
+    recorded = []
+    original = spotprice_module.record_api_call
+    spotprice_module.record_api_call = lambda service, success=True, reason=None: recorded.append((service, success, reason))
+    try:
+        window = (dt("2025-05-01T22:00Z"), dt("2025-05-02T22:00Z"))
+        for exception, reason, phrase in (
+            (aiohttp.ClientConnectionError("refused"), "connection_error", "request failed"),
+            (asyncio.TimeoutError(), "connection_error", "request failed"),
+            (UnicodeDecodeError("utf-8", b"\\xff", 0, 1, "bad"), "decode_error", "could not be read"),
+            (KeyError("price"), "decode_error", "could not be read"),
+        ):
+
+            async def get(url, params, expect_json, exception=exception):
+                """Raise the given exception."""
+                raise exception
+
+            async def post(url, payload, headers, exception=exception):
+                """Raise the given exception."""
+                raise exception
+
+            ec = make_api(provider="energycharts", entsoe_token=None)
+            ec.http_get = get
+            en = make_api(provider="entsoe", entsoe_token="secret-token")
+            en.http_get = get
+            tb = make_api(provider="tibber", tibber_token="t", entsoe_token=None)
+            tb.http_post_json = post
+            for service, coro in (("energycharts", ec.fetch_energycharts(*window)), ("entsoe", en.fetch_entsoe(*window)), ("tibber", tb.fetch_tibber())):
+                recorded.clear()
+                try:
+                    run(coro)
+                    raise AssertionError("expected SpotPriceError")
+                except SpotPriceError as e:
+                    assert phrase in str(e) and "secret-token" not in str(e), (service, str(e))
+                assert recorded == [(service, False, reason)], (service, type(exception).__name__, recorded)
+    finally:
+        spotprice_module.record_api_call = original
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1089,6 +1196,10 @@ SPOTPRICE_TESTS = [
     test_spotprice_tibber_token_only,
     test_spotprice_vat_one_or_more_is_percent,
     test_spotprice_charge_zone_unknown_keys,
+    test_spotprice_backoff_per_source,
+    test_spotprice_mixed_resolution_starts,
+    test_spotprice_tibber_token_implies_tibber_with_zone,
+    test_spotprice_fetch_error_categories,
 ]
 
 

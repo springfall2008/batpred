@@ -1690,7 +1690,7 @@ import rate = (spot EUR/MWh x spotprice_exchange_rate / 10 + spotprice_markup + 
 With the default exchange rate of 1 the result is in euro cents per kWh. The markup, charge zones and export rates are entered in your minor currency unit per kWh (as set by `currency_symbols`) and **exclude VAT**; `spotprice_vat` is a fraction (`0.19` for 19%).
 
 Prices are kept at their native resolution - 15 minutes for most of Europe since October 2025, 30 minutes for Ireland's SEM, 60 minutes where a market still publishes hourly prices.
-Tomorrow's prices are published around 12:00-13:00 CET; from 12:00 CET the component checks every 15 minutes until it holds the whole of the next market day (which runs midnight to midnight CET/CEST everywhere - 23:00 to 23:00 local time in Ireland and Portugal, 01:00 to 01:00 in Finland and the Baltics), otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours, and the last prices fetched are cached so they survive a restart.
+Tomorrow's prices are published around 12:00-13:00 CET; from 12:00 CET the component checks every 15 minutes until it holds the whole of the next market day (which runs midnight to midnight CET/CEST everywhere - 23:00 to 23:00 local time in Ireland and Portugal, 01:00 to 01:00 in Finland and the Baltics), otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours - each source on its own, so a spot price outage never delays Tibber prices - and the last prices fetched are cached so they survive a restart.
 
 Price sources (`spotprice_provider`; when it is not set the default is `tibber` if `spotprice_tibber_token` is set, otherwise `energycharts`):
 

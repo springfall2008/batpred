@@ -126,6 +126,10 @@ MARKET_TIMEZONE = pytz.timezone("Europe/Brussels")
 # Granularity used to detect overlapping intervals between series of different resolutions.
 OVERLAP_TICK_MINUTES = 5
 
+# Failures of the request itself, recorded as connection_error. Anything else raised while fetching
+# (a body that will not decode, an unexpected shape) is recorded as decode_error.
+NETWORK_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, OSError)
+
 ISO_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?$")
 
 
@@ -310,28 +314,55 @@ def parse_entsoe_xml(text):
     return resolve_overlaps(series), currency
 
 
+KNOWN_RESOLUTIONS = (timedelta(minutes=15), timedelta(minutes=30), timedelta(minutes=60))
+
+
+def point_resolutions(starts):
+    """Give each start in a sorted list the resolution of the run it belongs to.
+
+    A point takes the spacing to the next point when that is a known market resolution (15, 30 or 60
+    minutes) and the run continues at that spacing (the following gap, or the previous one, is the
+    same), or the next point is the last. Otherwise - the next gap is longer than any resolution
+    (points missing) or the spacing changes and the point could belong to either side - it takes
+    the smaller known spacing around it, so it can never be stretched over a missing point. A
+    series of mixed resolutions (60 minute hours followed by 15 minute quarters) keeps each part at
+    its own length rather than being forced to one series-wide spacing.
+    """
+    count = len(starts)
+    gaps = [starts[i + 1] - starts[i] for i in range(count - 1)]
+    known_gaps = [gap for gap in gaps if gap in KNOWN_RESOLUTIONS]
+    fallback = min(known_gaps) if known_gaps else timedelta(minutes=60)
+    resolutions = []
+    for i in range(count):
+        forward = gaps[i] if i < count - 1 else None
+        backward = gaps[i - 1] if i > 0 else None
+        following = gaps[i + 1] if i + 1 < count - 1 else None
+        if forward in KNOWN_RESOLUTIONS and (following is None or following == forward or backward == forward):
+            resolutions.append(forward)
+            continue
+        around = [gap for gap in (backward, forward) if gap in KNOWN_RESOLUTIONS]
+        if around:
+            resolutions.append(min(around))
+        else:
+            # Isolated by missing points on both sides: carry on at the resolution of the run before it
+            resolutions.append(resolutions[-1] if resolutions else fallback)
+    return resolutions
+
+
 def intervals_from_starts(starts_values):
     """Turn (start, value) pairs that carry no end time into (start, end, value) intervals.
 
-    Energy-Charts and Tibber give only interval starts. Every interval gets the series' resolution -
-    its most common spacing, taken over all published starts including ones whose value is missing -
-    and is cut short if the next start comes sooner. An interval is never stretched over a missing
-    point: a point with no value (None) or no timestamp at all simply leaves a gap, which Predbat
-    fills as it does any other gap in a rate feed. Gap filling for ENTSO-E's A03 curves happens only
-    in parse_entsoe_xml, where the format says a missing point repeats the last price.
+    Energy-Charts and Tibber give only interval starts. Each point gets its own run's resolution
+    (see point_resolutions), worked out over all published starts including ones whose value is
+    missing, and is cut short if the next start comes sooner. An interval is never stretched over a
+    missing point: a point with no value (None) or no timestamp at all simply leaves a gap, which
+    Predbat fills as it does any other gap in a rate feed. Gap filling for ENTSO-E's A03 curves
+    happens only in parse_entsoe_xml, where the format says a missing point repeats the last price.
     """
     starts = sorted({start for start, _value in starts_values})
     if not starts:
         return []
-    gaps = [starts[i + 1] - starts[i] for i in range(len(starts) - 1)]
-    if gaps:
-        counts = {}
-        for gap in gaps:
-            counts[gap] = counts.get(gap, 0) + 1
-        # Most common spacing; on a tie the shorter one, so an interval can only be under-stretched
-        resolution = max(counts.items(), key=lambda item: (item[1], -item[0].total_seconds()))[0]
-    else:
-        resolution = timedelta(minutes=60)
+    resolution = dict(zip(starts, point_resolutions(starts)))
     next_start = {starts[i]: starts[i + 1] for i in range(len(starts) - 1)}
     intervals = []
     seen = set()
@@ -339,7 +370,7 @@ def intervals_from_starts(starts_values):
         if value is None or start in seen:
             continue
         seen.add(start)
-        end = start + resolution
+        end = start + resolution[start]
         if start in next_start and next_start[start] < end:
             end = next_start[start]
         intervals.append((start, end, value))
@@ -572,7 +603,8 @@ class SpotPriceAPI(ComponentBase):
     ):
         """Store configuration and validate it. Problems are logged once here, not on every cycle."""
         if not provider:
-            # Unset: a Tibber token on its own means Tibber, otherwise the keyless default
+            # Unset: any Tibber token means Tibber - even when a zone is also set, since the zone may
+            # only be there for spot-linked export - otherwise the keyless default
             provider = "tibber" if tibber_token else "energycharts"
         self.provider = str(provider).strip().lower()
         if self.provider not in SPOTPRICE_PROVIDERS:
@@ -625,8 +657,9 @@ class SpotPriceAPI(ComponentBase):
         self.tibber_currency = None
         self.fetched = {"spot": None, "tibber": None}
         self.source_errors = {}
-        self.failures = 0
-        self.next_attempt = None
+        # Back-off is per source: a spot outage must never hold back Tibber's poll for tomorrow
+        self.source_failures = {"spot": 0, "tibber": 0}
+        self.source_next_attempt = {"spot": None, "tibber": None}
         self.last_error = None
         self.import_rates = []
         self.export_rates = []
@@ -754,11 +787,14 @@ class SpotPriceAPI(ComponentBase):
         }
         try:
             status, body = await self.http_get(ENTSOE_URL, params, expect_json=False)
-        except Exception as e:
-            # Network errors, timeouts and a body that will not decode (UnicodeDecodeError) alike
+        except NETWORK_ERRORS as e:
             record_api_call("entsoe", False, "connection_error")
             # The token travels in the query string, so keep it out of anything logged
             raise SpotPriceError("ENTSO-E request failed: {}".format(str(e).replace(self.entsoe_token, "***")))
+        except Exception as e:
+            # Not a network failure - e.g. a body that will not decode (UnicodeDecodeError)
+            record_api_call("entsoe", False, "decode_error")
+            raise SpotPriceError("ENTSO-E response could not be read ({}: {})".format(type(e).__name__, str(e).replace(self.entsoe_token, "***")))
         if status == 401:
             record_api_call("entsoe", False, "auth_error")
             raise SpotPriceError("ENTSO-E rejected the security token (HTTP 401)")
@@ -788,9 +824,12 @@ class SpotPriceAPI(ComponentBase):
         params = {"bzn": self.zone, "start": start.strftime("%Y-%m-%dT%H:%MZ"), "end": end.strftime("%Y-%m-%dT%H:%MZ")}
         try:
             status, body = await self.http_get(ENERGYCHARTS_URL, params, expect_json=True)
-        except Exception as e:
+        except NETWORK_ERRORS as e:
             record_api_call("energycharts", False, "connection_error")
             raise SpotPriceError("Energy-Charts request failed: {}".format(e))
+        except Exception as e:
+            record_api_call("energycharts", False, "decode_error")
+            raise SpotPriceError("Energy-Charts response could not be read ({}: {})".format(type(e).__name__, e))
         if status == 429:
             record_api_call("energycharts", False, "rate_limit")
             raise SpotPriceError("Energy-Charts rate limit hit (HTTP 429)")
@@ -853,9 +892,12 @@ class SpotPriceAPI(ComponentBase):
             query = "{ viewer { homes { id currentSubscription { priceInfo%s { today { total currency startsAt } tomorrow { total currency startsAt } } } } } }" % resolution
             try:
                 status, body = await self.http_post_json(TIBBER_URL, {"query": query}, headers)
-            except Exception as e:
+            except NETWORK_ERRORS as e:
                 record_api_call("tibber", False, "connection_error")
                 raise SpotPriceError("Tibber request failed: {}".format(e))
+            except Exception as e:
+                record_api_call("tibber", False, "decode_error")
+                raise SpotPriceError("Tibber response could not be read ({}: {})".format(type(e).__name__, e))
             if status in (401, 403):
                 record_api_call("tibber", False, "auth_error")
                 raise SpotPriceError("Tibber rejected the access token (HTTP {})".format(status))
@@ -988,19 +1030,49 @@ class SpotPriceAPI(ComponentBase):
             return True
         return False
 
-    def refresh_due(self, now):
-        """True when any needed source is due, but never before an error back-off has expired."""
-        if self.next_attempt is not None and now < self.next_attempt:
-            return False
-        return any(self.source_due(source, now) for source in self.sources_needed())
+    @property
+    def failures(self):
+        """Consecutive failures of the worst-off source (0 when every source is healthy)."""
+        return max(self.source_failures.values())
 
-    def record_failure(self, now, message):
-        """Count a failed refresh and schedule the next attempt with exponential back-off."""
-        self.failures += 1
-        self.last_error = message
-        delay = min(SPOTPRICE_BACKOFF_MIN_MINUTES * (2 ** (self.failures - 1)), SPOTPRICE_BACKOFF_MAX_MINUTES)
-        self.next_attempt = now + timedelta(minutes=delay)
-        self.log("Warn: SpotPrice: refresh failed ({}), retry in {} minutes".format(message, delay))
+    @property
+    def next_attempt(self):
+        """The earliest pending back-off expiry across sources, or None when nothing is backing off."""
+        pending = [when for when in self.source_next_attempt.values() if when is not None]
+        return min(pending) if pending else None
+
+    @next_attempt.setter
+    def next_attempt(self, value):
+        """Only clearing is supported: None lifts every source's back-off (the failure counts are kept)."""
+        if value is not None:
+            raise ValueError("next_attempt is per source; set source_next_attempt instead")
+        for source in self.source_next_attempt:
+            self.source_next_attempt[source] = None
+
+    def source_blocked(self, source, now):
+        """True while this source's own back-off has not expired. Other sources' back-offs never count."""
+        when = self.source_next_attempt.get(source)
+        return when is not None and now < when
+
+    def refresh_due(self, now):
+        """True when any needed source is due and not inside its own back-off."""
+        return any(self.source_due(source, now) and not self.source_blocked(source, now) for source in self.sources_needed())
+
+    def record_failure(self, now, source, message):
+        """Count a failed fetch of one source and schedule its next attempt with exponential back-off."""
+        self.source_failures[source] = self.source_failures.get(source, 0) + 1
+        delay = min(SPOTPRICE_BACKOFF_MIN_MINUTES * (2 ** (self.source_failures[source] - 1)), SPOTPRICE_BACKOFF_MAX_MINUTES)
+        self.source_next_attempt[source] = now + timedelta(minutes=delay)
+        self.log("Warn: SpotPrice: {} refresh failed ({}), retry in {} minutes".format(source, message, delay))
+
+    def record_success(self, now, source):
+        """Clear one source's error and back-off after a successful fetch."""
+        if self.source_failures.get(source):
+            self.log("SpotPrice: {} prices fetched again after {} failed attempt(s)".format(source, self.source_failures[source]))
+        self.source_failures[source] = 0
+        self.source_next_attempt[source] = None
+        self.source_errors.pop(source, None)
+        self.fetched[source] = now
 
     async def fetch_source(self, source, now):
         """Fetch one source and store its intervals. Raises SpotPriceError on failure."""
@@ -1013,41 +1085,37 @@ class SpotPriceAPI(ComponentBase):
         self.spot_intervals, self.spot_source = await self.fetch_spot(start, end)
 
     async def refresh(self, now):
-        """Fetch every needed source that is due. Returns True when none of them failed.
+        """Fetch every needed source that is due and outside its own back-off. Returns True when none failed.
 
-        Each source keeps its own fetch time and error, so with Tibber plus spot-linked export a
-        failing spot source neither discards nor delays the Tibber prices - those are stored and cached
-        straight away - while the spot failure still drives the back-off and shows in the status.
+        Each source keeps its own fetch time, error and back-off, so with Tibber plus spot-linked export
+        a failing spot source neither discards nor delays the Tibber prices - those are stored and cached
+        straight away - while the spot failure backs off on its own and shows in the status. Called
+        with nothing due (start-up, tests), every source not in back-off is fetched.
         """
-        needed = self.sources_needed()
+        needed = [source for source in self.sources_needed() if not self.source_blocked(source, now)]
         due = [source for source in needed if self.source_due(source, now)] or needed
-        errors = []
+        failed = False
         updated = False
         for source in due:
             try:
                 await self.fetch_source(source, now)
             except SpotPriceError as e:
-                self.source_errors[source] = str(e)
-                errors.append(str(e))
-                continue
+                message = str(e)
             except Exception as e:
                 # fetch_* convert everything they expect; anything else must still take the back-off path
-                self.source_errors[source] = "{}: {}".format(type(e).__name__, e)
-                errors.append(self.source_errors[source])
+                message = "{}: {}".format(type(e).__name__, e)
+            else:
+                self.record_success(now, source)
+                updated = True
                 continue
-            self.fetched[source] = now
-            self.source_errors.pop(source, None)
-            updated = True
+            self.source_errors[source] = message
+            self.record_failure(now, source, message)
+            failed = True
         if updated:
             await self.save_cache()
-        if errors:
-            self.record_failure(now, "; ".join(errors))
+        self.last_error = "; ".join(self.source_errors[source] for source in sorted(self.source_errors)) or None
+        if failed:
             return False
-        if self.failures:
-            self.log("SpotPrice: prices fetched again after {} failed attempt(s)".format(self.failures))
-        self.failures = 0
-        self.next_attempt = None
-        self.last_error = None
         data_end = self.data_end()
         self.log("SpotPrice: fetched {} prices{}, known until {}".format(self.provider, " (spot from {})".format(self.spot_source) if self.spot_source else "", data_end.isoformat() if data_end else "unknown"))
         return True
@@ -1149,8 +1217,8 @@ class SpotPriceAPI(ComponentBase):
                 "prices_until": data_end.isoformat() if data_end else None,
                 "last_error": self.last_error,
                 "source_errors": dict(self.source_errors),
-                "failures": self.failures,
-                "next_attempt": self.next_attempt.isoformat() if self.next_attempt else None,
+                "failures": dict(self.source_failures),
+                "next_attempt": {source: when.isoformat() for source, when in self.source_next_attempt.items() if when},
                 "icon": "mdi:chart-bell-curve",
             },
             app="spotprice",
@@ -1187,7 +1255,7 @@ class SpotPriceAPI(ComponentBase):
 
     def health_message(self):
         """Report the last refresh error while prices are failing."""
-        return self.last_error if self.failures else None
+        return self.last_error if self.source_errors else None
 
     async def run(self, seconds, first):
         """Called by ComponentBase every 60 seconds: refresh when due, then republish."""
