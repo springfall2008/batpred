@@ -565,6 +565,34 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "spotprice": {
+        "class": "spotprice.SpotPriceAPI",
+        "name": "Day-ahead Spot Price Tariff",
+        "args": {
+            # No registry default: when unset, initialize() picks tibber whenever a Tibber token is set
+            # (with or without a zone), else energycharts
+            "provider": {"required": False, "config": "spotprice_provider"},
+            "zone": {"required": False, "config": "spotprice_zone"},
+            "entsoe_token": {"required": False, "secret": True, "config": "spotprice_entsoe_token"},
+            "tibber_token": {"required": False, "secret": True, "config": "spotprice_tibber_token"},
+            "tibber_home_id": {"required": False, "secret": True, "config": "spotprice_tibber_home_id"},
+            "markup": {"required": False, "config": "spotprice_markup", "default": 0.0},
+            "vat": {"required": False, "config": "spotprice_vat", "default": 0.0},
+            "charge_zones": {"required": False, "config": "spotprice_charge_zones", "default": []},
+            "exchange_rate": {"required": False, "config": "spotprice_exchange_rate", "default": 1.0},
+            "export_mode": {"required": False, "config": "spotprice_export_mode", "default": "none"},
+            "export_rate": {"required": False, "config": "spotprice_export_rate", "default": 0.0},
+            "export_markup": {"required": False, "config": "spotprice_export_markup", "default": 0.0},
+            "export_zero_on_negative": {"required": False, "config": "spotprice_export_zero_on_negative", "default": False},
+            "automatic": {"required": False, "config": "spotprice_automatic", "default": True},
+        },
+        # The provider defaults to energycharts, so gate on what a real configuration must carry: a
+        # bidding zone for the spot sources, or a Tibber token. Without this the component would
+        # start on every install.
+        "required_or": ["zone", "tibber_token"],
+        "can_restart": True,
+        "phase": 1,
+    },
     "carbon": {
         "class": "carbon.CarbonAPI",
         "name": "Carbon Intensity API",
