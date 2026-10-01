@@ -372,7 +372,7 @@ def test_spotprice_tibber_parse(my_predbat=None):
     except SpotPriceError:
         pass
 
-    api = make_api(provider="tibber", tibber_token="t", entsoe_token=None, markup=15, vat=19, charge_zones=[{"start": "00:00", "end": "00:00", "rate": 9}])
+    api = make_api(provider="tibber", tibber_token="t", entsoe_token=None, markup=15, vat=0.19, charge_zones=[{"from": "00:00", "to": "00:00", "charge": 9}])
     api.tibber_intervals = intervals
     rates = api.build_import_rates()
     assert [rate for _s, _e, rate in rates] == [30.12, 29.88, 25.0], rates
@@ -416,14 +416,14 @@ def test_spotprice_tibber_fetch(my_predbat=None):
 
 def test_spotprice_formula(my_predbat=None):
     """(spot/10 + markup + zone) x (1 + VAT) in minor units, including negative spot and an exchange rate."""
-    assert spot_import_rate(100.0, 15.0, 0.0, 19.0) == 29.75
-    assert spot_import_rate(-50.0, 15.0, 0.0, 19.0) == 11.9
-    assert spot_import_rate(100.0, 15.0, 5.0, 19.0) == 35.7
-    assert spot_import_rate(100.0, 0.0, 0.0, 25.0, exchange_rate=11.0) == 137.5
+    assert spot_import_rate(100.0, 15.0, 0.0, 0.19) == 29.75
+    assert spot_import_rate(-50.0, 15.0, 0.0, 0.19) == 11.9
+    assert spot_import_rate(100.0, 15.0, 5.0, 0.19) == 35.7
+    assert spot_import_rate(100.0, 0.0, 0.0, 0.25, exchange_rate=11.0) == 137.5
     assert spot_export_rate(-20.0, 1.0) == -1.0
     assert spot_export_rate(80.0, -0.4) == 7.6
 
-    api = make_api(markup=15, vat=19)
+    api = make_api(markup=15, vat=0.19)
     api.spot_intervals = [(dt("2025-03-02T10:00Z"), dt("2025-03-02T10:15Z"), 100.0)]
     assert api.build_import_rates()[0][2] == 29.75
     published = format_rates(api.build_import_rates())
@@ -431,12 +431,12 @@ def test_spotprice_formula(my_predbat=None):
 
 
 def test_spotprice_charge_zones(my_predbat=None):
-    """Charge zones use local time (across DST), honour day_of_week and wrap past midnight; the first match wins."""
+    """Charge zones use local time (across DST), honour days and wrap past midnight; the first match wins."""
     zones = parse_charge_zones(
         [
-            {"start": "17:00", "end": "21:00", "rate": 12.0, "day_of_week": "1,2,3,4,5"},
-            {"start": "22:00", "end": "06:00", "rate": 2.0},
-            {"start": "00:00", "end": "00:00", "rate": 8.0},
+            {"from": "17:00", "to": "21:00", "charge": 12.0, "days": ["mon", "tue", "wed", "thu", "fri"]},
+            {"from": "22:00", "to": "06:00", "charge": 2.0},
+            {"from": "00:00", "to": "00:00", "charge": 8.0},
         ]
     )
     assert len(zones) == 3
@@ -454,19 +454,45 @@ def test_spotprice_charge_zones(my_predbat=None):
     assert at("2025-12-03T05:00Z") == 8.0  # 06:00 local, wrap zone ended
     assert at("2025-10-26T01:30Z") == 2.0  # 02:30 CET on the autumn DST day
 
-    api = make_api(markup=10, vat=0, charge_zones=[{"start": "17:00", "end": "21:00", "rate": 12.0}])
-    api.spot_intervals = [(dt("2025-12-02T15:45Z"), dt("2025-12-02T16:00Z"), 100.0), (dt("2025-12-02T16:00Z"), dt("2025-12-02T16:15Z"), 100.0)]
-    assert [rate for _s, _e, rate in api.build_import_rates()] == [20.0, 32.0]
+    api = make_api(markup=10, vat=0, charge_zones=[{"from": "17:00", "to": "00:00", "charge": 12.0}])
+    api.spot_intervals = [
+        (dt("2025-12-02T15:45Z"), dt("2025-12-02T16:00Z"), 100.0),
+        (dt("2025-12-02T16:00Z"), dt("2025-12-02T16:15Z"), 100.0),
+        (dt("2025-12-02T22:45Z"), dt("2025-12-02T23:00Z"), 100.0),
+        (dt("2025-12-02T23:00Z"), dt("2025-12-02T23:15Z"), 100.0),
+    ]
+    # to "00:00" runs up to local midnight (23:00Z in winter) and no further
+    assert [rate for _s, _e, rate in api.build_import_rates()] == [20.0, 32.0, 32.0, 20.0]
+
+    # days accepts names, full names, comma strings and 0-6 with Monday = 0
+    from spotprice import parse_days
+
+    assert parse_days(["mon", "Friday"]) == {0, 4}
+    assert parse_days("sat,sun") == {5, 6}
+    assert parse_days([0, 6]) == {0, 6}
+    assert parse_days(None) is None
+
+    # A value above 1 can only be a percentage: read 19 as 0.19, with a warning
+    pct = make_api(markup=15, vat=19)
+    assert pct.vat == 0.19 and any("is a fraction" in line for line in pct.base.logs)
 
 
 def test_spotprice_charge_zone_validation(my_predbat=None):
     """Malformed charge zones are skipped with a warning rather than breaking the tariff."""
     logs = []
     zones = parse_charge_zones(
-        [{"start": "25:00", "end": "06:00", "rate": 1}, {"start": "01:00", "end": "02:00", "rate": "x"}, {"start": "01:00", "end": "02:00", "rate": 1, "day_of_week": "8"}, "junk", {"start": "01:00", "end": "02:00", "rate": 3}], log=logs.append
+        [
+            {"from": "25:00", "to": "06:00", "charge": 1},
+            {"from": "01:00", "to": "02:00", "charge": "x"},
+            {"from": "01:00", "to": "02:00", "charge": 1, "days": [7]},
+            {"from": "01:00", "to": "02:00", "charge": 1, "days": ["someday"]},
+            "junk",
+            {"from": "01:00", "to": "02:00", "charge": 3},
+        ],
+        log=logs.append,
     )
     assert zones == [(60, 120, None, 3.0)], zones
-    assert len(logs) == 4
+    assert len(logs) == 5
 
 
 def test_spotprice_export_negative_spot(my_predbat=None):
@@ -530,7 +556,19 @@ def test_spotprice_provider_fallback(my_predbat=None):
     assert run(api.refresh(dt("2025-05-02T08:00Z"))) is True
     assert calls == ["entsoe", "energycharts"]
     assert api.spot_source == "energycharts" and len(api.spot_intervals) == 192
-    assert any("using energycharts instead" in line for line in api.base.logs)
+    # A second refresh during the same outage does not log the fallback again; recovery is logged once
+    assert run(api.refresh(dt("2025-05-02T14:00Z"))) is True
+    assert sum("until ENTSO-E recovers" in line for line in api.base.logs) == 1, api.base.logs
+
+    async def entsoe_ok(start, end):
+        """ENTSO-E is back."""
+        calls.append("entsoe-ok")
+        return spot_fixture()
+
+    api.fetch_entsoe = entsoe_ok
+    assert run(api.refresh(dt("2025-05-02T20:00Z"))) is True
+    assert api.spot_source == "entsoe"
+    assert sum("ENTSO-E is working again" in line for line in api.base.logs) == 1
 
     # No token at all: ENTSO-E is skipped without a warning on every refresh (initialize() warned once)
     no_token = make_api(entsoe_token=None)
@@ -538,7 +576,7 @@ def test_spotprice_provider_fallback(my_predbat=None):
     assert run(no_token.refresh(dt("2025-05-02T08:00Z"))) is True
     assert no_token.spot_source == "energycharts"
     assert sum("spotprice_entsoe_token is not set" in line for line in no_token.base.logs) == 1
-    assert not any("instead" in line for line in no_token.base.logs)
+    assert not any("until ENTSO-E recovers" in line for line in no_token.base.logs)
 
     # Both failing is a failure with both reasons
     both = make_api(entsoe_token="t")
@@ -686,6 +724,10 @@ def test_spotprice_zones_and_registry(my_predbat=None):
     for arg, info in entry["args"].items():
         assert info["config"] in APPS_SCHEMA, info["config"]
     assert entry["args"]["entsoe_token"]["secret"] and entry["args"]["tibber_token"]["secret"]
+    # provider defaults to energycharts, so the component must be gated on a zone or a Tibber token
+    assert entry["args"]["provider"]["default"] == "energycharts" and not entry["args"]["provider"]["required"]
+    assert entry["required_or"] == ["zone", "tibber_token"]
+    assert SpotPriceAPI(FakeBase(), zone="NL").provider == "energycharts"
 
 
 def test_spotprice_engine_reads_rates(my_predbat=None):

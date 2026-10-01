@@ -569,7 +569,7 @@ COMPONENT_LIST = {
         "class": "spotprice.SpotPriceAPI",
         "name": "Day-ahead Spot Price Tariff",
         "args": {
-            "provider": {"required": True, "config": "spotprice_provider"},
+            "provider": {"required": False, "config": "spotprice_provider", "default": "energycharts"},
             "zone": {"required": False, "config": "spotprice_zone"},
             "entsoe_token": {"required": False, "secret": True, "config": "spotprice_entsoe_token"},
             "tibber_token": {"required": False, "secret": True, "config": "spotprice_tibber_token"},
@@ -584,6 +584,10 @@ COMPONENT_LIST = {
             "export_zero_on_negative": {"required": False, "config": "spotprice_export_zero_on_negative", "default": False},
             "automatic": {"required": False, "config": "spotprice_automatic", "default": True},
         },
+        # The provider defaults to energycharts, so gate on what a real configuration must carry: a
+        # bidding zone for the spot sources, or a Tibber token. Without this the component would
+        # start on every install.
+        "required_or": ["zone", "tibber_token"],
         "can_restart": True,
         "phase": 1,
     },

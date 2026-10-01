@@ -16,10 +16,10 @@ day, e.g. Germany's section 14a module 3 network charges), with VAT on top. This
 that price from the spot market itself, so it works for any supplier with a spot-linked tariff
 rather than needing a per-supplier integration:
 
-    import rate = (spot EUR/MWh x exchange_rate / 10 + markup + charge_zone(t)) x (1 + VAT%)
+    import rate = (spot EUR/MWh x exchange_rate / 10 + markup + charge_zone(t)) x (1 + vat)
 
 which, with exchange_rate 1, is in euro cents per kWh. Markup and charge zones are entered in the
-same minor currency units per kWh and exclude VAT.
+same minor currency units per kWh and exclude VAT; vat is a fraction (0.19 for 19%).
 
 Price sources, chosen by spotprice_provider:
   - entsoe:       ENTSO-E Transparency Platform, document A44 (day-ahead prices). Needs a free
@@ -372,39 +372,69 @@ def parse_hhmm(text):
     return hours * 60 + minutes
 
 
-def parse_charge_zones(zones, log=None):
-    """Validate the spotprice_charge_zones list into (start_minute, end_minute, days, rate) tuples.
+DAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
-    Each entry is {start: "HH:MM", end: "HH:MM", rate: minor units per kWh, day_of_week: "1,2,3"
-    (optional, 1 = Monday)}. end <= start wraps past midnight, so 00:00-00:00 covers the whole day.
-    Bad entries are logged and skipped.
+
+def parse_days(days):
+    """Parse a charge zone's days into a set of weekdays (Monday = 0), or None for every day.
+
+    Accepts a list or comma separated string of day names ("mon".."sun", or full names) and/or
+    integers 0-6 with Monday = 0. Raises ValueError on anything else.
+    """
+    if days is None:
+        return None
+    items = days if isinstance(days, (list, tuple, set)) else str(days).split(",")
+    result = set()
+    for item in items:
+        if isinstance(item, bool):
+            raise ValueError(item)
+        if isinstance(item, int):
+            day = item
+        else:
+            text = str(item).strip().lower()
+            if not text:
+                continue
+            if text[:3] in DAY_NAMES and text.isalpha():
+                day = DAY_NAMES[text[:3]]
+            else:
+                day = int(text)
+        if day < 0 or day > 6:
+            raise ValueError(item)
+        result.add(day)
+    if not result:
+        raise ValueError(days)
+    return result
+
+
+def parse_charge_zones(zones, log=None):
+    """Validate the spotprice_charge_zones list into (start_minute, end_minute, days, charge) tuples.
+
+    Each entry is {from: "HH:MM", to: "HH:MM", charge: minor units per kWh before VAT, days: optional
+    list of "mon".."sun" (or 0-6, Monday = 0)}. Times are local. to <= from wraps past midnight, so
+    00:00-00:00 covers the whole day and 17:00-00:00 runs to midnight. Bad entries are logged and skipped.
     """
     parsed = []
     for entry in zones or []:
         if not isinstance(entry, dict):
             if log:
-                log("Warn: SpotPrice: ignoring charge zone {}, expected start/end/rate".format(entry))
+                log("Warn: SpotPrice: ignoring charge zone {}, expected from/to/charge".format(entry))
             continue
-        start = parse_hhmm(entry.get("start", "00:00"))
-        end = parse_hhmm(entry.get("end", "00:00"))
+        start = parse_hhmm(entry.get("from", "00:00"))
+        end = parse_hhmm(entry.get("to", "00:00"))
         try:
-            rate = float(entry.get("rate"))
+            charge = float(entry.get("charge"))
         except (TypeError, ValueError):
-            rate = None
-        days = None
-        if entry.get("day_of_week") is not None:
-            try:
-                days = {int(day) - 1 for day in str(entry["day_of_week"]).split(",") if str(day).strip()}
-            except ValueError:
-                days = {-1}
-            if any(day < 0 or day > 6 for day in days):
-                days = None
-                rate = None
-        if start is None or end is None or rate is None:
+            charge = None
+        try:
+            days = parse_days(entry.get("days"))
+        except (TypeError, ValueError):
+            days = None
+            charge = None
+        if start is None or end is None or charge is None:
             if log:
-                log("Warn: SpotPrice: ignoring charge zone {}, needs start/end as HH:MM, a numeric rate and day_of_week 1-7".format(entry))
+                log("Warn: SpotPrice: ignoring charge zone {}, needs from/to as HH:MM, a numeric charge and days as mon..sun".format(entry))
             continue
-        parsed.append((start, end, days, rate))
+        parsed.append((start, end, days, charge))
     return parsed
 
 
@@ -424,9 +454,9 @@ def charge_zone_rate(zones, local_time):
     return 0.0
 
 
-def spot_import_rate(spot_mwh, markup, zone_charge, vat_percent, exchange_rate=1.0):
-    """Price formula: (spot per MWh x exchange_rate / 10 + markup + zone_charge) x (1 + VAT%), minor units per kWh."""
-    return round((spot_mwh * exchange_rate / 10.0 + markup + zone_charge) * (1.0 + vat_percent / 100.0), 4)
+def spot_import_rate(spot_mwh, markup, zone_charge, vat, exchange_rate=1.0):
+    """Price formula: (spot per MWh x exchange_rate / 10 + markup + zone_charge) x (1 + vat), minor units per kWh; vat is a fraction."""
+    return round((spot_mwh * exchange_rate / 10.0 + markup + zone_charge) * (1.0 + vat), 4)
 
 
 def spot_export_rate(spot_mwh, export_markup, exchange_rate=1.0):
@@ -460,7 +490,7 @@ class SpotPriceAPI(ComponentBase):
 
     def initialize(
         self,
-        provider,
+        provider="energycharts",
         zone=None,
         entsoe_token=None,
         tibber_token=None,
@@ -486,8 +516,10 @@ class SpotPriceAPI(ComponentBase):
         self.tibber_home_id = tibber_home_id
         self.markup = self.to_float(markup, "spotprice_markup")
         self.vat = self.to_float(vat, "spotprice_vat")
-        if 0 < self.vat < 1:
-            self.log("Warn: SpotPrice: spotprice_vat is a percentage (e.g. 19 for 19%), {} looks like a fraction".format(self.vat))
+        if self.vat > 1:
+            # spotprice_vat is a fraction (0.19); a value like 19 can only have meant a percentage
+            self.log("Warn: SpotPrice: spotprice_vat is a fraction (e.g. 0.19 for 19%), reading {} as {}%".format(self.vat, self.vat))
+            self.vat = self.vat / 100.0
         self.exchange_rate = self.to_float(exchange_rate, "spotprice_exchange_rate", default=1.0)
         self.charge_zones = parse_charge_zones(charge_zones, log=self.log)
         self.export_mode = str(export_mode or "none").strip().lower()
@@ -518,6 +550,7 @@ class SpotPriceAPI(ComponentBase):
         self.last_error = None
         self.import_rates = []
         self.export_rates = []
+        self.entsoe_fallback_logged = False
         self.import_wired = False
         self.export_wired = False
 
@@ -696,11 +729,17 @@ class SpotPriceAPI(ComponentBase):
         for name, fetch in sources:
             try:
                 intervals = await fetch(start, end)
-                if errors:
-                    self.log("Warn: SpotPrice: {}, using {} instead".format("; ".join(errors), name))
-                return intervals, name
             except SpotPriceError as e:
                 errors.append(str(e))
+                continue
+            if name == "entsoe" and self.entsoe_fallback_logged:
+                self.log("SpotPrice: ENTSO-E is working again")
+                self.entsoe_fallback_logged = False
+            elif errors and not self.entsoe_fallback_logged:
+                # Logged once per outage rather than on every refresh while ENTSO-E stays down
+                self.log("Warn: SpotPrice: {}, using {} until ENTSO-E recovers".format("; ".join(errors), name))
+                self.entsoe_fallback_logged = True
+            return intervals, name
         raise SpotPriceError("; ".join(errors))
 
     async def fetch_tibber(self):
@@ -1057,7 +1096,7 @@ def main():  # pragma: no cover
     parser.add_argument("--entsoe-token", dest="entsoe_token")
     parser.add_argument("--tibber-token", dest="tibber_token")
     parser.add_argument("--markup", type=float, default=0.0)
-    parser.add_argument("--vat", type=float, default=0.0)
+    parser.add_argument("--vat", type=float, default=0.0, help="VAT as a fraction, e.g. 0.19")
     parser.add_argument("--export-mode", dest="export_mode", default="none", choices=SPOTPRICE_EXPORT_MODES)
     parser.add_argument("--export-rate", dest="export_rate", type=float, default=0.0)
     parser.add_argument("--zero-on-negative", dest="zero_on_negative", action="store_true")

@@ -302,7 +302,7 @@ The component sets `metric_octopus_import` and `metric_octopus_export` for you.
   spotprice_provider: energycharts
   spotprice_zone: DE-LU
   spotprice_markup: 18.5
-  spotprice_vat: 19
+  spotprice_vat: 0.19
 ```
 
 See the [spotprice component](components.md#day-ahead-spot-price-tariff-spotprice) for all options.

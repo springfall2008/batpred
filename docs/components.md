@@ -1684,17 +1684,17 @@ Builds import (and optionally export) rates for any European bidding zone from t
 Most European dynamic tariffs are priced as the spot price plus a supplier markup plus grid fees and levies, with VAT on top, and this component applies exactly that:
 
 ```text
-import rate = (spot EUR/MWh x spotprice_exchange_rate / 10 + spotprice_markup + charge zone) x (1 + spotprice_vat / 100)
+import rate = (spot EUR/MWh x spotprice_exchange_rate / 10 + spotprice_markup + charge zone) x (1 + spotprice_vat)
 ```
 
-With the default exchange rate of 1 the result is in euro cents per kWh. The markup, charge zones and export rates are entered in your minor currency unit per kWh (as set by `currency_symbols`) and **exclude VAT**.
+With the default exchange rate of 1 the result is in euro cents per kWh. The markup, charge zones and export rates are entered in your minor currency unit per kWh (as set by `currency_symbols`) and **exclude VAT**; `spotprice_vat` is a fraction (`0.19` for 19%).
 
 Prices are kept at their native resolution - 15 minutes for most of Europe since October 2025, 30 minutes for Ireland's SEM, 60 minutes where a market still publishes hourly prices.
 Tomorrow's prices are published around 12:00-13:00 CET; from midday local time the component checks every 15 minutes until it has them, otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours, and the last prices fetched are cached so they survive a restart.
 
-Price sources (`spotprice_provider`):
+Price sources (`spotprice_provider`, default `energycharts`):
 
-- `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If ENTSO-E fails the component falls back to Energy-Charts.
+- `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If the token is missing or ENTSO-E fails, the component falls back to Energy-Charts automatically and logs it once (and again once ENTSO-E recovers).
 - `energycharts` - [Energy-Charts](https://api.energy-charts.info/) from Fraunhofer ISE, no key needed. Prices for AT, BE, CH, CZ, DE-LU, DK1, DK2, FR, HU, IT-North, NL, NO2, PL, SE4 and SI are licensed CC BY 4.0 (Bundesnetzagentur | SMARD.de); Energy-Charts states that prices for other zones are for private use only. Ireland (IE-SEM) is not available from Energy-Charts.
 - `tibber` - [Tibber](https://developer.tibber.com/)'s own end-user price, read with your personal access token. Tibber's price already includes markup, grid fees and VAT, so `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied to it. Quarter-hourly prices are requested.
 
@@ -1707,7 +1707,7 @@ Price sources (`spotprice_provider`):
 #### Important notes (spotprice)
 
 - The component sets `metric_octopus_import` (and `metric_octopus_export` when export rates are configured) automatically, the same way the Octopus and Kraken components do. Set `spotprice_automatic: false` to wire them yourself
-- Leave `spotprice_export_mode` as `none` to keep using your own `rates_export`
+- Leave `spotprice_export_mode` unset to keep using your own `rates_export`
 - `spotprice_export_zero_on_negative` pays nothing for export in any interval where the spot price is below zero, as required for new German PV systems under the Solarspitzengesetz. It needs spot prices, so with `tibber` you must also set `spotprice_zone`
 - Spot prices are in EUR. If your tariff is in another currency (e.g. SEK, DKK, PLN) set `spotprice_exchange_rate` to the number of your major currency units per euro. Tibber prices are already in your local currency
 - Charge zones are matched on the local time (from `timezone`) at the start of each interval, so they follow daylight saving changes
@@ -1716,16 +1716,16 @@ Price sources (`spotprice_provider`):
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `provider` | String | Yes | - | `spotprice_provider` | `entsoe`, `energycharts` or `tibber` |
-| `zone` | String | Yes for entsoe/energycharts | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
+| `provider` | String | No | `energycharts` | `spotprice_provider` | `entsoe`, `energycharts` or `tibber` |
+| `zone` | String | Yes, except for tibber | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
 | `entsoe_token` | String | For entsoe | - | `spotprice_entsoe_token` | ENTSO-E Transparency Platform security token |
 | `tibber_token` | String | For tibber | - | `spotprice_tibber_token` | Tibber personal access token |
 | `tibber_home_id` | String | No | First home | `spotprice_tibber_home_id` | Tibber home id when your account has more than one home |
 | `markup` | Float | No | 0 | `spotprice_markup` | Supplier markup plus flat grid fees and levies, minor units per kWh, excluding VAT |
-| `vat` | Float | No | 0 | `spotprice_vat` | VAT as a percentage, e.g. `19` |
-| `charge_zones` | List | No | - | `spotprice_charge_zones` | Time-of-day charges added before VAT: entries of `start`, `end` (HH:MM local), `rate` and optional `day_of_week` (`1,2,3,4,5`, 1 = Monday). The first matching entry wins; an `end` at or before `start` wraps past midnight |
+| `vat` | Float | No | 0 | `spotprice_vat` | VAT as a fraction, e.g. `0.19` (a value above 1 is read as a percentage) |
+| `charge_zones` | List | No | - | `spotprice_charge_zones` | Time-of-day charges added before VAT: entries of `from`, `to` (HH:MM local), `charge` and optional `days` (e.g. `[mon, tue, wed, thu, fri]`). The first matching entry wins; a `to` at or before `from` wraps past midnight, so `to: "00:00"` runs up to midnight |
 | `exchange_rate` | Float | No | 1.0 | `spotprice_exchange_rate` | Major currency units per euro, for tariffs not priced in EUR |
-| `export_mode` | String | No | `none` | `spotprice_export_mode` | `none`, `fixed` (feed-in tariff) or `spot` (spot price + export markup, no VAT) |
+| `export_mode` | String | No | - | `spotprice_export_mode` | `fixed` (feed-in tariff) or `spot` (spot price + export markup, no VAT); leave unset to keep your own `rates_export` |
 | `export_rate` | Float | No | 0 | `spotprice_export_rate` | Fixed feed-in tariff, minor units per kWh |
 | `export_markup` | Float | No | 0 | `spotprice_export_markup` | Added to the spot price for spot-linked export (usually negative, a fee) |
 | `export_zero_on_negative` | Boolean | No | false | `spotprice_export_zero_on_negative` | Pay 0 for export whenever the spot price is negative |
@@ -1751,17 +1751,18 @@ Germany, spot tariff with a section 14a module 3 grid fee table and a fixed feed
   spotprice_entsoe_token: !secret entsoe_token
   spotprice_zone: DE-LU
   spotprice_markup: 18.5
-  spotprice_vat: 19
+  spotprice_vat: 0.19
   spotprice_charge_zones:
-    - start: "00:00"
-      end: "06:00"
-      rate: 2.5
-    - start: "17:00"
-      end: "21:00"
-      rate: 14.0
-    - start: "00:00"
-      end: "00:00"
-      rate: 9.0
+    - from: "00:00"
+      to: "06:00"
+      charge: 2.5
+    - from: "17:00"
+      to: "21:00"
+      charge: 14.0
+      days: [mon, tue, wed, thu, fri]
+    - from: "00:00"
+      to: "00:00"
+      charge: 9.0
   spotprice_export_mode: fixed
   spotprice_export_rate: 7.94
   spotprice_export_zero_on_negative: true
