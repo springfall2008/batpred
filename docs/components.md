@@ -31,6 +31,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
     - [Kraken Energy (kraken)](#kraken-energy-kraken)
+    - [Day-ahead Spot Price Tariff (spotprice)](#day-ahead-spot-price-tariff-spotprice)
     - [ML Load Prediction (load_ml)](#ml-load-prediction-load_ml)
 - [Managing Components](#managing-components)
     - [Checking Component Status](#checking-component-status)
@@ -1670,6 +1671,121 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 | `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
+
+---
+
+### Day-ahead Spot Price Tariff (spotprice)
+
+**Can be restarted:** Yes
+
+#### What it does (spotprice)
+
+Builds import (and optionally export) rates for any European bidding zone from the day-ahead spot market, so a spot-linked dynamic tariff works in Predbat without a supplier-specific integration.
+Most European dynamic tariffs are priced as the spot price plus a supplier markup plus grid fees and levies, with VAT on top, and this component applies exactly that:
+
+```text
+import rate = (spot EUR/MWh x spotprice_exchange_rate / 10 + spotprice_markup + charge zone) x (1 + spotprice_vat / 100)
+```
+
+With the default exchange rate of 1 the result is in euro cents per kWh. The markup, charge zones and export rates are entered in your minor currency unit per kWh (as set by `currency_symbols`) and **exclude VAT**.
+
+Prices are kept at their native resolution - 15 minutes for most of Europe since October 2025, 30 minutes for Ireland's SEM, 60 minutes where a market still publishes hourly prices.
+Tomorrow's prices are published around 12:00-13:00 CET; from midday local time the component checks every 15 minutes until it has them, otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours, and the last prices fetched are cached so they survive a restart.
+
+Price sources (`spotprice_provider`):
+
+- `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If ENTSO-E fails the component falls back to Energy-Charts.
+- `energycharts` - [Energy-Charts](https://api.energy-charts.info/) from Fraunhofer ISE, no key needed. Prices for AT, BE, CH, CZ, DE-LU, DK1, DK2, FR, HU, IT-North, NL, NO2, PL, SE4 and SI are licensed CC BY 4.0 (Bundesnetzagentur | SMARD.de); Energy-Charts states that prices for other zones are for private use only. Ireland (IE-SEM) is not available from Energy-Charts.
+- `tibber` - [Tibber](https://developer.tibber.com/)'s own end-user price, read with your personal access token. Tibber's price already includes markup, grid fees and VAT, so `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied to it. Quarter-hourly prices are requested.
+
+#### When to enable (spotprice)
+
+- You are on a dynamic tariff that follows the day-ahead spot price (e.g. most German, Austrian, Dutch, Belgian or Nordic dynamic tariffs)
+- Your electricity comes from Tibber and you want Tibber's prices used directly
+- You have a fixed feed-in tariff, or a spot-linked export tariff, and want export priced alongside
+
+#### Important notes (spotprice)
+
+- The component sets `metric_octopus_import` (and `metric_octopus_export` when export rates are configured) automatically, the same way the Octopus and Kraken components do. Set `spotprice_automatic: false` to wire them yourself
+- Leave `spotprice_export_mode` as `none` to keep using your own `rates_export`
+- `spotprice_export_zero_on_negative` pays nothing for export in any interval where the spot price is below zero, as required for new German PV systems under the Solarspitzengesetz. It needs spot prices, so with `tibber` you must also set `spotprice_zone`
+- Spot prices are in EUR. If your tariff is in another currency (e.g. SEK, DKK, PLN) set `spotprice_exchange_rate` to the number of your major currency units per euro. Tibber prices are already in your local currency
+- Charge zones are matched on the local time (from `timezone`) at the start of each interval, so they follow daylight saving changes
+
+#### Configuration Options (spotprice)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `provider` | String | Yes | - | `spotprice_provider` | `entsoe`, `energycharts` or `tibber` |
+| `zone` | String | Yes for entsoe/energycharts | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
+| `entsoe_token` | String | For entsoe | - | `spotprice_entsoe_token` | ENTSO-E Transparency Platform security token |
+| `tibber_token` | String | For tibber | - | `spotprice_tibber_token` | Tibber personal access token |
+| `tibber_home_id` | String | No | First home | `spotprice_tibber_home_id` | Tibber home id when your account has more than one home |
+| `markup` | Float | No | 0 | `spotprice_markup` | Supplier markup plus flat grid fees and levies, minor units per kWh, excluding VAT |
+| `vat` | Float | No | 0 | `spotprice_vat` | VAT as a percentage, e.g. `19` |
+| `charge_zones` | List | No | - | `spotprice_charge_zones` | Time-of-day charges added before VAT: entries of `start`, `end` (HH:MM local), `rate` and optional `day_of_week` (`1,2,3,4,5`, 1 = Monday). The first matching entry wins; an `end` at or before `start` wraps past midnight |
+| `exchange_rate` | Float | No | 1.0 | `spotprice_exchange_rate` | Major currency units per euro, for tariffs not priced in EUR |
+| `export_mode` | String | No | `none` | `spotprice_export_mode` | `none`, `fixed` (feed-in tariff) or `spot` (spot price + export markup, no VAT) |
+| `export_rate` | Float | No | 0 | `spotprice_export_rate` | Fixed feed-in tariff, minor units per kWh |
+| `export_markup` | Float | No | 0 | `spotprice_export_markup` | Added to the spot price for spot-linked export (usually negative, a fee) |
+| `export_zero_on_negative` | Boolean | No | false | `spotprice_export_zero_on_negative` | Pay 0 for export whenever the spot price is negative |
+| `automatic` | Boolean | No | true | `spotprice_automatic` | Wire the rate sensors into `metric_octopus_import`/`metric_octopus_export` |
+
+Keep tokens in `secrets.yaml`:
+
+```yaml
+# secrets.yaml
+entsoe_token: YOUR_ENTSOE_TOKEN
+tibber_token: YOUR_TIBBER_TOKEN
+```
+
+#### apps.yaml configuration example (spotprice)
+
+Germany, spot tariff with a section 14a module 3 grid fee table and a fixed feed-in tariff:
+
+```yaml
+  currency_symbols:
+    - '€'
+    - 'c'
+  spotprice_provider: entsoe
+  spotprice_entsoe_token: !secret entsoe_token
+  spotprice_zone: DE-LU
+  spotprice_markup: 18.5
+  spotprice_vat: 19
+  spotprice_charge_zones:
+    - start: "00:00"
+      end: "06:00"
+      rate: 2.5
+    - start: "17:00"
+      end: "21:00"
+      rate: 14.0
+    - start: "00:00"
+      end: "00:00"
+      rate: 9.0
+  spotprice_export_mode: fixed
+  spotprice_export_rate: 7.94
+  spotprice_export_zero_on_negative: true
+```
+
+Tibber, with spot-linked export:
+
+```yaml
+  spotprice_provider: tibber
+  spotprice_tibber_token: !secret tibber_token
+  spotprice_zone: NL
+  spotprice_export_mode: spot
+  spotprice_export_markup: -1.5
+```
+
+A commented template is available in [templates/spotprice.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/spotprice.yaml).
+
+#### Published entities (spotprice)
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_spotprice_import_rates` | Import rate now; the `rates` attribute holds every interval and is what Predbat reads |
+| `sensor.predbat_spotprice_export_rates` | Export rate now - only present when `spotprice_export_mode` is `fixed` or `spot` |
+| `sensor.predbat_spotprice_status` | `ok`, `waiting` or `error`, with the source used, when prices were fetched, how far ahead they run and the last error |
 
 ---
 

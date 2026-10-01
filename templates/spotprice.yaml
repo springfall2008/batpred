@@ -1,0 +1,51 @@
+# Day-ahead spot price tariff (spotprice component)
+#
+# Gives Predbat dynamic import (and optionally export) rates for any European bidding zone with a
+# spot-linked tariff, without needing a supplier-specific integration. Merge the keys below into your
+# existing pred_bat section in apps.yaml - this file is not a complete configuration on its own.
+#
+# import rate = (spot EUR/MWh / 10 + spotprice_markup + charge zone) x (1 + spotprice_vat / 100)
+#
+# Markup, charge zones and export rates are in your minor currency unit per kWh (e.g. euro cents)
+# and exclude VAT. See docs/components.md for every option.
+pred_bat:
+  timezone: Europe/Berlin
+  currency_symbols:
+    - '€'
+    - 'c'
+
+  # Price source: entsoe (needs a free ENTSO-E token, falls back to Energy-Charts),
+  # energycharts (no key needed) or tibber (Tibber's own end-user price, needs a Tibber token)
+  spotprice_provider: energycharts
+  # Bidding zone, e.g. DE-LU, AT, NL, BE, FR, DK1, SE3, NO1, IE-SEM (ENTSO-E only)
+  spotprice_zone: DE-LU
+  # spotprice_entsoe_token: !secret entsoe_token
+  # spotprice_tibber_token: !secret tibber_token
+
+  # Supplier markup plus any flat grid fees and levies, per kWh, excluding VAT
+  spotprice_markup: 18.5
+  # VAT as a percentage
+  spotprice_vat: 19
+
+  # Optional time-of-day grid fees (e.g. Germany's section 14a module 3), local time, excluding VAT.
+  # The first matching entry wins; day_of_week is optional (1 = Monday). Times outside every zone add 0.
+  # spotprice_charge_zones:
+  #   - start: "00:00"
+  #     end: "06:00"
+  #     rate: 2.5
+  #   - start: "17:00"
+  #     end: "21:00"
+  #     rate: 14.0
+  #   - start: "06:00"
+  #     end: "17:00"
+  #     rate: 9.0
+  #   - start: "21:00"
+  #     end: "00:00"
+  #     rate: 9.0
+
+  # Export: none (keep your own rates_export), fixed (feed-in tariff) or spot (spot + export markup, no VAT)
+  spotprice_export_mode: fixed
+  spotprice_export_rate: 7.94
+  # spotprice_export_markup: -0.4
+  # Pay nothing for export in any interval where the spot price is negative (Germany's Solarspitzengesetz)
+  spotprice_export_zero_on_negative: true
