@@ -526,14 +526,15 @@ It can be an on/off sensor (matched against **car_charging_now_response**), or a
     - sensor.wallbox_portal_charging_power
 ```
 
-A status sensor works too, as long as its state while charging is one of the **car_charging_now_response** values. For example a myenergi Zappi's plug status reads `Charging`, which the default list accepts:
+A status sensor works too, as long as its state while charging is one of the **car_charging_now_response** values. For example a myenergi Zappi's plug status, from the Home Assistant myenergi integration, reads `Charging`, which the default list accepts:
 
 ```yaml
   car_charging_now:
     - sensor.myenergi_zappi_XXXXXXXX_plug_status
-  car_charging_now_response:
-    - 'charging'
 ```
+
+If you set **car_charging_now_response** yourself, keep `charging` in it, and the values your other cars' sensors use: the one list covers every car.
+With `myenergi_automatic`, Predbat already points **car_charging_now** at the Zappi's charging power, so leave it unset.
 
 If the sensor's state never matches, Predbat never sees the car charging, so it cancels every dispatch the car is in, even while the car charges.
 

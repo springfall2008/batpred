@@ -212,8 +212,8 @@ pred_bat:
 
   # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
   # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi
-  # plug_status sensor. With octopus_intelligent_dynamic on (the default), a dispatch the car is never seen
-  # charging in is cancelled, and the house battery can lose its cheap rate too.
+  # plug_status sensor. If it never matches while the car charges, Predbat cancels the car's Octopus Intelligent
+  # dispatches (switch.predbat_octopus_intelligent_dynamic, On by default) and the house battery can lose their cheap rate.
   car_charging_now_response:
     - 'yes'
     - 'on'

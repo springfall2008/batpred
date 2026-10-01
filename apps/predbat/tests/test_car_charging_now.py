@@ -393,6 +393,12 @@ def _run_default_response(my_predbat):
         my_predbat.get_car_charging_planned()
         failed |= _check("t23 cycle {!r}".format(state), my_predbat.car_charging_now == [expected], "now {}".format(my_predbat.car_charging_now))
         failed |= _check("t23 live {!r}".format(state), my_predbat.car_charging_now_reading(0) is expected, "")
+
+    print("Test 24: a car_charging_now_response set in apps.yaml replaces the default rather than adding to it")
+    my_predbat.args["car_charging_now_response"] = ["yes", "on", "true"]
+    _sensor(my_predbat, "Charging")
+    my_predbat.get_car_charging_planned()
+    failed |= _check("t24 Charging not in the set list", my_predbat.car_charging_now == [False], "now {}".format(my_predbat.car_charging_now))
     _sensor(my_predbat, None)
     return failed
 
