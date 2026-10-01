@@ -15,6 +15,10 @@ from tests.test_multi_car_iog import pin_test_clock, restore_test_clock
 
 SLOT_SENSOR = "binary_sensor.octopus_energy_abc123_intelligent_dispatching"
 DERIVED_SWITCH = "switch.octopus_energy_abc123_intelligent_smart_charge"
+LEGACY_SENSOR = "binary_sensor.octopus_energy_intelligent_dispatching"
+LEGACY_SWITCH = "switch.octopus_energy_intelligent_smart_charge"
+CAR2_SENSOR = "binary_sensor.octopus_energy_def456_intelligent_dispatching"
+CAR2_SWITCH = "switch.octopus_energy_def456_intelligent_smart_charge"
 CUSTOM_SENSOR = "binary_sensor.my_car_dispatching"
 CUSTOM_SWITCH = "switch.my_car_smart_control"
 
@@ -73,18 +77,19 @@ def _setup(my_predbat):
     }
     my_predbat.ha_interface.set_state(SLOT_SENSOR, "off", attributes=copy.deepcopy(attributes))
     my_predbat.ha_interface.set_state(CUSTOM_SENSOR, "off", attributes=copy.deepcopy(attributes))
+    my_predbat.ha_interface.set_state(LEGACY_SENSOR, "off", attributes=copy.deepcopy(attributes))
+    my_predbat.ha_interface.set_state(CAR2_SENSOR, "off", attributes=copy.deepcopy(attributes))
     my_predbat.args["octopus_intelligent_slot"] = SLOT_SENSOR
     my_predbat.args.pop("octopus_intelligent_smart_control", None)
 
 
-def _slots(my_predbat):
+def _slots(my_predbat, save=False, car_n=0):
     """
-    Run the fetch and return the (planned, completed) slot counts it produced for car 0, by the dispatches' own kWh.
+    Run the fetch and return the dispatches' own kWh it produced for car_n, sorted - 5.0 is the completed one, 10.0 the planned one.
     """
-    my_predbat.octopus_slots = [[]]
-    my_predbat.fetch_sensor_data_cars(save=False)
-    kwh = sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[0])
-    return kwh
+    my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
+    my_predbat.fetch_sensor_data_cars(save=save)
+    return sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[car_n])
 
 
 def _check(name, condition, detail=""):
@@ -168,6 +173,73 @@ def run_octopus_smart_control_tests(my_predbat):
         items[DERIVED_SWITCH] = "off"
         _slots(my_predbat)
         failed |= _check("t9 signature", my_predbat.octopus_slots_signature(before) != my_predbat.octopus_slots_signature(my_predbat.octopus_slots), "")
+
+        print("Test 10: the legacy entity names without a device id derive their switch too")
+        my_predbat.args["octopus_intelligent_slot"] = LEGACY_SENSOR
+        items[LEGACY_SWITCH] = "off"
+        kwh = _slots(my_predbat)
+        failed |= _check("t10 legacy off", kwh == [5.0], "kwh {}".format(kwh))
+        items[LEGACY_SWITCH] = "on"
+        kwh = _slots(my_predbat)
+        failed |= _check("t10 legacy on", kwh == [5.0, 10.0], "kwh {}".format(kwh))
+
+        print("Test 11: the state is case-insensitive, and an odd state string is no evidence")
+        my_predbat.args["octopus_intelligent_slot"] = SLOT_SENSOR
+        items[DERIVED_SWITCH] = "OFF"
+        kwh = _slots(my_predbat)
+        failed |= _check("t11 OFF", kwh == [5.0], "kwh {}".format(kwh))
+        items[DERIVED_SWITCH] = "true"
+        kwh = _slots(my_predbat)
+        failed |= _check("t11 true", kwh == [5.0, 10.0], "kwh {}".format(kwh))
+
+        print("Test 12: the change is logged once on a live fetch, and not at all on a save=False re-run")
+        logs = []
+        real_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: (logs.append(message), real_log(message, *args, **kwargs))[1]
+        try:
+            items[DERIVED_SWITCH] = "off"
+            my_predbat.octopus_smart_control_off_logged = {}
+            _slots(my_predbat, save=False)
+            failed |= _check("t12 no log on re-run", not [x for x in logs if "Smart Control is now" in x], "logs {}".format(logs))
+            _slots(my_predbat, save=True)
+            _slots(my_predbat, save=True)
+            now_off = [x for x in logs if "Smart Control is now Off" in x]
+            failed |= _check("t12 logged once", len(now_off) == 1, "logs {}".format(logs))
+        finally:
+            my_predbat.log = real_log
+
+        print("Test 13: two cars - Smart Control off for one only")
+        my_predbat.num_cars = 2
+        my_predbat.car_charging_planned = [True, True]
+        my_predbat.car_charging_now = [False, False]
+        my_predbat.car_charging_plan_smart = [False, False]
+        my_predbat.car_charging_plan_max_price = [0, 0]
+        my_predbat.car_charging_plan_time = ["07:00:00", "07:00:00"]
+        my_predbat.car_charging_battery_size = [100.0, 100.0]
+        my_predbat.car_charging_limit = [100.0, 100.0]
+        my_predbat.car_charging_rate = [7.4, 7.4]
+        my_predbat.car_charging_slots = [[], []]
+        my_predbat.car_charging_exclusive = [False, False]
+        my_predbat.car_charging_manual_soc = [False, False]
+        my_predbat.args["car_charging_soc"] = [50.0, 50.0]
+        my_predbat.args["car_charging_limit"] = [100.0, 100.0]
+        my_predbat.args["octopus_intelligent_slot"] = [SLOT_SENSOR, CAR2_SENSOR]
+        items[DERIVED_SWITCH] = "off"
+        items[CAR2_SWITCH] = "on"
+        failed |= _check("t13 car 0 off", _slots(my_predbat, car_n=0) == [5.0], "")
+        failed |= _check("t13 car 1 on", sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[1]) == [5.0, 10.0], "")
+        items[DERIVED_SWITCH] = "on"
+        items[CAR2_SWITCH] = "off"
+        _slots(my_predbat)
+        failed |= _check("t13 car 0 on", sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[0]) == [5.0, 10.0], "")
+        failed |= _check("t13 car 1 off", sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[1]) == [5.0], "")
+
+        print("Test 14: a switch list shorter than the cars falls back to the derived switch for the rest")
+        my_predbat.args["octopus_intelligent_smart_control"] = [CUSTOM_SWITCH]
+        items[CUSTOM_SWITCH] = "on"
+        _slots(my_predbat)
+        failed |= _check("t14 car 0 explicit on", sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[0]) == [5.0, 10.0], "")
+        failed |= _check("t14 car 1 derived off", sorted(slot.get("charge_in_kwh") for slot in my_predbat.octopus_slots[1]) == [5.0], "")
     finally:
         for field, value in saved_state.items():
             setattr(my_predbat, field, value)
@@ -176,7 +248,7 @@ def run_octopus_smart_control_tests(my_predbat):
                 my_predbat.args[key] = saved_args[key]
             else:
                 my_predbat.args.pop(key, None)
-        for entity in (SLOT_SENSOR, CUSTOM_SENSOR, DERIVED_SWITCH, CUSTOM_SWITCH):
+        for entity in (SLOT_SENSOR, CUSTOM_SENSOR, LEGACY_SENSOR, CAR2_SENSOR, DERIVED_SWITCH, CUSTOM_SWITCH, LEGACY_SWITCH, CAR2_SWITCH):
             items.pop(entity, None)
         restore_test_clock(my_predbat, saved_clock)
     print("*** octopus_smart_control test {}".format("FAILED" if failed else "PASSED"))
