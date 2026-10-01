@@ -314,47 +314,67 @@ def parse_entsoe_xml(text):
     return resolve_overlaps(series), currency
 
 
-KNOWN_RESOLUTIONS = (timedelta(minutes=15), timedelta(minutes=30), timedelta(minutes=60))
+HOUR = timedelta(minutes=60)
 
 
-def point_resolutions(starts):
-    """Give each start in a sorted list the resolution of the run it belongs to.
+def expected_resolution(starts):
+    """A start-only series' own resolution: its most common spacing (the shorter on a tie), else an hour."""
+    gaps = [starts[i + 1] - starts[i] for i in range(len(starts) - 1)]
+    gaps = [gap for gap in gaps if gap > timedelta(0)]
+    if not gaps:
+        return HOUR
+    counts = {}
+    for gap in gaps:
+        counts[gap] = counts.get(gap, 0) + 1
+    return max(counts.items(), key=lambda item: (item[1], -item[0].total_seconds()))[0]
 
-    A point takes the spacing to the next point when that is a known market resolution (15, 30 or 60
-    minutes) and the run continues at that spacing (the following gap, or the previous one, is the
-    same), or the next point is the last. Otherwise - the next gap is longer than any resolution
-    (points missing) or the spacing changes and the point could belong to either side - it takes
-    the smaller known spacing around it, so it can never be stretched over a missing point. A
-    series of mixed resolutions (60 minute hours followed by 15 minute quarters) keeps each part at
-    its own length rather than being forced to one series-wide spacing.
+
+def point_resolutions(starts, expected=None):
+    """Give each start in a sorted list the length of the interval it begins.
+
+    Start-only sources omit the timestamps of missing points rather than sending nulls, so a long
+    gap to the next point cannot be told apart from a coarser price. Each point is therefore capped
+    at the expected resolution - the source's own (Tibber: quarter-hourly when asked for it, else
+    hourly) or, if not given, the series' most common spacing - unless the following points confirm
+    a coarser one. Only an hourly run of at least two equal gaps is accepted as confirmation: that is
+    the one coarser resolution a day-ahead market really mixes with quarter hours, whereas one long
+    gap, or a couple of "30 minute" gaps inside a quarter-hourly series, are missing points. The last
+    point continues its run when the run before it was accepted, else it gets the expected length.
     """
     count = len(starts)
+    if expected is None:
+        expected = expected_resolution(starts)
     gaps = [starts[i + 1] - starts[i] for i in range(count - 1)]
-    known_gaps = [gap for gap in gaps if gap in KNOWN_RESOLUTIONS]
-    fallback = min(known_gaps) if known_gaps else timedelta(minutes=60)
     resolutions = []
     for i in range(count):
         forward = gaps[i] if i < count - 1 else None
-        backward = gaps[i - 1] if i > 0 else None
-        following = gaps[i + 1] if i + 1 < count - 1 else None
-        if forward in KNOWN_RESOLUTIONS and (following is None or following == forward or backward == forward):
+        if forward is None:
+            backward = gaps[i - 1] if i > 0 else None
+            resolutions.append(backward if (backward is not None and backward > expected and resolutions and resolutions[-1] == backward) else expected)
+            continue
+        if forward <= expected:
             resolutions.append(forward)
             continue
-        around = [gap for gap in (backward, forward) if gap in KNOWN_RESOLUTIONS]
-        if around:
-            resolutions.append(min(around))
+        run_start = i
+        while run_start > 0 and gaps[run_start - 1] == forward:
+            run_start -= 1
+        run_end = i
+        while run_end + 1 < len(gaps) and gaps[run_end + 1] == forward:
+            run_end += 1
+        if forward == HOUR and run_end - run_start + 1 >= 2:
+            resolutions.append(forward)
         else:
-            # Isolated by missing points on both sides: carry on at the resolution of the run before it
-            resolutions.append(resolutions[-1] if resolutions else fallback)
+            resolutions.append(expected)
     return resolutions
 
 
-def intervals_from_starts(starts_values):
+def intervals_from_starts(starts_values, expected=None):
     """Turn (start, value) pairs that carry no end time into (start, end, value) intervals.
 
-    Energy-Charts and Tibber give only interval starts. Each point gets its own run's resolution
-    (see point_resolutions), worked out over all published starts including ones whose value is
-    missing, and is cut short if the next start comes sooner. An interval is never stretched over a
+    Energy-Charts and Tibber give only interval starts. Each point gets a length from
+    point_resolutions (capped at `expected`, the source's resolution, unless confirmed), worked out
+    over all published starts including ones whose value is missing, and is cut short if the next
+    start comes sooner. An interval is never stretched over a
     missing point: a point with no value (None) or no timestamp at all simply leaves a gap, which
     Predbat fills as it does any other gap in a rate feed. Gap filling for ENTSO-E's A03 curves
     happens only in parse_entsoe_xml, where the format says a missing point repeats the last price.
@@ -362,7 +382,7 @@ def intervals_from_starts(starts_values):
     starts = sorted({start for start, _value in starts_values})
     if not starts:
         return []
-    resolution = dict(zip(starts, point_resolutions(starts)))
+    resolution = dict(zip(starts, point_resolutions(starts, expected)))
     next_start = {starts[i]: starts[i + 1] for i in range(len(starts) - 1)}
     intervals = []
     seen = set()
@@ -397,11 +417,12 @@ def parse_energycharts_json(data):
 
 
 @parse_errors_as("Tibber")
-def parse_tibber_json(data, home_id=None):
+def parse_tibber_json(data, home_id=None, resolution_minutes=None):
     """Parse a Tibber priceInfo response into (start, end, total per kWh in major units) UTC intervals.
 
-    Picks the home matching home_id, else the first home with a price subscription. Returns
-    (intervals, currency, home_id). An entry with a malformed startsAt fails the whole response.
+    Picks the home matching home_id, else the first home with a price subscription. resolution_minutes
+    is what was asked for (15 for QUARTER_HOURLY, 60 otherwise) and caps every interval, so an
+    omitted entry is never covered by its neighbour. Returns (intervals, currency, home_id). An entry with a malformed startsAt fails the whole response.
     """
     if not isinstance(data, dict):
         raise SpotPriceError("Tibber returned an unexpected response")
@@ -432,7 +453,8 @@ def parse_tibber_json(data, home_id=None):
             total = entry.get("total")
             currency = entry.get("currency") or currency
             pairs.append((parse_utc(starts_at), None if total is None else float(total)))
-    return intervals_from_starts(pairs), currency, home.get("id")
+    expected = timedelta(minutes=resolution_minutes) if resolution_minutes else None
+    return intervals_from_starts(pairs, expected), currency, home.get("id")
 
 
 def parse_hhmm(text):
@@ -631,7 +653,8 @@ class SpotPriceAPI(ComponentBase):
         self.export_zero_on_negative = bool(export_zero_on_negative)
         self.automatic = bool(automatic)
 
-        if self.provider == "entsoe" and not self.entsoe_token:
+        if self.provider == "entsoe" and not self.entsoe_token and (self.energycharts_covers_zone() or not (self.zone or self.zone_eic)):
+            # Only where Energy-Charts can actually stand in; an ENTSO-E-only zone gets the config error below instead
             self.log("Warn: SpotPrice: spotprice_provider is entsoe but spotprice_entsoe_token is not set - using Energy-Charts")
         if self.provider == "tibber" and not self.tibber_token:
             self.log("Warn: SpotPrice: spotprice_provider is tibber but spotprice_tibber_token is not set")
@@ -933,7 +956,7 @@ class SpotPriceAPI(ComponentBase):
                 record_api_call("tibber", False, "server_error" if status >= 500 else "client_error")
                 raise SpotPriceError("Tibber returned HTTP {}".format(status))
             try:
-                intervals, currency, home_id = parse_tibber_json(body, self.tibber_home_id)
+                intervals, currency, home_id = parse_tibber_json(body, self.tibber_home_id, resolution_minutes=15 if resolution else 60)
             except SpotPriceError as e:
                 last_error = e
                 if resolution and "resolution" in str(e).lower():
@@ -1124,6 +1147,9 @@ class SpotPriceAPI(ComponentBase):
             return False
         needed = [source for source in self.sources_needed() if not self.source_blocked(source, now)]
         due = [source for source in needed if self.source_due(source, now)] or needed
+        if not due:
+            # Every source is inside its back-off: nothing was fetched, so nothing succeeded
+            return False
         failed = False
         updated = False
         for source in due:
@@ -1254,7 +1280,7 @@ class SpotPriceAPI(ComponentBase):
             app="spotprice",
         )
 
-        if self.automatic:
+        if self.automatic and not self.config_error:
             if self.import_rates and not self.import_wired:
                 self.set_arg("metric_octopus_import", self.entity_name("import_rates"))
                 self.import_wired = True
@@ -1294,7 +1320,9 @@ class SpotPriceAPI(ComponentBase):
     async def run(self, seconds, first):
         """Called by ComponentBase every 60 seconds: refresh when due, then republish."""
         now = self.now()
-        if first:
+        if first and not self.config_error:
+            # Behind a config error the cache is left alone: restoring it would publish frozen prices
+            # (and wire them into the plan) for a configuration that can never refresh them
             await self.load_cache()
         if self.refresh_due(now):
             await self.refresh(now)

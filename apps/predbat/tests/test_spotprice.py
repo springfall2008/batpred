@@ -1183,6 +1183,9 @@ def test_spotprice_entsoe_only_zone(my_predbat=None):
     assert api.config_error == "spotprice_entsoe_token is required for zone IE-SEM"
     errors = [line for line in api.base.logs if line.startswith("Error:")]
     assert errors == ["Error: SpotPrice: spotprice_entsoe_token is required for zone IE-SEM"], api.base.logs
+    # ...and no misleading "using Energy-Charts" warning, since Energy-Charts cannot stand in here
+    assert not any("using Energy-Charts" in line for line in api.base.logs), api.base.logs
+    assert any("using Energy-Charts" in line for line in make_api(provider="entsoe", entsoe_token=None, zone="DE-LU").base.logs)
     now = dt("2025-05-02T08:00Z")
     assert not api.refresh_due(now) and run(api.refresh(now)) is False
     for minute in range(0, 300, 60):
@@ -1211,6 +1214,101 @@ def test_spotprice_entsoe_only_zone(my_predbat=None):
     assert run(live.refresh(now)) is False
     assert calls == ["entsoe"], calls
     assert "ENTSO-E returned HTTP 503" in live.last_error and "Energy-Charts" not in live.last_error, live.last_error
+
+
+def test_spotprice_config_error_ignores_cache(my_predbat=None):
+    """Behind a config error cached prices are not restored, published or wired into the plan."""
+    from spotprice import serialise_intervals
+
+    storage = FakeStorage()
+    cached = {"spot_intervals": serialise_intervals(spot_fixture(start="2025-05-01T22:00Z", count=192)), "spot_fetched_at": "2025-05-02T08:00:00+00:00"}
+    storage.data[("spotprice", "energycharts_ie_sem")] = cached
+    storage.data[("spotprice", "entsoe_ie_sem")] = cached
+    for provider in ("energycharts", "entsoe"):
+        api = make_api(provider=provider, entsoe_token=None, zone="IE-SEM", storage=storage)
+        assert api.config_error
+        pin_now(api, dt("2025-05-02T09:00Z"))
+        assert run(api.run(0, True)) is True
+        assert api.spot_intervals == [] and api.import_rates == []
+        assert api.base.set_args == [], api.base.set_args
+        assert "sensor.predbat_spotprice_import_rates" not in api.base.entities
+        assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "error"
+        assert api.last_success_timestamp is None
+        # Even with prices somehow held, a config error never wires them
+        api.spot_intervals = spot_fixture(start="2025-05-01T22:00Z", count=192)
+        api.publish(dt("2025-05-02T09:00Z"))
+        assert api.base.set_args == []
+
+
+def test_spotprice_refresh_all_blocked(my_predbat=None):
+    """refresh() with every source inside its back-off fetches nothing, returns False and logs no 'fetched'."""
+    api = make_api(provider="energycharts", entsoe_token=None)
+    calls = []
+
+    async def fetch(start, end):
+        """Must not be called."""
+        calls.append(1)
+        return spot_fixture()
+
+    api.fetch_energycharts = fetch
+    api.source_next_attempt["spot"] = dt("2025-05-02T10:00Z")
+    assert run(api.refresh(dt("2025-05-02T09:00Z"))) is False
+    assert calls == [] and not any("fetched" in line for line in api.base.logs), api.base.logs
+    tib = make_api(provider="tibber", tibber_token="t", entsoe_token=None, zone="NL", export_mode="spot")
+    tib.source_next_attempt = {"spot": dt("2025-05-02T10:00Z"), "tibber": dt("2025-05-02T10:00Z")}
+    assert run(tib.refresh(dt("2025-05-02T09:00Z"))) is False and not any("fetched" in line for line in tib.base.logs)
+    # Once the back-off expires the fetch goes ahead
+    assert run(api.refresh(dt("2025-05-02T10:00Z"))) is True and calls == [1]
+
+
+def test_spotprice_omitted_timestamps(my_predbat=None):
+    """Omitted (not null) timestamps never get covered: intervals are capped at the source's resolution unless an hourly run confirms 60 minutes."""
+    from spotprice import intervals_from_starts
+
+    base = dt("2025-05-02T00:00Z")
+
+    def m(minutes):
+        """base + minutes."""
+        return base + timedelta(minutes=minutes)
+
+    def spans(intervals):
+        """(start, end) minute offsets."""
+        return [(int((s_ - base).total_seconds() // 60), int((e - base).total_seconds() // 60)) for s_, e, _v in intervals]
+
+    # d4: the first three quarters of hour 1 omitted - 00:00 must not stretch to 01:00
+    assert spans(intervals_from_starts([(m(0), 1.0), (m(60), 2.0), (m(75), 3.0), (m(90), 4.0)])) == [(0, 15), (60, 75), (75, 90), (90, 105)]
+    # d5: two single quarters dropped - no "30 minute" intervals over them
+    assert spans(intervals_from_starts([(m(0), 1.0), (m(15), 1.0), (m(45), 2.0), (m(75), 3.0), (m(90), 4.0), (m(105), 5.0)])) == [(0, 15), (15, 30), (45, 60), (75, 90), (90, 105), (105, 120)]
+    # A genuine mixed 60/15 response keeps its hours, at both boundaries
+    mixed = intervals_from_starts([(m(60 * h), 1.0) for h in range(3)] + [(m(180 + 15 * q), 9.0) for q in range(8)])
+    assert spans(mixed)[:4] == [(0, 60), (60, 120), (120, 180), (180, 195)]
+    tail = intervals_from_starts([(m(15 * q), 1.0) for q in range(8)] + [(m(120 + 60 * h), 2.0) for h in range(3)])
+    assert spans(tail)[-3:] == [(120, 180), (180, 240), (240, 300)]
+    # Tibber: the resolution asked for caps every interval - quarter-hourly query, entry omitted
+    data = {"data": {"viewer": {"homes": [{"id": "h", "currentSubscription": {"priceInfo": {"today": [{"total": 0.2, "startsAt": "2025-05-02T02:00:00+02:00"}, {"total": 0.3, "startsAt": "2025-05-02T03:00:00+02:00"}], "tomorrow": []}}}]}}}
+    quarter, _c, _h = parse_tibber_json(data, resolution_minutes=15)
+    assert spans(quarter) == [(0, 15), (60, 75)], spans(quarter)
+    hourly, _c, _h = parse_tibber_json(data, resolution_minutes=60)
+    assert spans(hourly) == [(0, 60), (60, 120)], spans(hourly)
+
+    # fetch_tibber passes the resolution it actually asked for
+    api = make_api(provider="tibber", tibber_token="t", entsoe_token=None)
+    replies = [{"errors": [{"message": 'Unknown argument "resolution"'}]}, data]
+
+    async def post(url, payload, headers):
+        """First reject the resolution argument, then answer the hourly query."""
+        return 200, replies.pop(0)
+
+    api.http_post_json = post
+    assert spans(run(api.fetch_tibber())) == [(0, 60), (60, 120)]
+    api2 = make_api(provider="tibber", tibber_token="t", entsoe_token=None)
+
+    async def post_quarter(url, payload, headers):
+        """Answer the quarter-hourly query straight away."""
+        return 200, data
+
+    api2.http_post_json = post_quarter
+    assert spans(run(api2.fetch_tibber())) == [(0, 15), (60, 75)]
 
 
 SPOTPRICE_TESTS = [
@@ -1252,6 +1350,9 @@ SPOTPRICE_TESTS = [
     test_spotprice_tibber_token_implies_tibber_with_zone,
     test_spotprice_fetch_error_categories,
     test_spotprice_entsoe_only_zone,
+    test_spotprice_config_error_ignores_cache,
+    test_spotprice_refresh_all_blocked,
+    test_spotprice_omitted_timestamps,
 ]
 
 
