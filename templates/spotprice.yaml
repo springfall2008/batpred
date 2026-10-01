@@ -28,7 +28,7 @@ pred_bat:
   spotprice_vat: 0.19
 
   # Optional time-of-day grid fees (e.g. Germany's section 14a module 3), local time, excluding VAT.
-  # The first matching entry wins; days is optional (mon..sun). Times outside every zone add 0.
+  # The first matching entry wins; days is optional (mon..sun, or 1-7 with Monday = 1). Times outside every zone add 0.
   # "to" at or before "from" wraps past midnight, so to: "00:00" runs up to midnight.
   # spotprice_charge_zones:
   #   - from: "00:00"

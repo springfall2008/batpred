@@ -470,7 +470,7 @@ def test_spotprice_charge_zones(my_predbat=None):
 
     assert parse_days(["mon", "Friday"]) == {0, 4}
     assert parse_days("sat,sun") == {5, 6}
-    assert parse_days([0, 6]) == {0, 6}
+    assert parse_days([1, 7]) == {0, 6}
     assert parse_days(None) is None
 
     # A value above 1 can only be a percentage: read 19 as 0.19, with a warning
@@ -485,7 +485,7 @@ def test_spotprice_charge_zone_validation(my_predbat=None):
         [
             {"from": "25:00", "to": "06:00", "charge": 1},
             {"from": "01:00", "to": "02:00", "charge": "x"},
-            {"from": "01:00", "to": "02:00", "charge": 1, "days": [7]},
+            {"from": "01:00", "to": "02:00", "charge": 1, "days": [0]},
             {"from": "01:00", "to": "02:00", "charge": 1, "days": ["someday"]},
             "junk",
             {"from": "01:00", "to": "02:00", "charge": 3},
@@ -726,7 +726,7 @@ def test_spotprice_zones_and_registry(my_predbat=None):
         assert info["config"] in APPS_SCHEMA, info["config"]
     assert entry["args"]["entsoe_token"]["secret"] and entry["args"]["tibber_token"]["secret"]
     # provider defaults to energycharts, so the component must be gated on a zone or a Tibber token
-    assert entry["args"]["provider"]["default"] == "energycharts" and not entry["args"]["provider"]["required"]
+    assert "default" not in entry["args"]["provider"] and not entry["args"]["provider"]["required"]
     assert entry["required_or"] == ["zone", "tibber_token"]
     assert SpotPriceAPI(FakeBase(), zone="NL").provider == "energycharts"
 
@@ -975,6 +975,86 @@ def test_spotprice_tibber_partial_failure(my_predbat=None):
     assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "ok"
 
 
+def test_spotprice_days_follow_engine_numbering(my_predbat=None):
+    """Numbered days are 1-7 with Monday = 1, as in rates_import day_of_week; 0 and 8 are rejected with a warning."""
+    from spotprice import parse_days
+
+    assert parse_days([1, 2, 3, 4, 5]) == {0, 1, 2, 3, 4}
+    assert parse_days("6,7") == {5, 6}
+    assert parse_days(["mon", 7]) == {0, 6}
+    for bad in ([0], "0,1", [8], "8"):
+        try:
+            parse_days(bad)
+        except ValueError:
+            continue
+        raise AssertionError("{} should be rejected".format(bad))
+    logs = []
+    zones = parse_charge_zones([{"from": "17:00", "to": "21:00", "charge": 1, "days": [0, 1]}, {"from": "17:00", "to": "21:00", "charge": 2, "days": [6, 7]}], log=logs.append)
+    assert zones == [(1020, 1260, {5, 6}, 2.0)], zones
+    assert len(logs) == 1 and "1-7 (Monday = 1)" in logs[0], logs
+    # Saturday 17:30 Berlin is in the [6, 7] zone, Friday is not
+    assert charge_zone_rate(zones, dt("2025-12-06T16:30Z").astimezone(BERLIN)) == 2.0
+    assert charge_zone_rate(zones, dt("2025-12-05T16:30Z").astimezone(BERLIN)) == 0.0
+
+
+def test_spotprice_tibber_token_only(my_predbat=None):
+    """A lone Tibber token implies provider tibber; spot-dependent export without a zone is switched off once, not failed every refresh."""
+    api = make_api(provider=None, entsoe_token=None, zone=None, tibber_token="t")
+    assert api.provider == "tibber" and api.sources_needed() == ["tibber"]
+    assert make_api(provider="energycharts", entsoe_token=None, tibber_token="t").provider == "energycharts"
+    assert make_api(provider=None, entsoe_token=None, zone="NL").provider == "energycharts"
+
+    for kwargs in ({"export_mode": "spot"}, {"export_mode": "fixed", "export_rate": 8.0, "export_zero_on_negative": True}):
+        tib = make_api(provider="tibber", tibber_token="t", entsoe_token=None, zone=None, **kwargs)
+        warnings = [line for line in tib.base.logs if "export rates disabled" in line]
+        assert len(warnings) == 1, tib.base.logs
+        assert tib.export_mode == "none" and not tib.needs_spot() and tib.sources_needed() == ["tibber"]
+
+        async def fetch_tibber():
+            """Tibber works."""
+            return [(dt("2025-05-02T08:00Z"), dt("2025-05-02T08:15Z"), 0.25)]
+
+        tib.fetch_tibber = fetch_tibber
+        assert run(tib.refresh(dt("2025-05-02T08:00Z"))) is True and tib.failures == 0
+        tib.publish(dt("2025-05-02T08:05Z"))
+        assert "sensor.predbat_spotprice_export_rates" not in tib.base.entities
+        assert not any(arg == "metric_octopus_export" for arg, _value in tib.base.set_args)
+    # With a zone the spot-linked export stays on
+    assert make_api(provider="tibber", tibber_token="t", entsoe_token=None, zone="NL", export_mode="spot").export_mode == "spot"
+
+
+def test_spotprice_vat_one_or_more_is_percent(my_predbat=None):
+    """spotprice_vat is a fraction: values of 1 or more are percentages (1 means 1%, not 100%) and warn."""
+    for value, expected, warned in ((0.19, 0.19, False), (0.0, 0.0, False), (0.999, 0.999, False), (1, 0.01, True), (19, 0.19, True), (25.5, 0.255, True)):
+        api = make_api(vat=value)
+        assert abs(api.vat - expected) < 1e-12, (value, api.vat)
+        assert any("is a fraction" in line for line in api.base.logs) == warned, (value, api.base.logs)
+    assert spot_import_rate(100.0, 0.0, 0.0, make_api(vat=1).vat) == 10.1
+
+
+def test_spotprice_charge_zone_unknown_keys(my_predbat=None):
+    """Old-style start/end/rate entries are reported once, and day_of_week works as an alias for days with a warning."""
+    logs = []
+    zones = parse_charge_zones([{"start": "17:00", "end": "21:00", "rate": 12}, {"start": "00:00", "end": "06:00", "rate": 2}], log=logs.append)
+    assert zones == []
+    unknown = [line for line in logs if "unknown key" in line]
+    assert len(unknown) == 1 and "end, rate, start" in unknown[0], logs
+
+    logs = []
+    zones = parse_charge_zones([{"from": "17:00", "to": "21:00", "charge": 1, "day_of_week": "6,7"}, {"from": "08:00", "to": "09:00", "charge": 2, "day_of_week": "1"}], log=logs.append)
+    assert zones == [(1020, 1260, {5, 6}, 1.0), (480, 540, {0}, 2.0)], zones
+    alias = [line for line in logs if "day_of_week" in line]
+    assert len(alias) == 1 and not any("unknown key" in line for line in logs), logs
+
+    # A clean configuration logs nothing
+    logs = []
+    parse_charge_zones([{"from": "17:00", "to": "21:00", "charge": 1, "days": ["sat"]}], log=logs.append)
+    assert logs == []
+    # Through the component the warning is emitted once at start-up
+    api = make_api(charge_zones=[{"from": "17:00", "to": "21:00", "charge": 1, "rate": 5}])
+    assert sum("unknown key" in line for line in api.base.logs) == 1
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1005,6 +1085,10 @@ SPOTPRICE_TESTS = [
     test_spotprice_market_day_polling,
     test_spotprice_status_states,
     test_spotprice_tibber_partial_failure,
+    test_spotprice_days_follow_engine_numbering,
+    test_spotprice_tibber_token_only,
+    test_spotprice_vat_one_or_more_is_percent,
+    test_spotprice_charge_zone_unknown_keys,
 ]
 
 

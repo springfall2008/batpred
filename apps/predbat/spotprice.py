@@ -422,13 +422,15 @@ def parse_hhmm(text):
 
 
 DAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+CHARGE_ZONE_KEYS = ("from", "to", "charge", "days")
 
 
 def parse_days(days):
-    """Parse a charge zone's days into a set of weekdays (Monday = 0), or None for every day.
+    """Parse a charge zone's days into a set of Python weekdays (Monday = 0), or None for every day.
 
-    Accepts a list or comma separated string of day names ("mon".."sun", or full names) and/or
-    integers 0-6 with Monday = 0. Raises ValueError on anything else.
+    Accepts a list or comma separated string of day names ("mon".."sun", or full names) and/or day
+    numbers 1-7 with Monday = 1 ... Sunday = 7 - the same numbering as day_of_week in rates_import.
+    Raises ValueError on anything else, including 0.
     """
     if days is None:
         return None
@@ -438,18 +440,18 @@ def parse_days(days):
         if isinstance(item, bool):
             raise ValueError(item)
         if isinstance(item, int):
-            day = item
+            number = item
         else:
             text = str(item).strip().lower()
             if not text:
                 continue
-            if text[:3] in DAY_NAMES and text.isalpha():
-                day = DAY_NAMES[text[:3]]
-            else:
-                day = int(text)
-        if day < 0 or day > 6:
-            raise ValueError(item)
-        result.add(day)
+            if text.isalpha() and text[:3] in DAY_NAMES:
+                result.add(DAY_NAMES[text[:3]])
+                continue
+            number = int(text)
+        if number < 1 or number > 7:
+            raise ValueError("day {} is outside 1-7 (Monday = 1)".format(item))
+        result.add(number - 1)
     if not result:
         raise ValueError(days)
     return result
@@ -459,15 +461,25 @@ def parse_charge_zones(zones, log=None):
     """Validate the spotprice_charge_zones list into (start_minute, end_minute, days, charge) tuples.
 
     Each entry is {from: "HH:MM", to: "HH:MM", charge: minor units per kWh before VAT, days: optional
-    list of "mon".."sun" (or 0-6, Monday = 0)}. Times are local. to <= from wraps past midnight, so
-    00:00-00:00 covers the whole day and 17:00-00:00 runs to midnight. Bad entries are logged and skipped.
+    list of "mon".."sun" or 1-7 with Monday = 1}. Times are local. to <= from wraps past midnight, so
+    00:00-00:00 covers the whole day and 17:00-00:00 runs to midnight. day_of_week is accepted as an
+    alias for days, with a warning. Unknown keys (such as the start/end/rate of rates_import) are
+    reported once rather than silently ignored. Bad entries are logged and skipped.
     """
     parsed = []
+    unknown_keys = set()
+    alias_used = False
     for entry in zones or []:
         if not isinstance(entry, dict):
             if log:
                 log("Warn: SpotPrice: ignoring charge zone {}, expected from/to/charge".format(entry))
             continue
+        unknown_keys.update(str(key) for key in entry if key not in CHARGE_ZONE_KEYS and key != "day_of_week")
+        days_value = entry.get("days")
+        if "day_of_week" in entry:
+            alias_used = True
+            if days_value is None:
+                days_value = entry["day_of_week"]
         start = parse_hhmm(entry.get("from", "00:00"))
         end = parse_hhmm(entry.get("to", "00:00"))
         try:
@@ -475,15 +487,19 @@ def parse_charge_zones(zones, log=None):
         except (TypeError, ValueError):
             charge = None
         try:
-            days = parse_days(entry.get("days"))
+            days = parse_days(days_value)
         except (TypeError, ValueError):
             days = None
             charge = None
         if start is None or end is None or charge is None:
             if log:
-                log("Warn: SpotPrice: ignoring charge zone {}, needs from/to as HH:MM, a numeric charge and days as mon..sun".format(entry))
+                log("Warn: SpotPrice: ignoring charge zone {}, needs from/to as HH:MM, a numeric charge and days as mon..sun or 1-7 (Monday = 1)".format(entry))
             continue
         parsed.append((start, end, days, charge))
+    if log and alias_used:
+        log("Warn: SpotPrice: spotprice_charge_zones uses day_of_week, please rename it to days (read as 1-7, Monday = 1)")
+    if log and unknown_keys:
+        log("Warn: SpotPrice: spotprice_charge_zones has unknown key(s) {} - expected {}".format(", ".join(sorted(unknown_keys)), ", ".join(CHARGE_ZONE_KEYS)))
     return parsed
 
 
@@ -539,7 +555,7 @@ class SpotPriceAPI(ComponentBase):
 
     def initialize(
         self,
-        provider="energycharts",
+        provider=None,
         zone=None,
         entsoe_token=None,
         tibber_token=None,
@@ -555,7 +571,10 @@ class SpotPriceAPI(ComponentBase):
         automatic=True,
     ):
         """Store configuration and validate it. Problems are logged once here, not on every cycle."""
-        self.provider = str(provider or "").strip().lower()
+        if not provider:
+            # Unset: a Tibber token on its own means Tibber, otherwise the keyless default
+            provider = "tibber" if tibber_token else "energycharts"
+        self.provider = str(provider).strip().lower()
         if self.provider not in SPOTPRICE_PROVIDERS:
             self.log("Warn: SpotPrice: unknown spotprice_provider '{}', expected one of {} - using energycharts".format(provider, ", ".join(SPOTPRICE_PROVIDERS)))
             self.provider = "energycharts"
@@ -565,8 +584,8 @@ class SpotPriceAPI(ComponentBase):
         self.tibber_home_id = tibber_home_id
         self.markup = self.to_float(markup, "spotprice_markup")
         self.vat = self.to_float(vat, "spotprice_vat")
-        if self.vat > 1:
-            # spotprice_vat is a fraction (0.19); a value like 19 can only have meant a percentage
+        if self.vat >= 1:
+            # spotprice_vat is a fraction (0.19); 1 or more can only have meant a percentage (1 = 1%, not 100%)
             self.log("Warn: SpotPrice: spotprice_vat is a fraction (e.g. 0.19 for 19%), reading {} as {}%".format(self.vat, self.vat))
             self.vat = self.vat / 100.0
         self.exchange_rate = self.to_float(exchange_rate, "spotprice_exchange_rate", default=1.0)
@@ -584,7 +603,18 @@ class SpotPriceAPI(ComponentBase):
             self.log("Warn: SpotPrice: spotprice_provider is entsoe but spotprice_entsoe_token is not set - using Energy-Charts")
         if self.provider == "tibber" and not self.tibber_token:
             self.log("Warn: SpotPrice: spotprice_provider is tibber but spotprice_tibber_token is not set")
-        if self.needs_spot() and not (self.zone or self.zone_eic):
+        if self.provider == "tibber" and self.needs_spot() and not (self.zone or self.zone_eic):
+            # Tibber only needs spot prices for the export side; without a zone they cannot be fetched,
+            # so switch that export off once here (leaving rates_export in charge) rather than failing
+            # every refresh
+            self.log(
+                "Warn: SpotPrice: spotprice_export_mode {}{} needs spot prices, but spotprice_zone is not set - export rates disabled, set spotprice_zone to enable them".format(
+                    self.export_mode, " with spotprice_export_zero_on_negative" if self.export_zero_on_negative else ""
+                )
+            )
+            self.export_mode = "none"
+            self.export_zero_on_negative = False
+        elif self.needs_spot() and not (self.zone or self.zone_eic):
             self.log("Warn: SpotPrice: spotprice_zone must be set (e.g. DE-LU) to use spot prices")
 
         # Raw source data, cached to storage. Spot intervals are per-MWh in EUR as published;

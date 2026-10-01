@@ -569,7 +569,8 @@ COMPONENT_LIST = {
         "class": "spotprice.SpotPriceAPI",
         "name": "Day-ahead Spot Price Tariff",
         "args": {
-            "provider": {"required": False, "config": "spotprice_provider", "default": "energycharts"},
+            # No registry default: initialize() infers tibber from a lone Tibber token, else energycharts
+            "provider": {"required": False, "config": "spotprice_provider"},
             "zone": {"required": False, "config": "spotprice_zone"},
             "entsoe_token": {"required": False, "secret": True, "config": "spotprice_entsoe_token"},
             "tibber_token": {"required": False, "secret": True, "config": "spotprice_tibber_token"},
