@@ -1437,7 +1437,7 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
-    def octopus_smart_control_off(self, car_n, slot_entity_id):
+    def octopus_smart_control_off(self, car_n, slot_entity_id, save=True):
         """
         Whether Octopus Smart Control is explicitly switched off for car_n, so its planned dispatches will not happen.
 
@@ -1451,14 +1451,14 @@ class Fetch:
             switch_config = [switch_config]
         switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
         if not switch_id and isinstance(slot_entity_id, str):
-            match = re.fullmatch(r"binary_sensor\.(octopus_energy_.+)_intelligent_dispatching", slot_entity_id)
+            match = re.fullmatch(r"binary_sensor\.(octopus_energy(?:_.+)?)_intelligent_dispatching", slot_entity_id)
             if match:
                 switch_id = "switch.{}_intelligent_smart_charge".format(match.group(1))
         if not switch_id:
             return False
         state = self.get_state_wrapper(entity_id=switch_id)
         off = isinstance(state, str) and state.lower() == "off"
-        if off != self.octopus_smart_control_off_logged.get(car_n, False):
+        if save and off != self.octopus_smart_control_off_logged.get(car_n, False):
             self.octopus_smart_control_off_logged[car_n] = off
             self.log("Car {} Octopus Smart Control is now {} ({}), planned Octopus dispatches are {}".format(car_n, "Off" if off else "On", switch_id, "ignored" if off else "used"))
         return off
@@ -1535,12 +1535,9 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                smart_control_off = self.octopus_smart_control_off(car_n, entity_id)
-                if planned and smart_control_off:
-                    # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will
-                    # act on it (#5339). Slots already delivered (completed) are real, so those are still counted above
-                    pass
-                elif planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
+                # on it (#5339). Slots already delivered (completed) are real, so those are still counted above
+                if planned and not self.octopus_smart_control_off(car_n, entity_id, save=save) and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     self.octopus_slots[car_n] += planned
