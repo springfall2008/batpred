@@ -1427,8 +1427,8 @@ def test_rate_entities_omit_max_when_the_rate_is_unknown(my_predbat=None):
     GIVTCP_CONTROLS' generic 20000 ceiling instead tells Predbat the battery can take 20kW, and
     battery_rate_max_charge/discharge/export are all sized from it.
 
-    inverter_details() returns {} whenever neither Invertor_Details nor the v3 serial-named block
-    resolves, so this is the same path that loses capacity, inverter limit and time together.
+    This fixture has no identifiable details block, so inverter_details() returns {} and this is
+    the same path that loses capacity, inverter limit and time together.
     """
     base, component = _make_component()
     component.rest[0].inverter.rest_data = _rest_data_blob()
@@ -2955,6 +2955,138 @@ def test_a_partial_first_report_is_replaced_once_the_inverter_fills_it_in(my_pre
     return 0
 
 
+def _details_warnings(messages):
+    """Log lines from one publish pass that report an unidentifiable inverter details block."""
+    return [message for message in messages if "identifiable inverter details" in message]
+
+
+def _watch_logs(base, component):
+    """Collect component and REST-client log lines into one list."""
+    messages = _capture_logs(component)
+    # GivTCPRest logs through base.log, which was copied onto the component at init, so
+    # replacing only component.log would miss a warning that had been left in the reader.
+    base.log = component.log
+    return messages
+
+
+def test_recovered_details_publish_without_a_missing_details_warning(my_predbat=None):
+    """
+    A v3 capture whose raw serial is null, missing or unmatched still publishes the details block.
+
+    The block keeps its Invertor_Serial_Number, so clock and capacity recover without a
+    missing-details warning. Reader calls around the publish must not add further warnings.
+    """
+    for label in ("null", "missing", "unmatched"):
+        base, component = _rest_from_fixture("cases/rest_v3.json")
+        invertor = component.rest[0].inverter.rest_data["raw"]["invertor"]
+        if label == "null":
+            invertor["serial_number"] = None
+        elif label == "missing":
+            del invertor["serial_number"]
+        else:
+            invertor["serial_number"] = "ZZ9999"
+        rest = component.rest[0]
+        assert rest.inverter_time() == "2024-12-30T13:07:22+00:00", label
+        assert rest.battery_capacity_kwh() == 9.52, label
+
+        messages = _watch_logs(base, component)
+        rest.battery_capacity_kwh()
+        rest.inverter_time()
+        rest.max_battery_rate()
+        rest.inverter_type()
+        rest.max_inverter_rate()
+        run_async(component.publish_data())
+
+        assert _details_warnings(messages) == [], f"{label} publish warned {_details_warnings(messages)}"
+        assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "2024-12-30T13:07:22+00:00", label
+        assert base.entities["sensor.predbat_givtcp_0_soc_max"]["state"] == 9.52, label
+        assert "inverter_time" in component.published_discovery[0], label
+    print("PASS: a recovered details block publishes clock and capacity with no warning")
+    return 0
+
+
+def test_unresolved_details_clear_a_stale_clock(my_predbat=None):
+    """
+    A non-empty snapshot with no identifiable details must not keep the previous inverter clock.
+
+    The warning is once per endpoint per publish pass, however many readers run. The other
+    endpoint keeps publishing its own clock. A later good snapshot restores the cleared clock.
+    An absent snapshot publishes nothing, so it leaves the current clock where it is.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    good0 = _rest_data_blob(version="3.0.4")
+    good0["Invertor_Details"] = {"Invertor_Serial_Number": "EA1", "Invertor_Time": "2024-12-30T13:07:22+00:00", "Battery_Capacity_kWh": 9.52}
+    good1 = _rest_data_blob(version="3.0.4")
+    good1["Invertor_Details"] = {"Invertor_Serial_Number": "EA2", "Invertor_Time": "2024-12-30T14:08:23+00:00", "Battery_Capacity_kWh": 8.0}
+    component.rest[0].inverter.rest_data = good0
+    component.rest[1].inverter.rest_data = good1
+    run_async(component.publish_data())
+    assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "2024-12-30T13:07:22+00:00"
+    assert base.entities["sensor.predbat_givtcp_1_inverter_time"]["state"] == "2024-12-30T14:08:23+00:00"
+
+    component.rest[0].inverter.rest_data = _rest_data_blob(version="3.0.4")
+    messages = _watch_logs(base, component)
+    rest = component.rest[0]
+    rest.battery_capacity_kwh()
+    rest.inverter_time()
+    rest.max_battery_rate()
+    rest.inverter_type()
+    rest.max_inverter_rate()
+    rest.inverter_details()
+    run_async(component.publish_data())
+
+    warnings = _details_warnings(messages)
+    assert len(warnings) == 1, f"expected one missing-details warning, got {warnings}"
+    assert "inverter 0" in warnings[0] and "http://givtcp0:6345" in warnings[0], warnings[0]
+    assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "unavailable"
+    assert "inverter_time" in component.published_discovery[0]
+    assert base.entities["sensor.predbat_givtcp_1_inverter_time"]["state"] == "2024-12-30T14:08:23+00:00"
+
+    component.rest[0].inverter.rest_data = good0
+    messages = _watch_logs(base, component)
+    run_async(component.publish_data())
+    assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "2024-12-30T13:07:22+00:00"
+    assert _details_warnings(messages) == [], f"a recovered clock warned {_details_warnings(messages)}"
+
+    component.rest[0].inverter.rest_data = None
+    messages = _watch_logs(base, component)
+    run_async(component.publish_data())
+    assert base.entities["sensor.predbat_givtcp_0_inverter_time"]["state"] == "2024-12-30T13:07:22+00:00"
+    assert _details_warnings(messages) == [], f"an absent snapshot warned {_details_warnings(messages)}"
+    assert base.entities["sensor.predbat_givtcp_1_inverter_time"]["state"] == "2024-12-30T14:08:23+00:00"
+    print("PASS: unresolved details clear a stale clock once, and a later snapshot restores it")
+    return 0
+
+
+def test_unresolved_details_do_not_discover_inverter_time(my_predbat=None):
+    """
+    An endpoint that has never reported a clock must not gain one from an unavailable placeholder.
+
+    published_discovery is what automatic_config claims from. Publishing nothing, or publishing
+    unavailable without recording the key, leaves the user's own inverter_time config in place.
+    """
+    base, component = _make_component()
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    messages = _watch_logs(base, component)
+    rest = component.rest[0]
+    rest.inverter_details()
+    rest.inverter_time()
+    rest.battery_capacity_kwh()
+    run_async(component.publish_data())
+
+    assert "sensor.predbat_givtcp_0_inverter_time" not in base.entities
+    assert "inverter_time" not in component.published_discovery.get(0, set())
+    warnings = _details_warnings(messages)
+    assert len(warnings) == 1, f"expected one missing-details warning, got {warnings}"
+    assert "inverter 0" in warnings[0] and "http://givtcp:6345" in warnings[0], warnings[0]
+
+    run_async(component.automatic_config())
+    assert "inverter_time" not in base.args, f"inverter_time must not be claimed, got {base.args.get('inverter_time')}"
+    print("PASS: unresolved details do not discover an inverter clock")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -2991,6 +3123,9 @@ def test_givtcp_component(my_predbat=None):
         ("rate_max_unknown", test_rate_entities_omit_max_when_the_rate_is_unknown, "no max advertised when rate unknown"),
         ("discovery_unpublished", test_discovery_keys_are_only_claimed_when_actually_published, "unpublished discovery keys not claimed"),
         ("discovery_published", test_discovery_keys_still_claimed_when_reported, "reported discovery keys still claimed"),
+        ("details_recovered", test_recovered_details_publish_without_a_missing_details_warning, "null raw serial still publishes inverter details"),
+        ("details_stale_clock", test_unresolved_details_clear_a_stale_clock, "unresolved details clear a stale inverter clock"),
+        ("details_no_clock_discovery", test_unresolved_details_do_not_discover_inverter_time, "unresolved details do not discover inverter_time"),
         ("slot_no_status", test_slot_write_before_any_status_is_refused_not_fabricated, "slot write refused with no status"),
         ("slot_with_status", test_slot_write_still_works_once_status_is_known, "slot write preserves the other end"),
         ("dt_not_v2", test_discharge_target_not_published_on_v2, "no discharge target on v2"),
