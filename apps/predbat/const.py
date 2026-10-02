@@ -162,3 +162,9 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 # need the same answer to "which of these two states is the more significant one to show".
 CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
 EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+
+# The status a run records when it completed but a component failed. predbat.py writes it and the
+# History view (output.split_status_warning) unwraps the run's own status back out of it, so both
+# read the wording from here.
+COMPONENT_ERROR_STATUS_PREFIX = "Error: Complete run status "
+COMPONENT_ERROR_STATUS_SUFFIX = " with component errors: "
