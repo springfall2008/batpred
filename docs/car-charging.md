@@ -186,6 +186,7 @@ The following entries are pre-configured in the `apps.yaml` template:
     - 'yes'
     - 'on'
     - 'true'
+    - 'charging'
 ```
 
 - **car_charging_planned** - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration) which lets Predbat know the car is plugged in and planned to charge during low-rate slots.
@@ -210,6 +211,8 @@ Leave it commented out if you have no sensor that reports the car actually drawi
 The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`) and Predbat gateway integrations set it for you, unless you have set it yourself in `apps.yaml`.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
+The sensor's state must match one of these exactly (ignoring case). If unset it defaults to `yes`, `on`, `enable`, `true` and `charging`, which covers on/off sensors and chargers whose status reads `Charging`, such as a myenergi Zappi's plug status.
+If your charger reports something else while charging, add that value here. Otherwise Predbat never sees the car charging, and with Octopus Intelligent it [cancels the car's dispatches](#checking-intelligent-dispatches-against-the-car).
 
 To make Predbat-led car charging more accurate, additionally you can configure the following items in `apps.yaml`:
 
@@ -523,6 +526,18 @@ It can be an on/off sensor (matched against **car_charging_now_response**), or a
     - sensor.wallbox_portal_charging_power
 ```
 
+A status sensor works too, as long as its state while charging is one of the **car_charging_now_response** values. For example a myenergi Zappi's plug status, from the Home Assistant myenergi integration, reads `Charging`, which the default list accepts:
+
+```yaml
+  car_charging_now:
+    - sensor.myenergi_zappi_XXXXXXXX_plug_status
+```
+
+If you set **car_charging_now_response** yourself, keep `charging` in it, and the values your other cars' sensors use: the one list covers every car.
+With `myenergi_automatic`, Predbat already points **car_charging_now** at the Zappi's charging power, so leave it unset.
+
+If the sensor's state never matches, Predbat never sees the car charging, so it cancels every dispatch the car is in, even while the car charges.
+
 Without **car_charging_now**, if your car is inside the CT clamp (**switch.predbat_car_energy_reported_load** On), Predbat uses the house load instead - slower and less certain, as other appliances also move it.
 With neither, nothing is checked.
 
@@ -564,6 +579,14 @@ For example, Octopus dispatches the car from 15:55 to 16:01 but the charger repo
 - Check **car_charging_now** names a real sensor, e.g. `sensor.wallbox_portal_charging_power`, not a fixed value like `off` - or that your car is inside the CT clamp.
 - Check **switch.predbat_octopus_intelligent_charging** is On, so Predbat builds the car plan from the Octopus dispatches.
 - Look in the log for `Octopus Intelligent: car` lines. If there are none while the car sits idle in a dispatch, the check is not running. Note that the `Dynamic load last period ...` line is written every cycle whatever these settings are, so it does not show the check is running.
+
+**If a dispatch is cancelled while the car is charging**
+
+The log shows `car 0 is in a dispatch but not charging, cancelling its slots` although the car is charging. Predbat is not reading **car_charging_now** as charging:
+
+- Look at the sensor's history in Home Assistant while the car charges. If it shows a status such as `Charging`, check that value is in **car_charging_now_response**. A `car_charging_now_response` list you set in `apps.yaml` replaces the default, so it must include `charging` itself.
+- The log's `Cars ... charging_now [False]` line shows what Predbat made of the sensor each cycle.
+- A charging power sensor (200W or more counts as charging) avoids matching status text altogether.
 
 #### Reading the dispatch timeline in the logs
 
