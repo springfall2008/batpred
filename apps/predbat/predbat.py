@@ -556,6 +556,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dynamic_load_car_warned_dynamic_off = False
         self.dynamic_load_car_run = {}
         self.dynamic_load_car_confirmed = {}
+        self.dynamic_load_car_saved = {}
         self.dynamic_load_car_sensors = {}
         self.dynamic_load_car_effective = {}
         self.dynamic_load_car_stripped = 0
@@ -2082,6 +2083,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
+            # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
+            self.dynamic_load_car_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
