@@ -69,11 +69,11 @@ def test_ensemble_returns_band_ratios(my_predbat):
     try:
         test_api.solar.open_meteo_forecast_max_age = 1.0
         ensemble_data = _make_ensemble_response(
-            times=["2025-06-15T04:00", "2025-06-15T05:00", "2025-06-15T12:00"],
+            times=["2025-06-15T04:00", "2025-06-15T05:00", "2025-06-15T12:00", "2025-06-15T13:00"],
             members={
-                "global_tilted_irradiance_member01": [0.0, 1.0, 400.0],
-                "global_tilted_irradiance_member02": [0.0, 2.0, 450.0],
-                "global_tilted_irradiance_member03": [5.0, 40.0, 480.0],
+                "global_tilted_irradiance_member01": [0.0, 1.0, 400.0, 300.0],
+                "global_tilted_irradiance_member02": [0.0, 2.0, 450.0, None],
+                "global_tilted_irradiance_member03": [5.0, 40.0, 480.0, 500.0],
             },
         )
         test_api.set_mock_response("ensemble-api.open-meteo.com", ensemble_data)
@@ -100,6 +100,11 @@ def test_ensemble_returns_band_ratios(my_predbat):
         # 05:00 -> [1, 2, 40]: 40/2 = 20x is capped at 2.0
         if result.get("2025-06-15T05:00") != (0.5, 2.0):
             print(f"ERROR: ensemble ratios at 05:00: expected (0.5, 2.0) with the P90 ratio capped, got {result.get('2025-06-15T05:00')}")
+            failed = True
+        # 13:00 -> [300, 500] with one member missing: an even count has no middle member, so the
+        # median is the mean of the two middle values (400), not the lower of them
+        if result.get("2025-06-15T13:00") != (0.75, 1.25):
+            print(f"ERROR: ensemble ratios at 13:00: expected (0.75, 1.25) against a true median of 400, got {result.get('2025-06-15T13:00')}")
             failed = True
     finally:
         test_api.cleanup()

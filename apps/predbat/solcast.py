@@ -306,7 +306,10 @@ class SolarAPI(ComponentBase):
                 continue
             values.sort()
             gti_p10 = values[max(0, math.ceil(len(values) * 0.10) - 1)]
-            gti_p50 = values[max(0, math.ceil(len(values) * 0.50) - 1)]
+            # A true median: with an even number of usable members there is no middle one, so
+            # take the mean of the two either side rather than the lower of them
+            middle = len(values) // 2
+            gti_p50 = values[middle] if len(values) % 2 else 0.5 * (values[middle - 1] + values[middle])
             gti_p90 = values[max(0, math.ceil(len(values) * 0.90) - 1)]
             if gti_p50 <= 0:
                 continue
