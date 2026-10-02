@@ -927,6 +927,45 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     return failed
 
 
+def test_rate_step_from_charge_rate_entity(test_name, my_predbat, ha):
+    """
+    The charge_rate entity's step_percent_of_capacity attribute sets the rate step per inverter, for a type that
+    covers more than one brand - the hub is GWMQTT whatever it drives and marks only its GivEnergy inverters (#5324).
+
+    Building an Inverter writes args and publishes entities on the shared fixture, so both are restored whole (#5079).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    try:
+        my_predbat.args["charge_rate"] = "number.charge_rate"
+        # inverter type, charge_rate entity, expected step - an attribute that is absent, blank or not a percentage leaves the row's value
+        for inverter_type, entity, expect in (
+            ("GWMQTT", {"state": 1100, "step_percent_of_capacity": 1}, 1),
+            ("GWMQTT", {"state": 1100, "max": 6000}, 0),
+            ("GWMQTT", 1100, 0),
+            ("GWMQTT", {"state": 1100, "step_percent_of_capacity": 150}, 0),
+            ("GWMQTT", {"state": 1100, "step_percent_of_capacity": "bad"}, 0),
+            ("GE", {"state": 1100, "max": 6000}, 1),
+        ):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            ha.dummy_items["number.charge_rate"] = entity
+            inv = Inverter(my_predbat, 0, quiet=True)
+            if inv.inv_rate_step_percent_of_capacity != expect:
+                print("ERROR: {} type {} charge_rate {} expected rate step {} got {}".format(test_name, inverter_type, entity, expect, inv.inv_rate_step_percent_of_capacity))
+                failed = True
+        if "rate_step_percent_of_capacity" in INVERTER_DEF["GWMQTT"]:
+            print("ERROR: {} the GWMQTT row must not carry a rate step, it covers every brand the hub drives".format(test_name))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
 def test_rate_tolerances(test_name, inv):
     """
     A rate read-back gets 5% of the rate ceiling either side, widened below to one step only where the inverter declares one (#5324).
@@ -5269,6 +5308,7 @@ def run_inverter_tests(my_predbat_dummy):
     # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
     failed |= test_rate_tolerances("rate_tolerances", inv)
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
+    failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
     failed |= test_rate_write_quantised("rate_write_quantised_charge", ha, inv, 2600, 1300, 1, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_settled", ha, inv, 1206, 1300, 0, 1206)
     failed |= test_rate_write_quantised("rate_write_quantised_charge_next_step", ha, inv, 1206, 1350, 1, 1341)

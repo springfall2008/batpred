@@ -535,7 +535,17 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
+        # The charge_rate entity can carry the step itself, for a type that covers more than one brand: the
+        # hub is GWMQTT whatever it drives, and marks only its GivEnergy inverters. The row's value stands otherwise
         self.inv_rate_step_percent_of_capacity = INVERTER_DEF[self.inverter_type].get("rate_step_percent_of_capacity", 0)
+        rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+        if rate_entity:
+            try:
+                rate_step = float(self.base.get_state_wrapper(rate_entity, attribute="step_percent_of_capacity"))
+            except (ValueError, TypeError):
+                rate_step = 0
+            if 0 < rate_step <= 100:
+                self.inv_rate_step_percent_of_capacity = rate_step
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":

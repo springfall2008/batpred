@@ -666,6 +666,42 @@ class TestInjectEntities:
 
         assert GATEWAY_ATTRIBUTE_TABLE["reserve_soc"]["max"] == 100
 
+    def test_rate_step_marked_on_givenergy_rates(self):
+        """A GivEnergy inverter's rate entities carry the 1% of capacity step its read-back is rounded down to (#5324)."""
+        status = self._make_status()
+        for inverter_type in (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+            status.inverters[0].type = inverter_type
+            gw = self._make_gateway()
+            gw._inject_entities(status)
+
+            for rate in ("charge_rate", "discharge_rate"):
+                state, attrs = gw._dashboard_calls["number.predbat_gateway_456789_" + rate]
+                assert state == 3000
+                assert attrs["step_percent_of_capacity"] == 1, (inverter_type, rate, attrs)
+                # The rest of the table entry survives
+                assert attrs["unit_of_measurement"] == "W"
+                assert attrs["step"] == 10
+
+    def test_rate_step_not_marked_on_other_brands(self):
+        """GWMQTT is one inverter type for every brand the hub drives, so the GivEnergy step must not reach the others."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        status = self._make_status()
+        for inverter_type in (pb.INVERTER_TYPE_SOLIS_HYBRID, pb.INVERTER_TYPE_DEYE_SUNSYNK, pb.INVERTER_TYPE_UNKNOWN):
+            status.inverters[0].type = inverter_type
+            gw = self._make_gateway()
+            gw._inject_entities(status)
+
+            for rate in ("charge_rate", "discharge_rate"):
+                _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_" + rate]
+                assert "step_percent_of_capacity" not in attrs, (inverter_type, rate, attrs)
+
+        # Marked on a copy: a GivEnergy inverter must not leave the step in the shared table
+        status.inverters[0].type = pb.INVERTER_TYPE_GIVENERGY
+        self._make_gateway()._inject_entities(status)
+        for rate in ("charge_rate", "discharge_rate"):
+            assert "step_percent_of_capacity" not in GATEWAY_ATTRIBUTE_TABLE[rate]
+
     def test_ems_aggregate_entities(self):
         """EMS aggregate and sub-inverter entities are published with table attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
