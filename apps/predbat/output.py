@@ -1080,19 +1080,27 @@ class Output:
         Returns (rate_kw, low_power): the rate achieved after the charge curve, and whether low power
         charging asked for less than the maximum charge rate. The curve tapering a full rate charge
         near the top of the battery is not low power - only the requested rate decides that.
+
+        The maximum is the one the prediction engine uses at the start of the slot: a hybrid inverter
+        whose DC charge rate is above its AC one can take the PV above the AC rate on top of it.
         """
         window = self.charge_window_best[charge_window_n]
         soc = self.predict_soc_best.get(minute_relative_start, self.soc_kw)
+        battery_rate_max_charge = self.battery_rate_max_charge
+        if self.inverter_hybrid and (self.battery_rate_max_charge_dc > battery_rate_max_charge):
+            pv_above = max((pv_forecast_minute_step.get(minute_relative_start, 0.0) / PREDICT_STEP) - battery_rate_max_charge, 0)
+            battery_rate_max_charge += min(self.battery_rate_max_charge_dc - battery_rate_max_charge, pv_above)
         pv_window_kwh = 0.0
         if self.set_charge_low_power:
-            window_end_rel = min(window["end"] - self.minutes_now, self.forecast_minutes)
+            # The window end is floored to a step boundary, as the prediction engine does
+            window_end_rel = min(max(((window["end"] - self.minutes_now) // PREDICT_STEP) * PREDICT_STEP, minute_relative_start), self.forecast_minutes)
             pv_window_kwh = sum(pv_forecast_minute_step.get(m, 0.0) for m in range(minute_relative_start, window_end_rel, PREDICT_STEP))
         charge_rate_now, charge_rate_now_curve = find_charge_rate(
             minute_start,
             soc,
             window,
             self.charge_limit_best[charge_window_n],
-            self.battery_rate_max_charge,
+            battery_rate_max_charge,
             self.soc_max,
             self.battery_charge_power_curve,
             self.set_charge_low_power,
@@ -1108,7 +1116,7 @@ class Output:
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
         )
         # Compared in whole watts, find_charge_rate() steps the rate down in watts and converts back
-        low_power = dp0(charge_rate_now * MINUTE_WATT) < dp0(self.battery_rate_max_charge * MINUTE_WATT)
+        low_power = dp0(charge_rate_now * MINUTE_WATT) < dp0(battery_rate_max_charge * MINUTE_WATT)
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0), low_power
 
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None, car_hold_minutes=None):
