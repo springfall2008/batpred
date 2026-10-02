@@ -336,6 +336,12 @@
   outline: none;
 }
 
+.plan-tooltip-trigger:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .plan-tooltip-trigger::after {
   display: none;
   content: attr(data-tooltip);

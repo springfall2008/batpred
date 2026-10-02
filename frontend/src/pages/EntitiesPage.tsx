@@ -66,7 +66,7 @@ export default function EntitiesPage() {
       {error && <div className="entities-error" role="alert">{error}</div>}
 
       <div className="entities-toolbar">
-        <input type="search" value={search} placeholder="Search name, ID or state…" aria-label="Search entities" onChange={(event) => setSearch(event.target.value)} />
+        <input type="search" name="search" autoComplete="off" value={search} placeholder="Search name, ID or state…" aria-label="Search entities" onChange={(event) => setSearch(event.target.value)} />
         <label><input type="checkbox" role="switch" checked={showAll} onChange={toggleShowAll} /> Show all Home Assistant entities</label>
         <span>{groups.reduce((count, [, items]) => count + items.length, 0)} entities</span>
       </div>

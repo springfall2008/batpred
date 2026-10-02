@@ -1,6 +1,7 @@
 /* Shared semantic tokens: components use the same meanings in both themes. */
 :root,
 :root[data-theme='light'] {
+  color-scheme: light;
   --color-bg: #f3f4f6;
   --color-surface: #ffffff;
   --color-border: #e5e7eb;
@@ -12,8 +13,11 @@
   --color-success: #16a34a;
   --color-warning: #f59e0b;
   --color-danger: #dc2626;
-  --color-current: #3b82f6;
-  --color-car: #d97706;
+  --color-current: #2563eb;
+  --color-primary: var(--color-current);
+  --color-car: #b45309;
+  --color-semantic-contrast: #ffffff;
+  --focus-ring: color-mix(in srgb, var(--color-current) 72%, white);
 
   /* Action colours */
   --color-charge: #2563eb;
@@ -22,7 +26,7 @@
   --color-export: #7c3aed;
   --color-hold-export: #8b5cf6;
   --color-freeze-export: #9333ea;
-  --color-hold-car: #d97706;
+  --color-hold-car: #b45309;
   --color-hold-iboost: #0284c7;
   --color-no-charge: #6b7280;
   --color-demand: #374151;
@@ -32,8 +36,9 @@
   --color-battery-low: #ef4444;
   --color-battery-medium: #f59e0b;
   --color-battery-high: #22c55e;
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.05);
-  --shadow-tooltip: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --shadow-sm: 0 1px 3px color-mix(in srgb, var(--color-text) 12%, transparent);
+  --shadow-card: 0 2px 8px color-mix(in srgb, var(--color-text) 6%, transparent);
+  --shadow-tooltip: 0 8px 24px color-mix(in srgb, var(--color-text) 18%, transparent);
   --color-flow-solar: #f59e0b;
   --color-solar-text: #92400e;
   /* Match the battery connection to the charging label; green identifies household load. */
@@ -44,6 +49,7 @@
 }
 
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --color-bg: #111827;
   --color-surface: #1f2937;
   --color-border: #374151;
@@ -55,7 +61,10 @@
   --color-success: #22c55e;
   --color-warning: #f59e0b;
   --color-danger: #f87171;
+  --color-primary: var(--color-current);
   --color-car: #fbbf24;
+  --color-semantic-contrast: #111827;
+  --focus-ring: color-mix(in srgb, var(--color-current) 78%, white);
 
   /* Action colours */
   --color-charge: #60a5fa;
@@ -74,8 +83,9 @@
   --color-battery-low: #f87171;
   --color-battery-medium: #fbbf24;
   --color-battery-high: #4ade80;
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.25);
-  --shadow-tooltip: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px color-mix(in srgb, black 32%, transparent);
+  --shadow-card: 0 2px 8px color-mix(in srgb, black 25%, transparent);
+  --shadow-tooltip: 0 8px 24px color-mix(in srgb, black 40%, transparent);
   --color-flow-solar: #fbbf24;
   --color-solar-text: #fbbf24;
   --color-flow-battery: var(--color-charge);

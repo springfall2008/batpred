@@ -66,31 +66,6 @@
   background: var(--color-danger);
 }
 
-.status-card-status-row {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-}
-
-.status-dot {
-  width: 0.7rem;
-  height: 0.7rem;
-  flex-shrink: 0;
-  border-radius: 50%;
-  transform: translateY(3px);
-}
-.status-ok {
-  background: var(--color-success);
-}
-
-.status-error {
-  background: var(--color-danger);
-}
-
-.status-card-version {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
 
 .status-card-details {
   display: grid;

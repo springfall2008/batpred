@@ -110,6 +110,8 @@ function StatusCard({
 
           <select
             className="status-card-select"
+            name="predbat-mode"
+            aria-label="Predbat operating mode"
             value={mode}
             onChange={(event) => onModeChange(event.target.value)}
           >

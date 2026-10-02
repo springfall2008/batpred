@@ -121,7 +121,7 @@ export default function InternalsPage() {
         <header>
           <div><h2>Object hierarchy</h2><p>{members.length} members at this level</p></div>
           <div className="internals-object-actions">
-            <input type="search" value={search} placeholder="Filter members…" aria-label="Filter object members" onChange={(event) => setSearch(event.target.value)} />
+            <input type="search" name="search" autoComplete="off" value={search} placeholder="Filter members…" aria-label="Filter object members" onChange={(event) => setSearch(event.target.value)} />
             <a href={`./api/internals/download?path=${encodeURIComponent(path)}`}><FontAwesomeIcon icon={faDownload} /> YAML</a>
           </div>
         </header>

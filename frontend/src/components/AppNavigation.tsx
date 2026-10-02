@@ -298,6 +298,10 @@ export default function AppNavigation({
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme
+    document.querySelector('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      resolvedTheme === 'dark' ? '#111827' : '#f3f4f6'
+    )
 
     try {
       localStorage.setItem('predbat-theme', theme)
@@ -332,6 +336,8 @@ export default function AppNavigation({
         <img
           src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight}
           alt="Predbat"
+          width="512"
+          height="177"
           className="mobile-app-logo"
         />
       </header>
@@ -370,7 +376,9 @@ export default function AppNavigation({
               >
                 <img
                   src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight}
-                  alt="Predbat Logo"
+                  alt=""
+                  width="512"
+                  height="177"
                   className="navigation-logo-image"
                 />
               </button>
@@ -438,6 +446,7 @@ export default function AppNavigation({
                 <a
                   key={item.href}
                   href={item.href}
+                  aria-current={active ? 'page' : undefined}
                   className={['navigation-item', active ? 'is-active' : '']
                     .filter(Boolean)
                     .join(' ')}
@@ -470,6 +479,8 @@ export default function AppNavigation({
                       key={item.href}
                       href={item.href}
                       target={item.external ? '_blank' : undefined}
+                      rel={item.external ? 'noreferrer' : undefined}
+                      aria-current={active ? 'page' : undefined}
                       className={[
                         'navigation-item',
                         horizontalShortcuts.includes(item) ? 'navigation-horizontal-shortcut-source' : '',
@@ -530,7 +541,7 @@ export default function AppNavigation({
 
       {batFlying && (
         <div className="predbat-flying-bat" aria-hidden="true">
-          <img src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight} alt="" />
+          <img src={resolvedTheme === 'dark' ? batLogoDark : batLogoLight} alt="" width="512" height="177" />
         </div>
       )}
     </>

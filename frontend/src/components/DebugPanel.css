@@ -122,7 +122,7 @@
 
 .debug-restart-button:hover {
   background: var(--color-danger);
-  color: white;
+  color: var(--color-semantic-contrast);
 }
 
 .debug-restart-button:disabled {

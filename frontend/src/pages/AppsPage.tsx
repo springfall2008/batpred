@@ -366,8 +366,8 @@ export default function AppsPage() {
         </div>
         <div className="apps-page-actions" aria-label="Pending changes">
           <span role="status">{saveState.text}</span>
-          <button disabled={saveState.saveDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('saveAllButton')?.click()}>Save changes</button>
-          <button disabled={saveState.discardDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('discardAllButton')?.click()}>Discard changes</button>
+          <button type="button" disabled={saveState.saveDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('saveAllButton')?.click()}>Save changes</button>
+          <button type="button" disabled={saveState.discardDisabled} onClick={() => frameRef.current?.contentDocument?.getElementById('discardAllButton')?.click()}>Discard changes</button>
         </div>
       </header>
       <iframe ref={frameRef} className="apps-frame" src="./legacy_apps" title="Predbat apps.yaml settings" onLoad={styleEmbeddedPage} />

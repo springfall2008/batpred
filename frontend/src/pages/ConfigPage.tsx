@@ -139,7 +139,7 @@ export default function ConfigPage() {
       </header>
 
       <div className="config-toolbar">
-        <input type="search" value={search} placeholder="Filter settings…" aria-label="Filter settings" onChange={(event) => setSearch(event.target.value)} />
+        <input type="search" name="search" autoComplete="off" value={search} placeholder="Filter settings…" aria-label="Filter settings" onChange={(event) => setSearch(event.target.value)} />
         <span>{visibleItems.length} of {items.length} settings</span>
       </div>
 
@@ -187,11 +187,11 @@ export default function ConfigPage() {
                           <i aria-hidden="true" /><span>{item.value ? 'On' : 'Off'}</span>
                         </label>
                       ) : item.type === 'select' ? (
-                        <select value={String(item.value)} disabled={disabled} onChange={(event) => save(item, event.target.value)}>
+                        <select name={item.name} aria-label={item.friendly_name} autoComplete="off" value={String(item.value)} disabled={disabled} onChange={(event) => save(item, event.target.value)}>
                           {item.options.map((option) => <option key={String(option)} value={String(option)}>{String(option) || 'None'}</option>)}
                         </select>
                       ) : item.type === 'input_number' || item.type === 'number' ? (
-                        <input type="number" defaultValue={Number(item.value)} min={item.min ?? undefined} max={item.max ?? undefined} step={item.step ?? undefined} disabled={disabled} onBlur={(event) => Number(event.target.value) !== Number(item.value) && save(item, Number(event.target.value))} />
+                        <input type="number" name={item.name} aria-label={item.friendly_name} autoComplete="off" defaultValue={Number(item.value)} min={item.min ?? undefined} max={item.max ?? undefined} step={item.step ?? undefined} disabled={disabled} onBlur={(event) => Number(event.target.value) !== Number(item.value) && save(item, Number(event.target.value))} />
                       ) : <span>{String(item.value)}</span>}
                     </td>
                   </tr>

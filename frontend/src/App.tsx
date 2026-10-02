@@ -434,6 +434,8 @@ function App() {
   if (currentPage === 'apps_editor' || currentPage === 'docs' || currentPage === 'log' || currentPage === 'components' || currentPage === 'discovery' || currentPage === 'cards' || currentPage === 'browse' || currentPage === 'internals' || currentPage === 'config' || currentPage === 'compare' || currentPage === 'annual' || currentPage === 'chat' || currentPage === 'apps' || currentPage === 'entity') {
     return (
       <>
+        <a className="skip-link" href="#main-content">Skip to main content</a>
+
         <div
           className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${updating ? 'is-calculating' : ''}`}
           inert={updating}
@@ -450,8 +452,8 @@ function App() {
             version={statusData?.version ?? ''}
           />
           <div className="app-content">
-            <main>
-              <Suspense fallback={<div>Loading…</div>}>
+            <main id="main-content" tabIndex={-1}>
+              <Suspense fallback={<div role="status" aria-live="polite">Loading…</div>}>
                 {currentPage === 'apps_editor' ? <AppsEditorPage /> : currentPage === 'docs' ? <DocsPage /> : currentPage === 'components' ? <ComponentsPage /> : currentPage === 'discovery' ? <DiscoveryPage /> : currentPage === 'cards' ? <CardsPage /> : currentPage === 'browse' ? <BrowsePage /> : currentPage === 'internals' ? <InternalsPage /> : currentPage === 'config' ? <ConfigPage /> : currentPage === 'compare' ? <ComparePage /> : currentPage === 'annual' ? <AnnualPage /> : currentPage === 'chat' ? <ChatPage /> : currentPage === 'apps' ? <AppsPage /> : currentPage === 'entity' ? <EntitiesPage /> : <LogPage />}
               </Suspense>
             </main>
@@ -472,7 +474,7 @@ function App() {
    */
   if (initialError && (!planData || !statusData)) {
     return (
-      <main className="dashboard-loading">
+      <main id="main-content" className="dashboard-loading">
         <div className="dashboard-load-error">
           <strong>Unable to load Predbat</strong>
 
@@ -490,11 +492,13 @@ function App() {
    * Normal first-load state.
    */
   if (!planData || !statusData) {
-    return <main>Loading Predbat dashboard...</main>
+    return <main id="main-content" className="dashboard-loading"><div className="dashboard-loading-status" role="status" aria-live="polite">Loading Predbat dashboard…</div></main>
   }
 
   return (
     <>
+      <a className="skip-link" href="#main-content">Skip to main content</a>
+
       <div
         className={`app-shell ${navigationCollapsed ? 'navigation-collapsed' : ''} ${navigationLayout === 'horizontal' ? 'navigation-horizontal' : ''} ${updating ? 'is-calculating' : ''}`}
         inert={updating}
@@ -512,7 +516,9 @@ function App() {
         />
 
         <div className="app-content">
-          <main className={currentPage === 'plan' || currentPage === 'charts' ? undefined : 'dashboard-main'}>
+          <main id="main-content" tabIndex={-1} className={currentPage === 'plan' || currentPage === 'charts' ? undefined : 'dashboard-main'}>
+            {currentPage === 'dash' && <h1 className="visually-hidden">Predbat Dashboard</h1>}
+
             {currentPage === 'plan' ? (
               <PlanPage
                 plan={planData.plan}

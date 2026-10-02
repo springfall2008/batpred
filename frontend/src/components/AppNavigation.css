@@ -268,7 +268,7 @@
 
 .navigation-item.is-active {
   background: var(--color-charge);
-  color: white;
+  color: var(--color-semantic-contrast);
 }
 
 .navigation-item-icon {
@@ -516,7 +516,7 @@
     align-items: center;
     gap: 0.65rem;
     min-height: 52px;
-    padding: 0.45rem 0.75rem;
+    padding: 0.45rem max(0.75rem, env(safe-area-inset-right)) 0.45rem max(0.75rem, env(safe-area-inset-left));
     border-bottom: 1px solid var(--color-border);
     background: var(--color-surface);
     box-shadow: 0 1px 5px rgba(0, 0, 0, 0.05);
@@ -536,6 +536,7 @@
     width: min(280px, 85vw);
     transform: translateX(-100%);
     box-shadow: 4px 0 18px rgba(0, 0, 0, 0.18);
+    overscroll-behavior: contain;
   }
 
   .app-navigation.is-mobile-open,

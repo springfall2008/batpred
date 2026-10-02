@@ -129,6 +129,8 @@ export default function LogPage() {
         </div>
         <input
           type="search"
+          name="search"
+          autoComplete="off"
           value={search}
           aria-label="Search the log"
           placeholder="Search the entire log…"

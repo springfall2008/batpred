@@ -6,6 +6,7 @@ export default function GridIcon(props: SVGProps<SVGSVGElement>) {
       viewBox="0 0 1712 1732"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
+      focusable="false"
       {...props}
     >
       <path

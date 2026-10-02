@@ -1019,6 +1019,9 @@ function DetailedPowerFlow({ data, showCar }: DetailedPowerFlowProps) {
       <img
         src={backgroundImage}
         alt=""
+        width="1536"
+        height="1024"
+        aria-hidden="true"
         className="
                     detailed-power-flow-background
                 "

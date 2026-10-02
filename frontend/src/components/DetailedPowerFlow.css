@@ -491,7 +491,7 @@
 .detailed-flow-debug-charge.is-active {
   border-color: var(--color-charge);
   background: var(--color-charge);
-  color: #ffffff;
+  color: var(--color-semantic-contrast);
 }
 
 /*
@@ -501,7 +501,7 @@
 .detailed-flow-debug-export.is-active {
   border-color: var(--color-export);
   background: var(--color-export);
-  color: #ffffff;
+  color: var(--color-semantic-contrast);
 }
 
 /*
@@ -511,7 +511,7 @@
 .detailed-flow-debug-car.is-active {
   border-color: var(--color-hold-car);
   background: var(--color-hold-car);
-  color: #ffffff;
+  color: var(--color-semantic-contrast);
 }
 
 @media (max-width: 700px) {

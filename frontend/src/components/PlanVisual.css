@@ -353,7 +353,7 @@
 .plan-timeline-event.timeline-action-charge {
   border-color: var(--color-charge);
   background: var(--color-charge);
-  color: white;
+  color: var(--color-semantic-contrast);
 }
 
 .plan-timeline-event.timeline-action-hold-charge {
@@ -385,7 +385,7 @@
 .plan-timeline-event.timeline-action-export {
   border-color: var(--color-export);
   background: var(--color-export);
-  color: white;
+  color: var(--color-semantic-contrast);
 }
 
 .plan-timeline-event.timeline-action-freeze-export {
