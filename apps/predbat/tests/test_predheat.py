@@ -131,8 +131,9 @@ def test_predheat(my_predbat):
 
         # Only the fast 5 second update loop is due here, so a run proves re-enabling asked for
         # an immediate update rather than leaving the user waiting for the next 5 minute boundary
+        # Make it strictly overdue: consecutive clock reads can be equal on Windows.
         for item in my_predbat.run_list:
-            item["next_time"] = datetime.now() if item["callback"].__name__ == "update_time_loop" else datetime.now() + timedelta(minutes=5)
+            item["next_time"] = datetime.now() - timedelta(seconds=1) if item["callback"].__name__ == "update_time_loop" else datetime.now() + timedelta(minutes=5)
         asyncio.get_event_loop().run_until_complete(my_predbat.timer_tick())
         if len(predheat.runs) <= runs_while_off:
             print("  ERROR: Predheat did not run promptly after being re-enabled")
