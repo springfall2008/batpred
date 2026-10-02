@@ -43,7 +43,7 @@ As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url)
 Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).
 
 Each tariff must be given an ID which will be used to create a sensor to track predicted cost over time, the full name is used in the description of that sensor and on the web page.
-The ID can contain alphanumeric characters or underscores; do not use slashes, commas, spaces or other special characters in the ID or Predbat will crash when running the compare!
+Use only lowercase alphanumeric characters and underscores in the ID - see [Comparison sensors](#comparison-sensors) below for what Predbat does with anything else.
 
 If you do not set an import or export rate for a particular tariff then your existing energy rates will be used.
 
@@ -140,9 +140,41 @@ The predicted cost is also shown, but keep in mind ending the day with an empty 
 
 For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above in `apps.yaml`. This sensor will track the cost as its main value and many details about the prediction in its attributes.
 
+Home Assistant only allows lowercase letters, digits and single underscores in an entity name, so Predbat converts the ID before using it:
+it is lowercased, any run of other characters (slashes, spaces, commas, hyphens) becomes a single underscore, and leading and trailing underscores are removed.
+For example an ID of `IGO/Prime` publishes to **predbat.compare_tariff_igo_prime**.
+An ID that leaves nothing behind at all (for example `///`) is skipped with a warning in the Predbat log.
+Writing the ID in that form yourself - lowercase, words separated by single underscores - keeps the entity name the same as the ID.
+
+Because the conversion folds several characters into one underscore, two different IDs can end up wanting the same sensor - `IGO/Prime` and `IGO Prime`
+both become **predbat.compare_tariff_igo_prime**. Only the first of them is published, and a warning naming both IDs is written to the Predbat log;
+rename one of them so each tariff gets its own sensor and its own history.
+
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
+
+## Stored comparison results - comparisons.yaml
+
+The result of the last comparison for every tariff is written to `comparisons.yaml`, which Predbat keeps in the same directory as your `apps.yaml`.
+It is written each time a tariff finishes being compared and is read back when Predbat starts, which is what allows the Compare web page and the
+comparison sensors to show yesterday's figures straight away rather than being blank until the next comparison runs.
+
+The file holds a single `comparisons:` dictionary keyed by the tariff ID from `compare_list`. Each entry is the outcome of that tariff's last
+scenario - the predicted `cost`, `metric`, `import_kwh`, `export_kwh`, the ending `soc`, the `date` it was computed, the `entity_id` it was
+published to, and the rendered `html` of that tariff's plan. The starting SoC (`soc_start`) is also kept so a repeated comparison on the same day
+starts from the same point, and yesterday's ending SoC carries into today.
+
+You do not need to edit this file, and nothing is lost by deleting it - the next comparison run simply recreates it, though the Compare page will
+be empty until then. Predbat discards stored results whose tariff ID is no longer listed in `compare_list`, so when you rename or remove a tariff in
+`apps.yaml` its old result stops being published as soon as Predbat restarts, and drops out of the file the next time a comparison is run.
+Renaming an ID in a way that does not change the sensor name (for example only changing its capitalisation) moves the stored result to the new ID
+rather than discarding it, since it is still the same sensor being published, and yesterday's ending SoC still carries into today's comparison.
+
+Removing or commenting out the whole `compare_list` block is treated as compare not being configured rather than as every tariff having been removed,
+so the stored results are kept in that case and are published once more each time Predbat starts. Delete `comparisons.yaml` as well if you want those
+sensors to stop being written altogether. Stored results are likewise kept, rather than all discarded, while no entry in `compare_list` has an ID that
+can be used (every ID missing, or like `///`).
 
 ## Overriding Predbat configuration per tariff
 
