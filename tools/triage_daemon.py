@@ -519,6 +519,7 @@ JOURNAL_CAPTURE_PROMPT = (
     "Before you finish, consider whether this investigation turned up something a future triage run would have wanted to know "
     "- a config item that explains a whole class of report, an API or firmware quirk, a symptom that maps to a module, a trap "
     "that wasted your time, or an existing debug-journal entry you found to be out of date. "
+    "Keep it to what would save time on a different issue - not the story of this ticket (what you tried, the fix, the alternatives), which belongs in the issue or PR. "
     f"If so, write it as a single markdown file in {QUEUE_DIR} named <issue-or-pr-number>-<short-slug>.md. "
     "Record only what you actually verified, and say how you verified it (read the symbol, ran the test, replayed the debug "
     "file, probed the live API) - separate that from anything you merely suspect, and name the issue or PR number so the next "
