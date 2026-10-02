@@ -28,6 +28,7 @@ from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
+from utils import parse_car_plan_windows, in_car_plan_window
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
 VERSION = "1.5.1"
@@ -87,9 +88,6 @@ CAR_DISCOVERY_ENTITY_SPEC = {
     "octopus_ready_time": {"entity_id": "select.predbat_ohme_target_time", "domain": "select", "access": "rw"},
     "octopus_charge_limit": {"entity_id": "number.predbat_ohme_target_percent", "domain": "number", "access": "rw"},
 }
-
-# Format Predbat writes its planned car charging windows in - see PredBat.time_abs_str()
-PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
 
 # Longest gap between power readings we will still integrate over. The charge session is polled
 # every 120 seconds, so a longer gap means Predbat stalled or was restarted and we have no evidence
@@ -360,30 +358,16 @@ class OhmeAPI(ComponentBase):
         if planned is None:
             return False
 
-        now = self.now_utc_exact
-        windows = []
-        for window in planned:
-            try:
-                start = self.local_tz.localize(datetime.datetime.strptime(window["start"], PLAN_TIME_FORMAT).replace(year=now.year))
-                end = self.local_tz.localize(datetime.datetime.strptime(window["end"], PLAN_TIME_FORMAT).replace(year=now.year))
-            except (KeyError, TypeError, ValueError):
-                continue
-            # The plan carries no year, so rebuild it around now for windows that cross New Year
-            if start < now - timedelta(hours=23):
-                start = start.replace(year=start.year + 1)
-                end = end.replace(year=end.year + 1)
-            elif end < start:
-                end = end.replace(year=end.year + 1)
-            windows.append((start, end))
-        self.control_windows = windows
+        # The plan carries no year - parse_car_plan_windows() (shared with myenergi and GivEnergy
+        # EVC) rebuilds it around now, whichever side of New Year it is read (#269)
+        self.control_windows = parse_car_plan_windows(planned, self.now_utc_exact, self.local_tz)
         return True
 
     def should_charge_now(self):
         """
         Is now inside one of Predbat's planned charging windows.
         """
-        now = self.now_utc_exact
-        return any(start <= now < end for start, end in self.control_windows)
+        return in_car_plan_window(self.control_windows, self.now_utc_exact)
 
     def control_drifted(self, should_charge):
         """
