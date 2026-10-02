@@ -159,7 +159,8 @@ For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per c
 
 If you are using Octopus-led charging with the [Octopus direct connection](energy-rates.md#octopus-energy-direct) method:
 
-- Predbat gets its Octopus charging slot information direct from the Octopus API, so comment out or delete octopus_intelligent_slot, octopus_ready_time and octopus_charge_limit from `apps.yaml`.
+- Predbat gets its Octopus charging slot information direct from the Octopus API, so comment out or delete octopus_intelligent_slot, octopus_intelligent_smart_control, octopus_ready_time and octopus_charge_limit from `apps.yaml`.
+- Predbat publishes a `switch.predbat_octopus_{account}_intelligent_smart_charge_{n}` switch for each Intelligent device, which is on while Octopus Smart Control is on. Turning it off or on in Home Assistant sends SUSPEND / UNSUSPEND to Octopus, the same as the Smart Control toggle in the Octopus app, and the switch goes back to how it was if Octopus rejects the change. It is also shown for a device that is suspended, so that you can turn Smart Control back on. While it is off Predbat ignores the planned Octopus slots, and a suspended device is no longer wired into Predbat until Smart Control is turned back on.
 
 If you are using Predbat-led charging:
 

@@ -70,6 +70,7 @@ INTELLIGENT_DEVICE_SETTING_KEYS = ["suspended", "weekday_target_time", "weekday_
 # rather than the catalogue drifting out of step with what apps.yaml actually points at.
 OCTOPUS_CAR_ENTITY_SPEC = {
     "octopus_intelligent_slot": ("binary_sensor", "intelligent_dispatch", "r"),
+    "octopus_intelligent_smart_control": ("switch", "intelligent_smart_charge", "rw"),
     "octopus_ready_time": ("select", "intelligent_target_time", "rw"),
     "octopus_charge_limit": ("number", "intelligent_target_soc", "rw"),
 }
@@ -345,6 +346,15 @@ intelligent_settings_mutation = """mutation {{
     mode: CHARGE
     unit: PERCENTAGE
     schedules: [{schedules}]
+  }}) {{
+    id
+  }}
+}}"""
+
+intelligent_smart_control_mutation = """mutation {{
+  updateDeviceSmartControl(input: {{
+    deviceId: "{device_id}"
+    action: {action}
   }}) {{
     id
   }}
@@ -688,7 +698,41 @@ class OctopusAPI(ComponentBase):
             self.commands.append({"command": "set_intelligent_target_percentage", "value": value, "device_id": device_id})
 
     async def switch_event(self, entity_id, service):
-        pass
+        """
+        Handle a turn on/off/toggle of an Intelligent Smart Control switch: show the new state straight away
+        and queue the command that sends it to Octopus (rolled back if the command fails).
+        """
+        suffix = self.get_entity_suffix(entity_id)
+        device_id = self.suffix_to_device_id(suffix)
+        if not device_id or entity_id != self.get_entity_name("switch", "intelligent_smart_charge", index=suffix):
+            return
+        device = self.intelligent_devices.get(device_id)
+        if not device:
+            return
+        was_suspended = bool(device.get("suspended"))
+        if service == "turn_on":
+            enabled = True
+        elif service == "turn_off":
+            enabled = False
+        elif service == "toggle":
+            enabled = was_suspended
+        else:
+            return
+        device["suspended"] = not enabled
+        self.publish_smart_control_switch(device_id, device)
+        self.commands.append({"command": "set_intelligent_smart_control", "value": enabled, "device_id": device_id, "was_suspended": was_suspended})
+
+    def publish_smart_control_switch(self, device_id, device):
+        """
+        Publish the Smart Control switch of an Intelligent device, on while the device is not suspended. It is
+        published for suspended devices too, so that Smart Control can be turned back on.
+        """
+        self.dashboard_item(
+            self.get_entity_name("switch", "intelligent_smart_charge", index=self.device_id_to_index_suffix(device_id)),
+            "off" if device.get("suspended") else "on",
+            attributes={"friendly_name": "Octopus Intelligent Smart Control", "icon": "mdi:ev-station"},
+            app="octopus",
+        )
 
     def is_alive(self):
         return self.api_started and self.account_data
@@ -832,6 +876,9 @@ class OctopusAPI(ComponentBase):
                 value = command.get("value", None)
                 device_id = command.get("device_id", None)
                 await self.async_set_intelligent_target_schedule(account_id, target_time=value, device_id=device_id)
+                done_command = True
+            elif command_name == "set_intelligent_smart_control":
+                await self.async_set_intelligent_smart_control(command.get("device_id", None), command.get("value", True), command.get("was_suspended", False))
                 done_command = True
             elif command_name == "join_saving_session_event":
                 event_code = command.get("event_code", None)
@@ -1148,6 +1195,27 @@ class OctopusAPI(ComponentBase):
             device["weekday_target_soc"] = target_percentage
         else:
             self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID {} found".format(device_id))
+
+    async def async_set_intelligent_smart_control(self, device_id, enabled, was_suspended=False):
+        """
+        Turn Octopus Smart Control on (UNSUSPEND) or off (SUSPEND) for an intelligent device. If Octopus rejects
+        it the switch goes back to how it was, rather than showing a state that never happened.
+        """
+        device = self.intelligent_devices.get(device_id)
+        if not device:
+            self.log("Warn: OctopusAPI: Try to set Smart Control, but no intelligent device ID {} found".format(device_id))
+            return False
+        action = "UNSUSPEND" if enabled else "SUSPEND"
+        self.log("OctopusAPI: Setting Smart Control {} for intelligent device {}".format(action, device_id))
+        result = await self.async_graphql_query(intelligent_smart_control_mutation.format(device_id=device_id, action=action), "set-intelligent-smart-control", returns_data=False)
+        if result is None:
+            self.log("Warn: OctopusAPI: Failed to {} Smart Control for intelligent device {}, putting the switch back".format(action, device_id))
+            device["suspended"] = was_suspended
+            self.publish_smart_control_switch(device_id, device)
+            return False
+        device["suspended"] = not enabled
+        self.publish_smart_control_switch(device_id, device)
+        return True
 
     async def async_join_saving_session_events(self, account_id, event_code):
         """
@@ -1469,6 +1537,7 @@ class OctopusAPI(ComponentBase):
             # num_cars past what Predbat actually supports (see fetch_config_options' clamp).
             active_devices = {device_id: device for device_id, device in devices.items() if not device.get("suspended")}
             slot_list = []
+            smart_control_list = []
             ready_list = []
             limit_list = []
             # Sort so a given device always lands in the same car slot. The slot index is what
@@ -1479,6 +1548,7 @@ class OctopusAPI(ComponentBase):
             for device_id in sorted(active_devices):
                 index_suffix = self.device_id_to_index_suffix(device_id)
                 slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
+                smart_control_list.append(self.get_entity_name("switch", "intelligent_smart_charge", index=index_suffix))
                 ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
                 limit_list.append(self.get_entity_name("number", "intelligent_target_soc", index=index_suffix))
             # With no active device left the wiring is cleared - but only wiring that is still what
@@ -1490,6 +1560,7 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
                 self.set_arg("octopus_intelligent_slot", slot_list)
+                self.set_arg("octopus_intelligent_smart_control", smart_control_list)
                 self.set_arg("octopus_ready_time", ready_list)
                 self.set_arg("octopus_charge_limit", limit_list)
                 self.intelligent_config_slots = slot_list
@@ -2684,6 +2755,7 @@ class OctopusAPI(ComponentBase):
                         active_event = True
             dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **device}
             self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=device_index), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+            self.publish_smart_control_switch(device_id, device)
             dispatch_slots.append(planned + completed)
 
             weekday_target_time = device.get("weekday_target_time", None)
