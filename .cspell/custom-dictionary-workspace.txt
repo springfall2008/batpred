@@ -145,6 +145,7 @@ denorm
 derate
 derated
 derating
+dess
 desync
 desynced
 devcontainer
@@ -346,6 +347,7 @@ labelcolor
 labelledby
 labelnames
 ladybugdb
+Lanmate
 larr
 libbi
 libc
@@ -529,6 +531,7 @@ pyproject
 pytest
 pythonhashseed
 pytz
+Quattro
 Qwen
 randn
 rany2
