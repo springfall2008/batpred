@@ -302,6 +302,10 @@
   gap: 0.3rem;
 }
 
+.plan-column-label-mobile {
+  display: none;
+}
+
 .plan-column-heading .plan-tooltip-trigger {
   font-size: 0.65rem;
   color: var(--color-text-muted);

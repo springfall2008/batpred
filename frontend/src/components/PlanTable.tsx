@@ -962,13 +962,16 @@ function findCurrentRowIndex(rows: Plan['rows']) {
 
 type ColumnHeadingProps = {
   label: string
+  mobileLabel?: string
   help: string
 }
 
-function ColumnHeading({ label, help }: ColumnHeadingProps) {
+function ColumnHeading({ label, mobileLabel, help }: ColumnHeadingProps) {
   return (
     <span className="plan-column-heading">
       <span>{label}</span>
+
+      <span className="plan-column-label-mobile">{mobileLabel ?? label}</span>
 
       <span className="plan-tooltip-trigger" data-tooltip={help} tabIndex={0} aria-label={help}>
         <FontAwesomeIcon icon={faCircleInfo} />
@@ -1143,6 +1146,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Import"
+                  mobileLabel="IMP"
                   help={
                     debugEnabled
                       ? 'The tariff import rate, followed by the effective rate after conversion losses and battery cycling.'
@@ -1154,6 +1158,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Export"
+                  mobileLabel="EXP"
                   help={
                     debugEnabled
                       ? 'The tariff export rate, followed by the effective rate after conversion losses and battery cycling.'
@@ -1223,6 +1228,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Target"
+                  mobileLabel="TRGT"
                   help="The battery target Predbat is aiming for during a charge or export action. Charge actions target an upper SOC; export actions target a lower SOC."
                 />
               </th>
@@ -1244,6 +1250,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Total"
+                  mobileLabel="TOTL"
                   help="Predbat's running estimated energy cost at the start of this slot."
                 />
               </th>
@@ -1253,6 +1260,7 @@ export default function PlanTable({
                   <th>
                     <ColumnHeading
                       label="CO₂ intensity"
+                      mobileLabel="CO2"
                       help="The forecast carbon intensity of grid electricity during this slot, in grams of CO₂ per kWh."
                     />
                   </th>
@@ -1260,6 +1268,7 @@ export default function PlanTable({
                   <th>
                     <ColumnHeading
                       label="CO₂ total"
+                      mobileLabel="CO2 TOTL"
                       help="Predbat's running forecast of net carbon emissions at the start of this slot, in kilograms of CO₂."
                     />
                   </th>

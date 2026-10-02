@@ -231,6 +231,10 @@
 }
 
 @media (max-width: 700px) {
+  .plan-view-tabs {
+    align-self: center;
+  }
+
   .plan-page-header h1 {
     font-size: 1.25rem;
   }
@@ -239,15 +243,18 @@
     padding: 0.8rem;
   }
 
-  /* Match the compact legacy plan: fit the normal table to the phone width. */
-  .plan-table:not(.is-debug) {
-    min-width: 0;
+  /* Size mobile columns from their content and scroll only when the data needs it. */
+  .plan-table,
+  .plan-table.is-debug {
+    width: max-content;
+    min-width: 100%;
     table-layout: auto;
     font-size: clamp(0.5rem, 1.7vw, 0.68rem);
   }
 
-  .plan-table:not(.is-debug) th {
-    padding: 0.35rem 0.12rem;
+  .plan-table th {
+    width: 1%;
+    padding: 0.35rem 0.18rem;
     font-size: 0.5rem;
     line-height: 1.1;
     letter-spacing: 0;
@@ -255,39 +262,54 @@
     white-space: normal;
   }
 
-  .plan-table:not(.is-debug) td {
-    padding: 0.35rem 0.12rem;
+  .plan-table td {
+    width: 1%;
+    padding: 0.35rem 0.18rem;
     text-align: right;
   }
 
-  .plan-table:not(.is-debug) th:first-child,
-  .plan-table:not(.is-debug) td:first-child,
-  .plan-table:not(.is-debug) th:nth-child(2),
-  .plan-table:not(.is-debug) td:nth-child(2) {
+  .plan-table th:first-child,
+  .plan-table td:first-child,
+  .plan-table th:nth-child(2),
+  .plan-table td:nth-child(2) {
     text-align: left;
   }
 
-  .plan-table:not(.is-debug) .plan-time,
-  .plan-table:not(.is-debug) .plan-target-button {
+  .plan-table .plan-time,
+  .plan-table .plan-target-button {
     min-width: 0;
   }
 
-  .plan-table:not(.is-debug) .plan-action {
+  .plan-table .plan-action {
     padding: 0.15rem;
   }
 
-  .plan-table:not(.is-debug) .plan-action > span:first-of-type,
-  .plan-table:not(.is-debug) .plan-action-chevron,
-  .plan-table:not(.is-debug) .plan-now-label {
+  .plan-table .plan-action > span:first-of-type,
+  .plan-table .plan-action-chevron,
+  .plan-table .plan-now-label {
     display: none;
   }
 
-  .plan-table:not(.is-debug) .plan-value-with-indicator {
+  .plan-table .plan-value-with-indicator {
     gap: 0.12rem;
   }
 
-  .plan-table:not(.is-debug) .plan-value-indicator {
+  .plan-table .plan-value-indicator {
     width: 0.3rem;
     height: 0.3rem;
+  }
+
+  .plan-table .plan-column-heading {
+    justify-content: center;
+    gap: 0;
+  }
+
+  .plan-table .plan-column-heading > span:first-child,
+  .plan-table .plan-column-heading .plan-tooltip-trigger {
+    display: none;
+  }
+
+  .plan-table .plan-column-label-mobile {
+    display: inline;
   }
 }
