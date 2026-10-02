@@ -30,7 +30,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Deep neural network with 3 hidden layers [512, 256, 64 neurons]
 - Optimised with He initialisation and AdamW weight decay for robust training
 - Automatically trains on historical data (requires at least 1 day, recommended 7+ days; fetches up to `load_ml_max_days_history` days from HA and accumulates up to `load_ml_database_days` days in the on-disk database)
-- Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns
+- Fine-tunes periodically (every 2 hours by default, configurable with `ml_retrain_interval_hours`) using full dataset to adapt to changing patterns
 - Time-weighted training prioritizes recent data while learning from historical patterns
 - Model persists across restarts
 - Falls back gracefully if predictions are unreliable
@@ -228,6 +228,16 @@ predbat:
     - **When to decrease**: To save disk space, or if you prefer the model to forget older patterns faster
     - **Disk usage**: Each day of history uses approximately 5.6 KB (5 channels × 288 steps/day × 4 bytes, plus minimal metadata/format overhead)
 
+### Retraining Interval
+
+Set **ML Retrain Interval** (`input_number.predbat_ml_retrain_interval_hours`) in Home Assistant or `ml_retrain_interval_hours` on Predbat's web configuration page.
+
+- **Default**: 2 hours
+- **Range**: 1–48 hours, in 1-hour steps. The maximum matches the model's existing 48-hour staleness limit.
+- **Example**: Set to 24 for daily retraining to reduce how often CPU-intensive training runs.
+- Changes take effect on the next ML component cycle without restarting. The interval is measured from the last training timestamp, not a fixed time of day.
+- Initial training still runs as soon as the component has started and enough data is available. Predictions continue to update every 30 minutes between training sessions.
+
 ### History Accumulation and the Database
 
 The ML component maintains two distinct layers of historical data:
@@ -383,7 +393,7 @@ Good predictions require:
 4. **Energy Rate Data**: Automatically included - helps model learn consumption patterns based on time-of-use tariffs
 5. **PV Generation Data**: If you have solar panels, include `pv_today` sensor for better correlation
 6. **Clean Data**: Avoid gaps or incorrect readings in historical data
-7. **Recent Training**: Model retrains every 2 hours using full dataset with time-weighted sampling to adapt to changing patterns
+7. **Recent Training**: Model retrains every `ml_retrain_interval_hours` hours (default 2) using full dataset with time-weighted sampling to adapt to changing patterns
 
 ### Understanding MAE (Mean Absolute Error)
 

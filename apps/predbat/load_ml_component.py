@@ -15,7 +15,7 @@
 
 ComponentBase wrapper that manages the LoadPredictor lifecycle including
 data fetching, periodic training/fine-tuning, prediction generation, and
-status sensor publishing. Retrains every 2 hours and updates predictions
+status sensor publishing. Retrains every 2 hours by default and updates predictions
 every 30 minutes.
 """
 
@@ -30,8 +30,7 @@ import json
 import traceback
 import numpy as np
 
-# Training intervals
-RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
+# Prediction interval
 PREDICTION_INTERVAL_SECONDS = 30 * 60  # 30 minutes between predictions
 
 # Database schema version - increment when the saved format changes to force a clean rebuild
@@ -721,8 +720,10 @@ class LoadMLComponent(ComponentBase):
         is_initial = not self.initial_training_done
 
         # Retrain if the model is older than the retrain interval (rather than on a fixed tick)
-        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else RETRAIN_INTERVAL_SECONDS
-        should_train = not first and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
+        retrain_interval_hours = self.get_arg("ml_retrain_interval_hours", 2)
+        retrain_interval_seconds = retrain_interval_hours * 60 * 60
+        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else retrain_interval_seconds
+        should_train = not first and (retrain_age_seconds >= retrain_interval_seconds)
 
         # Fetch fresh load data periodically (every N minutes)
         should_fetch = first or should_train or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
@@ -756,7 +757,7 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Initial training is required, delaying until component has started")
                 return True
         elif should_train:
-            self.log("ML Component: Starting fine-tune training (2h interval), model age is {} hours".format(retrain_age_seconds / 3600.0))
+            self.log("ML Component: Starting fine-tune training ({}h interval), model age is {} hours".format(retrain_interval_hours, retrain_age_seconds / 3600.0))
         elif should_fetch:
             # If not training either then no need to print anything
             self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
