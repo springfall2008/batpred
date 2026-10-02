@@ -43,7 +43,6 @@ from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import copy
-import re
 
 
 class Fetch:
@@ -1438,23 +1437,20 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
-    def octopus_smart_control_off(self, car_n, slot_entity_id, save=True):
+    def octopus_smart_control_off(self, car_n, save=True):
         """
         Whether Octopus Smart Control is explicitly switched off for car_n, so its planned dispatches will not happen.
 
-        The switch is octopus_intelligent_smart_control (one per car), or for the Octopus Energy integration it is
-        derived from the dispatching sensor (binary_sensor.octopus_energy_<id>_intelligent_dispatching ->
-        switch.octopus_energy_<id>_intelligent_smart_charge). Only an explicit "off" counts - a missing or
+        The switch is octopus_intelligent_smart_control (one per car), which the apps.yaml template points at the Octopus
+        Energy integration's intelligent smart charge switch. Only an explicit "off" counts - an unset, missing or
         unavailable switch leaves the planned slots trusted as before.
+
+        The change is logged once, and only when save is True (not in compare.py's re-runs for other tariffs).
         """
         switch_config = self.get_arg("octopus_intelligent_smart_control", None, indirect=False)
         if switch_config and not isinstance(switch_config, list):
             switch_config = [switch_config]
         switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
-        if not switch_id and isinstance(slot_entity_id, str):
-            match = re.fullmatch(r"binary_sensor\.(octopus_energy(?:_.+)?)_intelligent_dispatching", slot_entity_id)
-            if match:
-                switch_id = "switch.{}_intelligent_smart_charge".format(match.group(1))
         if not switch_id:
             return False
         state = self.get_state_wrapper(entity_id=switch_id)
@@ -1540,7 +1536,7 @@ class Fetch:
                 # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
                 # the manual bump/boost charges the user asked for themselves
                 planned_used = planned
-                if self.octopus_smart_control_off(car_n, entity_id, save=save):
+                if self.octopus_smart_control_off(car_n, save=save):
                     planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES]
                 if planned_used and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
