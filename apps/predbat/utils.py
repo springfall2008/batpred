@@ -1831,6 +1831,14 @@ def in_iboost_slot(minute, iboost_plan):
     return load_amount
 
 
+def round_out_to_period(start_minutes, end_minutes, period=30):
+    """
+    Round a span of minutes out to whole periods: the start down and the end up, so any overlap with a
+    period takes the whole of it. Octopus prices and bills a dispatch by whole half hours.
+    """
+    return (start_minutes // period) * period, ((end_minutes + period - 1) // period) * period
+
+
 def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):
     """
     Is the given minute inside a car slot

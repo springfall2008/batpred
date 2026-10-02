@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -3688,8 +3688,7 @@ class Octopus:
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
         # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
         # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
-        # what the tariff charged, and today's cost is built from them.
-        car_cancelled = self.dynamic_load_car_effective.get(car_n, False)
+        # what the tariff charged, and today's cost is built from them. None when the car is not cancelled.
         strip_from = self.dynamic_load_car_strip_from(car_n)
 
         if octopus_slots:
@@ -3713,8 +3712,7 @@ class Octopus:
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
-                    start_minutes = (start_minutes // plan_interval_minutes) * plan_interval_minutes
-                    end_minutes = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
+                    start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes, plan_interval_minutes)
                     start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
                     end_minutes = min(end_minutes, self.forecast_minutes)
 
@@ -3728,7 +3726,7 @@ class Octopus:
                             # is behaviour-preserving there and simply avoids the staleness this PR adds.)
                             assumed_price = rates.get(start_minutes, self.rate_min)
 
-                        if car_cancelled and minute >= strip_from:
+                        if strip_from is not None and minute >= strip_from:
                             continue  # Car is not charging, its dispatch is not trusted as cheap
 
                         if minute in saved_slots:
@@ -3803,7 +3801,8 @@ class Octopus:
         A minute is set back to rate_max_base, and loses its io_adjusted marker, only when it is from now
         onwards, outside the fixed 23:30-05:30 window (cheap by tariff, not by dispatch), covered by a
         cancelled car's dispatch and not covered by a dispatch of any car still trusted - the rates are
-        shared by every car.
+        shared by every car. The rest of a half hour a cancelled car was seen charging in is still trusted
+        (see dynamic_load_car_strip_from()), whatever another cancelled car's dispatch covers.
         """
         cancelled_cars = [car_n for car_n in range(self.num_cars) if self.dynamic_load_car_effective.get(car_n, False)]
         if not cancelled_cars or not self.io_adjusted:
@@ -3815,15 +3814,18 @@ class Octopus:
         cancelled_minutes = set()
         trusted_minutes = set()
         for car_n in range(min(self.num_cars, len(self.octopus_slots))):
-            covered = cancelled_minutes if car_n in cancelled_cars else trusted_minutes
-            from_minute = self.dynamic_load_car_strip_from(car_n) if car_n in cancelled_cars else self.minutes_now
+            strip_from = self.dynamic_load_car_strip_from(car_n)
             for slot in self.octopus_slots[car_n]:
                 start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
                 if start_minutes == end_minutes:
                     continue
-                start_minutes = (start_minutes // 30) * 30
-                end_minutes = ((end_minutes + 29) // 30) * 30
-                covered.update(range(max(start_minutes, from_minute), end_minutes))
+                start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
+                start_minutes = max(start_minutes, self.minutes_now)
+                if strip_from is None:
+                    trusted_minutes.update(range(start_minutes, end_minutes))
+                else:
+                    trusted_minutes.update(range(start_minutes, min(end_minutes, strip_from)))
+                    cancelled_minutes.update(range(max(start_minutes, strip_from), end_minutes))
 
         window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
         window_start = window["start"][0] * 60 + window["start"][1]
