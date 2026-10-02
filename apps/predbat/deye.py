@@ -1526,35 +1526,27 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # _reconcile_control gated off after a restart - the exact failure this fix is for,
             # on the one inverter that had just been told to re-write.
             if (isinstance(applied, dict) and applied) or (isinstance(active, list) and active):
+                if isinstance(active, list):
+                    self.control_active = set(active)
+
                 if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
                     if isinstance(applied, dict):
                         self.applied_payload = applied
-                    # Restored alongside applied_payload, not just it: control_active is what
-                    # actually lets _reconcile_control() write at all, so restoring
-                    # applied_payload without it would still leave every inverter silently
-                    # unmanaged after a restart. Past the age bound both are dropped together,
-                    # so a stale cache still forces a fresh write-button press to recommit,
-                    # rather than trusting old control state indefinitely.
-                    if isinstance(active, list):
-                        self.control_active = set(active)
-                    elif isinstance(applied, dict):
-                        # A cache written before this key existed carries applied_payload alone.
-                        # Restoring that half on its own would preserve the very bug this fix is
-                        # for through the one restart that installs the fix, so infer the missing
-                        # half from applied_payload. Its keys are a safe lower bound and cannot arm
-                        # an inverter Predbat never drove: apply_dynamic_control is only reached
-                        # through apply_schedule()/apply_reserve_live(), which add to
-                        # control_active first, or through _reconcile_control(), which is
-                        # already gated on it. The reverse is not true - an apply that wrote
-                        # nothing leaves control_active set with no applied_payload entry - so this
-                        # restores a subset, never a superset.
-                        self.control_active = set(applied.keys())
+                    elif not isinstance(active, list):
+                        self.control_active = set()
                 else:
-                    # Deliberately discarded. This cache asserts the inverter still holds
-                    # what Predbat last wrote; after a long gap that may be false, and a
-                    # wrongly SKIPPED write leaves the battery diverging from the plan. A
-                    # redundant write is the cheaper mistake.
-                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(age)}), the next apply will re-write to the inverter")
+                    # The last payload is unsafe to trust after a long gap, but the
+                    # ownership flag must survive so _reconcile_control() can immediately
+                    # re-apply the current schedule. Clearing only applied_payload makes the
+                    # next apply a real write instead of waiting for an unrelated button event.
+                    self.applied_payload = {}
+                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(age)}), retaining control ownership so the next cycle re-writes the inverter")
+
+                if not isinstance(active, list) and isinstance(applied, dict):
+                    # A cache written before control_active existed carries applied_payload
+                    # alone. Its keys are a safe lower bound because every applied payload was
+                    # produced after the control path had marked that inverter active.
+                    self.control_active = set(applied.keys())
 
     async def refresh_static(self):
         """Re-run discovery and the per-model capability reads, then cache them."""

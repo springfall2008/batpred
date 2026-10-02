@@ -359,7 +359,7 @@ def test_restore_primes_the_ratings_signature():
 
 
 def test_stale_applied_payload_is_discarded_but_orders_are_not():
-    """A stale applied_payload (and control_active with it) is dropped so the next apply re-writes; orders always resume."""
+    """A stale applied_payload is dropped while control_active and orders resume."""
     failed = False
     d = StorageDeye()
     d._mock_storage = _warm_cache()
@@ -372,8 +372,8 @@ def test_stale_applied_payload_is_discarded_but_orders_are_not():
     if d.applied_payload:
         print(f"ERROR: a stale applied_payload must be discarded: {d.applied_payload}")
         failed = True
-    if d.control_active:
-        print(f"ERROR: control_active must be discarded alongside a stale applied_payload: {d.control_active}")
+    if d.control_active != {"INV1"}:
+        print(f"ERROR: control_active must survive so the next cycle can re-arm the inverter: {d.control_active}")
         failed = True
     if not any("applied-payload cache is stale" in m for m in d.log_messages):
         print(f"ERROR: expected a stale applied-payload log line: {d.log_messages}")
@@ -483,12 +483,16 @@ def test_invalidated_payload_still_restores_control_active():
         print(f"ERROR: the emptied applied_payload must stay empty so the next apply re-writes, got {restored.applied_payload}")
         failed = True
 
-    # The age bound is unchanged by the above: past it both halves still go together.
+    # Past the age bound the payload is discarded, but control ownership survives so the
+    # next reconciliation can immediately submit a fresh write.
     stale = StorageDeye()
     stale._mock_storage = FakeStorage(data={DEYE_CACHE_CONTROL: saved}, ages={DEYE_CACHE_CONTROL: DEYE_RESTORE_MAX_CONTROL + 1.0})
     run_async(stale.restore_state())
-    if stale.control_active:
-        print(f"ERROR: a stale control cache must still discard control_active, got {stale.control_active}")
+    if stale.control_active != {"INV1"}:
+        print(f"ERROR: a stale control cache must retain control_active for re-arming, got {stale.control_active}")
+        failed = True
+    if stale.applied_payload:
+        print(f"ERROR: a stale applied_payload must be discarded, got {stale.applied_payload}")
         failed = True
     assert not failed, "test_invalidated_payload_still_restores_control_active"
 
