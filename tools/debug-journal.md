@@ -242,9 +242,24 @@ Grep for the named symbol rather than trusting a line number.
 - **One unexplained observation, recorded so a second sighting is recognised.** In GH#4900's log, at 00:00:27, the nightly tariff-compare scenario for `igo_fixed` - running under swapped flat 12.0p export rates - had its scenario plan accepted as the **live** plan (`using new plan` logged from inside the scenario). A recalculation 18 seconds later replaced it, so nothing was harmed that night. The code path was not identified within triage scope. If you see `using new plan` inside a compare scenario, this is the thing.
 - **Never run the test harness in a fresh git worktree without copying `manifest.yaml` in first.** Importing `predbat.py` runs `check_install()` (`download.py`). `apps/predbat/manifest.yaml` is gitignored, so a new worktree has none: Predbat fetches the manifest for `THIS_VERSION` from GitHub, finds the branch's file list does not match (a file the release lacks, such as `log_secrets.py`, is enough), then downloads the release and **overwrites the worktree's tracked files** with it - including whatever you just edited - and exits. Seen on 24 Sep 2026: ten files, the kernel `.so` binaries among them, reverted to v9.2.0 in one run. The only sign in the log is `Predbat files are not installed correctly, trying to download them`. Copy the main checkout's `manifest.yaml` into the worktree before the first run; if it has already happened, `git checkout -- .` and `git clean -fd apps/predbat` in the worktree, then redo your edits.
 
+## What belongs here, and what does not
+
+The journal is for what a future triage run would otherwise have to rediscover. Test every entry with one question: would it save time on a **different** issue?
+
+- **Keep: techniques and traps.** How to replay a dump (`--redo`), test-order pollution, stale kernel binaries, the macOS local-network block. These apply to every investigation.
+- **Keep, tightly: durable facts about a device or API.** One line, no story. "GivEnergy stores rates as a whole percent of capacity, rounded down" is about the hardware, not about the issue that found it.
+- **Keep, short and dated: findings that explain a class of report.** "Car not charging because X" is useful when the same symptom comes back. Give the issue or PR number and the date, say how it was verified, and word it as "look here first", so the reader confirms it against the code.
+- **Drop: per-issue narrative.** What was tried, what the fix was, why the alternatives were rejected. That belongs in the PR and the issue, where it stays tied to the code it describes. In the journal it goes stale as the code moves.
+
+Entries go stale, so retire them:
+
+- When the code an entry describes has changed, correct or delete the entry. Do not leave it marked as stale.
+- Once a fix for a bug entry has shipped, cut the row down to what a reader holding an older log needs ("fixed in PR #N") and drop the story.
+- Prefer sharpening an existing entry over adding a second one.
+
 ## Adding to this file
 
-When an investigation turns up something a future triage run would have wanted to know — a config item that explains a class of report, an API quirk, a symptom that maps to a module — add a row. Keep it short, name the symbol rather than the line number, and cite the issue number so the next reader can check the original.
+When an investigation turns up something that passes the test above, add a row. Keep it short, name the symbol rather than the line number, and cite the issue number so the next reader can check the original.
 
 If you are running under the triage bot you cannot edit this file directly — the clone is `reset --hard` before every flow, so the edit would not survive. Write the finding as a single markdown file in the queue directory named in your system prompt instead; the `/journal-update` flow folds the queue in once a day, re-checking each candidate against current `main` first, and opens a PR for a maintainer to merge.
 
