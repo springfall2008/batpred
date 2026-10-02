@@ -1291,6 +1291,9 @@ class GatewayMQTT(ComponentBase):
         discharge_enable_entities = []
         export_limit_entities = []
         inverter_limit_entities = []
+        battery_scaling_entities = []
+        battery_rate_max_entities = []
+        inverter_time_entities = []
 
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
@@ -1323,6 +1326,10 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
             inverter_limit_entities.append(f"sensor.{base}_inverter_rate_max")
+            battery_scaling_entities.append(f"sensor.{base}_battery_dod")
+            battery_rate_max_entities.append(f"sensor.{base}_battery_rate_max")
+            # Clock drift detection — uses GatewayStatus.timestamp
+            inverter_time_entities.append(f"sensor.{base}_inverter_time")
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
@@ -1355,13 +1362,11 @@ class GatewayMQTT(ComponentBase):
 
         # Battery health (first inverter)
         self.set_arg("battery_temperature_history", f"sensor.{base0}_battery_temperature")
-        self.set_arg("battery_scaling", [f"sensor.{base0}_battery_dod"])
 
-        # Battery rate max
-        self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
-
-        # Inverter time (clock drift detection — uses GatewayStatus.timestamp)
-        self.set_arg("inverter_time", [f"sensor.{base0}_inverter_time"])
+        # Per-inverter: inverter.py reads these at index=self.id, so each needs one entry per inverter
+        self.set_arg("battery_scaling", battery_scaling_entities)
+        self.set_arg("battery_rate_max", battery_rate_max_entities)
+        self.set_arg("inverter_time", inverter_time_entities)
 
         # EMS aggregate entities (GivEnergy EMS only)
         inv0 = inverters[0]
