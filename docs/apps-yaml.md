@@ -1957,7 +1957,11 @@ source changes. Do not judge the accuracy of the new source until the settling p
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a PV10 pessimistic estimate alongside the central PV50.
+Ensemble members are used to derive the PV10 pessimistic and PV90 optimistic estimates alongside the central PV50.
+For each hour Predbat takes the ensemble's 10th and 90th percentiles as a ratio of the ensemble's own median, and applies those ratios to the PV50,
+so the gap either side of PV50 is wider when the weather models disagree and narrower when they agree.
+When PV calibration is on, PV10 and PV90 are scaled by the same calibration as the PV50.
+If the ensemble data cannot be downloaded, PV10 and PV90 are created from the worst and best of your recent days instead.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
