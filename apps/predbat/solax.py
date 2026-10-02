@@ -387,6 +387,9 @@ class SolaxAPI(ComponentBase):
         self.realtime_plant_failed = set()
         self.realtime_device_failed = set()
 
+        # Plants whose PV energy has been built from their inverters, these never drop back to the plant total
+        self.plant_pv_from_devices = set()
+
         # When the plant and device info was last read successfully, seeded from the storage cache on
         # startup so that a restart does not re-read data that is still current, plus when it was last
         # attempted so that a failing read is retried at a sensible rate rather than every cycle
@@ -444,7 +447,7 @@ class SolaxAPI(ComponentBase):
         self.set_arg("load_today", [f"sensor.{self.prefix}_solax_{plant}_total_load" for plant in plants])
         self.set_arg("import_today", [f"sensor.{self.prefix}_solax_{plant}_total_imported" for plant in plants])
         self.set_arg("export_today", [f"sensor.{self.prefix}_solax_{plant}_total_exported" for plant in plants])
-        self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_total_yield" for plant in plants])
+        self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_pv_yield" for plant in plants])
         self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_battery_charge_discharge_power" for plant in plants])
         self.set_arg("battery_power_invert", [f"True" for plant in plants])
 
@@ -606,6 +609,28 @@ class SolaxAPI(ComponentBase):
         self.log(f"SolaX API: Updated control for plant {plant_id}, field {field} to {value}")
         await self.publish_controls()
         return True
+
+    def get_plant_pv_yield(self, plant_id, plant_yield):
+        """
+        Lifetime PV energy for a plant in kWh, summed from its inverters rather than taken from the plant total
+
+        The plant level totalYield includes the AC output of an AC-coupled battery inverter, so battery
+        discharge reads as generation (GH#5356). Returns None when the value should be held: a sum with an
+        inverter missing dips and then recovers, which reads as a burst of generation on a cumulative counter
+        """
+        pv_yield = 0.0
+        for device_sn in self.plant_inverters.get(plant_id, []):
+            device_yield = self.realtime_device_data.get(device_sn, {}).get("totalYield")
+            if device_sn in self.realtime_device_failed or device_yield is None:
+                return None
+            pv_yield += device_yield
+        if pv_yield > 0:
+            self.plant_pv_from_devices.add(plant_id)
+            return pv_yield
+        if plant_id in self.plant_pv_from_devices:
+            return None
+        # No inverter reports a yield of its own, so the plant total is the only PV figure there is
+        return plant_yield
 
     def get_max_power_inverter(self, plant_id):
         rated_power = 0
@@ -2699,26 +2724,38 @@ class SolaxAPI(ComponentBase):
                     },
                     app="solax",
                 )
-                # Work out total load
-                # This is will total imported + total discharged - total exported - total charged + total yield
-                total_load = (
-                    realtime.get("totalImported", 0.0)
-                    + realtime.get("totalDischarged", 0.0)
-                    - realtime.get("totalExported", 0.0)
-                    - realtime.get("totalCharged", 0.0)
-                    + realtime.get("totalYield", 0.0)
-                )
-                self.dashboard_item(
-                    f"sensor.{self.prefix}_solax_{plant_id}_total_load",
-                    state=total_load,
-                    attributes={
-                        "friendly_name": f"SolaX {plant_name} Total Load",
-                        "unit_of_measurement": "kWh",
-                        "device_class": "energy",
-                        "state_class": "measurement",
-                    },
-                    app="solax",
-                )
+                # PV energy is built from the inverters, as the plant total yield above counts the output of an
+                # AC-coupled battery inverter as generation. The load is derived from it so both are held together
+                pv_yield = self.get_plant_pv_yield(plant_id, realtime.get("totalYield", 0.0))
+                if pv_yield is None:
+                    self.log(f"Warn: SolaX API: No inverter yield read for plant {realtime_plant_id}, keeping the previous PV yield and load values")
+                else:
+                    self.dashboard_item(
+                        f"sensor.{self.prefix}_solax_{plant_id}_pv_yield",
+                        state=pv_yield,
+                        attributes={
+                            "friendly_name": f"SolaX {plant_name} PV Yield",
+                            "unit_of_measurement": "kWh",
+                            "device_class": "energy",
+                            "state_class": "measurement",
+                        },
+                        app="solax",
+                    )
+
+                    # Work out total load
+                    # This is total imported + total discharged - total exported - total charged + PV yield
+                    total_load = realtime.get("totalImported", 0.0) + realtime.get("totalDischarged", 0.0) - realtime.get("totalExported", 0.0) - realtime.get("totalCharged", 0.0) + pv_yield
+                    self.dashboard_item(
+                        f"sensor.{self.prefix}_solax_{plant_id}_total_load",
+                        state=total_load,
+                        attributes={
+                            "friendly_name": f"SolaX {plant_name} Total Load",
+                            "unit_of_measurement": "kWh",
+                            "device_class": "energy",
+                            "state_class": "measurement",
+                        },
+                        app="solax",
+                    )
 
                 # Total Earnings sensor
                 self.dashboard_item(
@@ -2945,6 +2982,15 @@ async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=N
         return
     else:
         print("✓ Initialisation successful")
+
+    # Show where each plant's PV energy comes from, the plant total against the inverters it is now built from
+    for pv_plant_id in solax.plant_list:
+        plant_realtime = solax.realtime_data.get(pv_plant_id, {})
+        print(f"\nPV yield for plant {pv_plant_id}: plant totalYield {plant_realtime.get('totalYield')} kWh, dailyYield {plant_realtime.get('dailyYield')} kWh")
+        for device_sn in solax.plant_inverters.get(pv_plant_id, []):
+            device_realtime = solax.realtime_device_data.get(device_sn, {})
+            print(f"  Inverter {device_sn}: totalYield {device_realtime.get('totalYield')} dailyYield {device_realtime.get('dailyYield')} totalACOutput {device_realtime.get('totalACOutput')} dailyACOutput {device_realtime.get('dailyACOutput')}")
+        print(f"  Published PV yield: {solax.get_plant_pv_yield(pv_plant_id, plant_realtime.get('totalYield', 0.0))} kWh")
 
     # If raw test commands are specified, issue them in order against the first plant
     if test_commands and solax.plant_list:
