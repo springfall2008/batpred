@@ -975,8 +975,12 @@ class Fetch:
 
         import_rates = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
+        self.rate_import_pre_saving = {}
         export_rates = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
+        self.rate_export_pre_saving = {}
         self.rate_slots = []
         self.io_adjusted = {}
         self.low_rates = []
@@ -1246,11 +1250,26 @@ class Fetch:
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
+            # Snapshot the tariff as it stands AFTER the IOG/SmartFlex dispatch overlay but BEFORE any
+            # saving/free/Axle session distorts it (the overrides below are applied to it too).
+            # rate_import_base is built further up
+            # (ahead of rate_add_io_slots), so capping a saving minute against that would discard a
+            # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
+            # threshold scan could then miss a genuinely cheap slot (#5163 review).
+            self.rate_import_pre_saving = import_rates.copy()
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
-            import_rates = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", import_rates, self.rate_import_replicated)
-            import_rates = self.apply_manual_rates(import_rates, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
+            # Snapshot which minutes a saving/free/Axle session tagged "saving" here, before
+            # basic_rates()/apply_manual_rates() below get a chance to overwrite rate_replicate with
+            # their own "increment"/"user" tag on the same minute - a supported combination (an
+            # override active during a saving session). set_rate_thresholds() reads this frozen set,
+            # not the live rate_import_replicated dict, so a later overwrite here can't erase the
+            # "this was a saving minute" provenance it depends on (GH#5050, #5052 review).
+            self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
+            import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
+                import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated
+            )
             self.rate_scan(import_rates, print=True)
         else:
             self.rate_import_no_io = {}
@@ -1267,12 +1286,19 @@ class Fetch:
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
+            # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
+            # rather than aliased so the two can never be corrupted together by a future in-place
+            # mutation of either (#5163 review).
+            self.rate_export_pre_saving = self.rate_export_base.copy()
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
-            export_rates = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", export_rates, self.rate_export_replicated)
-            export_rates = self.apply_manual_rates(export_rates, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
+            # See the import block's equivalent comment above (GH#5050, #5052 review).
+            self.rate_export_saving_minutes = {minute for minute, tag in self.rate_export_replicated.items() if tag == "saving"}
+            export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(
+                export_rates, self.rate_export_pre_saving, self.rate_export_saving_minutes, self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.manual_export_rates, False, self.rate_export_replicated
+            )
             self.rate_scan_export(export_rates, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -2111,6 +2137,26 @@ class Fetch:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
+    def apply_rate_overrides(self, rates, pre_saving, saving_minutes, override_items, rtype, manual_items, is_import, rate_replicate):
+        """
+        Apply the configured rate overrides and then the manual rates on top of rates, tagging each
+        overridden minute in rate_replicate. Returns (rates, pre_saving).
+
+        When there are saving minutes the same overrides also go on pre_saving - the rates without
+        any saving/free/Axle session - so it stays "these rates without the session". Otherwise
+        rate_minmax_excluding_saving() would cap an overridden session minute (a fixed 50p to
+        discourage charging in the session, say) back to the bare tariff and the override would
+        drop out of the threshold stats (#5163 review). With no saving minutes nothing reads
+        pre_saving, so it is left alone rather than logging every override twice each cycle.
+        """
+        rates = self.basic_rates(override_items, rtype, rates, rate_replicate)
+        rates = self.apply_manual_rates(rates, manual_items, is_import=is_import, rate_replicate=rate_replicate)
+        if saving_minutes and pre_saving:
+            self.log("Applying {} to the rates without the saving session too, for the rate thresholds".format(rtype))
+            pre_saving = self.basic_rates(override_items, rtype, pre_saving, {})
+            pre_saving = self.apply_manual_rates(pre_saving, manual_items, is_import=is_import, rate_replicate={})
+        return rates, pre_saving
+
     def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate=None):
         """
         Apply manual rates to the rates dictionary
@@ -2397,6 +2443,76 @@ class Fetch:
         rate_min_base, rate_max_base, _, _, _ = self.rate_minmax(rate_base)
         return rate_base, rate_min_base, rate_max_base
 
+    def rate_minmax_excluding_saving(self, rates, saving_minutes, rate_base):
+        """
+        Work out min/max/average over the forecast window, mapping any saving-session/free-slot/Axle
+        minute back to its own pre-event base rate rather than the boosted or discounted one it
+        currently holds in `rates` (GH#5050).
+
+        saving_minutes (rate_import_saving_minutes/rate_export_saving_minutes) is a frozen set of
+        minutes load_saving_slot()/load_free_slot()/load_axle_slot() tagged, captured right after
+        those calls and before basic_rates()/apply_manual_rates() run - NOT the live
+        rate_import_replicated/rate_export_replicated dict, which a later override active during the
+        same session (a documented, supported combination) can overwrite on the very same minute,
+        losing the "this was a saving minute" provenance a live-dict check would need (#5052 review).
+
+        rate_base (rate_import_pre_saving/rate_export_pre_saving) is `rates` as it would be with no
+        saving/free/Axle session: snapshotted just before the session loaders run, then given the same
+        overrides and manual rates as `rates` by apply_rate_overrides() - already computed on every real fetch cycle whenever
+        `rates` is non-empty, so this is a straight lookup rather than a second pass over `rates` to
+        reconstruct it. Carrying the overrides matters: a user who overrides a session minute (a fixed
+        50p to discourage charging, or an increment on top of the event) must see that override in the
+        threshold stats, not have it capped back to the bare tariff (#5163 review). On the import side
+        the snapshot is taken AFTER the IOG dispatch overlay, not from rate_import_base which predates
+        rate_add_io_slots(): capping a saving minute against the pre-IOG curve would discard a
+        legitimate dispatch discount wherever a session and a dispatch slot overlap (#5163 review).
+        Export has no IOG overlay, so its snapshot starts from rate_export_base.
+
+        Only ever caps a tagged minute DOWN to its base rate, never raises it - the "saving" tag
+        covers two economically opposite things: an event REWARD added on top of the tariff rate (a
+        synthetic high above the base that should not raise the threshold above every genuine tariff
+        rate) and a free/discounted session, which SUBTRACTS from the rate (a genuinely cheap slot
+        the automatic threshold should still be free to pick as "low rate" - capping it back up to
+        the base rate would throw the real discount away and could make rate_max == rate_min on an
+        otherwise-flat tariff, pushing the automatic threshold above every rate).
+
+        Falls back to the plain (unfiltered) min/max/average when rate_base is empty/unavailable, so
+        the fallback is exact rather than approximate. annual.py always installs a different tariff, and
+        compare.py does whenever a tariff supplies its own rates for a side; both clear that side's
+        snapshot AND saving_minutes together, since offsets into the live tables would map unrelated
+        minutes of the new tariff. A compare tariff that reuses the live rates keeps the live sets, which
+        still describe them. Either reset alone would be enough today - an empty dict short-circuits here,
+        and an empty set means no minute is ever looked up - but they describe the same tariff and are
+        kept in step so a future caller cannot end up with one without the other.
+        """
+        if not rate_base:
+            return self.rate_minmax(rates)[:3]
+
+        rate_min = 99999
+        rate_max = 0
+        rate_total = 0
+        rate_n = 0
+
+        for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
+            if minute not in rates:
+                continue
+            rate = rates[minute]
+            if minute in saving_minutes:
+                if minute not in rate_base:
+                    # A session created this minute (load_axle_slot() adds to rate_dict.get(minute, 0)),
+                    # so the tariff has no rate of its own here and the synthetic reward is not one.
+                    continue
+                rate = min(rate, rate_base[minute])
+            rate_min = min(rate_min, rate)
+            rate_max = max(rate_max, rate)
+            rate_total += rate
+            rate_n += 1
+
+        if rate_n == 0:
+            return self.rate_minmax(rates)[:3]
+
+        return dp2(rate_min), dp2(rate_max), dp2(rate_total / rate_n)
+
     def rate_min_forward_calc(self, rates):
         """
         Work out lowest rate from time forwards
@@ -2456,6 +2572,14 @@ class Fetch:
     def set_rate_thresholds(self):
         """
         Set the high and low rate thresholds
+
+        Threshold stats are computed excluding saving-session/free-slot/Axle-boosted minutes
+        (GH#5050) via rate_minmax_excluding_saving() - self.rate_min/rate_max/rate_average (and the
+        export equivalents) still include those synthetic minutes and are left untouched, since
+        other consumers (dashboard sensors, graph scaling, plan.py pricing) want the real boosted
+        price shown. Without this, a two-rate tariff plus a saving-session reward could push
+        rate_max above every genuine tariff rate and make the whole ordinary-price day read as
+        "low rate" in automatic mode.
         """
         curr = self.currency_symbols[1]
 
@@ -2465,14 +2589,25 @@ class Fetch:
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
         car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
+        # An empty table has nothing to filter, so keep the stored stats for that side as before - scanning
+        # it would return the (99999, 0, 0) placeholder and push the threshold to 99998.9 (#5163 review)
+        if self.rate_import:
+            rate_min, rate_max, rate_average = self.rate_minmax_excluding_saving(self.rate_import, self.rate_import_saving_minutes, self.rate_import_pre_saving)
+        else:
+            rate_min, rate_max, rate_average = self.rate_min, self.rate_max, self.rate_average
+        if self.rate_export:
+            rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_saving_minutes, self.rate_export_pre_saving)
+        else:
+            rate_export_min, rate_export_max, rate_export_average = self.rate_export_min, self.rate_export_max, self.rate_export_average
+
         if self.rate_low_threshold > 0:
-            self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
+            self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or have_manual_soc:
-                self.rate_import_cost_threshold = self.rate_max + 0.1
+            if (rate_max == rate_min) or (rate_export_max > rate_max) or have_alerts or have_manual_soc:
+                self.rate_import_cost_threshold = rate_max + 0.1
             else:
-                self.rate_import_cost_threshold = self.rate_max - 0.5
+                self.rate_import_cost_threshold = rate_max - 0.5
 
         # When we plan car on the rates we need to include all the rates up to the max car price
         if car_planning_on_rates:
@@ -2480,13 +2615,13 @@ class Fetch:
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
-            self.rate_export_cost_threshold = dp2(self.rate_export_average * self.rate_high_threshold)
+            self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
-            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min) or have_alerts:
-                self.rate_export_cost_threshold = self.rate_export_min - 0.1
+            if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
+                self.rate_export_cost_threshold = rate_export_min - 0.1
             else:
-                self.rate_export_cost_threshold = self.rate_export_min + 0.5
+                self.rate_export_cost_threshold = rate_export_min + 0.5
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
