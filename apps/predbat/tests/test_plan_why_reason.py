@@ -400,6 +400,9 @@ def run_test_plan_why_reason(my_predbat):
     elif "Charging up to 80" not in _render(row, templates) or "{}kW".format(expected_charge_rate_kw) not in _render(row, templates):
         print("ERROR: Chrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: a full rate Chrg slot should not show the snail, got: {}".format(row["state_html"]))
+        failed = True
 
     # --- Test 2: HoldChrg ---
     print("Test HoldChrg reason")
@@ -468,6 +471,22 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     elif "{:.2f}kW".format(rate_kw) not in _render(row, templates):
         print("ERROR: Chrg low power rendered text missing the throttled rate: {}".format(_render(row, templates)))
+        failed = True
+    elif row["state_html"] != "Chrg&nearr;&#x1F40C;":
+        print("ERROR: Chrg low power state cell should show the snail like a slow export does (#5352), got: {}".format(row["state_html"]))
+        failed = True
+
+    # --- Test 4c: low power mode on but the target needs the full rate - not a slow charge, no snail ---
+    print("Test Chrg low power at the full rate shows no snail")
+    my_predbat.charge_limit_best = [10.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)  # too far from the target to throttle within the window
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg low power full rate reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: Chrg low power at the full rate should not show the snail, got: {}".format(row["state_html"]))
         failed = True
     my_predbat.set_charge_low_power = False
     my_predbat.charge_window_best = window
