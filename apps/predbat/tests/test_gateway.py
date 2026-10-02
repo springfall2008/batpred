@@ -1746,6 +1746,28 @@ class TestAutomaticConfig:
         assert "000aa1" in gw._args["soc_percent"][0]
         assert "000bb2" in gw._args["soc_percent"][1]
 
+    def test_multi_inverter_battery_args_have_one_entry_per_inverter(self):
+        """battery_scaling, battery_rate_max and inverter_time are per-inverter args, so each gets one entry per primary inverter.
+
+        A single entry leaves inverter 1 reading index 1 out of range: PredBat falls back to a 2600 W battery_rate_max
+        and 1.0 battery_scaling, and never checks that inverter's clock.
+        """
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_multi"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE2223G800", primary=True)
+        self._make_inverter(status, serial="CE2225G400", primary=True)
+        gw._last_status = status
+        gw.automatic_config()
+
+        base0 = f"{gw.prefix}_gateway_23g800"
+        base1 = f"{gw.prefix}_gateway_25g400"
+        assert gw._args["battery_scaling"] == [f"sensor.{base0}_battery_dod", f"sensor.{base1}_battery_dod"]
+        assert gw._args["battery_rate_max"] == [f"sensor.{base0}_battery_rate_max", f"sensor.{base1}_battery_rate_max"]
+        assert gw._args["inverter_time"] == [f"sensor.{base0}_inverter_time", f"sensor.{base1}_inverter_time"]
+
     # ------------------------------------------------------------------
     # Secondary (cloud) and unsupported feature args
     # ------------------------------------------------------------------
