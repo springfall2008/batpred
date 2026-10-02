@@ -453,6 +453,44 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "ecoflow": {
+        "class": "ecoflow.EcoFlowAPI",
+        "name": "EcoFlow IoT Developer Platform",
+        "inverter": True,
+        "event_filter": "predbat_ecoflow_",
+        "args": {
+            # BYOK: each user's own key pair from the IoT developer console of the EcoFlow
+            # account the battery is registered to. /device/list returns only devices bound to
+            # the account itself, so a shared platform account would see nothing - the
+            # opposite of the AlphaESS model.
+            "access_key": {"required": False, "secret": True, "config": "ecoflow_access_key"},
+            "secret_key": {"required": False, "secret": True, "config": "ecoflow_secret_key"},
+            "device_sn": {"required": False, "config": "ecoflow_device_sn"},
+            "automatic": {"required": False, "default": False, "config": "ecoflow_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "ecoflow_automatic_ignore_pv"},
+            # OFF by default, unlike alphaess_control_enable and sunsynk_control_enable. Those
+            # components can write; this one cannot yet - the published documentation gives no
+            # Power Ocean cmdSet/id pair, so ECOFLOW_SCHEDULE_COMMANDS is empty and no control
+            # entity is bound. Defaulting this True would advertise control that does not
+            # exist. Flip the default with the command table, not before it.
+            "control_enable": {"required": False, "default": False, "config": "ecoflow_control_enable"},
+            # Per-install correction for the UNVERIFIED quota field names in
+            # ECOFLOW_TELEMETRY. {predbat_leaf: quota_key}. This exists so the first tester can
+            # fix the names from their own device's key list without waiting for a release.
+            "key_map": {"required": False, "config": "ecoflow_key_map"},
+            # The user's own figures. No documented quota field carries a pack size or an
+            # inverter rating, so without these Predbat plans against inverter.py's defaults.
+            "battery_capacity": {"required": False, "config": "ecoflow_battery_capacity"},
+            "inverter_limit": {"required": False, "config": "ecoflow_inverter_limit"},
+            "api_delay": {"required": False, "default": 2, "config": "ecoflow_api_delay"},
+            "min_write_interval": {"required": False, "default": 300, "config": "ecoflow_min_write_interval"},
+        },
+        # Gate activation on having an access key. Without this the component would start for
+        # every instance, since all individual args are optional.
+        "required_or": ["access_key"],
+        "phase": 1,
+        "can_restart": True,
+    },
     "enphase": {
         "class": "enphase.EnphaseAPI",
         "name": "Enphase API",
