@@ -133,6 +133,7 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
 
 ```yaml
   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_intelligent_smart_control: 're:(switch.octopus_energy([0-9a-z_]+|)_intelligent_smart_charge)'
   octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 ```
@@ -141,10 +142,11 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
 For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car (see [Multiple Electric Cars](#multiple-electric-cars)).
 
-- **octopus_intelligent_smart_control** - Optional. Points to the Octopus Energy integration 'intelligent smart charge' switch (`switch.octopus_energy_{{DEVICE_ID}}_intelligent_smart_charge`),
+- **octopus_intelligent_smart_control** - Points to the Octopus Energy integration 'intelligent smart charge' switch (`switch.octopus_energy_{{DEVICE_ID}}_intelligent_smart_charge`),
 which is on while Octopus Smart Control is on for the car. Octopus keeps reporting the charging plan it had already made after you switch Smart Control off, so while this switch is `off`
 Predbat ignores the *planned* Octopus slots (including any bonus slots) as they will not happen; slots already delivered, and bump/boost charges you asked for yourself, still count.
-You do not normally need to set this: when **octopus_intelligent_slot** is the integration's `intelligent_dispatching` sensor, Predbat derives the switch from it. Only set it if you have renamed the switch.
+It holds the entity ID of the switch, not a value, so Predbat follows the switch live, however it is turned off (the Octopus app, Home Assistant or an automation).
+If you set up `apps.yaml` before this item existed, add it to pick up the change. If the switch cannot be found, planned slots are used as normal.
 For **multiple IOG-enrolled vehicles**, set this to a list with one switch per car.
 
 - **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
@@ -273,7 +275,7 @@ If you have **two or more EVs enrolled in Octopus Intelligent Go**, Predbat can 
 
 If you use the Octopus Direct function inside Predbat then you can set **octopus_automatic** to True to automatically configure IOG cars.
 
-Otherwise if using Bottle Cap Dave's Octopus integration then set **octopus_intelligent_slot**, **octopus_ready_time** and **octopus_charge_limit**
+Otherwise if using Bottle Cap Dave's Octopus integration then set **octopus_intelligent_slot**, **octopus_intelligent_smart_control**, **octopus_ready_time** and **octopus_charge_limit**
 to lists with one entry per car in `apps.yaml`:
 
 ```yaml
@@ -286,6 +288,10 @@ to lists with one entry per car in `apps.yaml`:
   octopus_intelligent_slot:
     - 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_dispatching'
     - 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_dispatching'
+
+  octopus_intelligent_smart_control:
+    - 'switch.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_smart_charge'
+    - 'switch.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_smart_charge'
 
   octopus_ready_time:
     - 'time.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_target_time'
