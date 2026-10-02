@@ -479,7 +479,7 @@ class MockConfigProvider:
             "car_charging_exclusive": False,
             "car_charging_from_battery": False,
             "car_charging_planned_response": ["yes", "on", "enable", "true"],
-            "car_charging_now_response": ["yes", "on", "enable", "true"],
+            "car_charging_now_response": ["yes", "on", "enable", "true", "charging"],
             "combine_rate_threshold": 1.0,
             "combine_export_slots": True,
             "combine_charge_slots": True,
