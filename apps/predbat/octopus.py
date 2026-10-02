@@ -58,6 +58,7 @@ CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
+SMART_CONTROL_PENDING_SECONDS = 120  # How long a Smart Control change we sent stays on show if Octopus has not yet reported it
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -648,6 +649,7 @@ class OctopusAPI(ComponentBase):
         self.sensor_updated_at = None
         self.automatic = automatic
         self.commands = []
+        self.smart_control_pending = {}  # device_id -> (suspended, expiry) for a Smart Control change Octopus may not yet report
         self.mpan = None
         self.tou_windows = None
         self.tou_windows_day = None
@@ -698,7 +700,7 @@ class OctopusAPI(ComponentBase):
         """
         suffix = self.get_entity_suffix(entity_id)
         device_id = self.suffix_to_device_id(suffix)
-        if not device_id or entity_id != self.get_entity_name("switch", "intelligent_smart_charge", index=suffix):
+        if not device_id or self.device_id_to_index_suffix(device_id) != suffix or entity_id != self.get_entity_name("switch", "intelligent_smart_charge", index=suffix):
             return
         device = self.intelligent_devices.get(device_id)
         if not device:
@@ -716,6 +718,20 @@ class OctopusAPI(ComponentBase):
         self.publish_smart_control_switch(device_id, device)
         self.commands.append({"command": "set_intelligent_smart_control", "value": enabled, "device_id": device_id, "was_suspended": was_suspended})
 
+    def apply_smart_control_pending(self, device_id, device):
+        """
+        Keep a Smart Control change we have just sent to Octopus on show until Octopus reports it (or
+        SMART_CONTROL_PENDING_SECONDS pass), so a poll made straight afterwards does not flip the switch back.
+        """
+        pending = self.smart_control_pending.get(device_id)
+        if not pending:
+            return
+        suspended, expiry = pending
+        if device.get("suspended") == suspended or datetime.now() >= expiry:
+            self.smart_control_pending.pop(device_id, None)
+        else:
+            device["suspended"] = suspended
+
     def publish_smart_control_switch(self, device_id, device):
         """
         Publish the Smart Control switch of an Intelligent device, on while the device is not suspended. It is
@@ -724,7 +740,7 @@ class OctopusAPI(ComponentBase):
         self.dashboard_item(
             self.get_entity_name("switch", "intelligent_smart_charge", index=self.device_id_to_index_suffix(device_id)),
             "off" if device.get("suspended") else "on",
-            attributes={"friendly_name": "Octopus Intelligent Smart Control", "icon": "mdi:ev-station"},
+            attributes={"friendly_name": "Octopus Intelligent Smart Control ({})".format(device.get("model") or self.device_id_to_index_suffix(device_id)), "icon": "mdi:ev-station"},
             app="octopus",
         )
 
@@ -1060,6 +1076,7 @@ class OctopusAPI(ComponentBase):
                 # Always call fetch_previous_dispatch when completed dispatches are available to merge historical data.
                 for device_id in intelligent_devices:
                     device = intelligent_devices[device_id]
+                    self.apply_smart_control_pending(device_id, device)
                     if "completed_dispatches" in device:
                         self.intelligent_devices[device_id] = device
                         await self.fetch_previous_dispatch(device_id)
@@ -1188,13 +1205,18 @@ class OctopusAPI(ComponentBase):
             return False
         action = "UNSUSPEND" if enabled else "SUSPEND"
         self.log("OctopusAPI: Setting Smart Control {} for intelligent device {}".format(action, device_id))
-        result = await self.async_graphql_query(intelligent_smart_control_mutation.format(device_id=device_id, action=action), "set-intelligent-smart-control", returns_data=False)
-        if result is None:
+        try:
+            result = await self.async_graphql_query(intelligent_smart_control_mutation.format(device_id=device_id, action=action), "set-intelligent-smart-control", returns_data=False)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            self.log("Warn: OctopusAPI: Smart Control {} for intelligent device {} raised {}".format(action, device_id, error))
+            result = None
+        if not result or result.get("updateDeviceSmartControl") is None:
             self.log("Warn: OctopusAPI: Failed to {} Smart Control for intelligent device {}, putting the switch back".format(action, device_id))
             device["suspended"] = was_suspended
             self.publish_smart_control_switch(device_id, device)
             return False
         device["suspended"] = not enabled
+        self.smart_control_pending[device_id] = (not enabled, datetime.now() + timedelta(seconds=SMART_CONTROL_PENDING_SECONDS))
         self.publish_smart_control_switch(device_id, device)
         return True
 
