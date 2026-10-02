@@ -91,6 +91,8 @@ These automatically build a local kernel via `build_kernel.sh` if one isn't alre
 
 ## Editing the code
 
+If you use Claude Code, see [AI assistant memory](ai-assistant-memory.md) for how to give it a persistent memory across sessions.
+
 There are at least a couple of ways of working on the code, outlined here.
 
 ### Using GitHub Codespaces
