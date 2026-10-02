@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 from octopus import OctopusAPI
@@ -98,6 +99,49 @@ async def _run(my_predbat):
     api.async_graphql_query = AsyncMock(return_value=None)
     await api.process_commands("acc-1")
     failed |= _check("t5 rolled back", api.published.get(active_switch) == "on" and api.intelligent_devices[ACTIVE_ID]["suspended"] is False, "published {}".format(api.published))
+
+    print("Test 5b: an exception or an empty reply also puts the switch back")
+    for reply in (RuntimeError("boom"), {"updateDeviceSmartControl": None}):
+        api.commands = []
+        api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+        await api.switch_event(active_switch, "turn_off")
+        api.async_graphql_query = AsyncMock(side_effect=reply) if isinstance(reply, Exception) else AsyncMock(return_value=reply)
+        await api.process_commands("acc-1")
+        failed |= _check("t5b rolled back {}".format(type(reply).__name__), api.published.get(active_switch) == "on" and api.intelligent_devices[ACTIVE_ID]["suspended"] is False, "published {}".format(api.published))
+
+    print("Test 5c: a poll straight after a successful change does not flip the switch back until Octopus reports it")
+    api.commands = []
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+    await api.switch_event(active_switch, "turn_off")
+    api.async_graphql_query = AsyncMock(return_value={"updateDeviceSmartControl": {"id": ACTIVE_ID}})
+    await api.process_commands("acc-1")
+    polled = {"suspended": False}
+    api.apply_smart_control_pending(ACTIVE_ID, polled)
+    failed |= _check("t5c override held", polled["suspended"] is True, "polled {}".format(polled))
+    polled = {"suspended": True}
+    api.apply_smart_control_pending(ACTIVE_ID, polled)
+    failed |= _check("t5c cleared once reported", ACTIVE_ID not in api.smart_control_pending and polled["suspended"] is True, "pending {}".format(api.smart_control_pending))
+    api.smart_control_pending[ACTIVE_ID] = (True, datetime.now() - timedelta(seconds=1))
+    polled = {"suspended": False}
+    api.apply_smart_control_pending(ACTIVE_ID, polled)
+    failed |= _check("t5c expires", polled["suspended"] is False and ACTIVE_ID not in api.smart_control_pending, "polled {}".format(polled))
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+
+    print("Test 5d: devices whose ids end alike are told apart, and the name says which car")
+    other_id = "other-9" + api.device_id_to_index_suffix(ACTIVE_ID)
+    api.intelligent_devices[other_id] = {"suspended": False, "model": "iX3", "planned_dispatches": [], "completed_dispatches": []}
+    api.commands = []
+    await api.switch_event(api.get_entity_name("switch", "intelligent_smart_charge", index=api.device_id_to_index_suffix(ACTIVE_ID)), "turn_off")
+    failed |= _check("t5d right device", [c["device_id"] for c in api.commands] == [ACTIVE_ID] and api.intelligent_devices[other_id]["suspended"] is False, "commands {}".format(api.commands))
+    api.intelligent_devices.pop(other_id)
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+    api.intelligent_devices[ACTIVE_ID]["model"] = "iX3"
+    captured = {}
+    api.dashboard_item = lambda entity, state, attributes=None, app=None: captured.__setitem__(entity, attributes)
+    api.publish_smart_control_switch(ACTIVE_ID, api.intelligent_devices[ACTIVE_ID])
+    failed |= _check("t5d name", "iX3" in captured[active_switch]["friendly_name"], "captured {}".format(captured))
+    api.dashboard_item = lambda entity, state, attributes=None, app=None: api.published.__setitem__(entity, state)
+    api.commands = []
 
     print("Test 6: events for other entities, other services and unknown devices are ignored")
     api.commands = []
