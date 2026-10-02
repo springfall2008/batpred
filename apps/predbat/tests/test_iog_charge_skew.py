@@ -12,6 +12,8 @@ import copy
 
 from tests.test_infra import reset_rates, reset_inverter, update_rates_import
 from prediction import Prediction
+from tests.test_iog_session_fallback import run_iog_session_fallback_tests
+from tests.test_charge_after_export_clip import run_charge_after_export_clip_tests
 
 # Attributes these tests mutate on the shared my_predbat instance. They are snapshotted on
 # entry and restored on exit so this test does not pollute state for later tests in the suite.
@@ -388,6 +390,8 @@ def run_iog_charge_skew_tests(my_predbat):
         failed += run_io_rate_adjustment_tests(my_predbat)
         failed += run_iog_sort_wiring_tests(my_predbat)
         failed += run_iog_integration_tests(my_predbat)
+        failed += run_iog_session_fallback_tests(my_predbat)
+        failed += run_charge_after_export_clip_tests(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
 

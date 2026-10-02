@@ -59,7 +59,9 @@
 // by adding it to the grid balance after the battery has acted; the rest of the import pays rate_max.
 // Parity 16: each car charging in a step adds its own energy to the house load, not the running total
 // across cars, which counted the first car once per car (GH#5313).
-#define PK_PARITY_REVISION 16
+// Parity 17: a lost Intelligent dispatch uses the normal tariff maximum, preserving higher
+// session/override prices at this step without spreading them across the forecast.
+#define PK_PARITY_REVISION 17
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -774,7 +776,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const double dispatch_rate = import_rate;
         const bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
         if (dispatch_gone) {
-            import_rate = c->rate_max; // Assume in worst case that slot goes away and max rate applies
+            import_rate = std::max(import_rate, c->rate_max); // Normal tariff fallback, preserving this step's session/override price
         }
         const double export_rate = c->rate_export[k];
 

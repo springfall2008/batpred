@@ -1988,7 +1988,13 @@ class Plan:
                     record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
                     # Export slot clipping
+                    export_limits_before_clip = self.export_limits_best.copy()
                     self.export_window_best, self.export_limits_best = self.clip_export_slots(self.minutes_now, self.predict_soc, self.export_window_best, self.export_limits_best, record_export_windows, PREDICT_STEP)
+
+                    # Clipped export targets can change the value of charging in a later slot.
+                    # Recheck charge decisions before disabled windows are discarded.
+                    if self.export_limits_best != export_limits_before_clip and self.refine_charge_after_export_clip():
+                        preclip_new = (self.charge_limit_best.copy(), clone_windows(self.charge_window_best), clone_windows(self.export_window_best), self.export_limits_best.copy())
 
                     # Filter out the windows we disabled during clipping
                     self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
@@ -3358,6 +3364,32 @@ class Plan:
                 )
             )
         return pruned
+
+    def refine_charge_after_export_clip(self):
+        """Recheck Intelligent charge targets against the export instructions that will execute."""
+        if not self.calculate_best_charge or not self.io_adjusted:
+            return False
+        record_charge_windows = self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best)
+        selected_metric = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)[0]
+        changed = False
+        for window_n in range(record_charge_windows):
+            window = self.charge_window_best[window_n]
+            if not any(self.io_adjusted.get(minute, False) for minute in range(max(window["start"], self.minutes_now), window["end"])):
+                continue
+            if not self.allow_this_charge_window(window_n):
+                continue
+            result = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)
+            best_soc, metric_plan = result[0], result[-1]
+            if best_soc != self.charge_limit_best[window_n] and metric_plan < selected_metric - 0.0001:
+                self.charge_limit_best[window_n] = best_soc
+                selected_metric = metric_plan
+                changed = True
+                self.log(
+                    "Refine charge after export clipping window {} {}-{} target {}kWh metric {}".format(
+                        window_n, self.time_abs_str(self.charge_window_best[window_n]["start"]), self.time_abs_str(self.charge_window_best[window_n]["end"]), best_soc, selected_metric
+                    )
+                )
+        return changed
 
     def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
         """

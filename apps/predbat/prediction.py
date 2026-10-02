@@ -195,7 +195,9 @@ class Prediction(PredictionBatch):
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
-            self.rate_max = base.rate_max
+            # A dispatch that disappears falls back to the normal tariff, not a saving-session
+            # or VPP penalty from an unrelated hour. Older debug dumps may lack the base maximum.
+            self.rate_max = getattr(base, "rate_max_base", 0) or base.rate_max
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -738,7 +740,8 @@ class Prediction(PredictionBatch):
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
             if dispatch_gone:
-                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
+                # Keep any session penalty or override at this minute, without spreading it to other slots.
+                import_rate = max(import_rate, self.rate_max)
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
