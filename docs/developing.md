@@ -47,6 +47,13 @@ cd coverage
 
 For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
 
+There are two modes:
+
+- **Exact replay** (the default) takes the battery SoC from the log at every run, so each re-plan starts from exactly what the live system saw. Use it to check the replay reproduces the live plans before changing anything.
+- **Simulated** (`--replay_simulate`) steps the battery forward itself under the replayed plan, using the actual PV and load from the log and Predbat's own battery and inverter model (rate curves, losses, reserve, the inverter and export limits). Use it once the code is changed: the SoC then follows the changed plan instead of being pinned to what the unchanged code did.
+
+`--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and shows when each plan says to export.
+
 Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log must be from the same day as the yaml and run on a similar Predbat version.
 
 ### Finding test order dependencies
