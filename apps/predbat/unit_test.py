@@ -80,7 +80,7 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
-from tests.replay_forward import replay_forward, summarise
+from tests.replay_forward import replay_forward, summarise, chart_replay
 from tests.test_replay_forward import run_replay_forward_tests
 from tests.test_saving_session import (
     test_saving_session,
@@ -803,6 +803,7 @@ def main():
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
     parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at this HH:MM")
+    parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
@@ -896,6 +897,9 @@ def main():
 
     if args.debug_file and args.replay_log:
         rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until)
+        if args.replay_chart:
+            chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
+            print("Wrote replay chart to {}".format(args.replay_chart))
         replanned, identical, same_start = summarise(rows)
         print("Replay: of {} re-plans, {} reproduce the logged export windows exactly and {} the first window's start".format(replanned, identical, same_start))
         sys.exit(0)

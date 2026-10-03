@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:02.135467: Current data so far today: load 5.74kWh, import 17.74kWh, export 4.57kWh, PV 0.21kWh
@@ -123,6 +123,39 @@ def test_summarise():
     return 0
 
 
+def test_export_mode_now():
+    """The plan's instruction at a minute: forced export below 99%, freeze at 99%, nothing at 100% or outside a window."""
+    windows = [("09:00", "10:00", 18.5, 40.0), ("10:00", "11:00", 18.5, 99.0), ("11:00", "12:00", 18.5, 100.0), ("23:30", "00:00", 18.5, 10.0)]
+    cases = [(9 * 60, "export"), (10 * 60 + 30, "freeze"), (11 * 60 + 30, None), (8 * 60, None), (23 * 60 + 45, "export")]
+    for minute, expected in cases:
+        got = export_mode_now(windows, minute)
+        if got != expected:
+            print("ERROR: export_mode_now at minute {} gave {} expected {}".format(minute, got, expected))
+            return 1
+    if export_mode_now(None, 600) is not None:
+        print("ERROR: no plan should mean no export")
+        return 1
+    return 0
+
+
+def test_chart_replay():
+    """A replay chart renders to a PNG without needing a display."""
+    rows = [
+        {"minutes_now": 540, "soc_percent": 80, "replanned": True, "logged": [("09:00", "10:00", 18.5, 40.0)], "replayed": [("09:30", "10:00", 18.5, 50.0)]},
+        {"minutes_now": 545, "soc_percent": 78, "replanned": False, "logged": None, "replayed": None},
+        {"minutes_now": 550, "soc_percent": 75, "replanned": True, "logged": [("10:00", "11:00", 18.5, 99.0)], "replayed": []},
+    ]
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "replay.png")
+        chart_replay(rows, path, title="test")
+        with open(path, "rb") as handle:
+            header = handle.read(8)
+    if header != b"\x89PNG\r\n\x1a\n":
+        print("ERROR: chart_replay did not write a PNG")
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -131,4 +164,6 @@ def run_replay_forward_tests(my_predbat):
     failed += test_shift_counter()
     failed += test_set_export_window()
     failed += test_summarise()
+    failed += test_export_mode_now()
+    failed += test_chart_replay()
     return failed
