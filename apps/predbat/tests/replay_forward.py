@@ -39,6 +39,7 @@ INDAY_RE = re.compile(r"in-day adjustment ([\d.]+)%")
 DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
 NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), (\w+), ([\d.]+)\)")
+VERSION_RE = re.compile(r"version (\S+) currently running")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
@@ -106,7 +107,7 @@ def parse_log(path):
                 if found:
                     run["in_force"] = found.group(1)
                     continue
-            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (DIVERGENCE_RE, "divergence"), (COST_RE, "cost"), (NEXT_LIMIT_RE, "next_limit"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
+            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (DIVERGENCE_RE, "divergence"), (COST_RE, "cost"), (NEXT_LIMIT_RE, "next_limit"), (VERSION_RE, "version"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
                 found = regex.search(line)
                 if found:
                     run[store] = found.groups() if store in ("soc", "today", "force", "next_limit") else found.group(1)
@@ -292,11 +293,30 @@ def remove_logged_load_divergence(my_predbat):
             del my_predbat.__dict__[name]
 
 
+def version_change(runs):
+    """Return (index, old version, new version) for the first run whose logged version differs, or None."""
+    version = None
+    for index, run in enumerate(runs):
+        if not run.get("version"):
+            continue
+        if version is None:
+            version = run["version"]
+        elif run["version"] != version:
+            return index, version, run["version"]
+    return None
+
+
 def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet):
     """Step through the runs, re-planning where the log did, and return the comparison rows."""
     sim_soc = my_predbat.soc_kw
     prev = {"today": None, "force": None}
     rows = []
+    # A faithful replay needs the code that wrote the log, so it can only run up to a version change
+    change = version_change(runs)
+    if change is not None:
+        index, before, after = change
+        print("Replay stops at {}: the log changes from Predbat {} to {} here".format(runs[index]["time"][11:16], before, after))
+        runs = runs[:index]
     for index, run in enumerate(runs):
         if until_minutes is not None and run["minutes_now"] > until_minutes:
             break
