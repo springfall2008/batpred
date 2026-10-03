@@ -19,7 +19,7 @@ The comparison is the point. Where the replay reproduces the logged windows it c
 changes; where it does not, the first run that diverges says what the log carries that the yaml did not.
 
 Inputs taken from the log rather than recomputed: SoC, the cumulative load/PV/import/export counters, the
-in-day load adjustment, the PV cloud factor, and the inverter's programmed export window. The PV forecast is
+in-day load adjustment, the load divergence, and the inverter's programmed export window. The PV forecast is
 the one in the yaml - the log records only its total.
 """
 import array
@@ -35,7 +35,7 @@ RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes no
 SOC_RE = re.compile(r"Inverter 0 SoC: ([\d.]+)kWh (\d+)%.*current battery power (-?\d+)W")
 TODAY_RE = re.compile(r"Current data so far today: load ([\d.]+)kWh, import ([\d.]+)kWh, export ([\d.]+)kWh, PV ([\d.]+)kWh")
 INDAY_RE = re.compile(r"in-day adjustment ([\d.]+)%")
-CLOUD_RE = re.compile(r"PV cloud factor ([\d.]+)")
+DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
 WINDOW_RE = re.compile(r"(\d\d-\d\d) (\d\d):(\d\d):\d\d - (\d\d-\d\d) (\d\d):(\d\d):\d\d @ ([\d.]+)\S+ ([\d.]+)%")
@@ -91,7 +91,7 @@ def parse_log(path):
                 continue
             if run is None:
                 continue
-            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (CLOUD_RE, "cloud"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
+            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (DIVERGENCE_RE, "divergence"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
                 found = regex.search(line)
                 if found:
                     run[store] = found.groups() if store in ("soc", "today", "force") else found.group(1)
@@ -184,8 +184,11 @@ def apply_run(my_predbat, prev, run):
         inverter.soc_percent = int(soc_percent)
     if run.get("inday"):
         my_predbat.load_inday_adjustment = float(run["inday"]) / 100.0
-    if run.get("cloud"):
-        my_predbat.metric_cloud_coverage = float(run["cloud"])
+    # calculate_plan recomputes the load divergence from the load history, which the replay can only rebuild
+    # at the log's 5-minute resolution - smoother than the live 1-minute history, so it comes out different.
+    # Use the logged value instead; it is rounded to 2 dp of the fraction exactly as get_load_divergence returns it.
+    if run.get("divergence"):
+        my_predbat.replay_load_divergence = round(float(run["divergence"]) / 100.0, 2)
     # The window the inverter is holding is the one the previous run programmed
     set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now)
 
@@ -213,10 +216,42 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     plan_day = my_predbat.now_utc.strftime("%d-%m")
     start = my_predbat.now_utc.strftime("%H:%M")
     runs = [run for run in parse_log(log_file) if run["time"][:10] == day and run["time"][11:16] > start]
-    prev = {"today": None, "force": None}
     # The yaml's own day counters stand in for the run before the first one
     yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
+    install_logged_load_divergence(my_predbat)
+    try:
+        rows = replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet)
+    finally:
+        remove_logged_load_divergence(my_predbat)
+    return rows
+
+
+def install_logged_load_divergence(my_predbat):
+    """Make get_load_divergence return the value the log recorded for the current run, when there is one."""
+    original = my_predbat.get_load_divergence
+
+    def logged_load_divergence(minutes_now, load_minutes):
+        """Return the logged divergence, falling back to computing it when the log had none."""
+        value = getattr(my_predbat, "replay_load_divergence", None)
+        if value is None:
+            return original(minutes_now, load_minutes)
+        return value if my_predbat.metric_load_divergence_enable else None
+
+    my_predbat.get_load_divergence = logged_load_divergence
+    my_predbat.replay_load_divergence = None
+
+
+def remove_logged_load_divergence(my_predbat):
+    """Undo install_logged_load_divergence, so the shared instance is left as it was found."""
+    for name in ("get_load_divergence", "replay_load_divergence"):
+        if name in my_predbat.__dict__:
+            del my_predbat.__dict__[name]
+
+
+def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet):
+    """Step through the runs, re-planning where the log did, and return the comparison rows."""
     sim_soc = my_predbat.soc_kw
+    prev = {"today": None, "force": None}
     rows = []
     for run in runs:
         if until_minutes is not None and run["minutes_now"] > until_minutes:
