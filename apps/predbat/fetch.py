@@ -940,6 +940,34 @@ class Fetch:
         except Exception as e:
             self.log("Warn: Unable to log the raw load for replay: {}".format(e))
 
+    def log_replay_ml_forecast(self, results):
+        """Log the Load ML predictions whenever they change, so a log can be replayed against them.
+
+        The predictions come from a model retrained in the background, so a replay cannot re-derive them; they are
+        an input, like the PV forecast. They are logged as read from the sensor, before Predbat converts and
+        re-anchors them, so that code still runs in a replay. Evenly spaced timestamps are logged as a start, a step
+        and the values; anything else as the full mapping. Never raises - this runs every cycle on the main loop.
+        """
+        try:
+            if not isinstance(results, dict):
+                return
+            items = sorted(results.items())
+            signature = hash(tuple((str(key), str(value)) for key, value in items))
+            if signature == getattr(self, "replay_ml_signature", None):
+                return
+            self.replay_ml_signature = signature
+            try:
+                times = [str2time(str(key)) for key, _ in items]
+                steps = {int((after - before).total_seconds() // 60) for before, after in zip(times, times[1:])}
+            except (ValueError, TypeError):
+                steps = set()
+            if items and len(steps) == 1:
+                self.log("Replay input: ML load forecast changed, from {} every {} minutes kWh {}".format(items[0][0], steps.pop(), [round(float(value), 4) for _, value in items]))
+            else:
+                self.log("Replay input: ML load forecast changed, kWh {}".format(dict(items)))
+        except Exception as e:
+            self.log("Warn: Unable to log the ML load forecast for replay: {}".format(e))
+
     def log_replay_load_forecast(self):
         """Log the load forecast the plan will use this cycle, so a log can be replayed against it.
 
@@ -2731,6 +2759,7 @@ class Fetch:
         # Use ML Model for load prediction
         load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
         if load_ml_forecast:
+            self.log_replay_ml_forecast(load_ml_forecast)
             self.log("Loading ML load forecast from sensor.{}_load_ml_forecast".format(self.prefix))
             # Convert format from dict to array
             if isinstance(load_ml_forecast, dict):

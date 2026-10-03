@@ -90,6 +90,25 @@ def test_raw_load_logged(my_predbat):
     return 0
 
 
+def test_ml_forecast_logged_on_change(my_predbat):
+    """Load ML predictions are logged compactly when evenly spaced, in full otherwise, and only when they change."""
+    my_predbat.replay_ml_signature = None
+    results = {"2026-10-01T09:30:00+0000": 1.5, "2026-10-01T09:00:00+0000": 1.0, "2026-10-01T10:00:00+0000": 2.25}
+    lines = capture(my_predbat, lambda: my_predbat.log_replay_ml_forecast(results))
+    if len(lines) != 1 or "from 2026-10-01T09:00:00+0000 every 30 minutes kWh [1.0, 1.5, 2.25]" not in lines[0]:
+        print("ERROR: expected a compact ML forecast line, got {}".format(lines))
+        return 1
+    if capture(my_predbat, lambda: my_predbat.log_replay_ml_forecast(dict(results))):
+        print("ERROR: unchanged ML predictions should not be logged again")
+        return 1
+    results["2026-10-01T10:15:00+0000"] = 2.5
+    lines = capture(my_predbat, lambda: my_predbat.log_replay_ml_forecast(results))
+    if len(lines) != 1 or "every" in lines[0] or "10:15:00" not in lines[0]:
+        print("ERROR: uneven ML predictions should be logged in full, got {}".format(lines))
+        return 1
+    return 0
+
+
 def test_logging_never_raises(my_predbat):
     """A malformed forecast is reported as a warning rather than raised into the main loop."""
     my_predbat.pv_forecast_minute = {"bad": "data"}
@@ -107,12 +126,13 @@ def test_logging_never_raises(my_predbat):
 def run_log_replay_inputs_tests(my_predbat):
     """Run the replay-input logging tests, restoring the shared fixture afterwards."""
     missing = object()
-    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature",)}
+    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature")}
     failed = 0
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
         failed += test_load_forecast_logged(my_predbat)
         failed += test_raw_load_logged(my_predbat)
+        failed += test_ml_forecast_logged_on_change(my_predbat)
         failed += test_logging_never_raises(my_predbat)
     finally:
         for key, value in saved.items():
