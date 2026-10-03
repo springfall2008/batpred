@@ -114,16 +114,13 @@ def test_restore_reinstates_static_and_config():
 
 
 def test_control_cache_restore_is_time_bounded():
-    """A stale applied-payload/control_active cache is discarded so the next write is forced.
+    """A stale applied-payload cache is discarded, but control_active survives the restart.
 
-    It is a change-detection cache with no read-back, so restoring it asserts the inverter
-    still holds what Predbat last wrote. After a long outage that assertion is false, the
-    next write would be wrongly skipped and the battery would silently diverge.
-
-    control_active is bounded alongside applied_payload, not just restored unconditionally:
-    _reconcile_control() gates every write on control_active, so restoring it
-    past the same staleness bound would let a write-skipping restart still claim to be
-    actively controlling an inverter it has not actually confirmed for a long time.
+    The write guard is a local re-arming flag, not a proof the inverter still holds the
+    exact payload Predbat last sent. After a restart, a stale applied_payload must not be
+    trusted and must be cleared so the next write is forced, but control_active must be
+    kept so _reconcile_control() re-applies the current plan instead of waiting for an
+    unrelated entity event to press the write button again.
     """
     failed = False
     fresh = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL - 1})
@@ -140,10 +137,10 @@ def test_control_cache_restore_is_time_bounded():
     stale.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}, "control_active": ["INV1"]}
     run_async_local(stale.restore_state())
     if stale.applied_payload:
-        print(f"ERROR: a stale control cache was restored: {stale.applied_payload}")
+        print(f"ERROR: a stale applied_payload was restored: {stale.applied_payload}")
         failed = True
-    if stale.control_active:
-        print(f"ERROR: a stale control_active was restored: {stale.control_active}")
+    if stale.control_active != {"INV1"}:
+        print(f"ERROR: a stale control_active should survive the restart so re-arming still happens, got {stale.control_active}")
         failed = True
     assert not failed, "test_control_cache_restore_is_time_bounded"
 
