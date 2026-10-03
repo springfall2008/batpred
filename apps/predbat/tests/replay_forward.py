@@ -255,7 +255,7 @@ def apply_run(my_predbat, prev, run):
     set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now, prev.get("next_limit"))
 
 
-def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, simulate=False):
+def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, simulate=False, overrides=None):
     """Restore debug_file, then step through log_file re-planning where the log did; return the comparison rows.
 
     Each row is a dict with the run's time, whether it re-planned, the logged and replayed export windows, the
@@ -265,8 +265,16 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     With simulate the replay is closed-loop: the battery is stepped forward under the replayed plan using the
     actual PV and load (see simulate_soc), and that SoC - not the logged one - is what each re-plan starts from.
     Without it every re-plan starts from the SoC the log recorded.
+
+    overrides maps instance attribute names to values set after the yaml is restored, for what-if replays such as
+    a different pv_metric90_weight.
     """
     restore_debug_state(my_predbat, debug_file)
+    for name, value in (overrides or {}).items():
+        if not hasattr(my_predbat, name):
+            raise ValueError("Unknown setting {} for --replay_set".format(name))
+        print("Replay override: {} = {} (was {})".format(name, value, getattr(my_predbat, name)))
+        setattr(my_predbat, name, value)
     my_predbat.plan_valid = True
     rebuild_load_pv_models(my_predbat)
     until_minutes = None
@@ -308,6 +316,24 @@ def remove_logged_load_divergence(my_predbat):
     for name in ("get_load_divergence", "replay_load_divergence"):
         if name in my_predbat.__dict__:
             del my_predbat.__dict__[name]
+
+
+def parse_override(text):
+    """Parse a name=value override, reading the value as a number or boolean when it looks like one."""
+    name, _, value = text.partition("=")
+    if not name or not _:
+        raise ValueError("Expected name=value, got {}".format(text))
+    lowered = value.strip().lower()
+    if lowered in ("true", "false"):
+        return name.strip(), lowered == "true"
+    try:
+        return name.strip(), int(value)
+    except ValueError:
+        pass
+    try:
+        return name.strip(), float(value)
+    except ValueError:
+        return name.strip(), value
 
 
 def version_change(runs):

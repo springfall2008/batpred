@@ -80,7 +80,7 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
-from tests.replay_forward import replay_forward, summarise, chart_replay, soc_rms_error
+from tests.replay_forward import replay_forward, summarise, chart_replay, soc_rms_error, parse_override
 from tests.test_replay_forward import run_replay_forward_tests
 from tests.test_dummy_inverter import run_dummy_inverter_tests
 from tests.test_saving_session import (
@@ -812,6 +812,7 @@ def main():
     parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
     parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at this HH:MM")
     parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
+    parser.add_argument("--replay_set", action="append", help="With --replay_log: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
     parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
@@ -905,7 +906,8 @@ def main():
         sys.exit(0)
 
     if args.debug_file and args.replay_log:
-        rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until, simulate=args.replay_simulate)
+        overrides = dict(parse_override(text) for text in (args.replay_set or []))
+        rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until, simulate=args.replay_simulate, overrides=overrides)
         if args.replay_chart:
             chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
             print("Wrote replay chart to {}".format(args.replay_chart))

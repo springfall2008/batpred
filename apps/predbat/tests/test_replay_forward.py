@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -297,6 +297,21 @@ def test_replay_inputs():
     return failed
 
 
+def test_parse_override():
+    """Overrides read numbers and booleans as such, and anything else as text."""
+    cases = [("pv_metric90_weight=0.25", ("pv_metric90_weight", 0.25)), ("forecast_hours=30", ("forecast_hours", 30)), ("calculate_pv90_plan=False", ("calculate_pv90_plan", False)), ("mode=eco", ("mode", "eco"))]
+    for text, expected in cases:
+        if parse_override(text) != expected:
+            print("ERROR: parse_override({}) gave {}".format(text, parse_override(text)))
+            return 1
+    try:
+        parse_override("missing-equals")
+    except ValueError:
+        return 0
+    print("ERROR: an override without = should be rejected")
+    return 1
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -312,4 +327,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_soc_rms_error()
     failed += test_version_change()
     failed += test_replay_inputs()
+    failed += test_parse_override()
     return failed
