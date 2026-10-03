@@ -23,6 +23,7 @@ in-day load adjustment, the load divergence, and the inverter's programmed expor
 the one in the yaml - the log records only its total.
 """
 import array
+import math
 import re
 from datetime import date, timedelta
 
@@ -383,6 +384,14 @@ def chart_replay(rows, filename, title="Replay"):
     fig.tight_layout()
     fig.savefig(filename, dpi=110)
     plt.close(fig)
+
+
+def soc_rms_error(rows):
+    """Root-mean-square difference in SoC % between the replay's simulated battery and the log, or None when not simulating."""
+    errors = [row["soc_sim_percent"] - row["soc_percent"] for row in rows if row.get("soc_sim_percent") is not None]
+    if not errors:
+        return None
+    return math.sqrt(sum(error * error for error in errors) / len(errors))
 
 
 def summarise(rows):
