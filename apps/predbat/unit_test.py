@@ -80,8 +80,9 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
-from tests.replay_forward import replay_forward, summarise, chart_replay
+from tests.replay_forward import replay_forward, summarise, chart_replay, soc_rms_error
 from tests.test_replay_forward import run_replay_forward_tests
+from tests.test_dummy_inverter import run_dummy_inverter_tests
 from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
@@ -708,6 +709,7 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("dummy_inverter", run_dummy_inverter_tests, "Simulated inverter and battery component (model physics, controls, automatic config)", False),
         ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
         ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
@@ -909,6 +911,9 @@ def main():
             print("Wrote replay chart to {}".format(args.replay_chart))
         replanned, identical, same_start = summarise(rows)
         print("Replay: of {} re-plans, {} reproduce the logged export windows exactly and {} the first window's start".format(replanned, identical, same_start))
+        rms = soc_rms_error(rows)
+        if rms is not None:
+            print("Replay: simulated SoC differs from the logged SoC by {:.2f}% RMS over {} runs".format(rms, len(rows)))
         sys.exit(0)
 
     if args.debug_file:

@@ -636,6 +636,20 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "dummy_inverter": {
+        "class": "dummy_inverter.DummyInverter",
+        "name": "Dummy Inverter",
+        "inverter": True,
+        "event_filter": "predbat_dummy_",
+        # A simulated inverter and battery for demos and log replay, enabled by a dummy_inverter apps.yaml block.
+        # Defaults for every setting in the block live in dummy_inverter.py beside the model that uses them.
+        "args": {
+            "config": {"required": True, "config": "dummy_inverter"},
+            "automatic": {"required": False, "config": "dummy_inverter_automatic", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "teslemetry": {
         "class": "teslemetry.TeslemetryAPI",
         "name": "Tesla Powerwall (Teslemetry)",
