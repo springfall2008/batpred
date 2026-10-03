@@ -1,6 +1,6 @@
 # fmt: off
 # pylint: disable=line-too-long
-"""Unit tests for the replay-input log lines (Fetch.log_replay_pv_forecast and Fetch.log_replay_load_forecast)."""
+"""Unit tests for the replay-input log lines (Fetch.log_replay_*)."""
 
 import re
 
@@ -68,6 +68,28 @@ def test_load_forecast_logged(my_predbat):
     return 0
 
 
+def test_raw_load_logged(my_predbat):
+    """The raw load counter and power for the last 10 minutes are logged newest first."""
+    counter = {minute: 10.0 - minute * 0.01 for minute in range(20)}
+    power = {minute: 600.0 for minute in range(20)}
+    lines = capture(my_predbat, lambda: my_predbat.log_replay_raw_load(counter, power))
+    if len(lines) != 1 or "raw load, newest first" not in lines[0]:
+        print("ERROR: expected one raw load line, got {}".format(lines))
+        return 1
+    if numbers(lines[0])[:2] != [10.0, 9.99] or numbers(lines[0].split("load_power", 1)[1]) != [600.0] * 10:
+        print("ERROR: raw load values wrong: {}".format(lines[0]))
+        return 1
+    lines = capture(my_predbat, lambda: my_predbat.log_replay_raw_load(counter, None))
+    if "load_power W []" not in lines[0]:
+        print("ERROR: no power data should log an empty power list: {}".format(lines))
+        return 1
+    lines = capture(my_predbat, lambda: my_predbat.log_replay_raw_load(None, None))
+    if not lines or not lines[0].startswith("Warn:"):
+        print("ERROR: bad input should warn, not raise: {}".format(lines))
+        return 1
+    return 0
+
+
 def test_logging_never_raises(my_predbat):
     """A malformed forecast is reported as a warning rather than raised into the main loop."""
     my_predbat.pv_forecast_minute = {"bad": "data"}
@@ -90,6 +112,7 @@ def run_log_replay_inputs_tests(my_predbat):
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
         failed += test_load_forecast_logged(my_predbat)
+        failed += test_raw_load_logged(my_predbat)
         failed += test_logging_never_raises(my_predbat)
     finally:
         for key, value in saved.items():

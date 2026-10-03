@@ -926,6 +926,20 @@ class Fetch:
         except Exception as e:
             self.log("Warn: Unable to log the PV forecast for replay: {}".format(e))
 
+    def log_replay_raw_load(self, load_minutes, load_power_data):
+        """Log the last 10 minutes of raw load readings, before the load_power fill reshapes them.
+
+        The load forecast is derived from a history that fill_load_from_power re-cuts every cycle, so a replay that
+        is to re-derive it needs the raw readings: the load counter (kWh, newest first) and the load power (W, newest
+        first), both per minute. Never raises - this runs every cycle on the main loop.
+        """
+        try:
+            counter = [round(load_minutes.get(minute, 0), 4) for minute in range(10)]
+            power = [int(round(load_power_data.get(minute, 0))) for minute in range(10)] if load_power_data else []
+            self.log("Replay input: raw load, newest first, load_today kWh {} load_power W {}".format(counter, power))
+        except Exception as e:
+            self.log("Warn: Unable to log the raw load for replay: {}".format(e))
+
     def log_replay_load_forecast(self):
         """Log the load forecast the plan will use this cycle, so a log can be replayed against it.
 
@@ -1083,6 +1097,7 @@ class Fetch:
             if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
                 self.log("Using load_power data to fill gaps in load_today data")
                 load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
+                self.log_replay_raw_load(self.load_minutes, load_power_data)
                 self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
             # Load data
@@ -1099,6 +1114,7 @@ class Fetch:
                     # ever-growing cumulative series, inflating fill_load_from_power gap-fills.
                     self.log("Using load_power data to fill gaps in load_today data")
                     load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
+                    self.log_replay_raw_load(self.load_minutes, load_power_data)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:
                 if self.load_forecast:
