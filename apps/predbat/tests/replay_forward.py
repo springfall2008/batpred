@@ -28,7 +28,7 @@ from datetime import timedelta
 
 from utils import MinuteArray
 from prediction import Prediction
-from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models
+from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows
 
 RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
 SOC_RE = re.compile(r"Inverter 0 SoC: ([\d.]+)kWh (\d+)%.*current battery power (-?\d+)W")
@@ -161,6 +161,8 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False):
         apply_run(my_predbat, prev, run)
         row = {"time": run["time"][11:16], "replanned": run["filtered"] is not None, "logged": parse_windows(run["filtered"]) if run["filtered"] else None, "replayed": None}
         if row["replanned"]:
+            # Candidate windows start at the current slot, so they move with the clock as fetch moves them
+            rescan_rate_windows(my_predbat)
             rebuild_load_pv_models(my_predbat)
             pv_step = my_predbat.pv_forecast_minute_step
             load_step = my_predbat.load_minutes_step

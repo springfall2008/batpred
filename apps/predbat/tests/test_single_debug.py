@@ -102,6 +102,35 @@ def rebuild_load_pv_models(my_predbat, load_override=1.0):
     )
 
 
+def rescan_rate_windows(my_predbat):
+    """Re-derive the rate thresholds and the candidate charge/export windows for the instance's current time."""
+    # Set rate thresholds
+    if my_predbat.rate_import or my_predbat.rate_export:
+        print("Set rate thresholds")
+        my_predbat.set_rate_thresholds()
+        print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
+
+    # Find discharging windows
+    if my_predbat.rate_export:
+        my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
+        print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
+        # Update threshold automatically
+        if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
+            my_predbat.rate_export_cost_threshold = export_lowest
+
+    # Find charging windows
+    if my_predbat.rate_import:
+        # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
+        # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
+        # so a debug.yaml replay could never catch a regression in the split)
+        pv_light_dark = my_predbat.calc_pv_light_dark()
+        print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
+        my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
+        # Update threshold automatically
+        if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
+            my_predbat.rate_import_cost_threshold = highest
+
+
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
     print("**** Running debug test {} ****\n".format(debug_file))
     # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
@@ -175,31 +204,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Charge scaling 10 {} load scaling 10 {}".format(my_predbat.charge_scaling10, my_predbat.load_scaling10))
 
     if re_do_rates:
-        # Set rate thresholds
-        if my_predbat.rate_import or my_predbat.rate_export:
-            print("Set rate thresholds")
-            my_predbat.set_rate_thresholds()
-            print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
-
-        # Find discharging windows
-        if my_predbat.rate_export:
-            my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
-            print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
-            # Update threshold automatically
-            if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
-                my_predbat.rate_export_cost_threshold = export_lowest
-
-        # Find charging windows
-        if my_predbat.rate_import:
-            # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
-            # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
-            # so a debug.yaml replay could never catch a regression in the split)
-            pv_light_dark = my_predbat.calc_pv_light_dark()
-            print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
-            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
-            # Update threshold automatically
-            if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
-                my_predbat.rate_import_cost_threshold = highest
+        rescan_rate_windows(my_predbat)
     else:
         print("don't re-do rates")
 
