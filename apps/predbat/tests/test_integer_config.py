@@ -478,3 +478,102 @@ def test_metric_battery_value_scaling_step_resolves_export_margin(my_predbat):
 
     print("✓ Test passed: metric_battery_value_scaling step {} keeps the first nudge ({:.4f}) clear of the {:.4f} flip point and keeps old 0.1-step values valid".format(step, first_nudge, flip_point))
     return False
+
+
+def _float_declared_keys():
+    """The APPS_SCHEMA keys whose declared type includes "float"."""
+    from config import APPS_SCHEMA
+
+    return {key for key, spec in APPS_SCHEMA.items() if "float" in str(spec.get("type", "")).split("|")}
+
+
+def test_float_declared_keys_never_read_with_int_default(my_predbat):
+    """
+    Guard for #4925: no call site may read a key APPS_SCHEMA declares "float" with a bare int literal default.
+
+    get_arg() coerces its return value on the *type* of the default it is handed and applies that to
+    whatever value was resolved, real configured value or not. So `get_arg("solcast_poll_hours", 8)`
+    ran a configured 4.8 through int(float(value)) and returned 4 - shortening the Solcast poll TTL
+    to 4h and pushing a two-site hobbyist account past its 10 poll/day quota. Nothing warned:
+    validate_config() checks the raw apps.yaml value against the float schema and passes it.
+
+    The fix is a float literal at each call site. This scans the source rather than asserting on
+    today's eight sites, so a new `get_arg("<float key>", 8)` or a COMPONENT_LIST spec with
+    `"default": 8` fails here instead of truncating in production. It sees literals only - a
+    default passed through a variable, or a key read through a wrapper accessor, is not checked.
+    """
+    print("**** test_float_declared_keys_never_read_with_int_default ****")
+    import ast
+    import glob
+    import os
+    import components
+
+    float_keys = _float_declared_keys()
+    source_dir = os.path.dirname(os.path.abspath(components.__file__))
+    offenders = []
+    scanned = 0
+    for path in sorted(glob.glob(os.path.join(source_dir, "*.py"))):
+        scanned += 1
+        with open(path, encoding="utf-8") as source:
+            tree = ast.parse(source.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", None)) == "get_arg" and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value in float_keys:
+                default = node.args[1] if len(node.args) > 1 else None
+                for keyword in node.keywords:
+                    if keyword.arg == "default":
+                        default = keyword.value
+                if isinstance(default, ast.Constant) and type(default.value) is int:
+                    offenders.append("{}:{} get_arg({!r}, {})".format(os.path.basename(path), node.lineno, node.args[0].value, default.value))
+            elif isinstance(node, ast.Dict):
+                keys = [key.value if isinstance(key, ast.Constant) else None for key in node.keys]
+                if "config" in keys and "default" in keys:
+                    config = node.values[keys.index("config")]
+                    default = node.values[keys.index("default")]
+                    if isinstance(config, ast.Constant) and config.value in float_keys and isinstance(default, ast.Constant) and type(default.value) is int:
+                        offenders.append("{}:{} arg spec {!r} default {}".format(os.path.basename(path), node.lineno, config.value, default.value))
+
+    assert scanned > 10 and float_keys, "Guard found nothing to scan ({} files, {} float keys) - has the layout changed?".format(scanned, len(float_keys))
+    assert not offenders, "Float-declared keys read with an int default, which truncates a configured fraction (#4925) - write e.g. 8.0: {}".format("; ".join(offenders))
+
+    print("✓ Test passed: {} float-declared keys, no int defaults across {} source files".format(len(float_keys), scanned))
+    return False
+
+
+def test_component_arg_specs_resolve_float_declared_keys_as_float(my_predbat):
+    """
+    Behavioural companion to the source guard above (#4925): every COMPONENT_LIST arg spec with a
+    default whose "config" key APPS_SCHEMA declares "float" must resolve a configured fraction
+    intact, resolved exactly the way Components.initialize() does
+    (`arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)`).
+    """
+    print("**** test_component_arg_specs_resolve_float_declared_keys_as_float ****")
+
+    from components import COMPONENT_LIST
+
+    float_keys = _float_declared_keys()
+    original_args = my_predbat.args.copy()
+    checked = []
+    try:
+        for component_name, component_info in COMPONENT_LIST.items():
+            for arg, arg_info in component_info.get("args", {}).items():
+                config_name = arg_info.get("config", None)
+                if not config_name or arg_info.get("config_late_resolve", False):
+                    continue
+                if config_name not in float_keys:
+                    continue
+                if arg_info.get("default", None) is None:
+                    # No default means no coercion, so there is nothing that could truncate
+                    continue
+
+                my_predbat.args[config_name] = 4.8
+                value = my_predbat.get_arg(config_name, arg_info.get("default", None), indirect=arg_info.get("indirect", False))
+                my_predbat.args.pop(config_name, None)
+                assert value == 4.8, "{}.{} ({}) resolved a configured 4.8 as {} ({}) - a float-declared key must not be truncated by its arg spec default".format(component_name, arg, config_name, value, type(value))
+                checked.append(config_name)
+    finally:
+        my_predbat.args = original_args
+
+    assert checked, "No float-declared component arg specs found to check - has APPS_SCHEMA or COMPONENT_LIST changed shape?"
+
+    print("✓ Test passed: {} float-declared component arg spec(s) resolve fractional values intact: {}".format(len(checked), ", ".join(sorted(set(checked)))))
+    return False
