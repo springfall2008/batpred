@@ -1134,27 +1134,21 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: No access token for MQTT battery command")
             return False
 
-        payload = {
-            "accessToken": token,
-            "commands": [{
-                "systemId": system_id,
-                "activeMode": active_mode,
-                "startTime": now_ts,
-                "duration": int(duration_minutes)
-            }]
-        }
+        # The optional fields belong inside the command object, next to systemId - at the top level of the payload they are ignored
+        command = {"systemId": system_id, "activeMode": active_mode, "startTime": now_ts, "duration": int(duration_minutes)}
         if charging_power_kw is not None:
-            payload["chargingPower"] = round(charging_power_kw, 2)
+            command["chargingPower"] = round(charging_power_kw, 2)
         if pv_power_kw is not None:
-            payload["pvPower"] = round(pv_power_kw, 2)
+            command["pvPower"] = round(pv_power_kw, 2)
         if max_sell_power_kw is not None:
-            payload["maxSellPower"] = round(max_sell_power_kw, 2)
+            command["maxSellPower"] = round(max_sell_power_kw, 2)
         if max_purchase_power_kw is not None:
-            payload["maxPurchasePower"] = round(max_purchase_power_kw, 2)
+            command["maxPurchasePower"] = round(max_purchase_power_kw, 2)
         if charge_priority_type is not None:
-            payload["chargePriorityType"] = charge_priority_type
+            command["chargePriorityType"] = charge_priority_type
         if discharge_priority_type is not None:
-            payload["dischargePriorityType"] = discharge_priority_type
+            command["dischargePriorityType"] = discharge_priority_type
+        payload = {"accessToken": token, "commands": [command]}
 
         self.log("SigenergyAPI: Sending MQTT battery command {} ({} min, {:.2f}kW) to system {}".format(
             active_mode, duration_minutes, charging_power_kw or 0.0, system_id))
