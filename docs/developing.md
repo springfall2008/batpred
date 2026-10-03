@@ -54,7 +54,30 @@ There are two modes:
 
 `--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and shows when each plan says to export.
 
+In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
+
 Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log must be from the same day as the yaml and run on a similar Predbat version.
+
+### The dummy inverter
+
+For a demo, or to run Predbat end to end without real hardware, the `dummy_inverter` component simulates a hybrid inverter and battery. Add a block to `apps.yaml` and it publishes its own sensors and controls and points Predbat's inverter settings at them:
+
+```yaml
+dummy_inverter:
+  battery_size: 10          # kWh usable
+  battery_rate_max: 3600    # W, charge and discharge
+  inverter_limit: 5000      # W, AC output shared by PV and battery
+  export_limit: 5000        # W
+  battery_loss: 0.96
+  battery_loss_discharge: 0.96
+  inverter_loss: 0.96
+  reserve: 4                # %
+  soc_initial: 50           # %
+  pv_peak: 4.0              # kW, clear-sky curve used when there is no PV forecast
+  load: 0.4                 # kW, or a list of 24 hourly values
+```
+
+Every setting is optional. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
 
 ### Finding test order dependencies
 

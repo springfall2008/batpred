@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:02.135467: Current data so far today: load 5.74kWh, import 17.74kWh, export 4.57kWh, PV 0.21kWh
@@ -214,6 +214,15 @@ def test_logged_load_divergence(my_predbat):
     return 0
 
 
+def test_soc_rms_error():
+    """The RMS SoC error compares simulated and logged SoC, and is None when nothing was simulated."""
+    rows = [{"soc_percent": 50, "soc_sim_percent": 53}, {"soc_percent": 60, "soc_sim_percent": 56}, {"soc_percent": 70, "soc_sim_percent": None}]
+    if abs(soc_rms_error(rows) - (12.5 ** 0.5)) > 1e-9 or soc_rms_error([{"soc_percent": 1}]) is not None:
+        print("ERROR: soc_rms_error gave {}".format(soc_rms_error(rows)))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -226,4 +235,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_chart_replay()
     failed += test_simulate_soc(my_predbat)
     failed += test_logged_load_divergence(my_predbat)
+    failed += test_soc_rms_error()
     return failed
