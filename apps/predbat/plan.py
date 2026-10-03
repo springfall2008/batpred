@@ -583,27 +583,38 @@ class Plan:
     def dynamic_load_car_state(self):
         """
         The dispatch-check state worth keeping across a restart, in a form storage can hold, keyed by car:
-        - confirmed: the end of the half hour the car was last seen charging in (dynamic_load_car_strip_from());
+        - confirmed: the end of the half hour the car was last seen charging in (dynamic_load_car_strip_from()),
+          while that half hour is still to come;
         - run: the dispatch the car is in, with the earliest start seen for it - the start band is timed from it;
-        - since: when the car was first seen not charging in it - the grace period is timed from it;
         - cancelled: the decision so far, which stands while there is no evidence either way.
 
-        All times are absolute, as minutes since midnight_utc mean something else after midnight. The rest
-        of the state (which cars have a sensor, what has been warned about, this cycle's decision) is
-        rebuilt every cycle.
+        All times are absolute, as minutes since midnight_utc mean something else after midnight. The "not
+        charging since" clock is deliberately not kept: a restart is a stretch with no evidence, after which
+        the running check starts the grace period afresh too (see dynamic_load_car_target()) - the car may
+        have charged in it - and the clock changes with every flap of an unreliable sensor, which would
+        rewrite the store every 15 seconds. The rest (which cars have a sensor, what has been warned about,
+        this cycle's decision) is rebuilt every cycle.
         """
+        now_minute = self.dynamic_load_car_minute(self.now_utc_real)
+        confirmed_cars = {car_n: confirmed for car_n, confirmed in self.dynamic_load_car_confirmed.items() if self.dynamic_load_car_minutes_of(confirmed) > now_minute}
         cars = {}
-        for car_n in sorted(set(self.dynamic_load_car_confirmed) | set(self.dynamic_load_car_since) | set(self.dynamic_load_car_run)):
-            confirmed = self.dynamic_load_car_confirmed.get(car_n)
-            since = self.dynamic_load_car_since.get(car_n)
+        for car_n in sorted(set(confirmed_cars) | set(self.dynamic_load_car_run)):
+            confirmed = confirmed_cars.get(car_n)
             run = self.dynamic_load_car_run.get(car_n)
             cars[str(car_n)] = {
                 "confirmed": confirmed.isoformat() if confirmed else None,
-                "since": since.isoformat() if since else None,
                 "run": {key: (self.midnight_utc + timedelta(minutes=run[key])).isoformat() for key in ("start", "end")} if run else None,
                 "cancelled": bool(self.dynamic_load_car_cancelled.get(car_n, False)),
             }
         return cars
+
+    def dynamic_load_car_minutes_of(self, when):
+        """
+        A time saved by the dispatch check as minutes since midnight_utc, the axis of dynamic_load_car_minute():
+        the times are built from that axis, so it includes clock_skew and must be compared on it, not with
+        now_utc_real.
+        """
+        return (when - self.midnight_utc).total_seconds() / 60
 
     def dynamic_load_car_save(self):
         """
@@ -635,9 +646,9 @@ class Plan:
         """
         Restore the dispatch-check state saved by dynamic_load_car_save(), at start up.
 
-        Only what is still current is taken: a confirmed half hour that has not ended yet, and the run,
-        grace clock and decision of a dispatch that has not ended yet. Anything older belongs to a dispatch
-        the car has since left, where the running check would have dropped it too.
+        Only what is still current is taken: a confirmed half hour that has not ended yet, and the run and
+        decision of a dispatch that has not ended yet. Anything older belongs to a dispatch the car has since
+        left, where the running check would have dropped it too.
         """
         storage = self.components.get_component("storage") if self.components else None
         if not storage or self.midnight_utc is None:
@@ -653,27 +664,23 @@ class Plan:
         if not isinstance(cars, dict):
             return
 
-        now = self.now_utc_real
+        now_minute = self.dynamic_load_car_minute(self.now_utc_real)
         restored = []
         for key, car in cars.items():
             try:
                 car_n = int(key)
                 confirmed = datetime.fromisoformat(car["confirmed"]) if car.get("confirmed") else None
-                since = datetime.fromisoformat(car["since"]) if car.get("since") else None
-                run = {name: datetime.fromisoformat(car["run"][name]) for name in ("start", "end")} if car.get("run") else None
-                confirmed_current = confirmed is not None and confirmed > now
-                run_current = run is not None and run["end"] > now
-                run_minutes = {name: (run[name] - self.midnight_utc).total_seconds() / 60 for name in ("start", "end")} if run_current else None
+                run = {name: self.dynamic_load_car_minutes_of(datetime.fromisoformat(car["run"][name])) for name in ("start", "end")} if car.get("run") else None
+                confirmed_current = confirmed is not None and self.dynamic_load_car_minutes_of(confirmed) > now_minute
+                run_current = run is not None and run["end"] > now_minute
             except (ValueError, TypeError, KeyError, AttributeError):
                 continue
             if confirmed_current:
                 self.dynamic_load_car_confirmed[car_n] = confirmed
             if run_current:
                 # Whole minutes stay ints, as the slots they are compared with are
-                self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run_minutes.items()}
+                self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run.items()}
                 self.dynamic_load_car_cancelled[car_n] = bool(car.get("cancelled", False))
-                if since is not None:
-                    self.dynamic_load_car_since[car_n] = since
             if confirmed_current or run_current:
                 restored.append(car_n)
         if restored:
