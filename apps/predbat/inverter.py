@@ -368,6 +368,9 @@ class Inverter:
         self.registers_moved = 0
         # Per-control write backoff state, keyed by entity_id - see _write_attempts().
         self.write_backoff = {}
+        # The last charge and discharge rate set, in W, keyed "charge"/"discharge". Only read for an
+        # inverter with no rate entity of its own - see rate_or_last_set().
+        self.rate_last_set = {}
 
         self._init_attribute_defaults()
 
@@ -2075,7 +2078,7 @@ class Inverter:
         if "discharge_rate_percent" in self.base.args:
             current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
         else:
-            current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
+            current_rate = self.rate_or_last_set("discharge")
 
         try:
             current_rate = int(current_rate)
@@ -2085,6 +2088,21 @@ class Inverter:
 
         return current_rate
 
+    def rate_after_deadband(self, current_rate, new_rate, rate_max):
+        """
+        The rate adjust_charge_rate()/adjust_discharge_rate() leave in place: new_rate, or current_rate
+        when the change is within their deadband (rate_tolerances()).
+
+        A move to or from 0 is never inside it. 0 holds the battery, so it is a different state rather than
+        a slightly different rate: on a 10kW battery the deadband is 500W, and a 400W low power charge after
+        an export held the rate at 0 would otherwise be left at 0 and never charge.
+        """
+        if (current_rate == 0) == (new_rate == 0):
+            fuzzy, fuzzy_below = self.rate_tolerances(rate_max)
+            if within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
+                return current_rate
+        return new_rate
+
     def get_current_charge_rate(self):
         """
         Get the current charge rate in watts
@@ -2092,7 +2110,7 @@ class Inverter:
         if "charge_rate_percent" in self.base.args:
             current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
         else:
-            current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
+            current_rate = self.rate_or_last_set("charge")
         try:
             current_rate = int(current_rate)
         except (ValueError, TypeError):
@@ -2100,6 +2118,23 @@ class Inverter:
             current_rate = self.battery_rate_max_raw
 
         return current_rate
+
+    def rate_or_last_set(self, direction):
+        """
+        This inverter's charge or discharge rate in W, from its rate entity, or the rate last set when it has none.
+
+        A script-driven "power" inverter (the Solax SX4 template, #3311) has no rate register, so
+        there is no charge_rate entity to read back. Falling back to battery_rate_max there sent the
+        maximum as the start script's {power} however low the planned rate was. Predbat chose the rate
+        itself, so it is held on this object instead, which outlives the plan cycle. It is only updated
+        when the rate moves by more than the write deadband, as a register would be, so a small change
+        keeps {power} - and the service call's dedup - steady. It is lost on a restart, which reads
+        battery_rate_max until the next rate is set.
+        """
+        arg = direction + "_rate"
+        if self.base.get_arg(arg, indirect=False, index=self.id, default=None) is None:
+            return self.rate_last_set.get(direction, self.battery_rate_max_raw)
+        return self.base.get_arg(arg, index=self.id, default=self.battery_rate_max_raw, required_unit="W")
 
     def rate_tolerances(self, rate_max):
         """
@@ -2150,7 +2185,7 @@ class Inverter:
         current_rate = self.get_current_charge_rate()
 
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
-        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
+        if self.rate_after_deadband(current_rate, new_rate, self.battery_rate_max_charge) != current_rate:
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "charge_rate" in self.base.args:
                 self.write_and_poll_value(
@@ -2167,6 +2202,7 @@ class Inverter:
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} charge rate changes to {new_rate}W at {self.base.time_now_str()}")
             self.mqtt_message(topic="set/charge_rate", payload=new_rate)
+            self.rate_last_set["charge"] = new_rate
 
         # Re-assert the timed current register on every call, not just when charge_rate itself
         # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
@@ -2199,7 +2235,7 @@ class Inverter:
         current_rate = self.get_current_discharge_rate()
 
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
-        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
+        if self.rate_after_deadband(current_rate, new_rate, self.battery_rate_max_discharge) != current_rate:
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "discharge_rate" in self.base.args:
                 self.write_and_poll_value(
@@ -2216,6 +2252,7 @@ class Inverter:
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} discharge rate changes to {new_rate}W at {self.base.time_now_str()}")
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
+            self.rate_last_set["discharge"] = new_rate
 
         # Re-assert the timed current register on every call, not just when discharge_rate itself
         # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
@@ -3340,9 +3377,16 @@ class Inverter:
         # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
-    def adjust_charge_immediate(self, target_soc, freeze=False):
+    def adjust_charge_immediate(self, target_soc, freeze=False, rate=None):
         """
         Adjust from charging or not charging based on passed target soc
+
+        rate is the charge rate (W) execute_plan() intends for this cycle. Rates are written after its
+        per-inverter loop, so reading the stored rate here would send the previous cycle's to the
+        service as {power} (#5252). None falls back to the stored rate.
+
+        With no charge_rate entity at all (a script-driven "power" inverter, #3311), the stored rate is
+        the one last set - see rate_or_last_set() - so the deadband is measured against that.
         """
         # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
         # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
@@ -3358,6 +3402,8 @@ class Inverter:
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
             current_rate = self.get_current_charge_rate()
+            if rate is not None:
+                current_rate = self.rate_after_deadband(current_rate, int(rate + 0.5), self.battery_rate_max_charge)
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": int(target_soc),
@@ -3389,9 +3435,12 @@ class Inverter:
         else:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
-    def adjust_export_immediate(self, target_soc, freeze=False):
+    def adjust_export_immediate(self, target_soc, freeze=False, rate=None):
         """
         Adjust from exporting or not exporting based on passed target soc
+
+        rate is the discharge rate (W) execute_plan() intends for this cycle - see
+        adjust_charge_immediate(). None falls back to the stored rate.
         """
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
         # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
@@ -3405,13 +3454,17 @@ class Inverter:
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
         if target_soc < 100:
             # Mirrors adjust_charge_immediate()'s charge_start_service payload just above - the
-            # actual (possibly low-power-scaled) rate already set via adjust_discharge_rate(), not
-            # always the inverter's maximum, which produced a full-power discharge_start_service
-            # call even during a planned low-power export (batpred#4619).
+            # planned (possibly low-power-scaled) rate, not always the inverter's maximum, which
+            # produced a full-power discharge_start_service call even during a planned low-power
+            # export (batpred#4619). Passed in as rate, since execute_plan() writes the rate itself
+            # later in the cycle (#5252).
+            current_rate = self.get_current_discharge_rate()
+            if rate is not None:
+                current_rate = self.rate_after_deadband(current_rate, int(rate + 0.5), self.battery_rate_max_discharge)
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": int(target_soc),
-                "power": int(self.get_current_discharge_rate()),
+                "power": int(current_rate),
             }
 
             # Stop charge

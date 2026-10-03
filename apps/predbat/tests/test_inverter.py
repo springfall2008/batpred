@@ -1724,6 +1724,117 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_immediate_service_power_uses_passed_rate(test_name, my_predbat, ha, inv, dummy_items):
+    """
+    #5252: execute_plan() writes rates after its per-inverter loop, so it passes this cycle's rate to
+    adjust_charge_immediate()/adjust_export_immediate() for the service's {power}. The passed rate
+    goes through the same 5% deadband adjust_charge_rate() applies, so a small change keeps the
+    stored rate - and the service payload - steady instead of re-sending a slightly different
+    power (and a fresh service call) every cycle. With no rate entity it is measured against the rate
+    last set (#3311), or the maximum before any rate is set.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved = (inv.battery_rate_max_charge, inv.battery_rate_max_discharge, inv.soc_percent, ha.service_store_enable, dict(my_predbat.last_service_hash), inv.battery_rate_max_raw)
+    saved_rate_last_set = dict(inv.rate_last_set)
+    saved_rate_items = {key: dummy_items.get(key) for key in ("number.charge_rate", "number.discharge_rate")}
+    try:
+        inv.battery_rate_max_charge = 3000 / MINUTE_WATT  # deadband 150W
+        inv.battery_rate_max_discharge = 3000 / MINUTE_WATT
+        inv.soc_percent = 50
+        my_predbat.args["charge_start_service"] = "charge_start"
+        my_predbat.args["charge_freeze_service"] = None
+        my_predbat.args["charge_stop_service"] = "charge_stop"
+        my_predbat.args["discharge_start_service"] = "discharge_start"
+        my_predbat.args["discharge_stop_service"] = "discharge_stop"
+        my_predbat.args["discharge_freeze_service"] = None
+        my_predbat.args["charge_rate"] = "number.charge_rate"
+        my_predbat.args["discharge_rate"] = "number.discharge_rate"
+        my_predbat.args["device_id"] = "DID0"
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+        dummy_items["number.charge_rate"] = 1100
+        dummy_items["number.discharge_rate"] = 1100
+        ha.service_store_enable = True
+
+        def power_sent(call, service, **kwargs):
+            """Run one immediate call on a fresh dedup state and return the {power} sent to service."""
+            my_predbat.last_service_hash.clear()
+            ha.service_store = []
+            call(**kwargs)
+            powers = [data.get("power") for name, data in ha.get_service_store() if name == service]
+            return powers[0] if len(powers) == 1 else powers
+
+        cases = (
+            ("charge, no rate: stored rate", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100), 1100),
+            ("charge, new rate", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100, rate=2500), 2500),
+            ("charge, rate within deadband", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100, rate=1200), 1100),
+            ("export, no rate: stored rate", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10), 1100),
+            ("export, new rate", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10, rate=2500), 2500),
+            ("export, rate within deadband", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10, rate=1200), 1100),
+        )
+        for name, call, service, kwargs, expected in cases:
+            got = power_sent(call, service, **kwargs)
+            if got != expected:
+                print("ERROR: {} {}: {} should be sent power {} got {}".format(test_name, name, service, expected, got))
+                failed = True
+
+        # No rate entity at all (a script-driven "power" inverter, #3311) and no rate set yet: the
+        # stored rate reads as the maximum, so the deadband is measured against that.
+        my_predbat.args.pop("charge_rate", None)
+        my_predbat.args.pop("discharge_rate", None)
+        inv.battery_rate_max_raw = 3000
+        inv.rate_last_set = {}
+        cases = (
+            ("charge, no entity, no rate: maximum", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100), 3000),
+            ("charge, no entity, new rate", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100, rate=1000), 1000),
+            ("charge, no entity, within deadband of maximum", inv.adjust_charge_immediate, "charge_start", dict(target_soc=100, rate=2900), 3000),
+            ("export, no entity, no rate: maximum", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10), 3000),
+            ("export, no entity, new rate", inv.adjust_export_immediate, "discharge_start", dict(target_soc=10, rate=1000), 1000),
+        )
+        for name, call, service, kwargs, expected in cases:
+            got = power_sent(call, service, **kwargs)
+            if got != expected:
+                print("ERROR: {} {}: {} should be sent power {} got {}".format(test_name, name, service, expected, got))
+                failed = True
+
+        # Two consecutive cycles with a small change (inside the deadband), the rate applied after each
+        # as execute_plan() does: the rate last set is measured against, so the second cycle is held at
+        # the first and its identical start call is not sent again.
+        for name, call, apply_rate, service, kwargs in (
+            ("charge", inv.adjust_charge_immediate, inv.adjust_charge_rate, "charge_start", dict(target_soc=100)),
+            ("export", inv.adjust_export_immediate, inv.adjust_discharge_rate, "discharge_start", dict(target_soc=10)),
+        ):
+            inv.rate_last_set = {}
+            my_predbat.last_service_hash.clear()
+            ha.service_store = []
+            call(rate=1000, **kwargs)
+            apply_rate(1000, notify=False)
+            call(rate=1050, **kwargs)
+            apply_rate(1050, notify=False)
+            got = [data.get("power") for called, data in ha.get_service_store() if called == service]
+            if got != [1000]:
+                print("ERROR: {} {}, no entity, small change: {} should be sent power [1000] got {}".format(test_name, name, service, got))
+                failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        inv.battery_rate_max_charge, inv.battery_rate_max_discharge, inv.soc_percent, ha.service_store_enable, hash_saved, inv.battery_rate_max_raw = saved
+        inv.rate_last_set = saved_rate_last_set
+        for key, value in saved_rate_items.items():
+            if value is None:
+                dummy_items.pop(key, None)
+            else:
+                dummy_items[key] = value
+        my_predbat.last_service_hash.clear()
+        my_predbat.last_service_hash.update(hash_saved)
+        ha.service_store = []
+
+    return failed
+
+
 def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
@@ -5652,6 +5763,7 @@ charge_start_service:
     failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 75, freeze=True, no_freeze=True, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 30, freeze=True, no_freeze=True, repeat=True)
+    failed |= test_immediate_service_power_uses_passed_rate("immediate_service_power_passed_rate", my_predbat, ha, inv, dummy_items)
     if failed:
         return failed
 

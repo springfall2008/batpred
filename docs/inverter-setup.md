@@ -3662,7 +3662,7 @@ The default options passed in are:
 
 - device_id - as defined in `apps.yaml` by **device_id**
 - target_soc - The SoC to charge to
-- power - The charge power to use
+- power - The charge power Predbat has planned for this cycle, in watts, including a low power charge. A change smaller than 5% of the maximum rate keeps the previous power, so the service is not called again for it. This works whether or not **charge_rate** is set
 - charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
 
@@ -3686,7 +3686,7 @@ The default options passed in are:
 
 - device_id - as defined in `apps.yaml` by **device_id**
 - target_soc - The SoC to discharge to
-- power - The discharge power to use
+- power - The discharge power Predbat has planned for this cycle, in watts. As for charging, a change smaller than 5% of the maximum rate keeps the previous power
 
 #### discharge_freeze_service
 
