@@ -42,18 +42,8 @@ def _dump_state_before_plan(my_predbat, filename):
         json.dump(state, handle, indent=2, sort_keys=True)
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
-    print("**** Running debug test {} ****\n".format(debug_file))
-    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
-    # debug_cases regression suite exercise the same code path and produce the same result.
-    re_do_rates = redo
-    reset_load_model = redo
-    reload_octopus_slots = redo
-    load_override = 1.0
-    my_predbat.load_user_config()
-    failed = False
-
-    print("**** Test {} ****".format(test_name))
+def restore_debug_state(my_predbat, debug_file):
+    """Reset the shared fixture and load a debug yaml into it, leaving it ready to plan from."""
     reset_inverter(my_predbat)
     # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
     # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
@@ -76,6 +66,55 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
     my_predbat.args["threads"] = 0
+
+
+def rebuild_load_pv_models(my_predbat, load_override=1.0):
+    """Rebuild the stepped load and PV models from the history and forecasts now held on the instance."""
+    my_predbat.load_minutes_step = my_predbat.step_data_history(
+        my_predbat.load_minutes,
+        my_predbat.minutes_now,
+        forward=False,
+        scale_today=my_predbat.load_inday_adjustment,
+        scale_fixed=my_predbat.load_scaling * load_override,
+        type_load=True,
+        load_forecast=my_predbat.load_forecast,
+        load_scaling_dynamic=my_predbat.load_scaling_dynamic,
+        cloud_factor=my_predbat.metric_load_divergence,
+        load_adjust=my_predbat.manual_load_adjust,
+        load_baseline=my_predbat.dynamic_load_baseline,
+    )
+    my_predbat.load_minutes_step10 = my_predbat.step_data_history(
+        my_predbat.load_minutes,
+        my_predbat.minutes_now,
+        forward=False,
+        scale_today=my_predbat.load_inday_adjustment,
+        scale_fixed=my_predbat.load_scaling10 * load_override,
+        type_load=True,
+        load_forecast=my_predbat.load_forecast,
+        load_scaling_dynamic=my_predbat.load_scaling_dynamic,
+        cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
+        load_adjust=my_predbat.manual_load_adjust,
+        load_baseline=my_predbat.dynamic_load_baseline,
+    )
+    my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
+    my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
+        my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
+    )
+
+
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
+    print("**** Running debug test {} ****\n".format(debug_file))
+    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
+    # debug_cases regression suite exercise the same code path and produce the same result.
+    re_do_rates = redo
+    reset_load_model = redo
+    reload_octopus_slots = redo
+    load_override = 1.0
+    my_predbat.load_user_config()
+    failed = False
+
+    print("**** Test {} ****".format(test_name))
+    restore_debug_state(my_predbat, debug_file)
     # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
@@ -182,36 +221,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # plan regression when the plans are identical.
     if reset_load_model:
         print("Reset load model")
-        my_predbat.load_minutes_step = my_predbat.step_data_history(
-            my_predbat.load_minutes,
-            my_predbat.minutes_now,
-            forward=False,
-            scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling * load_override,
-            type_load=True,
-            load_forecast=my_predbat.load_forecast,
-            load_scaling_dynamic=my_predbat.load_scaling_dynamic,
-            cloud_factor=my_predbat.metric_load_divergence,
-            load_adjust=my_predbat.manual_load_adjust,
-            load_baseline=my_predbat.dynamic_load_baseline,
-        )
-        my_predbat.load_minutes_step10 = my_predbat.step_data_history(
-            my_predbat.load_minutes,
-            my_predbat.minutes_now,
-            forward=False,
-            scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling10 * load_override,
-            type_load=True,
-            load_forecast=my_predbat.load_forecast,
-            load_scaling_dynamic=my_predbat.load_scaling_dynamic,
-            cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
-            load_adjust=my_predbat.manual_load_adjust,
-            load_baseline=my_predbat.dynamic_load_baseline,
-        )
-        my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
-        my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
-            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
-        )
+        rebuild_load_pv_models(my_predbat, load_override)
 
     pv_step = my_predbat.pv_forecast_minute_step
     pv10_step = my_predbat.pv_forecast_minute10_step

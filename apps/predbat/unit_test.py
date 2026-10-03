@@ -80,6 +80,8 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
+from tests.replay_forward import replay_forward, summarise
+from tests.test_replay_forward import run_replay_forward_tests
 from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
@@ -702,6 +704,7 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
@@ -798,6 +801,8 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
+    parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at this HH:MM")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
@@ -887,6 +892,12 @@ def main():
             callers_of=args.random_profile_callers,
             line_profile_funcs=args.random_profile_line,
         )
+        sys.exit(0)
+
+    if args.debug_file and args.replay_log:
+        rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until)
+        replanned, identical, same_start = summarise(rows)
+        print("Replay: of {} re-plans, {} reproduce the logged export windows exactly and {} the first window's start".format(replanned, identical, same_start))
         sys.exit(0)
 
     if args.debug_file:
