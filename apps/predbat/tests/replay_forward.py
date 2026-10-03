@@ -30,7 +30,7 @@ from datetime import date, timedelta
 from const import PREDICT_STEP, EXPORT_MODE_TARGET
 from utils import MinuteArray, pack_export_limit
 from prediction import Prediction
-from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows
+from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows, apply_overrides
 
 RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
 SOC_RE = re.compile(r"Inverter 0 SoC: ([\d.]+)kWh (\d+)%.*current battery power (-?\d+)W")
@@ -267,14 +267,10 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     Without it every re-plan starts from the SoC the log recorded.
 
     overrides maps instance attribute names to values set after the yaml is restored, for what-if replays such as
-    a different pv_metric90_weight.
+    a different pv_metric90_weight (--override).
     """
     restore_debug_state(my_predbat, debug_file)
-    for name, value in (overrides or {}).items():
-        if not hasattr(my_predbat, name):
-            raise ValueError("Unknown setting {} for --replay_set".format(name))
-        print("Replay override: {} = {} (was {})".format(name, value, getattr(my_predbat, name)))
-        setattr(my_predbat, name, value)
+    apply_overrides(my_predbat, overrides)
     my_predbat.plan_valid = True
     rebuild_load_pv_models(my_predbat)
     until_minutes = None

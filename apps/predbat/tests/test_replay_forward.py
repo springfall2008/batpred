@@ -6,6 +6,7 @@ import os
 import tempfile
 
 from utils import MinuteArray
+from tests.test_single_debug import apply_overrides
 from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
@@ -312,6 +313,24 @@ def test_parse_override():
     return 1
 
 
+def test_apply_overrides(my_predbat):
+    """An override sets a known setting; an unknown name is rejected rather than silently creating an attribute."""
+    saved = my_predbat.pv_metric90_weight
+    try:
+        apply_overrides(my_predbat, {"pv_metric90_weight": 0.25})
+        if my_predbat.pv_metric90_weight != 0.25:
+            print("ERROR: the override was not applied")
+            return 1
+        try:
+            apply_overrides(my_predbat, {"no_such_setting": 1})
+        except ValueError:
+            return 0
+        print("ERROR: an unknown setting should be rejected")
+        return 1
+    finally:
+        my_predbat.pv_metric90_weight = saved
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -328,4 +347,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_version_change()
     failed += test_replay_inputs()
     failed += test_parse_override()
+    failed += test_apply_overrides(my_predbat)
     return failed
