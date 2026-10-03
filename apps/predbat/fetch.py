@@ -905,6 +905,50 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
+    def log_replay_pv_forecast(self):
+        """Log the PV forecast whenever it changes, so a log can be replayed against the forecast the plan really used.
+
+        A debug yaml holds the forecast at one moment, and Solcast refreshes it during the day. One line per change:
+        p50, p10 and p90 as kWh per half hour for the next 48 hours from the current half hour. Never raises - this
+        runs every cycle on the main loop, and a logging fault must not stop the plan.
+        """
+        try:
+            series = (self.pv_forecast_minute or {}, self.pv_forecast_minute10 or {}, self.pv_forecast_minute90 or {})
+            signature = tuple(round(sum(values.values()), 4) for values in series)
+            if signature == getattr(self, "replay_pv_signature", None):
+                return
+            self.replay_pv_signature = signature
+            start = self.minutes_now - self.minutes_now % 30
+            halves = []
+            for values in series:
+                halves.append([round(sum(values.get(minute, 0) for minute in range(slot, slot + 30)), 3) for slot in range(start, start + 48 * 60, 30)])
+            self.log("Replay input: PV forecast changed, 30-minute kWh from {} p50 {} p10 {} p90 {}".format((self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M"), halves[0], halves[1], halves[2]))
+        except Exception as e:
+            self.log("Warn: Unable to log the PV forecast for replay: {}".format(e))
+
+    def log_replay_load_forecast(self):
+        """Log the load forecast the plan will use this cycle, so a log can be replayed against it.
+
+        The forecast is rebuilt every cycle from a history that the load_power fill re-cuts each time, so it cannot
+        be reproduced from a debug yaml. One line per cycle: Wh per 5 minutes from the current 5-minute slot to the
+        end of the plan. load_forecast is cumulative from midnight, so each value is the difference across its slot.
+        Never raises - this runs every cycle on the main loop.
+        """
+        try:
+            if not self.load_forecast:
+                return
+            start = self.minutes_now - self.minutes_now % PREDICT_STEP
+            end = self.minutes_now + self.forecast_minutes
+            last = 0.0
+            cumulative = []
+            for minute in range(start, end + PREDICT_STEP, PREDICT_STEP):
+                last = self.load_forecast.get(minute, last)
+                cumulative.append(last)
+            slots = [int(round(max(after - before, 0) * 1000)) for before, after in zip(cumulative, cumulative[1:])]
+            self.log("Replay input: load forecast, 5-minute Wh from {} {}".format((self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M"), slots))
+        except Exception as e:
+            self.log("Warn: Unable to log the load forecast for replay: {}".format(e))
+
     def fetch_pv_forecast_and_dawn(self):
         """
         Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
@@ -917,6 +961,7 @@ class Fetch:
             pv_light_dark: dict as returned by calc_pv_light_dark(), also stored on self.pv_light_dark.
         """
         self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+        self.log_replay_pv_forecast()
 
         # Stored on self, not just local, so it can be used elsewhere rather than only by the
         # window split below.
@@ -1365,6 +1410,8 @@ class Fetch:
         # load_ml_forecast is this cycle's own fetch result from earlier in this function, so there is
         # no cross-cycle state that could leave a stale "ML was active" reading behind (#4762 review).
         self.apply_load_ml_forecast_history(self.now_utc, load_ml_forecast)
+
+        self.log_replay_load_forecast()
 
         # Load today vs actual
         if self.load_minutes:
