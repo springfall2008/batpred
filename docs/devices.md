@@ -266,6 +266,37 @@ Can be used to extract the car's current SoC.
 
 Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
 
+## V2C Trydan
+
+<https://www.home-assistant.io/integrations/v2c/>
+
+Official local Home Assistant integration for the V2C Trydan EV charger.
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in:
+
+```yaml
+  car_charging_energy:
+    - 'sensor.your_v2c_device_charge_energy'
+  car_charging_planned:
+    - 'binary_sensor.your_v2c_device_connected'
+  car_charging_planned_response:
+    - 'on'
+  car_charging_now:
+    - 'binary_sensor.your_v2c_device_charging'
+  car_charging_now_response:
+    - 'on'
+```
+
+Replace `your_v2c_device` with the entity prefix that Home Assistant assigned to your charger. The suffixes above are the English entity names; Home Assistant builds entity ids from the device name in your own language, so on a non-English install look for the equivalent connected, charging and charge energy entities in your charger's entity list.
+The charge energy entity covers the current charging session and may reset when a new session starts.
+
+The charger is controlled through a pause switch rather than an enable switch, so Predbat-led charging needs an automation with inverted
+logic driven by `binary_sensor.predbat_car_charging_slot`:
+
+- Slot **on** → turn `switch.your_v2c_device_pause_session` **off** to resume charging.
+- Slot **off** → turn the pause switch **on** to pause charging.
+
+Gate the resume step on `binary_sensor.your_v2c_device_connected` so a charging session is not resumed when no car is plugged in.
+
 ## Wallbox Pulsar
 
 <https://www.home-assistant.io/integrations/wallbox/>
