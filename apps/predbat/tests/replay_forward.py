@@ -311,12 +311,13 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
     sim_soc = my_predbat.soc_kw
     prev = {"today": None, "force": None}
     rows = []
-    # A faithful replay needs the code that wrote the log, so it can only run up to a version change
+    # A faithful replay needs the code that wrote the log, so past a version change it can only be expected to
+    # match loosely. Carry on, but mark every row from the change onwards so results can be judged separately.
     change = version_change(runs)
+    change_index = None
     if change is not None:
-        index, before, after = change
-        print("Replay stops at {}: the log changes from Predbat {} to {} here".format(runs[index]["time"][11:16], before, after))
-        runs = runs[:index]
+        change_index, before, after = change
+        print("Replay note: the log changes from Predbat {} to {} at {}; plans after that are not expected to match as closely".format(before, after, runs[change_index]["time"][11:16]))
     for index, run in enumerate(runs):
         if until_minutes is not None and run["minutes_now"] > until_minutes:
             break
@@ -345,6 +346,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             "replayed": None,
             "logged_candidate": parse_windows(run["filtered"], plan_day) if run["filtered"] else None,
             "replayed_candidate": None,
+            "after_version_change": change_index is not None and index >= change_index,
         }
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
@@ -482,6 +484,11 @@ def chart_replay(rows, filename, title="Replay"):
     ax_mode.set_xlabel("Time of day (hour)", color=muted)
     ax_mode.text(1.0, 1.02, "solid = forced export, hatched = freeze", transform=ax_mode.transAxes, ha="right", va="bottom", color=muted, fontsize=8)
 
+    changes = [hour for row, hour in zip(rows, times) if row.get("after_version_change")]
+    if changes:
+        for axis in (ax_soc, ax_mode):
+            axis.axvline(changes[0], color=muted, linestyle=":", linewidth=1.5)
+        ax_soc.text(changes[0], 102, " version change", color=muted, fontsize=8, va="bottom")
     for axis in (ax_soc, ax_mode):
         axis.grid(True, color=grid, linewidth=0.8)
         axis.set_axisbelow(True)
@@ -501,15 +508,16 @@ def soc_rms_error(rows):
     return math.sqrt(sum(error * error for error in errors) / len(errors))
 
 
-def summarise(rows, logged="logged", replayed="replayed"):
+def summarise(rows, logged="logged", replayed="replayed", after_version_change=False):
     """Return (compared, identical, same_first_start) counts for a replay.
 
     By default this compares the adopted plans; pass logged="logged_candidate", replayed="replayed_candidate" to
     compare the candidate plans each re-plan produced before deciding whether to adopt them. identical counts
     re-plans whose whole export window list matches the log; same_first_start is the looser count where only the
-    first window's start agrees, which is the part that decides whether export is on now.
+    first window's start agrees, which is the part that decides whether export is on now. Rows from a logged
+    version change onwards are counted only when after_version_change is set, as they are not expected to match.
     """
-    replanned = [row for row in rows if row["replanned"] and row.get(logged) is not None]
+    replanned = [row for row in rows if row["replanned"] and row.get(logged) is not None and row.get("after_version_change", False) == after_version_change]
     identical = [row for row in replanned if row[logged] == row[replayed]]
     same_start = [row for row in replanned if first_window(row[logged]).split("-")[0] == first_window(row[replayed]).split("-")[0]]
     return len(replanned), len(identical), len(same_start)

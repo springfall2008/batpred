@@ -145,6 +145,10 @@ def test_summarise():
     if summarise(rows) != (3, 1, 2):
         print("ERROR: summarise gave {} expected (3, 1, 2)".format(summarise(rows)))
         return 1
+    rows.append({"replanned": True, "logged": same, "replayed": same, "after_version_change": True})
+    if summarise(rows) != (3, 1, 2) or summarise(rows, after_version_change=True) != (1, 1, 1):
+        print("ERROR: rows after a version change should be counted separately: {} {}".format(summarise(rows), summarise(rows, after_version_change=True)))
+        return 1
     return 0
 
 
@@ -169,7 +173,7 @@ def test_chart_replay():
     rows = [
         {"minutes_now": 540, "soc_percent": 80, "replanned": True, "logged": [(540, 600, 18.5, 40.0)], "replayed": [(570, 600, 18.5, 50.0)]},
         {"minutes_now": 545, "soc_percent": 78, "replanned": False, "logged": None, "replayed": None},
-        {"minutes_now": 550, "soc_percent": 75, "replanned": True, "logged": [(600, 660, 18.5, 99.0)], "replayed": []},
+        {"minutes_now": 550, "soc_percent": 75, "replanned": True, "logged": [(600, 660, 18.5, 99.0)], "replayed": [], "after_version_change": True},
     ]
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "replay.png")
