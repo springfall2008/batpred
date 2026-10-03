@@ -36,6 +36,19 @@ For coverage analysis install the 'coverage' library with Python, or use the ver
 1. ./run_cov --quick
 2. Open `htmlcov/index.html` in your web browser
 
+### Replaying a log forwards from a debug yaml
+
+A debug yaml is one moment in time. When a bug report also attaches the log from the following hours, the replay can step through that log from the yaml and re-plan wherever the real Predbat did:
+
+```bash
+cd coverage
+./run_all --debug_file <predbat_debug.yaml> --replay_log <predbat.log> [--replay_until HH:MM]
+```
+
+For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
+
+Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log must be from the same day as the yaml and run on a similar Predbat version.
+
 ### Finding test order dependencies
 
 All tests run against one shared `PredBat`/Home Assistant fixture (see `create_predbat()` in `unit_test.py`), so a test that mutates shared state and doesn't fully restore it can make a *later* test fail - a bug in the test suite itself, not in Predbat (see issue [#5079](https://github.com/springfall2008/batpred/issues/5079)). These only show up when the two tests happen to run in that order, so a clean `./run_all` doesn't prove there isn't one lurking.
