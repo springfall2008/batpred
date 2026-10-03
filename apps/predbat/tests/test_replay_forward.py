@@ -6,13 +6,14 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:02.135467: Current data so far today: load 5.74kWh, import 17.74kWh, export 4.57kWh, PV 0.21kWh
 2026-10-01 08:30:02.324401: Today's load divergence 100.0%, in-day adjustment 92.66%, damping 0.95x, yesterday 88.64% today 100.0% blend 64.58%
 2026-10-01 08:30:02.366949: Inverter 0 SoC: 14.27kWh 85%, current charge rate 9200W, current discharge rate 9660W, current battery power -40W, current battery voltage 52.0V, grid power 6W, load power 506W, PV Power 558W
 2026-10-01 08:30:02.468111: PV Forecast 44.6kWh and 10% Forecast 30.6kWh; PV cloud factor 0.2
+2026-10-01 08:30:02.469744: Load divergence over 8.0 hours mean 363.79W, min 254.4W, max 748.8W, std dev 73.34W, divergence 10.08%
 2026-10-01 08:30:04.419814: Export windows filtered [ 01-10 09:00:00 - 01-10 12:00:00 @ 18.5c 55.0%, 01-10 13:00:00 - 01-10 13:30:00 @ 18.5c 84.0% ]
 2026-10-01 08:30:05.663103: Inverter 0 Adjust force export to True, change times from 00:00:00 - 00:00:00 to 09:00:00 - 12:01:00
 2026-10-01 08:35:00.575570: --------------- PredBat - update at 2026-10-01 08:35:00+01:00 with clock skew 0 minutes, minutes now 515
@@ -62,8 +63,8 @@ def test_parse_log():
     if first["soc"] != ("14.27", "85", "-40") or first["today"] != ("5.74", "17.74", "4.57", "0.21"):
         print("ERROR: SoC or day counters parsed wrongly: {} {}".format(first["soc"], first["today"]))
         failed = 1
-    if first["inday"] != "92.66" or first["cloud"] != "0.2" or first["force"] != ("True", "09", "00", "12", "01"):
-        print("ERROR: in-day adjustment, cloud factor or force export parsed wrongly: {} {} {}".format(first["inday"], first["cloud"], first["force"]))
+    if first["inday"] != "92.66" or first["divergence"] != "10.08" or first["force"] != ("True", "09", "00", "12", "01"):
+        print("ERROR: in-day adjustment, load divergence or force export parsed wrongly: {} {} {}".format(first["inday"], first["divergence"], first["force"]))
         failed = 1
     if parse_windows(first["filtered"], "01-10") != [(540, 720, 18.5, 55.0), (780, 810, 18.5, 84.0)]:
         print("ERROR: filtered windows parsed wrongly: {}".format(first["filtered"]))
@@ -190,6 +191,29 @@ def test_simulate_soc(my_predbat):
     return 0
 
 
+def test_logged_load_divergence(my_predbat):
+    """While installed, the logged divergence replaces the computed one; removing it restores the instance."""
+    enabled = my_predbat.metric_load_divergence_enable
+    try:
+        install_logged_load_divergence(my_predbat)
+        my_predbat.replay_load_divergence = 0.16
+        my_predbat.metric_load_divergence_enable = True
+        if my_predbat.get_load_divergence(0, {}) != 0.16:
+            print("ERROR: the logged load divergence was not used")
+            return 1
+        my_predbat.metric_load_divergence_enable = False
+        if my_predbat.get_load_divergence(0, {}) is not None:
+            print("ERROR: a disabled load divergence should still read as None")
+            return 1
+    finally:
+        remove_logged_load_divergence(my_predbat)
+        my_predbat.metric_load_divergence_enable = enabled
+    if "get_load_divergence" in my_predbat.__dict__ or "replay_load_divergence" in my_predbat.__dict__:
+        print("ERROR: removing the override left state on the instance")
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -201,4 +225,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_export_mode_now()
     failed += test_chart_replay()
     failed += test_simulate_soc(my_predbat)
+    failed += test_logged_load_divergence(my_predbat)
     return failed
