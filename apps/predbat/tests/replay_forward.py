@@ -19,7 +19,7 @@ The comparison is the point. Where the replay reproduces the logged windows it c
 changes; where it does not, the first run that diverges says what the log carries that the yaml did not.
 
 Inputs taken from the log rather than recomputed: SoC, the cumulative load/PV/import/export counters, the
-in-day load adjustment, the load divergence, and the inverter's programmed export window. The PV forecast is
+in-day load adjustment, the load divergence, the cost so far today and the inverter's programmed export window. The PV forecast is
 the one in the yaml - the log records only its total.
 """
 import array
@@ -27,8 +27,8 @@ import math
 import re
 from datetime import date, timedelta
 
-from const import PREDICT_STEP
-from utils import MinuteArray
+from const import PREDICT_STEP, EXPORT_MODE_TARGET
+from utils import MinuteArray, pack_export_limit
 from prediction import Prediction
 from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows
 
@@ -38,10 +38,17 @@ TODAY_RE = re.compile(r"Current data so far today: load ([\d.]+)kWh, import ([\d
 INDAY_RE = re.compile(r"in-day adjustment ([\d.]+)%")
 DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
+NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), (\w+), ([\d.]+)\)")
+COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
+IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
 WINDOW_RE = re.compile(r"(\d\d-\d\d) (\d\d):(\d\d):\d\d - (\d\d-\d\d) (\d\d):(\d\d):\d\d @ ([\d.]+)\S+ ([\d.]+)%")
 # The four day counters in the order the log prints them, and the history arrays that mirror them
 COUNTER_ARRAYS = ("load_minutes", "import_today", "export_today", "pv_today")
+# Other backwards cumulative histories read alongside the load history (the load filter subtracts car and
+# iBoost energy from it). The log has no per-run figure for these, so they age with nothing added - right
+# while the car is not charging and iBoost is idle, which is the case the replay supports so far.
+AGED_ARRAYS = ("car_charging_energy", "iboost_energy_today")
 
 
 def day_offset(date_text, day):
@@ -87,15 +94,22 @@ def parse_log(path):
         for line in handle:
             marker = RUN_RE.search(line)
             if marker:
-                run = {"time": marker.group(1), "minutes_now": int(marker.group(2)), "filtered": None, "force": None}
+                run = {"time": marker.group(1), "minutes_now": int(marker.group(2)), "filtered": None, "force": None, "in_force": None}
                 runs.append(run)
                 continue
             if run is None:
                 continue
-            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (DIVERGENCE_RE, "divergence"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
+            # The first "Best export window" of a run is the plan in force when it starts - the one the previous
+            # run adopted. Later ones in the same run are the re-plan's working lists.
+            if run["in_force"] is None:
+                found = IN_FORCE_RE.search(line)
+                if found:
+                    run["in_force"] = found.group(1)
+                    continue
+            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (DIVERGENCE_RE, "divergence"), (COST_RE, "cost"), (NEXT_LIMIT_RE, "next_limit"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
                 found = regex.search(line)
                 if found:
-                    run[store] = found.groups() if store in ("soc", "today", "force") else found.group(1)
+                    run[store] = found.groups() if store in ("soc", "today", "force", "next_limit") else found.group(1)
     return [run for run in runs if run.get("soc")]
 
 
@@ -107,9 +121,15 @@ def shift_counter(history, minutes, delta):
     the old latest value up to the new one. The growth is spread evenly across the gap, which is all the log's
     once-per-run counters can tell us.
     """
-    if minutes <= 0:
+    if minutes <= 0 or not history:
         return history
     old_latest = history.get(0, 0.0)
+    if isinstance(history, dict):
+        # A plain dict history may be sparse, so shift its keys rather than assuming a dense range
+        result = {key + minutes: value for key, value in history.items()}
+        for key in range(minutes):
+            result[key] = old_latest + delta * (minutes - key) / minutes
+        return result
     shifted = array.array("d", [0.0]) * (len(history) + minutes)
     for key in range(minutes):
         shifted[key] = old_latest + delta * (minutes - key) / minutes
@@ -120,8 +140,12 @@ def shift_counter(history, minutes, delta):
     return result
 
 
-def set_export_window(my_predbat, force, now_minutes):
-    """Set the inverter's programmed export window from the log's force export line, or clear it."""
+def set_export_window(my_predbat, force, now_minutes, limit=None):
+    """Set the inverter's programmed export window and its limit from the log, or clear them.
+
+    force is the log's force export line; limit is the (mode, target, power) the log gave for the next export
+    window. The window and its limit must stay the same length, as the base prediction reads them together.
+    """
     if force and force[0] == "True":
         start = int(force[1]) * 60 + int(force[2])
         end = int(force[3]) * 60 + int(force[4])
@@ -130,9 +154,15 @@ def set_export_window(my_predbat, force, now_minutes):
             end += 24 * 60
         average = my_predbat.rate_export.get(start, 0) if my_predbat.rate_export else 0
         my_predbat.export_window = [{"start": start, "end": end, "average": average}]
+        if limit:
+            mode, target, power = limit
+            my_predbat.export_limits = [pack_export_limit(int(mode), None if target == "None" else int(target), float(power))]
+        else:
+            my_predbat.export_limits = [pack_export_limit(EXPORT_MODE_TARGET, 0)]
         my_predbat.isExporting = start <= now_minutes < end
     else:
         my_predbat.export_window = []
+        my_predbat.export_limits = []
         my_predbat.isExporting = False
 
 
@@ -174,6 +204,13 @@ def apply_run(my_predbat, prev, run):
     elif gap:
         for name in COUNTER_ARRAYS:
             setattr(my_predbat, name, shift_counter(getattr(my_predbat, name), gap, 0.0))
+    for name in AGED_ARRAYS:
+        history = getattr(my_predbat, name, None)
+        if isinstance(history, list):
+            # One history per car
+            setattr(my_predbat, name, [shift_counter(car, gap, 0.0) for car in history])
+        elif history:
+            setattr(my_predbat, name, shift_counter(history, gap, 0.0))
     my_predbat.minutes_now = run["minutes_now"]
     my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=gap)
     my_predbat.now_utc_real = my_predbat.now_utc
@@ -183,6 +220,12 @@ def apply_run(my_predbat, prev, run):
     for inverter in my_predbat.inverters:
         inverter.soc_kw = float(soc_kw)
         inverter.soc_percent = int(soc_percent)
+    # Every prediction's metric starts from the cost so far today, and the prediction's day totals start from
+    # these counters; the live system recomputes both each run, so take them from the log too
+    if run.get("cost"):
+        my_predbat.cost_today_sofar = float(run["cost"])
+    if run.get("today"):
+        my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in run["today"])
     if run.get("inday"):
         my_predbat.load_inday_adjustment = float(run["inday"]) / 100.0
     # calculate_plan recomputes the load divergence from the load history, which the replay can only rebuild
@@ -191,7 +234,7 @@ def apply_run(my_predbat, prev, run):
     if run.get("divergence"):
         my_predbat.replay_load_divergence = round(float(run["divergence"]) / 100.0, 2)
     # The window the inverter is holding is the one the previous run programmed
-    set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now)
+    set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now, prev.get("next_limit"))
 
 
 def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, simulate=False):
@@ -254,9 +297,10 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
     sim_soc = my_predbat.soc_kw
     prev = {"today": None, "force": None}
     rows = []
-    for run in runs:
+    for index, run in enumerate(runs):
         if until_minutes is not None and run["minutes_now"] > until_minutes:
             break
+        next_run = runs[index + 1] if index + 1 < len(runs) else None
         if simulate:
             before = prev.get("today") or yaml_today
             now_today = run.get("today") or before
@@ -277,23 +321,64 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             "soc_percent": int(run["soc"][1]),
             "soc_sim_percent": my_predbat.soc_percent if simulate else None,
             "replanned": run["filtered"] is not None,
-            "logged": parse_windows(run["filtered"], plan_day) if run["filtered"] else None,
+            "logged": None,
             "replayed": None,
+            "logged_candidate": parse_windows(run["filtered"], plan_day) if run["filtered"] else None,
+            "replayed_candidate": None,
         }
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_windows(my_predbat)
+            rebuild_load_forecast(my_predbat)
             rebuild_load_pv_models(my_predbat)
             pv_step = my_predbat.pv_forecast_minute_step
             load_step = my_predbat.load_minutes_step
             my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
-            my_predbat.calculate_plan(recompute=True, publish=False)
-            row["replayed"] = parse_windows(my_predbat.window_as_text(my_predbat.export_window_best, my_predbat.export_limits_best), plan_day)
+            candidate = capture_candidate(my_predbat)
+            row["replayed_candidate"] = parse_windows(candidate, plan_day) if candidate else None
+            adopted = parse_windows(my_predbat.window_as_text(my_predbat.export_window_best, my_predbat.export_limits_best), plan_day)
+            # The log shows the adopted plan at the start of the next run, with windows that ended by then dropped
+            if next_run and next_run["in_force"] is not None:
+                row["logged"] = parse_windows(next_run["in_force"], plan_day)
+                row["replayed"] = [window for window in adopted if window[1] > next_run["minutes_now"]]
         rows.append(row)
         prev = run
         if not quiet and row["replanned"]:
             print(format_row(row))
     return rows
+
+
+def rebuild_load_forecast(my_predbat):
+    """Rebuild the weighted-bucket historical load forecast for the current time, as fetch does every run.
+
+    Only for installs using it (days_previous_auto) and no other load forecast source, which is the case the
+    replay supports so far: the forecast is then this alone. Without it every re-plan keeps the yaml's forecast.
+    """
+    if not my_predbat.load_forecast_history or my_predbat.load_minutes_age < 1:
+        return
+    forecast = my_predbat.compute_load_forecast_history(my_predbat.now_utc)
+    if forecast:
+        my_predbat.load_forecast = dict(forecast)
+
+
+def capture_candidate(my_predbat):
+    """Re-plan, returning the candidate plan's window text that calculate_plan logs before deciding whether to adopt it."""
+    captured = []
+    original = my_predbat.log
+
+    def log(message, *args, **kwargs):
+        """Keep the candidate plan line, then log as normal."""
+        found = FILTERED_RE.search(str(message))
+        if found:
+            captured.append(found.group(1))
+        return original(message, *args, **kwargs)
+
+    my_predbat.log = log
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        del my_predbat.log
+    return captured[-1] if captured else None
 
 
 def first_window(windows):
@@ -305,7 +390,9 @@ def first_window(windows):
 
 def format_row(row):
     """Format one replanned row: time, logged first window, replayed first window and whether the lists match."""
-    return "{} logged {:<26} replay {:<26} {}".format(row["time"], first_window(row["logged"]), first_window(row["replayed"]), "same" if row["logged"] == row["replayed"] else "DIFF")
+    adopted = "same" if row["logged"] == row["replayed"] else "DIFF"
+    candidate = "same" if row.get("logged_candidate") == row.get("replayed_candidate") else "DIFF"
+    return "{} adopted: logged {:<26} replay {:<26} {}   candidate {}".format(row["time"], first_window(row["logged"]), first_window(row["replayed"]), adopted, candidate)
 
 
 def export_mode_now(windows, minutes_now):
@@ -343,7 +430,7 @@ def chart_replay(rows, filename, title="Replay"):
     modes = {name: [] for name in carried}
     targets = {name: [] for name in carried}
     for row in rows:
-        if row["replanned"]:
+        if row["replanned"] and row["logged"] is not None:
             carried["Live (log)"] = row["logged"]
             carried["Replay"] = row["replayed"]
         for name in carried:
@@ -394,13 +481,15 @@ def soc_rms_error(rows):
     return math.sqrt(sum(error * error for error in errors) / len(errors))
 
 
-def summarise(rows):
-    """Return (replanned, identical, same_first_start) counts for a replay.
+def summarise(rows, logged="logged", replayed="replayed"):
+    """Return (compared, identical, same_first_start) counts for a replay.
 
-    identical counts re-plans whose whole export window list matches the log; same_first_start is the looser
-    count where only the first window's start agrees, which is the part that decides whether export is on now.
+    By default this compares the adopted plans; pass logged="logged_candidate", replayed="replayed_candidate" to
+    compare the candidate plans each re-plan produced before deciding whether to adopt them. identical counts
+    re-plans whose whole export window list matches the log; same_first_start is the looser count where only the
+    first window's start agrees, which is the part that decides whether export is on now.
     """
-    replanned = [row for row in rows if row["replanned"]]
-    identical = [row for row in replanned if row["logged"] == row["replayed"]]
-    same_start = [row for row in replanned if first_window(row["logged"]).split("-")[0] == first_window(row["replayed"]).split("-")[0]]
+    replanned = [row for row in rows if row["replanned"] and row.get(logged) is not None]
+    identical = [row for row in replanned if row[logged] == row[replayed]]
+    same_start = [row for row in replanned if first_window(row[logged]).split("-")[0] == first_window(row[replayed]).split("-")[0]]
     return len(replanned), len(identical), len(same_start)
