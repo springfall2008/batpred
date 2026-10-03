@@ -33,6 +33,9 @@ PREDICT_STEP = 5
 DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
 DYNAMIC_LOAD_CAR_START_MINUTES = 3
 DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
+# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
+DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one

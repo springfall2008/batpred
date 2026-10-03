@@ -23,6 +23,7 @@ from multiprocessing import cpu_count
 from const import (
     CLOUD_FACTOR_PV10,
     CLOUD_WINDOW_MINUTES,
+    DYNAMIC_LOAD_CAR_CONFIRM_MINUTES,
     DYNAMIC_LOAD_CAR_LOAD_MINUTES,
     DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
     DYNAMIC_LOAD_CAR_START_MINUTES,
@@ -553,12 +554,14 @@ class Plan:
                 self.dynamic_load_car_since.pop(car_n, None)
                 # The dispatch has started, so Octopus bills the whole of this half hour off-peak even if the car
                 # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows.
-                # The half hour is the one the evidence covers: a sensor reads now, but the load test averages the
-                # PREDICT_STEP minutes before minutes_now, so a cycle just past a boundary saw the previous one.
-                # The load test only needs load that is not low to trust the slot, which a cooker or hot tub also
-                # gives; keeping the cheap rate needs load at the car's own charging rate
+                # The half hour is the one the evidence covers: the load test averages the PREDICT_STEP minutes
+                # before minutes_now, so a cycle just past a boundary saw the previous one. A sensor reads now, but
+                # can still show charging for a car that stopped just before the boundary, so it only confirms
+                # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
+                # either way. The load test only needs load that is not low to trust the slot, which a cooker or
+                # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate
                 if car_n in self.dynamic_load_car_sensors:
-                    seen_minute = minute
+                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES else None
                 elif self.load_last_period >= self.car_charging_threshold_kw():
                     seen_minute = self.minutes_now - 1
                 else:
