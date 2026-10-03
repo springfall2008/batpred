@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:02.135467: Current data so far today: load 5.74kWh, import 17.74kWh, export 4.57kWh, PV 0.21kWh
@@ -34,9 +34,12 @@ class FakeBat:
 
 def test_parse_windows():
     """A window_as_text string parses back into start, end, rate and percent."""
-    windows = parse_windows("[ 01-10 09:00:00 - 01-10 12:00:00 @ 18.5c 55.0%, 01-10 23:55:00 - 02-10 00:00:00 @ 8.43c 0.0% ]")
-    if windows != [("09:00", "12:00", 18.5, 55.0), ("23:55", "00:00", 8.43, 0.0)]:
+    windows = parse_windows("[ 01-10 09:00:00 - 01-10 12:00:00 @ 18.5c 55.0%, 01-10 23:55:00 - 02-10 00:00:00 @ 8.43c 0.0%, 02-10 06:00:00 - 02-10 07:00:00 @ 16.5c 60.0% ]", "01-10")
+    if windows != [(540, 720, 18.5, 55.0), (1435, 1440, 8.43, 0.0), (1800, 1860, 16.5, 60.0)]:
         print("ERROR: parse_windows gave {}".format(windows))
+        return 1
+    if first_window(windows[2:]) != "06:00+1d-07:00+1d @60%":
+        print("ERROR: a window tomorrow should be labelled as tomorrow: {}".format(first_window(windows[2:])))
         return 1
     if parse_windows("[  ]") != [] or first_window([]) != "-":
         print("ERROR: an empty window list should parse to nothing")
@@ -62,7 +65,7 @@ def test_parse_log():
     if first["inday"] != "92.66" or first["cloud"] != "0.2" or first["force"] != ("True", "09", "00", "12", "01"):
         print("ERROR: in-day adjustment, cloud factor or force export parsed wrongly: {} {} {}".format(first["inday"], first["cloud"], first["force"]))
         failed = 1
-    if parse_windows(first["filtered"]) != [("09:00", "12:00", 18.5, 55.0), ("13:00", "13:30", 18.5, 84.0)]:
+    if parse_windows(first["filtered"], "01-10") != [(540, 720, 18.5, 55.0), (780, 810, 18.5, 84.0)]:
         print("ERROR: filtered windows parsed wrongly: {}".format(first["filtered"]))
         failed = 1
     if second["filtered"] is not None or second["force"] is not None:
@@ -110,11 +113,11 @@ def test_set_export_window():
 
 def test_summarise():
     """Re-plans are counted as identical or as agreeing on the first window's start."""
-    same = [("09:00", "12:00", 18.5, 55.0)]
+    same = [(540, 720, 18.5, 55.0)]
     rows = [
         {"replanned": True, "logged": same, "replayed": same},
-        {"replanned": True, "logged": same, "replayed": [("09:00", "12:00", 18.5, 60.0)]},
-        {"replanned": True, "logged": same, "replayed": [("10:00", "12:00", 18.5, 55.0)]},
+        {"replanned": True, "logged": same, "replayed": [(540, 720, 18.5, 60.0)]},
+        {"replanned": True, "logged": same, "replayed": [(600, 720, 18.5, 55.0)]},
         {"replanned": False, "logged": None, "replayed": None},
     ]
     if summarise(rows) != (3, 1, 2):
@@ -125,8 +128,9 @@ def test_summarise():
 
 def test_export_mode_now():
     """The plan's instruction at a minute: forced export below 99%, freeze at 99%, nothing at 100% or outside a window."""
-    windows = [("09:00", "10:00", 18.5, 40.0), ("10:00", "11:00", 18.5, 99.0), ("11:00", "12:00", 18.5, 100.0), ("23:30", "00:00", 18.5, 10.0)]
-    cases = [(9 * 60, "export"), (10 * 60 + 30, "freeze"), (11 * 60 + 30, None), (8 * 60, None), (23 * 60 + 45, "export")]
+    windows = [(540, 600, 18.5, 40.0), (600, 660, 18.5, 99.0), (660, 720, 18.5, 100.0), (1410, 1440, 18.5, 10.0), (1800, 1860, 18.5, 30.0)]
+    # The last window is tomorrow at 06:00, so it must not count at 06:00 today
+    cases = [(9 * 60, "export"), (10 * 60 + 30, "freeze"), (11 * 60 + 30, None), (8 * 60, None), (23 * 60 + 45, "export"), (6 * 60, None)]
     for minute, expected in cases:
         got = export_mode_now(windows, minute)
         if got != expected:
@@ -141,9 +145,9 @@ def test_export_mode_now():
 def test_chart_replay():
     """A replay chart renders to a PNG without needing a display."""
     rows = [
-        {"minutes_now": 540, "soc_percent": 80, "replanned": True, "logged": [("09:00", "10:00", 18.5, 40.0)], "replayed": [("09:30", "10:00", 18.5, 50.0)]},
+        {"minutes_now": 540, "soc_percent": 80, "replanned": True, "logged": [(540, 600, 18.5, 40.0)], "replayed": [(570, 600, 18.5, 50.0)]},
         {"minutes_now": 545, "soc_percent": 78, "replanned": False, "logged": None, "replayed": None},
-        {"minutes_now": 550, "soc_percent": 75, "replanned": True, "logged": [("10:00", "11:00", 18.5, 99.0)], "replayed": []},
+        {"minutes_now": 550, "soc_percent": 75, "replanned": True, "logged": [(600, 660, 18.5, 99.0)], "replayed": []},
     ]
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "replay.png")
@@ -152,6 +156,36 @@ def test_chart_replay():
             header = handle.read(8)
     if header != b"\x89PNG\r\n\x1a\n":
         print("ERROR: chart_replay did not write a PNG")
+        return 1
+    return 0
+
+
+def test_simulate_soc(my_predbat):
+    """With no PV and no plan the battery covers the actual load, losing it plus its losses; no time means no change."""
+    if simulate_soc(my_predbat, 5.0, 0, 0.0, 1.0) != 5.0:
+        print("ERROR: a zero-minute simulation should not move the SoC")
+        return 1
+    missing = object()
+    saved = {key: getattr(my_predbat, key, missing) for key in ("charge_limit_best", "charge_window_best", "export_window_best", "export_limits_best", "soc_max", "reserve", "pv_forecast_minute_step", "load_minutes_step", "inverter_limit")}
+    try:
+        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best = [], [], [], []
+        my_predbat.soc_max = 10.0
+        my_predbat.reserve = 0.5
+        # The bare fixture has a zero inverter limit, which would stop the battery discharging at all
+        my_predbat.inverter_limit = 5000 / 60000.0
+        my_predbat.pv_forecast_minute_step = {}
+        my_predbat.load_minutes_step = {}
+        soc = simulate_soc(my_predbat, 5.0, 30, 0.0, 1.0)
+    finally:
+        # Restore exactly, removing what the fixture did not have, so no later test sees this one's state
+        for key, value in saved.items():
+            if value is missing:
+                delattr(my_predbat, key)
+            else:
+                setattr(my_predbat, key, value)
+    # 1 kWh of load drawn from the battery, divided by the discharge loss, so a little over 1 kWh
+    if not (3.8 <= soc <= 4.0):
+        print("ERROR: simulate_soc gave {} for 1 kWh of load from 5 kWh, expected a little under 4".format(soc))
         return 1
     return 0
 
@@ -166,4 +200,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_summarise()
     failed += test_export_mode_now()
     failed += test_chart_replay()
+    failed += test_simulate_soc(my_predbat)
     return failed
