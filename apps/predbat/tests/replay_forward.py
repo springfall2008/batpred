@@ -159,7 +159,7 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False):
         if until_minutes is not None and run["minutes_now"] > until_minutes:
             break
         apply_run(my_predbat, prev, run)
-        row = {"time": run["time"][11:16], "replanned": run["filtered"] is not None, "logged": parse_windows(run["filtered"]) if run["filtered"] else None, "replayed": None}
+        row = {"time": run["time"][11:16], "minutes_now": run["minutes_now"], "soc_percent": int(run["soc"][1]), "replanned": run["filtered"] is not None, "logged": parse_windows(run["filtered"]) if run["filtered"] else None, "replayed": None}
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_windows(my_predbat)
@@ -186,6 +186,92 @@ def first_window(windows):
 def format_row(row):
     """Format one replanned row: time, logged first window, replayed first window and whether the lists match."""
     return "{} logged {:<26} replay {:<26} {}".format(row["time"], first_window(row["logged"]), first_window(row["replayed"]), "same" if row["logged"] == row["replayed"] else "DIFF")
+
+
+def hhmm_minutes(text):
+    """Convert HH:MM to minutes past midnight."""
+    return int(text[:2]) * 60 + int(text[3:5])
+
+
+def export_mode_now(windows, minutes_now):
+    """Return 'export', 'freeze' or None for the plan's instruction at minutes_now.
+
+    A window's percent is its target SoC for a forced export, 99 for Freeze Export and 100 for idle, as
+    window_as_text prints them. Only today's windows can cover the current minute, so a window whose end
+    is before its start (one running past midnight) is treated as ending at midnight.
+    """
+    for start, end, _rate, percent in windows or []:
+        start_minutes = hhmm_minutes(start)
+        end_minutes = hhmm_minutes(end) or 24 * 60
+        if end_minutes <= start_minutes:
+            end_minutes = 24 * 60
+        if start_minutes <= minutes_now < end_minutes:
+            if percent >= 100:
+                return None
+            return "freeze" if percent >= 99 else "export"
+    return None
+
+
+def chart_replay(rows, filename, title="Replay"):
+    """Chart a replay as a PNG: actual SoC against each plan's export target, and what each plan was doing.
+
+    The live plan (from the log) and the replayed plan are each carried forward between re-plans, so every run
+    shows the plan in force at that moment. The target is the SoC the first forced-export window aims for,
+    on the same % scale as the SoC itself. Uses the Agg backend so it never opens a window.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    colours = {"Live (log)": "#2a78d6", "Replay": "#eb6834"}
+    ink, muted, grid = "#0b0b0b", "#52514e", "#e6e5e1"
+    times = [row["minutes_now"] / 60.0 for row in rows]
+
+    # Carry each plan forward from its last re-plan
+    carried = {"Live (log)": None, "Replay": None}
+    modes = {name: [] for name in carried}
+    targets = {name: [] for name in carried}
+    for row in rows:
+        if row["replanned"]:
+            carried["Live (log)"] = row["logged"]
+            carried["Replay"] = row["replayed"]
+        for name in carried:
+            modes[name].append(export_mode_now(carried[name], row["minutes_now"]))
+            forced = [window for window in carried[name] or [] if window[3] < 99]
+            targets[name].append(forced[0][3] if forced else None)
+
+    fig, (ax_soc, ax_mode) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True, gridspec_kw={"height_ratios": [3, 1.1]})
+    fig.suptitle(title, color=ink, fontsize=13, x=0.06, ha="left")
+
+    ax_soc.plot(times, [row["soc_percent"] for row in rows], color=ink, linewidth=2, label="Actual SoC")
+    for name, colour in colours.items():
+        ax_soc.step(times, [float("nan") if value is None else value for value in targets[name]], where="post", color=colour, linewidth=2, linestyle="--", label="{} export target".format(name))
+    ax_soc.set_ylabel("Battery SoC (%)", color=muted)
+    ax_soc.set_ylim(0, 105)
+    ax_soc.legend(frameon=False, loc="lower left")
+
+    # One lane per plan: solid for forced export, hatched for Freeze Export
+    step = (times[1] - times[0]) if len(times) > 1 else 5 / 60.0
+    for lane, name in enumerate(colours):
+        for hour, mode in zip(times, modes[name]):
+            if mode:
+                ax_mode.add_patch(plt.Rectangle((hour, lane + 0.15), step, 0.7, facecolor=colours[name] if mode == "export" else "none", edgecolor=colours[name], hatch=None if mode == "export" else "////", linewidth=0))
+    ax_mode.set_yticks([0.5, 1.5], list(colours))
+    ax_mode.set_ylim(0, 2)
+    ax_mode.set_ylabel("Plan says\nexport now", color=muted)
+    ax_mode.set_xlabel("Time of day (hour)", color=muted)
+    ax_mode.text(1.0, 1.02, "solid = forced export, hatched = freeze", transform=ax_mode.transAxes, ha="right", va="bottom", color=muted, fontsize=8)
+
+    for axis in (ax_soc, ax_mode):
+        axis.grid(True, color=grid, linewidth=0.8)
+        axis.set_axisbelow(True)
+        for side in ("top", "right"):
+            axis.spines[side].set_visible(False)
+        axis.tick_params(colors=muted)
+    fig.tight_layout()
+    fig.savefig(filename, dpi=110)
+    plt.close(fig)
 
 
 def summarise(rows):
