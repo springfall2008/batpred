@@ -24,8 +24,9 @@ the one in the yaml - the log records only its total.
 """
 import array
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 
+from const import PREDICT_STEP
 from utils import MinuteArray
 from prediction import Prediction
 from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows
@@ -42,9 +43,35 @@ WINDOW_RE = re.compile(r"(\d\d-\d\d) (\d\d):(\d\d):\d\d - (\d\d-\d\d) (\d\d):(\d
 COUNTER_ARRAYS = ("load_minutes", "import_today", "export_today", "pv_today")
 
 
-def parse_windows(text):
-    """Parse a window_as_text string into (start HH:MM, end HH:MM, rate, percent) tuples."""
-    return [("{}:{}".format(m[1], m[2]), "{}:{}".format(m[4], m[5]), float(m[6]), float(m[7])) for m in WINDOW_RE.findall(text)]
+def day_offset(date_text, day):
+    """Days from day to date_text, both dd-mm (the plan text carries no year)."""
+    if not day:
+        return 0
+    delta = (date(2000, int(date_text[3:5]), int(date_text[:2])) - date(2000, int(day[3:5]), int(day[:2]))).days
+    # A plan seen on 31 Dec reaches into January
+    if delta < -180:
+        delta += 366
+    return delta
+
+
+def parse_windows(text, day=None):
+    """Parse a window_as_text string into (start minute, end minute, rate, percent) tuples.
+
+    Minutes are counted from midnight of day (dd-mm, the date of the run that logged or made the plan), so a
+    window tomorrow starts at 1440 or later and can never be mistaken for one today.
+    """
+    windows = []
+    for m in WINDOW_RE.findall(text):
+        start = day_offset(m[0], day) * 1440 + int(m[1]) * 60 + int(m[2])
+        end = day_offset(m[3], day) * 1440 + int(m[4]) * 60 + int(m[5])
+        windows.append((start, end, float(m[6]), float(m[7])))
+    return windows
+
+
+def minute_label(minute):
+    """Format a minute from midnight as HH:MM, marking later days with +Nd."""
+    days, rest = divmod(minute, 1440)
+    return "{:02d}:{:02d}{}".format(rest // 60, rest % 60, "+{}d".format(days) if days else "")
 
 
 def parse_log(path):
@@ -108,6 +135,33 @@ def set_export_window(my_predbat, force, now_minutes):
         my_predbat.isExporting = False
 
 
+def simulate_soc(my_predbat, soc_kw, minutes, pv_kwh, load_kwh):
+    """Advance the battery by minutes from soc_kw under the plan in force, with the PV and load that actually happened.
+
+    The battery and inverter are modelled by Predbat's own prediction engine, so charge/discharge rate curves,
+    losses, reserve, the inverter AC limit (shared by PV and battery on a hybrid) and the export limit all apply
+    exactly as the planner sees them. The plan's forecast for the gap is replaced by the actual PV and load,
+    spread evenly over it. Must be called with the instance's clock still at the start of the gap and its
+    stepped PV and load models built for that moment (rebuild_load_pv_models), which supply the rest of the horizon.
+    """
+    if minutes <= 0:
+        return soc_kw
+    pv_step = dict(my_predbat.pv_forecast_minute_step)
+    load_step = dict(my_predbat.load_minutes_step)
+    steps = max(minutes // PREDICT_STEP, 1)
+    for index in range(steps):
+        pv_step[index * PREDICT_STEP] = pv_kwh / steps
+        load_step[index * PREDICT_STEP] = load_kwh / steps
+    # The step just past the gap is simulated too, so it needs a value even where the model has none
+    pv_step.setdefault(steps * PREDICT_STEP, 0.0)
+    load_step.setdefault(steps * PREDICT_STEP, 0.0)
+    prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, soc_kw=soc_kw)
+    # Only the gap is needed, so stop the simulation just after it rather than running the whole horizon
+    prediction.forecast_minutes = (steps + 1) * PREDICT_STEP
+    prediction.run_prediction(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=prediction.forecast_minutes, save="replay")
+    return prediction.predict_soc.get(steps * PREDICT_STEP, soc_kw)
+
+
 def apply_run(my_predbat, prev, run):
     """Move the restored instance forwards from the previous run's moment to this run's."""
     gap = run["minutes_now"] - my_predbat.minutes_now
@@ -136,11 +190,16 @@ def apply_run(my_predbat, prev, run):
     set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now)
 
 
-def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False):
+def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, simulate=False):
     """Restore debug_file, then step through log_file re-planning where the log did; return the comparison rows.
 
-    Each row is a dict with the run's time, whether it re-planned, and the logged and replayed export windows.
-    until is an optional HH:MM after which the replay stops.
+    Each row is a dict with the run's time, whether it re-planned, the logged and replayed export windows, the
+    actual SoC from the log and, when simulate is set, the replay's own SoC. until is an optional HH:MM after
+    which the replay stops.
+
+    With simulate the replay is closed-loop: the battery is stepped forward under the replayed plan using the
+    actual PV and load (see simulate_soc), and that SoC - not the logged one - is what each re-plan starts from.
+    Without it every re-plan starts from the SoC the log recorded.
     """
     restore_debug_state(my_predbat, debug_file)
     my_predbat.plan_valid = True
@@ -151,15 +210,40 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False):
 
     # Only the yaml's own day, from the first run after the yaml was written
     day = my_predbat.now_utc.strftime("%Y-%m-%d")
+    plan_day = my_predbat.now_utc.strftime("%d-%m")
     start = my_predbat.now_utc.strftime("%H:%M")
     runs = [run for run in parse_log(log_file) if run["time"][:10] == day and run["time"][11:16] > start]
     prev = {"today": None, "force": None}
+    # The yaml's own day counters stand in for the run before the first one
+    yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
+    sim_soc = my_predbat.soc_kw
     rows = []
     for run in runs:
         if until_minutes is not None and run["minutes_now"] > until_minutes:
             break
+        if simulate:
+            before = prev.get("today") or yaml_today
+            now_today = run.get("today") or before
+            load_kwh = max(float(now_today[0]) - float(before[0]), 0.0)
+            pv_kwh = max(float(now_today[3]) - float(before[3]), 0.0)
+            rebuild_load_pv_models(my_predbat)
+            sim_soc = simulate_soc(my_predbat, sim_soc, run["minutes_now"] - my_predbat.minutes_now, pv_kwh, load_kwh)
         apply_run(my_predbat, prev, run)
-        row = {"time": run["time"][11:16], "minutes_now": run["minutes_now"], "soc_percent": int(run["soc"][1]), "replanned": run["filtered"] is not None, "logged": parse_windows(run["filtered"]) if run["filtered"] else None, "replayed": None}
+        if simulate:
+            my_predbat.soc_kw = sim_soc
+            my_predbat.soc_percent = int(round(sim_soc / my_predbat.soc_max * 100)) if my_predbat.soc_max else 0
+            for inverter in my_predbat.inverters:
+                inverter.soc_kw = sim_soc
+                inverter.soc_percent = my_predbat.soc_percent
+        row = {
+            "time": run["time"][11:16],
+            "minutes_now": run["minutes_now"],
+            "soc_percent": int(run["soc"][1]),
+            "soc_sim_percent": my_predbat.soc_percent if simulate else None,
+            "replanned": run["filtered"] is not None,
+            "logged": parse_windows(run["filtered"], plan_day) if run["filtered"] else None,
+            "replayed": None,
+        }
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_windows(my_predbat)
@@ -168,7 +252,7 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False):
             load_step = my_predbat.load_minutes_step
             my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
             my_predbat.calculate_plan(recompute=True, publish=False)
-            row["replayed"] = parse_windows(my_predbat.window_as_text(my_predbat.export_window_best, my_predbat.export_limits_best))
+            row["replayed"] = parse_windows(my_predbat.window_as_text(my_predbat.export_window_best, my_predbat.export_limits_best), plan_day)
         rows.append(row)
         prev = run
         if not quiet and row["replanned"]:
@@ -180,7 +264,7 @@ def first_window(windows):
     """Return the first window as a short string, or '-' if there is none."""
     if not windows:
         return "-"
-    return "{}-{} @{:g}%".format(windows[0][0], windows[0][1], windows[0][3])
+    return "{}-{} @{:g}%".format(minute_label(windows[0][0]), minute_label(windows[0][1]), windows[0][3])
 
 
 def format_row(row):
@@ -188,24 +272,14 @@ def format_row(row):
     return "{} logged {:<26} replay {:<26} {}".format(row["time"], first_window(row["logged"]), first_window(row["replayed"]), "same" if row["logged"] == row["replayed"] else "DIFF")
 
 
-def hhmm_minutes(text):
-    """Convert HH:MM to minutes past midnight."""
-    return int(text[:2]) * 60 + int(text[3:5])
-
-
 def export_mode_now(windows, minutes_now):
     """Return 'export', 'freeze' or None for the plan's instruction at minutes_now.
 
     A window's percent is its target SoC for a forced export, 99 for Freeze Export and 100 for idle, as
-    window_as_text prints them. Only today's windows can cover the current minute, so a window whose end
-    is before its start (one running past midnight) is treated as ending at midnight.
+    window_as_text prints them.
     """
     for start, end, _rate, percent in windows or []:
-        start_minutes = hhmm_minutes(start)
-        end_minutes = hhmm_minutes(end) or 24 * 60
-        if end_minutes <= start_minutes:
-            end_minutes = 24 * 60
-        if start_minutes <= minutes_now < end_minutes:
+        if start <= minutes_now < end:
             if percent >= 100:
                 return None
             return "freeze" if percent >= 99 else "export"
@@ -244,7 +318,9 @@ def chart_replay(rows, filename, title="Replay"):
     fig, (ax_soc, ax_mode) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True, gridspec_kw={"height_ratios": [3, 1.1]})
     fig.suptitle(title, color=ink, fontsize=13, x=0.06, ha="left")
 
-    ax_soc.plot(times, [row["soc_percent"] for row in rows], color=ink, linewidth=2, label="Actual SoC")
+    ax_soc.plot(times, [row["soc_percent"] for row in rows], color=ink, linewidth=2, label="Actual SoC (log)")
+    if any(row.get("soc_sim_percent") is not None for row in rows):
+        ax_soc.plot(times, [row.get("soc_sim_percent") for row in rows], color=colours["Replay"], linewidth=2, label="Replay simulated SoC")
     for name, colour in colours.items():
         ax_soc.step(times, [float("nan") if value is None else value for value in targets[name]], where="post", color=colour, linewidth=2, linestyle="--", label="{} export target".format(name))
     ax_soc.set_ylabel("Battery SoC (%)", color=muted)
