@@ -966,11 +966,11 @@ def test_control_window_parsing():
     inside = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
     component = _control_component(plans={0: [inside]})
 
-    assert component.refresh_car_windows(CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 22, 59))) is False
+    assert component.charger_control_refresh_windows(CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 22, 59))) is False
     # The window end is exclusive, so the boundary minute is already outside
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 1, 0))) is False
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 1, 0))) is False
     print("  ✓ Planned car charging windows are parsed and matched against the clock")
 
 
@@ -985,25 +985,25 @@ def test_control_windows_across_new_year():
     component = _control_component(plans={0: [crossing]})
 
     before_midnight = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 30))
-    assert component.refresh_car_windows(before_midnight) is True
-    assert component.should_charge_now(0, before_midnight) is True, "The window is active before midnight"
+    assert component.charger_control_refresh_windows(before_midnight) is True
+    assert component.charger_control_should_charge(0, before_midnight) is True, "The window is active before midnight"
 
     after_midnight = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 0, 30))
-    assert component.refresh_car_windows(after_midnight) is True
-    assert component.should_charge_now(0, after_midnight) is True, "The same window is still active after midnight"
+    assert component.charger_control_refresh_windows(after_midnight) is True
+    assert component.charger_control_should_charge(0, after_midnight) is True, "The same window is still active after midnight"
 
     ended = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 6, 0))
-    assert component.refresh_car_windows(ended) is True
-    assert component.should_charge_now(0, ended) is False, "The window has ended by 06:00"
+    assert component.charger_control_refresh_windows(ended) is True
+    assert component.charger_control_should_charge(0, ended) is False, "The window has ended by 06:00"
 
     # A window genuinely far ahead must not be dragged back a year by the rebuild - the
     # plan reaches 48 hours, well beyond the 23 hour margin the first version allowed
     ahead = _plan_window(datetime.datetime(2026, 8, 23, 20, 0), datetime.datetime(2026, 8, 24, 2, 0))
     component = _control_component(plans={0: [ahead]})
     now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 10, 0))
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is False, "A window 34 hours ahead has not started"
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is False, "A window 34 hours ahead has not started"
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
     print("  ✓ Windows spanning New Year are matched from both sides of midnight")
 
 
@@ -1014,13 +1014,13 @@ def test_control_windows_are_per_car():
     component = _control_component(plans={0: [car0], 1: [car1]})
 
     now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is True
-    assert component.should_charge_now(1, now) is False, "Car 1's window has not started yet"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is True
+    assert component.charger_control_should_charge(1, now) is False, "Car 1's window has not started yet"
 
     later = CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 4, 30))
-    assert component.should_charge_now(0, later) is False
-    assert component.should_charge_now(1, later) is True
+    assert component.charger_control_should_charge(0, later) is False
+    assert component.charger_control_should_charge(1, later) is True
     print("  ✓ Each car's plan drives its own Zappi")
 
 
@@ -1034,12 +1034,12 @@ def test_control_windows_tolerate_a_bad_entry_and_a_missing_plan():
     now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
 
     component = _control_component(plans={0: [{"start": "nonsense"}, good]})
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is True, "The good window must survive a bad neighbour"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is True, "The good window must survive a bad neighbour"
 
     never_published = _control_component()
-    assert never_published.refresh_car_windows(now) is False
-    assert never_published.should_charge_now(0, now) is False
+    assert never_published.charger_control_refresh_windows(now) is False
+    assert never_published.charger_control_should_charge(0, now) is False
     print("  ✓ A malformed window is skipped and a missing plan is not acted on")
 
 
@@ -1050,8 +1050,8 @@ def test_control_windows_cross_the_year_boundary():
     component = _control_component(plans={0: [window]})
 
     now = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 45))
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is True, "A window straddling New Year must still match"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is True, "A window straddling New Year must still match"
     print("  ✓ Windows crossing the year boundary are rebuilt around now")
 
 
@@ -1075,10 +1075,10 @@ def test_control_charge_sets_fast_inside_and_stopped_outside():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast", component.transport.set_mode.await_args
 
-    run_async(component.control_charge(OUT_OF_WINDOW))
+    run_async(component.charger_control_apply(OUT_OF_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
     print("  ✓ Fast inside a planned window, Stopped outside it")
 
@@ -1093,7 +1093,7 @@ def test_control_charge_maps_each_zappi_to_its_own_car():
     component.devices = {"Z12345678": _zappi(12345678), "Z22223333": _zappi(22223333)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     by_serial = {call.args[0].serial: call.args[1] for call in component.transport.set_mode.await_args_list}
     assert by_serial == {"12345678": "Fast", "22223333": "Stopped"}, by_serial
     print("  ✓ Each Zappi follows its own car's plan")
@@ -1109,16 +1109,16 @@ def test_control_charge_is_edge_triggered_but_corrects_drift():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1
     # The poll now reports Fast, matching what was set, so nothing more is sent
     component.devices["Z12345678"] = _zappi(12345678, mode_index=1)
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1, "A settled charger must not be re-commanded"
 
     # Someone switches it to Eco+ in the myenergi app - Predbat puts it back
     component.devices["Z12345678"] = _zappi(12345678, mode_index=3)
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_count == 2, "Drift away from the set mode must be corrected"
     assert component.transport.set_mode.await_args.args[1] == "Fast"
     print("  ✓ Control is edge triggered but corrects drift")
@@ -1130,7 +1130,7 @@ def test_control_charge_ignores_eddis():
     component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ Eddis are never driven by car charge control")
 
@@ -1145,7 +1145,7 @@ def test_control_charge_does_nothing_before_a_plan_exists():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ Nothing is commanded before Predbat has published a plan")
 
@@ -1166,7 +1166,7 @@ def _controlling_component(plans=None, **overrides):
 
 def test_control_gating_refuses_with_a_reason():
     """Control only runs when it is asked for and can work, and says why when it will not."""
-    assert _controlling_component().control_active is True
+    assert _controlling_component().charger_control_active is True
 
     for overrides, expected in (
         ({"zappi_control": False}, None),
@@ -1176,7 +1176,7 @@ def test_control_gating_refuses_with_a_reason():
         ({"enable_controls": False}, "myenergi_enable_controls"),
     ):
         component = _controlling_component(**overrides)
-        assert component.control_active is False, overrides
+        assert component.charger_control_active is False, overrides
         if expected:
             assert any(expected in message for message in component.log_messages), (overrides, component.log_messages)
     print("  ✓ Zappi control refuses to run without its prerequisites, and says which")
@@ -1185,25 +1185,89 @@ def test_control_gating_refuses_with_a_reason():
 def test_control_releases_to_the_saved_mode():
     """Releasing puts the Zappi back where it was before Predbat first moved it."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast"
 
     # The switch going off is a release, not just a pause in commanding
-    component.control_enabled = False
-    run_async(component.control_tick(IN_WINDOW))
+    component.charger_control_enabled = False
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", "The Zappi was in Eco+ before Predbat took over"
-    assert component.control_modes == {}, "A released Zappi is no longer held"
+    assert component.charger_control_state == {}, "A released Zappi is no longer held"
     print("  ✓ Releasing restores the mode the Zappi had before Predbat took over")
+
+
+def test_control_release_forgets_the_saved_mode():
+    """A Zappi released on its own (its car gone) forgets the mode it was saved in, so taking it
+    back later snapshots the mode the user has set since."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW], 1: [NIGHT_WINDOW]})
+    second = _zappi(22345678)
+    component.devices[second.device_id] = second
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes[second.device_id] == "Eco+"
+
+    component.base.num_cars = 1
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert second.device_id not in component.control_saved_modes, component.control_saved_modes
+
+    second.mode = "Eco"
+    component.base.num_cars = 2
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes[second.device_id] == "Eco", component.control_saved_modes
+    print("  ✓ A released Zappi snapshots its mode afresh when taken back")
+
+
+def test_control_release_retry_keeps_the_saved_mode():
+    """A release that fails is retried next cycle, still restoring the mode the Zappi had before.
+
+    The Zappi was in Eco before Predbat took it. The first release command fails, so the
+    retry must still put it back in Eco rather than falling back to Eco+.
+    """
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678, mode_index=2)}
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes == {"Z12345678": "Eco"}, component.control_saved_modes
+
+    component.charger_control_enabled = False
+    component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("timed out"))
+    try:
+        run_async(component.charger_control_tick(IN_WINDOW))
+        raise AssertionError("The failed release should raise to the run loop")
+    except MyEnergiApiError:
+        pass
+
+    component.transport.set_mode = AsyncMock(return_value=True)
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    assert component.control_saved_modes == {}, "Saved modes are forgotten once the release has gone through"
+    print("  ✓ A failed release is retried with the saved mode intact")
+
+
+def test_control_release_forgets_a_mode_saved_before_a_refused_command():
+    """A mode saved ahead of a refused command does not outlive the release."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("refused"))
+    try:
+        run_async(component.charger_control_tick(IN_WINDOW))
+    except MyEnergiApiError:
+        pass
+    assert component.control_saved_modes == {"Z12345678": "Eco+"}, component.control_saved_modes
+    assert component.charger_control_state == {}, "A refused command is not recorded as set"
+
+    component.charger_control_enabled = False
+    component.transport.set_mode = AsyncMock(return_value=True)
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes == {}, component.control_saved_modes
+    print("  ✓ Release forgets modes saved ahead of refused commands")
 
 
 def test_control_releases_to_eco_plus_when_nothing_was_saved():
     """With no saved mode - a restart, or a mode that cannot be set - release falls back to Eco+."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
-    component.control_modes = {"Z12345678": "Fast"}
+    component.charger_control_state = {"Z12345678": True}
     component.control_saved_modes = {}
-    component.control_enabled = False
+    component.charger_control_enabled = False
 
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
     print("  ✓ Release falls back to Eco+ when there is nothing saved")
 
@@ -1211,19 +1275,19 @@ def test_control_releases_to_eco_plus_when_nothing_was_saved():
 def test_control_stops_and_resumes_on_read_only():
     """Read only mode releases the Zappis, and clearing it resumes control."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1
 
     component.base.args["set_read_only"] = True
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", "Read only must release, not just stop commanding"
 
     # Still read only - nothing more is sent, there is nothing left to release
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_count == 2
 
     component.base.args["set_read_only"] = False
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast", "Clearing read only must resume control"
     print("  ✓ Read only releases the Zappis and clearing it resumes control")
 
@@ -1235,12 +1299,12 @@ def test_control_switch_is_published_and_toggles_control():
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
 
     run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_off"))
-    assert component.control_enabled is False
+    assert component.charger_control_enabled is False
     run_async(component.publish_data())
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
 
     run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_on"))
-    assert component.control_enabled is True
+    assert component.charger_control_enabled is True
     print("  ✓ The zappi control switch is published and toggles control")
 
 
@@ -1252,13 +1316,13 @@ def test_control_switch_is_not_published_when_control_cannot_run():
     run. Toggling it would only make it responsive, not honest - so it is not published.
     """
     component = _controlling_component(enable_controls=False)
-    assert component.control_active is False
+    assert component.charger_control_active is False
     run_async(component.publish_data())
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") is None
 
     # It reappears, with its remembered state, once controls are allowed again
     allowed = _controlling_component()
-    assert allowed.control_active is True
+    assert allowed.charger_control_active is True
     run_async(allowed.publish_data())
     assert allowed.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
     print("  ✓ No control switch appears when control could not act on it")
@@ -1276,9 +1340,9 @@ def test_control_switch_publishes_its_restored_state_on_the_first_cycle():
 
     async def _load_off():
         """Stand in for storage returning a switched-off control state."""
-        component.control_enabled = False
+        component.charger_control_enabled = False
 
-    component.load_control_enabled = _load_off
+    component.charger_control_load_enabled = _load_off
 
     run_async(component.run(0, True))
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
@@ -1301,11 +1365,11 @@ def test_run_enables_control_and_drives_the_zappi():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(return_value=True)
-    component.load_control_enabled = AsyncMock()
+    component.charger_control_load_enabled = AsyncMock()
 
     assert run_async(component.run(0, True)) is True
-    assert component.control_active is True
-    component.load_control_enabled.assert_awaited_once()
+    assert component.charger_control_active is True
+    component.charger_control_load_enabled.assert_awaited_once()
     # A real poll drove the Zappi from the plan without waiting for a second cycle
     assert component.transport.set_mode.await_count == 1, component.transport.set_mode.await_args_list
     print("  ✓ The run loop enables control and drives the Zappi from the plan")
@@ -1318,7 +1382,7 @@ def test_run_does_not_control_when_the_feature_is_off():
     component.transport.set_mode = AsyncMock(return_value=True)
 
     assert run_async(component.run(0, True)) is True
-    assert component.control_active is False
+    assert component.charger_control_active is False
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ The run loop leaves the Zappi alone when control is off")
 
@@ -1360,9 +1424,9 @@ def test_control_switch_state_survives_a_restart():
 
     restarted = _controlling_component(plans={0: [NIGHT_WINDOW]})
     restarted.base.components = _Components(storage)
-    assert restarted.control_enabled is True, "A fresh component starts with control on"
-    run_async(restarted.load_control_enabled())
-    assert restarted.control_enabled is False, "The saved off state must survive a restart"
+    assert restarted.charger_control_enabled is True, "A fresh component starts with control on"
+    run_async(restarted.charger_control_load_enabled())
+    assert restarted.charger_control_enabled is False, "The saved off state must survive a restart"
     print("  ✓ The control switch state survives a restart")
 
 
@@ -1378,12 +1442,12 @@ def test_control_failure_does_not_break_the_poll():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
-    component.load_control_enabled = AsyncMock()
+    component.charger_control_load_enabled = AsyncMock()
 
     assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
     # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
-    assert component.control_modes == {}, component.control_modes
+    assert component.charger_control_state == {}, component.charger_control_state
     print("  ✓ A refused mode command warns without failing the poll")
 
 
@@ -2539,6 +2603,9 @@ def test_myenergi(my_predbat=None):
     test_control_gating_refuses_with_a_reason()
     test_control_releases_to_the_saved_mode()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
+    test_control_release_retry_keeps_the_saved_mode()
+    test_control_release_forgets_the_saved_mode()
+    test_control_release_forgets_a_mode_saved_before_a_refused_command()
     test_control_stops_and_resumes_on_read_only()
     test_control_switch_is_published_and_toggles_control()
     test_control_switch_is_not_published_when_control_cannot_run()

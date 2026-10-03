@@ -36,7 +36,7 @@ from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
-from utils import parse_car_plan_windows, in_car_plan_window
+from car_charger_control import CarChargerControl
 
 MYENERGI_DIRECTOR_URL = "https://director.myenergi.net"
 MYENERGI_CLOUD_URL = "https://api.s18.myenergi.net"
@@ -758,7 +758,7 @@ MIN_POLL_SECONDS = 60
 MAX_POLL_SECONDS = 30 * 60
 
 
-class MyEnergiAPI(ComponentBase, OAuthMixin):
+class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     """myenergi component providing Zappi and Eddi monitoring and boost control."""
 
     def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60, zappi_control=False, automatic_zappi=True, automatic_eddi=True):
@@ -783,13 +783,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
         self.devices = {}
         self.boost_amounts = {}
-        self.control_windows = {}
-        self.control_modes = {}
+        # The mode each Zappi was in before Predbat first moved it, restored on release
         self.control_saved_modes = {}
-        self.control_active = False
-        # The runtime switch, on unless the user turns it off. Restored from storage at startup.
-        self.control_enabled = True
-        self.control_released = False
+        self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled")
         self.queued_events = []
         self._auto_configured = False
         self.transport = None
@@ -882,36 +878,6 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)
 
-    def refresh_car_windows(self, now):
-        """Read Predbat's planned car charging windows for every car into control_windows.
-
-        Returns True once at least one car's plan has been read, False while no slot sensor
-        has ever been published - which is what stops the loop stopping a car on startup,
-        before Predbat has decided anything.
-
-        The caller passes now so every car is judged against the same instant, and so the
-        parsing stays a pure function of the plan and the clock.
-        """
-        windows = {}
-        found = False
-        for car_n in range(self.num_cars):
-            postfix = "" if car_n == 0 else "_{}".format(car_n)
-            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
-            if planned is None:
-                continue
-            found = True
-            windows[car_n] = self._parse_plan_windows(planned, now)
-        self.control_windows = windows
-        return found
-
-    def _parse_plan_windows(self, planned, now):
-        """Turn one car's published plan into a list of localised (start, end) pairs."""
-        return parse_car_plan_windows(planned, now, self.local_tz)
-
-    def should_charge_now(self, car_n, now):
-        """Is now inside one of the planned charging windows for this car."""
-        return in_car_plan_window(self.control_windows.get(car_n, []), now)
-
     def enable_control(self):
         """Decide whether Predbat-led Zappi control should run, and say why when it will not.
 
@@ -929,89 +895,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         if not self.enable_controls:
             self.log("Warn: myenergi: myenergi_zappi_control is ignored while myenergi_enable_controls is off")
             return
-        self.control_active = True
+        self.charger_control_active = True
         self.log("Info: myenergi: Predbat-led Zappi charge control enabled")
-
-    async def save_control_enabled(self):
-        """Persist the control switch so an off survives a restart.
-
-        Without this a restart would silently hand Predbat back a Zappi the user had
-        deliberately released, which they would only notice when the car charged at the
-        wrong time. Fails soft: no Storage component just means the switch is not sticky.
-        """
-        if self.storage is None:
-            return
-        try:
-            await self.storage.save(MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, {"control_enabled": self.control_enabled})
-        except Exception as exc:
-            self.log("Warn: myenergi: could not save the Zappi control switch state: {}".format(exc))
-
-    async def load_control_enabled(self):
-        """Restore the control switch from storage, leaving it on when nothing is saved."""
-        if self.storage is None:
-            return
-        try:
-            saved = await self.storage.load(MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE)
-        except Exception as exc:
-            self.log("Warn: myenergi: could not read the Zappi control switch state: {}".format(exc))
-            return
-        if isinstance(saved, dict) and "control_enabled" in saved:
-            self.control_enabled = bool(saved["control_enabled"])
-            if not self.control_enabled:
-                self.log("Info: myenergi: Zappi charge control is switched off from the last session")
-
-    def control_read_only_now(self):
-        """Is Predbat in read only mode - the live attribute rather than just the config arg.
-
-        axle_control forces read only by setting the attribute without touching the arg, so
-        read the attribute first and fall back to the arg for the window before it is set.
-        """
-        read_only = getattr(self.base, "set_read_only", None)
-        if read_only is None:
-            read_only = self.get_arg("set_read_only", False)
-        return bool(read_only)
-
-    async def control_tick(self, now):
-        """Run one cycle of Zappi control, releasing rather than just going quiet.
-
-        Read only mode and the control switch are both releases: Predbat may have left a
-        Zappi Stopped, and walking away from that would strand the car unable to charge.
-        """
-        if not self.control_active:
-            return
-        reason = None
-        if self.control_read_only_now():
-            reason = "Predbat is in read only mode"
-        elif not self.control_enabled:
-            reason = "the Zappi control switch is off"
-        if reason:
-            if not self.control_released:
-                self.log("Info: myenergi: releasing the Zappis because {}".format(reason))
-                await self.release_zappis()
-                self.control_released = True
-            return
-        if self.control_released:
-            self.log("Info: myenergi: resuming Zappi charge control")
-            self.control_released = False
-        await self.control_charge(now)
-
-    async def release_zappis(self):
-        """Hand every held Zappi back, restoring the mode it had before Predbat took over.
-
-        Falls back to Eco+ when nothing was saved - a restart, or a device that reported a
-        mode neither API accepts back - so a released Zappi always lands somewhere useful
-        rather than being left Stopped.
-        """
-        for device in self.controlled_zappis():
-            if device.device_id not in self.control_modes:
-                continue
-            mode = self.control_saved_modes.get(device.device_id)
-            if mode not in ZAPPI_MODE_TO_CLOUD:
-                mode = ZAPPI_MODE_RELEASE
-            self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
-            await self.transport.set_mode(device, mode)
-        self.control_modes = {}
-        self.control_saved_modes = {}
 
     def controlled_zappis(self):
         """The Zappis to drive, in serial order, so Zappi N is the same car as auto-config's Nth.
@@ -1021,30 +906,53 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         """
         return [device for device in sorted(self.devices.values(), key=lambda item: item.serial) if device.kind == DEVICE_KIND_ZAPPI]
 
-    async def control_charge(self, now):
-        """Drive every controlled Zappi from its car's charge plan.
+    def charger_control_chargers(self):
+        """The Zappis to drive, in car order - see controlled_zappis()."""
+        return [(device.device_id, device) for device in self.controlled_zappis()]
 
-        Predbat holds the charger for as long as it is in control: Fast inside a planned
-        window, Stopped outside one. Fast is the only mode that draws what the plan assumed,
-        since the window was chosen for its rate rather than for sunshine.
+    def charger_control_drifted(self, device, charge):
+        """Has the Zappi been put in a different mode, e.g. from the myenergi app."""
+        return device.mode != (ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED)
 
-        The caller passes now so every Zappi is judged against one instant.
+    async def charger_control_send(self, device, charge, car_n):
+        """Fast inside a planned window, Stopped outside one.
+
+        Fast is the only mode that draws what the plan assumed, since the window was chosen
+        for its rate rather than for sunshine.
         """
-        if not self.refresh_car_windows(now):
-            return
-        for car_n, device in enumerate(self.controlled_zappis()):
-            wanted = ZAPPI_MODE_CHARGING if self.should_charge_now(car_n, now) else ZAPPI_MODE_STOPPED
-            asked = self.control_modes.get(device.device_id)
-            if asked == wanted and device.mode == wanted:
-                continue
-            if asked == wanted:
-                self.log("Info: myenergi: {} was changed away from {}, re-applying".format(device.name, wanted))
-            # Remember where the charger was before Predbat first moved it, so release can put it back
-            if device.device_id not in self.control_saved_modes:
-                self.control_saved_modes[device.device_id] = device.mode
-            self.log("Info: myenergi: setting {} to {} for car {}".format(device.name, wanted, car_n))
-            await self.transport.set_mode(device, wanted)
-            self.control_modes[device.device_id] = wanted
+        wanted = ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED
+        # Remember where the charger was before Predbat first moved it, so release can put it back
+        if device.device_id not in self.control_saved_modes:
+            self.control_saved_modes[device.device_id] = device.mode
+        self.log("Info: myenergi: setting {} to {} for car {}".format(device.name, wanted, car_n))
+        await self.transport.set_mode(device, wanted)
+
+    async def charger_control_release_one(self, device, charge):
+        """Hand a held Zappi back, restoring the mode it had before Predbat took over.
+
+        Falls back to Eco+ when nothing was saved - a restart, or a device that reported a
+        mode neither API accepts back - so a released Zappi always lands somewhere useful
+        rather than being left Stopped.
+        """
+        # Read, not popped: if the command fails the release is retried next cycle, and must
+        # still know where to put the Zappi back
+        mode = self.control_saved_modes.get(device.device_id)
+        if mode not in ZAPPI_MODE_TO_CLOUD:
+            mode = ZAPPI_MODE_RELEASE
+        self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
+        await self.transport.set_mode(device, mode)
+        # Only once it has gone through: a Zappi taken back later must snapshot its mode afresh
+        self.control_saved_modes.pop(device.device_id, None)
+
+    async def charger_control_release(self):
+        """Release every held Zappi, then forget every saved mode.
+
+        Cleared only once the whole release has gone through, so a failed command keeps what
+        the retry needs. Cleared entirely rather than per Zappi, so a mode saved ahead of a
+        command that was refused cannot outlive the release and block a fresh snapshot later.
+        """
+        await super().charger_control_release()
+        self.control_saved_modes = {}
 
     def boost_amount_for(self, device):
         """Return the currently selected boost amount for a device."""
@@ -1091,15 +999,15 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
                     # Before the first publish: the switch has to carry its restored state
                     # from the start, or a restart with control switched off would show it
                     # on for a cycle and then flip, looking like Predbat taking control back
-                    await self.load_control_enabled()
+                    await self.charger_control_load_enabled()
                     self.enable_control()
                 await self.publish_data()
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
                     self._auto_configured = True
-                if self.control_active:
+                if self.charger_control_active:
                     try:
-                        await self.control_tick(self.now_utc_exact)
+                        await self.charger_control_tick(self.now_utc_exact)
                     except MyEnergiError as exc:
                         # myenergi can refuse a mode for reasons Predbat cannot see - nothing
                         # plugged in, a fault on the charger. Monitoring still succeeded, so
@@ -1178,9 +1086,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         if not self.enable_controls:
             return False
         if entity_id.endswith("_myenergi_zappi_control"):
-            self.control_enabled = service == "turn_on"
-            self.log("Info: myenergi: Zappi charge control switched {}".format("on" if self.control_enabled else "off"))
-            await self.save_control_enabled()
+            await self.charger_control_set_enabled(service == "turn_on")
             return True
         if not entity_id.endswith("_boost"):
             return False
@@ -1204,14 +1110,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
     async def publish_data(self):
         """Publish every known device as Predbat entities."""
-        if self.control_active:
+        if self.charger_control_active:
             # Published only when control could actually act on it. Gating on the config
             # key alone would leave a switch reading "on" for a feature that cannot run -
             # monitor-only mode, or automatic configuration off - and making that switch
             # merely respond to a toggle would keep it live without making it honest.
             self.dashboard_item(
                 "switch.{}_myenergi_zappi_control".format(self.prefix),
-                state="on" if self.control_enabled else "off",
+                state="on" if self.charger_control_enabled else "off",
                 attributes=myenergi_attribute_table["zappi_control"],
                 app="myenergi",
             )
