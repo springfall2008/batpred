@@ -643,6 +643,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.iboost_running_full = False
         self.iboost_running_solar = False
         self.last_service_hash = {}
+        self.last_service_time = {}
         self.count_inverter_writes = {}
         self.rate_slots = []
         self.low_rates = []
