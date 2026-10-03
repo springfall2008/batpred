@@ -1182,6 +1182,61 @@ def test_control_gating_refuses_with_a_reason():
     print("  ✓ Zappi control refuses to run without its prerequisites, and says which")
 
 
+def _unset_control_component(apps_yaml, **overrides):
+    """Build a component with myenergi_zappi_control unset and the given apps.yaml entries."""
+    component = _control_component(**overrides)
+    component.base.args_from_apps_yaml = apps_yaml
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.enable_control()
+    return component
+
+
+def test_unset_control_follows_automatic_written_by_the_user():
+    """Unset myenergi_zappi_control turns on only when the user wrote the automatic setting.
+
+    Both automatic settings default on, so without this check every Zappi user would be
+    switched to Predbat control on upgrade.
+    """
+    assert _unset_control_component({}).charger_control_active is False, "Nothing written: Zappi control stays off"
+    assert _unset_control_component({"myenergi_automatic": True}).charger_control_active is True
+    assert _unset_control_component({"myenergi_automatic_zappi": True}).charger_control_active is True
+    # An explicit false still wins over automatic written by the user
+    assert _unset_control_component({"myenergi_automatic": True}, zappi_control=False).charger_control_active is False
+
+    # Following the automatic setting is not a request, so a missing prerequisite is not warned about
+    for overrides in ({"automatic": False}, {"automatic_zappi": False}, {"enable_controls": False}):
+        component = _unset_control_component({"myenergi_automatic": True}, **overrides)
+        assert component.charger_control_active is False, overrides
+        assert not any("Warn" in message for message in component.log_messages), (overrides, component.log_messages)
+    print("  ✓ Unset Zappi control follows myenergi_automatic only when the user wrote it")
+
+
+def test_control_setting_strings_are_read_as_booleans():
+    """myenergi_zappi_control has no default, so a quoted value must still read as the boolean it names."""
+    assert _make_component(zappi_control="false").zappi_control is False
+    assert _make_component(zappi_control="true").zappi_control is True
+    assert _make_component(zappi_control=0).zappi_control is False
+    assert _make_component().zappi_control is None
+    print("  ✓ Quoted and numeric myenergi_zappi_control values read as booleans")
+
+
+def test_control_hand_to_octopus_never_fast():
+    """Handing a Zappi to Octopus restores its saved mode, but never Fast - that would start a charge."""
+    component = _controlling_component()
+    device = component.devices["Z12345678"]
+    component.control_saved_modes[device.device_id] = "Fast"
+    run_async(component.charger_control_hand_to_octopus(device, False))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
+    assert device.device_id not in component.control_saved_modes
+
+    component.control_saved_modes[device.device_id] = "Eco"
+    run_async(component.charger_control_hand_to_octopus(device, False))
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    print("  ✓ A Zappi handed to Octopus goes back to its own mode, never Fast")
+
+
 def test_control_releases_to_the_saved_mode():
     """Releasing puts the Zappi back where it was before Predbat first moved it."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
@@ -1306,6 +1361,40 @@ def test_control_switch_is_published_and_toggles_control():
     run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_on"))
     assert component.charger_control_enabled is True
     print("  ✓ The zappi control switch is published and toggles control")
+
+
+def test_guest_switch_is_published_and_releases_the_zappi():
+    """The guest charging switch is published beside the control switch, and hands the Zappi back."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_guest_charging") == "off"
+
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped"
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_guest_charging", "turn_on")) is True
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_guest_charging") == "on"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", "Guest charging hands the Zappi back to its own mode"
+    print("  ✓ The guest charging switch is published and hands the Zappi back")
+
+
+def test_guest_charging_ends_when_the_zappi_is_unplugged():
+    """The Zappi's plug status ends guest charging once the guest's car is unplugged."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    device = component.devices["Z12345678"]
+    assert component.charger_control_car_plugged(device) is True, device.plug_status
+    device.plug_status = "EV Disconnected"
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    device.plug_status = "EV Connected"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.charger_control_guest is True
+
+    device.plug_status = "EV Disconnected"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.charger_control_guest is False
+    print("  ✓ Unplugging from the Zappi ends guest charging")
 
 
 def test_control_switch_is_not_published_when_control_cannot_run():
@@ -2601,6 +2690,9 @@ def test_myenergi(my_predbat=None):
     test_control_charge_ignores_eddis()
     test_control_charge_does_nothing_before_a_plan_exists()
     test_control_gating_refuses_with_a_reason()
+    test_unset_control_follows_automatic_written_by_the_user()
+    test_control_setting_strings_are_read_as_booleans()
+    test_control_hand_to_octopus_never_fast()
     test_control_releases_to_the_saved_mode()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
@@ -2608,6 +2700,8 @@ def test_myenergi(my_predbat=None):
     test_control_release_forgets_a_mode_saved_before_a_refused_command()
     test_control_stops_and_resumes_on_read_only()
     test_control_switch_is_published_and_toggles_control()
+    test_guest_switch_is_published_and_releases_the_zappi()
+    test_guest_charging_ends_when_the_zappi_is_unplugged()
     test_control_switch_is_not_published_when_control_cannot_run()
     test_control_switch_publishes_its_restored_state_on_the_first_cycle()
     test_control_switch_is_not_published_without_the_feature()

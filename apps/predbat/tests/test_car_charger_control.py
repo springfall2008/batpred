@@ -14,7 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
-from car_charger_control import CarChargerControl
+from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, parse_control_setting, parse_dispatch_time
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -72,6 +72,8 @@ class FakeComponent(CarChargerControl):
         self.drift_aware = drift_aware
         self.args = {}
         self.plans = {}
+        # entity id -> attributes of the Intelligent dispatch sensors
+        self.sensors = {}
         self.logs = []
         self.commands = []
         # Chargers whose commands are refused
@@ -88,13 +90,15 @@ class FakeComponent(CarChargerControl):
         """Record a log line."""
         self.logs.append(message)
 
-    def get_arg(self, name, default=None):
+    def get_arg(self, name, default=None, **kwargs):
         """Config args, as ComponentBase.get_arg."""
         return self.args.get(name, default)
 
     def get_state_wrapper(self, entity_id, default=None, attribute=None):
-        """Only the car charging slot sensors are read."""
-        return self.plans.get(entity_id, default)
+        """The car charging slot plans, or an attribute of a dispatch sensor."""
+        if attribute == "planned":
+            return self.plans.get(entity_id, default)
+        return self.sensors.get(entity_id, {}).get(attribute or "state", default)
 
     def charger_control_chargers(self):
         """Chargers in car order."""
@@ -350,6 +354,334 @@ def test_inactive_does_nothing():
     assert component.commands == [], component.commands
 
 
+class FakeOctopus:
+    """The parts of the Octopus component the Octopus rule reads."""
+
+    def __init__(self, configured=True, automatic=True):
+        """configured False means discovery has not wired the car slots yet."""
+        self.automatic = automatic
+        self.intelligent_config_devices = [] if configured else None
+
+
+class FakeKraken:
+    """The part of the Kraken component the Octopus rule reads."""
+
+    def __init__(self, started):
+        """started False means its first run has not succeeded yet."""
+        self.api_started = started
+
+
+class FakeComponents:
+    """Component registry holding at most an Octopus and a Kraken component."""
+
+    def __init__(self, octopus, kraken=None):
+        """Wrap the given components, or None."""
+        self.octopus = octopus
+        self.kraken = kraken
+
+    def get_component(self, name):
+        """Only Octopus and Kraken are known."""
+        return {"octopus": self.octopus, "kraken": self.kraken}.get(name)
+
+
+DISPATCH = "binary_sensor.predbat_octopus_intelligent_dispatch"
+
+
+def _octopus_component(octopus=None, is_charger=None, control=None, wired=True):
+    """A component for car 0's charger with the given Octopus arrangement.
+
+    is_charger is what car 0's dispatch sensor says, None for a sensor that does not say.
+    """
+    component = FakeComponent([FakeCharger("a")])
+    component.charger_control_config = control
+    component.base.components = FakeComponents(octopus)
+    component.base.car_slot_owner = None
+    if wired:
+        component.args["octopus_intelligent_slot"] = [DISPATCH]
+        component.sensors[DISPATCH] = {} if is_charger is None else {"is_charger": is_charger}
+    _plan(component, 0, [])
+    return component
+
+
+def test_parse_control_setting():
+    """Control settings arrive unconverted, so quoted and numeric values must still read right."""
+    for value, expected in ((None, None), (True, True), (False, False), ("false", False), ("False", False), ("off", False), ("true", True), ("on", True), (0, False), (1, True)):
+        assert parse_control_setting(value) is expected, (value, parse_control_setting(value))
+
+
+def test_octopus_rule_without_octopus_drives():
+    """No Octopus Intelligent car at all - Predbat drives the charger."""
+    component = _octopus_component(wired=False)
+    assert component.charger_control_octopus_drives_charger(0) is False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+
+def test_octopus_rule_car_integrated_drives():
+    """Octopus drives the car, not the charger - Predbat drives the charger to match the dispatches."""
+    component = _octopus_component(FakeOctopus(), is_charger=False)
+    assert component.charger_control_octopus_drives_charger(0) is False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+
+def test_octopus_rule_charge_point_hands_off_without_starting():
+    """Octopus drives the charger itself - Predbat lets go of a charger it had stopped without
+    starting it, and says so once."""
+    component = _octopus_component(wired=False)
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {"is_charger": True}
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "A stopped charger is left for Octopus, not started: {}".format(component.commands)
+    assert component.charger_control_state == {}
+    assert sum("leaving it to Octopus" in line for line in component.logs) == 1, component.logs
+
+    # Octopus Intelligent turned off in Predbat only changes Predbat's planning - Octopus still
+    # drives the charger, so Predbat still leaves it alone rather than fight
+    component.args["octopus_intelligent_charging"] = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+    # The charger stops being the Octopus device - Predbat takes it back
+    component.sensors[DISPATCH] = {"is_charger": False}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 2, component.commands
+    assert any("no longer left to Octopus" in line for line in component.logs), component.logs
+
+
+def test_octopus_rule_charge_point_releases_a_running_charger():
+    """A charger Predbat had running is released as usual when Octopus takes it over."""
+    component = _octopus_component(wired=False)
+    _plan(component, 0, [("06-01 01:00:00", "06-01 02:00:00")])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0)], component.commands
+
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {"is_charger": True}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0), ("a", "release", True)], component.commands
+
+
+def test_octopus_rule_car_integrated_follows_the_dispatch_sensor():
+    """Octopus drives the car - the charger runs while a dispatch is on, even before the plan shows it."""
+    component = _octopus_component(FakeOctopus(), is_charger=False)
+    component.sensors[DISPATCH]["state"] = "on"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0)], component.commands
+
+    component.sensors[DISPATCH]["state"] = "off"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0), component.commands
+
+    # With octopus_intelligent_charging off Predbat follows only its own plan
+    component.args["octopus_intelligent_charging"] = False
+    component.sensors[DISPATCH]["state"] = "on"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 2, component.commands
+
+
+def test_dispatch_times_judged_against_the_clock():
+    """The dispatch times on the sensor decide, not its on/off state, which lags the end of a
+    dispatch by up to a refresh. Octopus and Kraken write the times differently."""
+    component = _octopus_component(FakeOctopus(), is_charger=False)
+    now = _now()  # 01:30 London, 00:30 UTC
+    component.sensors[DISPATCH]["state"] = "on"
+    # Octopus format - ended at 00:30 UTC, so the stale "on" must not keep the charger running
+    component.sensors[DISPATCH]["completed_dispatches"] = [{"start": "2026-06-01T00:00:00+0000", "end": "2026-06-01T00:30:00+0000"}]
+    assert component.charger_control_dispatch_active(0, now) is False
+    # Kraken format - running now
+    component.sensors[DISPATCH]["planned_dispatches"] = [{"start": "2026-06-01T00:15:00Z", "end": "2026-06-01T01:00:00Z"}]
+    assert component.charger_control_dispatch_active(0, now) is True
+    # A sensor with no dispatch times falls back to its state
+    component.sensors[DISPATCH] = {"is_charger": False, "state": "on"}
+    assert component.charger_control_dispatch_active(0, now) is True
+    assert parse_dispatch_time("not a time") is None and parse_dispatch_time(None) is None
+
+
+def test_guest_switch_toggle():
+    """A toggle flips guest charging rather than turning it off."""
+    component = FakeComponent([FakeCharger("a")])
+    component.charger_control_switch_prefix = "fake"
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "toggle"))
+    assert component.charger_control_guest is True
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "toggle"))
+    assert component.charger_control_guest is False
+
+
+def test_octopus_rule_explicit_true_never_overrides_a_charge_point():
+    """control: true does not make Predbat fight Octopus for a charger Octopus is known to drive."""
+    component = _octopus_component(FakeOctopus(), is_charger=True, control=True)
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+
+
+def test_octopus_rule_unknown_hands_off_unless_told():
+    """A dispatch sensor that does not say (the Octopus Energy integration) - hands off unless control: true."""
+    component = _octopus_component(None)
+    assert component.charger_control_octopus_drives_charger(0) is None
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+    warnings = [line for line in component.logs if line.startswith("Warn") and "cannot tell" in line]
+    assert len(warnings) == 1, component.logs
+    assert not any("leaving it to Octopus" in line for line in component.logs), component.logs
+    run_async(component.charger_control_tick(_now()))
+    assert sum(line.startswith("Warn") for line in component.logs) == 1, "Warned once, not every cycle: {}".format(component.logs)
+
+    named = _octopus_component(None)
+    named.charger_control_setting = "ge_cloud_evc_control"
+    run_async(named.charger_control_tick(_now()))
+    assert any("Set ge_cloud_evc_control: true" in line for line in named.logs), named.logs
+
+    told = _octopus_component(None, control=True)
+    run_async(told.charger_control_tick(_now()))
+    assert told.commands == [("a", "off", 0)], told.commands
+
+
+def test_octopus_rule_waits_for_octopus_discovery():
+    """The Octopus component has not wired its devices yet - nothing is commanded until it has."""
+    component = _octopus_component(FakeOctopus(configured=False), wired=False)
+    assert component.charger_control_octopus_drives_charger(0) is None
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+    assert any("waiting for the Octopus component" in line for line in component.logs), component.logs
+    assert not any(line.startswith("Warn") for line in component.logs), "Waiting for discovery is not worth a warning: {}".format(component.logs)
+
+    # Discovery found no Intelligent devices - there is nothing for Octopus to drive
+    component.base.components = FakeComponents(FakeOctopus())
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+
+def test_octopus_rule_waits_for_kraken():
+    """Kraken wires its slots in its first successful run - until then nothing is commanded."""
+    component = _octopus_component(None, wired=False)
+    component.base.components = FakeComponents(None, FakeKraken(started=False))
+    assert component.charger_control_octopus_drives_charger(0) is None
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+
+    component.base.components = FakeComponents(None, FakeKraken(started=True))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "Kraken started and wired nothing for this car: {}".format(component.commands)
+
+
+def test_octopus_rule_does_not_wait_without_octopus_automatic():
+    """With octopus_automatic off the Octopus component never wires the slots, so there is nothing to wait for."""
+    component = _octopus_component(FakeOctopus(configured=False, automatic=False), wired=False)
+    assert component.charger_control_octopus_drives_charger(0) is False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+
+def test_octopus_rule_other_slot_owner_hands_off():
+    """Another component (Ohme) supplies the Intelligent slots from the charger itself."""
+    component = _octopus_component(None)
+    component.base.car_slot_owner = "ohme"
+    assert component.charger_control_octopus_drives_charger(0) is True
+
+
+def test_octopus_rule_per_car():
+    """Each car is judged on its own wired dispatch sensor, whatever order the slots are listed in
+    and whichever component (Octopus or Kraken) published them."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    component.base.components = FakeComponents(None)
+    component.base.car_slot_owner = None
+    component.args["octopus_intelligent_slot"] = ["binary_sensor.predbat_kraken_intelligent_dispatch_z", "binary_sensor.predbat_kraken_intelligent_dispatch_a"]
+    component.sensors = {
+        "binary_sensor.predbat_kraken_intelligent_dispatch_z": {"is_charger": True},
+        "binary_sensor.predbat_kraken_intelligent_dispatch_a": {"is_charger": False},
+    }
+    _plan(component, 0, [])
+    _plan(component, 1, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("b", "off", 1)], component.commands
+
+
+def _guest_component():
+    """A component with a guest switch, holding its charger stopped outside any window."""
+    component = FakeComponent([FakeCharger("a")])
+    component.charger_control_switch_prefix = "fake"
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    return component
+
+
+def test_guest_charging_releases_and_resumes():
+    """Guest charging hands the charger back so the guest can charge, and Predbat takes it back after."""
+    component = _guest_component()
+    assert run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on")) is True
+    assert run_async(component.charger_control_guest_event("switch.predbat_fake_other", "turn_on")) is False
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("a", "release", False)], component.commands
+
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_off"))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0), component.commands
+
+
+def test_guest_charging_ends_when_the_car_is_unplugged():
+    """A charger that can tell ends guest charging when a connected car is unplugged - but not
+    before the guest has plugged in."""
+    component = _guest_component()
+    charger = component.chargers[0]
+    charger.connected = False
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is True, "Turned on before the guest arrived, so nothing has been unplugged yet"
+
+    charger.connected = True
+    run_async(component.charger_control_tick(_now()))
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is False
+    assert any("the guest's car was unplugged" in line for line in component.logs), component.logs
+
+
+def test_guest_charging_survives_the_owner_unplugging():
+    """The owner's car, already on the charger when guest charging went on, is unplugged to make
+    way for the guest - that must not end guest charging."""
+    component = _guest_component()
+    charger = component.chargers[0]
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(_now()))
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is True, "The owner's unplug must not end guest charging"
+
+    # The guest plugs in, charges, and leaves
+    charger.connected = True
+    run_async(component.charger_control_tick(_now()))
+    charger.connected = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.charger_control_guest is False
+
+
+def test_guest_charging_times_out():
+    """A charger that cannot tell a car was unplugged ends guest charging after the time limit."""
+    component = _guest_component()
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now() + datetime.timedelta(hours=GUEST_CHARGING_MAX_HOURS - 1)))
+    assert component.charger_control_guest is True
+    run_async(component.charger_control_tick(_now() + datetime.timedelta(hours=GUEST_CHARGING_MAX_HOURS)))
+    assert component.charger_control_guest is False
+    assert component.commands[-1] == ("a", "off", 0), "Predbat drives the charger again: {}".format(component.commands)
+
+
+def test_no_guest_switch_without_a_prefix():
+    """A component that did not ask for a guest switch has none."""
+    component = FakeComponent([FakeCharger("a")])
+    assert component.charger_control_guest_entity() is None
+    assert run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on")) is False
+
+
 def run_car_charger_control_tests(my_predbat=None):
     """Run the shared charger control tests. Returns True on failure."""
     print("**** Running car charger control tests ****")
@@ -369,4 +701,24 @@ def run_car_charger_control_tests(my_predbat=None):
     test_failed_release_is_retried()
     test_one_refusing_charger_does_not_block_the_others()
     test_inactive_does_nothing()
+    test_parse_control_setting()
+    test_octopus_rule_without_octopus_drives()
+    test_octopus_rule_car_integrated_drives()
+    test_octopus_rule_charge_point_hands_off_without_starting()
+    test_octopus_rule_charge_point_releases_a_running_charger()
+    test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
+    test_dispatch_times_judged_against_the_clock()
+    test_guest_switch_toggle()
+    test_octopus_rule_explicit_true_never_overrides_a_charge_point()
+    test_octopus_rule_unknown_hands_off_unless_told()
+    test_octopus_rule_waits_for_octopus_discovery()
+    test_octopus_rule_does_not_wait_without_octopus_automatic()
+    test_octopus_rule_waits_for_kraken()
+    test_octopus_rule_other_slot_owner_hands_off()
+    test_octopus_rule_per_car()
+    test_guest_charging_releases_and_resumes()
+    test_guest_charging_ends_when_the_car_is_unplugged()
+    test_guest_charging_survives_the_owner_unplugging()
+    test_guest_charging_times_out()
+    test_no_guest_switch_without_a_prefix()
     return False

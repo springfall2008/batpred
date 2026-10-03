@@ -17,7 +17,7 @@ import aiohttp
 import pytz
 from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1, dp2, dp4
-from car_charger_control import CarChargerControl
+from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 import asyncio
 import math
@@ -144,6 +144,10 @@ EVC_CONNECTED_STATUSES = {"preparing", "charging", "suspendedev", "suspendedevse
 # unrecognised value can be reported instead of silently reading as "nothing plugged in",
 # which would look exactly like a working charger that Predbat quietly ignores.
 EVC_DISCONNECTED_STATUSES = {"available", "idle", "offline", "unavailable", "faulted", "reserved", "unknown"}
+
+# The subset of those that positively mean nothing is plugged in, rather than that the charger
+# cannot say - used to end guest charging, which a comms blip must not do
+EVC_EMPTY_STATUSES = {"available", "idle"}
 
 
 def evc_status_key(status):
@@ -585,7 +589,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     # GivEnergy's cloud applies a write some seconds after accepting it; the GEC and GEE rows wait 10
     WRITE_AND_POLL_SLEEP = 10
 
-    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=None):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
@@ -593,10 +597,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         # chargers into the car planning registers a car and moves num_cars, so it has to
         # be something a user turns on rather than something an upgrade does to them.
         self.automatic_evc = automatic_evc
-        self.evc_control = evc_control
+        self.evc_control = parse_control_setting(evc_control)
         # Remembering what each charger was last asked to do means a poll that changes nothing
         # sends nothing - every command goes through async_send_evc_command's retry loop.
-        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled")
+        self.charger_control_setup("GECloud", "EV charger", EVC_STORAGE_MODULE, EVC_CONTROL_STATE, "evc_control_enabled", control=self.evc_control, switch_prefix="gecloud", control_setting="ge_cloud_evc_control")
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -732,6 +736,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         """
         if entity_id.endswith("_gecloud_evc_control"):
             await self.charger_control_set_enabled(service == "turn_on")
+            return
+        if await self.charger_control_guest_event(entity_id, service):
             return
 
         mapping = self.register_entity_map.get(entity_id, None)
@@ -2093,12 +2099,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Control needs the EVC automatic configuration because a charger is driven from its
         own car's plan, and it is that configuration which establishes which charger is
         which car - without it, charger 1 could be told to follow a car it is not attached to.
+
+        ge_cloud_evc_control left unset turns control on with ge_cloud_automatic_evc, since
+        setting that is the user asking Predbat to plan for the car. False keeps it off.
         """
         self.charger_control_active = False
-        if not self.evc_control:
+        if self.evc_control is False:
             return
         if not self.automatic_evc:
-            self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
+            # Unset control just follows the automatic setting, so only an explicit request is worth a warning
+            if self.evc_control:
+                self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
             return
         self.charger_control_active = True
         self.log("GECloud: Predbat-led EV charger control enabled")
@@ -2127,6 +2138,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
     def charger_control_chargers(self):
         """The chargers to drive, in car order - see controlled_evc_devices()."""
         return [(uuid, uuid) for uuid in self.controlled_evc_devices()]
+
+    def charger_control_car_plugged(self, uuid):
+        """Is a car plugged in, for ending guest charging - only a status known to mean an empty
+        charger counts as unplugged, so an offline or unknown blip does not end it."""
+        return evc_status_key(self.evc_device[uuid].get("status", None)) not in EVC_EMPTY_STATUSES
 
     def charger_control_connected(self, uuid):
         """A charger with no car plugged in is left alone - commanding it would achieve nothing and every command costs a retry loop."""
@@ -2412,6 +2428,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     attributes={"friendly_name": "EV Charger Control", "icon": "mdi:ev-station"},
                     app="gecloud",
                 )
+                self.charger_control_publish_guest("gecloud")
                 try:
                     await self.charger_control_tick(self.now_utc_exact)
                 except EVCCommandFailed as exc:

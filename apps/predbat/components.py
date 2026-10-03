@@ -164,9 +164,10 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_automatic_evc",
             },
+            # No default: unset means "on when ge_cloud_automatic_evc maps the chargers to cars",
+            # distinct from an explicit False (never) or True (also when the Octopus side is unknown)
             "evc_control": {
                 "required": False,
-                "default": False,
                 "config": "ge_cloud_evc_control",
             },
         },
@@ -245,9 +246,9 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ohme_automatic",
             },
+            # No default: unset means "on when ohme_automatic registers the car" - see evc_control above
             "ohme_control": {
                 "required": False,
-                "default": False,
                 "config": "ohme_control",
             },
             # Deliberately has no default: unset means "auto-detect from the Octopus component",
@@ -275,7 +276,8 @@ COMPONENT_LIST = {
             "automatic_eddi": {"required": False, "config": "myenergi_automatic_eddi", "default": True},
             "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
             "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
-            "zappi_control": {"required": False, "config": "myenergi_zappi_control", "default": False},
+            # No default: unset means "on when the user set myenergi_automatic themselves" - see MyEnergiAPI.enable_control()
+            "zappi_control": {"required": False, "config": "myenergi_zappi_control"},
         },
         # Gate activation on having at least one auth path — api_key is the direct
         # transport's local hub credential, key is the cloud transport's access token.

@@ -293,6 +293,8 @@ def test_ohme(my_predbat=None):
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
         ("control_release_retry", _test_ohme_control_failed_release_retries, "a refused release is retried without failing the run"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
+        ("control_hand_to_octopus", _test_ohme_control_hand_to_octopus, "handing to Octopus turns max charge off first"),
+        ("control_car_plugged", _test_ohme_control_car_plugged, "plug state for ending guest charging"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
         ("auto_config_keeps_now", _test_ohme_auto_config_keeps_user_car_charging_now, "auto config keeps the user's car_charging_now"),
         ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
@@ -1616,8 +1618,9 @@ class MockOhmeAPI(OhmeAPI):
         self.queued_events = []
         self.ohme_automatic = False
         self.ohme_automatic_octopus_intelligent = None
-        self.ohme_control = False
-        self.charger_control_setup("Ohme API", "charger")
+        # Unset, as components.py leaves it when apps.yaml does not mention it
+        self.ohme_control = None
+        self.charger_control_setup("Ohme API", "charger", switch_prefix="ohme")
         self.control_saved_target = None
         self.prefix = "predbat"
         self.local_tz = pytz.timezone("Europe/London")
@@ -1703,10 +1706,53 @@ def _test_ohme_control_enable_rules(my_predbat=None):
     """Test when Predbat-led charge control is allowed to run"""
     print("**** Running test_ohme_control_enable_rules ****")
 
-    # Off by default
+    # Unset control follows ohme_automatic: off without it, and without a warning
     api = MockOhmeAPI()
     api.enable_control(False)
-    assert api.charger_control_active is False, "Expected control off when ohme_control is not set"
+    assert api.charger_control_active is False, "Expected unset control off without ohme_automatic"
+    assert not any("Warn" in msg for msg in api.log_messages), f"Unset control is not a request, got {api.log_messages}"
+
+    # ... but not while the car's size and limit are left at their 100 kWh / 100% defaults, since
+    # max charge overrides the Ohme's own target and would charge to full
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.charger_control_active is False, "Expected unset control to wait for the car's size and limit"
+    assert any("car_charging_battery_size and car_charging_limit" in msg for msg in api.log_messages), api.log_messages
+    assert not any("Warn" in msg for msg in api.log_messages), api.log_messages
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.base.args_from_apps_yaml = {"car_charging_battery_size": 77}
+    api.enable_control(False)
+    assert api.charger_control_active is False, "Expected unset control to wait for car_charging_limit too"
+
+    # ... on with it once both are set
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.base.args_from_apps_yaml = {"car_charging_battery_size": 77, "car_charging_limit": 80}
+    api.enable_control(False)
+    assert api.charger_control_active is True, "Expected unset control to turn on with ohme_automatic"
+
+    # An explicit true is the user's call, and does not need them
+    api = MockOhmeAPI()
+    api.ohme_control = True
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.charger_control_active is True, "Expected ohme_control: true to turn on without the size and limit"
+
+    # ... but left to Octopus when the Intelligent slots come from the Ohme, again without a warning
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.enable_control(True)
+    assert api.charger_control_active is False, "Expected unset control to leave an Octopus-driven Ohme alone"
+    assert not any("Warn" in msg for msg in api.log_messages), f"Expected an Info, not a warning, got {api.log_messages}"
+
+    # An explicit false keeps it off even with ohme_automatic
+    api = MockOhmeAPI()
+    api.ohme_control = False
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.charger_control_active is False, "Expected ohme_control: false to keep control off"
 
     # Needs the car registered, or there is no plan to enforce
     api = MockOhmeAPI()
@@ -1905,6 +1951,39 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert any("Read only mode cleared" in msg for msg in api.log_messages), f"Expected a resume log, got {api.log_messages}"
 
     print("PASS: read only released and resumed the charger")
+    return 0
+
+
+def _test_ohme_control_hand_to_octopus(my_predbat=None):
+    """Test handing a paused charger to Octopus turns max charge off before resuming it"""
+    print("**** Running test_ohme_control_hand_to_octopus ****")
+
+    api = _ohme_control_api()
+    api.control_saved_target = 70
+    run_async(api.charger_control_hand_to_octopus(api.client, False))
+    urls = [request["url"] for request in api.client.request_log]
+    max_off = next(i for i, url in enumerate(urls) if "max-charge?enabled=false" in url)
+    resume = next(i for i, url in enumerate(urls) if url.endswith("/resume"))
+    assert max_off < resume, f"Max charge must be off before the charger is resumed, got {urls}"
+    assert api.control_saved_target is None, "Expected the saved target to be restored and cleared"
+    return 0
+
+
+def _test_ohme_control_car_plugged(my_predbat=None):
+    """Test the Ohme's plug state, used to end guest charging"""
+    print("**** Running test_ohme_control_car_plugged ****")
+
+    api = _ohme_control_api()
+    api.client._charge_session = {}
+    assert api.charger_control_car_plugged(api.client) is True, "No session yet should read as plugged in"
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}}
+    assert api.charger_control_car_plugged(api.client) is True
+    api.client._charge_session = {"mode": "DISCONNECTED"}
+    assert api.charger_control_car_plugged(api.client) is False
+
+    # The guest switch reaches the mixin through the Ohme's own switch handler
+    run_async(api.switch_event_handler("switch.predbat_ohme_guest_charging", "turn_on"))
+    assert api.charger_control_guest is True, "Expected the Ohme guest switch to turn guest charging on"
     return 0
 
 
