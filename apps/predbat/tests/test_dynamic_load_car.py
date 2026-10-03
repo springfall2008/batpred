@@ -25,8 +25,7 @@ import shutil
 import tempfile
 from datetime import timedelta
 
-from tests.test_infra import run_async
-from tests.test_plan_persistence import _MockComponents, _make_storage
+from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 SENSOR = "binary_sensor.car_charging_now_test"
@@ -1105,14 +1104,14 @@ def _restart(my_predbat):
 def _run_persistence(my_predbat):
     """
     The dispatch-check state is saved to storage whenever it changes and restored after a restart, so a
-    restart part-way through a dispatch neither loses the kept half hour (GH#5316) nor restarts the grace
-    period, the start band or the cancellation.
+    restart part-way through a dispatch neither loses the kept half hour (GH#5316) nor restarts the start
+    band or the cancellation. The grace period does start again, as after any stretch with no evidence.
     """
     failed = False
     saved_components = my_predbat.components
     tmpdir = tempfile.mkdtemp()
     try:
-        storage = _make_storage(my_predbat, tmpdir)
+        storage = make_test_storage(my_predbat, tmpdir)
         saves = []
         backend_save = storage.backend.save
 
@@ -1124,9 +1123,9 @@ def _run_persistence(my_predbat):
         storage.backend.save = counting_save
         slots = [{"start": 390, "end": 450, "kwh": 3.0, "octopus": True}]
 
-        print("Test 49: the confirmed half hour, the grace clock and the dispatch run survive a restart")
+        print("Test 49: the confirmed half hour and the dispatch run survive a restart, the grace clock starts again")
         _reset(my_predbat)
-        my_predbat.components = _MockComponents(storage)
+        my_predbat.components = MockStorageComponents(storage)
         _sensor(my_predbat, "on")
         _cycle(my_predbat, 395, slots=slots)
         _sensor(my_predbat, "off")
@@ -1136,29 +1135,38 @@ def _run_persistence(my_predbat):
         _at(my_predbat, 403)
         _restart(my_predbat)
         failed |= _check("t49 confirmed restored", my_predbat.dynamic_load_car_confirmed.get(0) == my_predbat.midnight_utc + timedelta(minutes=420), "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
-        failed |= _check("t49 grace clock restored", my_predbat.dynamic_load_car_since.get(0) == since, "since {}".format(my_predbat.dynamic_load_car_since))
+        failed |= _check("t49 grace clock not restored", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since))
         failed |= _check("t49 run restored", my_predbat.dynamic_load_car_run.get(0) == {"start": 390, "end": 450}, "run {}".format(my_predbat.dynamic_load_car_run))
         failed |= _check("t49 still trusted", my_predbat.dynamic_load_car_cancelled.get(0) is False, "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
-        # The grace runs from the restored clock, not from the restart
+        # The car may have charged while Predbat was down, so the grace runs from the first reading after the restart
         changed = _cycle(my_predbat, 404, 30, slots=slots)
-        failed |= _check("t49 cancelled on the restored clock", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+        failed |= _check("t49 not cancelled on the old clock", not changed and not my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
+        changed = _cycle(my_predbat, 406, 30, slots=slots)
+        failed |= _check("t49 cancelled after a fresh grace", changed and my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
         failed |= _check("t49 strip from 07:00", my_predbat.dynamic_load_car_strip_from(0) == 420, "strip from {}".format(my_predbat.dynamic_load_car_strip_from(0)))
 
         print("Test 50: a cancellation survives a restart, with no evidence either way after it")
         _sensor(my_predbat, "unavailable")
-        _at(my_predbat, 406)
+        _at(my_predbat, 407)
         _restart(my_predbat)
         failed |= _check("t50 cancelled restored", my_predbat.dynamic_load_car_cancelled.get(0) is True, "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
-        _cycle(my_predbat, 407, slots=slots)
+        _cycle(my_predbat, 408, slots=slots)
         failed |= _check("t50 still cancelled", my_predbat.dynamic_load_car_cancelled.get(0) and _kwh(my_predbat) == [0], "kwh {}".format(_kwh(my_predbat)))
 
-        print("Test 51: state is only written when it changes")
+        print("Test 51: state is only written when it changes - not for a sensor flapping between unavailable and off")
         count = len(saves)
-        _cycle(my_predbat, 408, slots=slots)
+        _cycle(my_predbat, 409, slots=slots)
         my_predbat.dynamic_load_car_poll(my_predbat.now_utc_real)
         failed |= _check("t51 no write when unchanged", len(saves) == count, "saves {} was {}".format(len(saves), count))
+        for step, state in enumerate(["off", "unavailable", "off", "unavailable"]):
+            _sensor(my_predbat, state)
+            my_predbat.dynamic_load_car_poll(my_predbat.midnight_utc + timedelta(minutes=409, seconds=15 * (step + 1)))
+        failed |= _check("t51 no write for a flapping sensor", len(saves) == count, "saves {} was {}".format(len(saves), count))
 
-        print("Test 52: state from a dispatch that is over is not restored")
+        print("Test 52: state from a dispatch that is over is not restored, and a confirmation is not kept once its half hour is over")
+        _cycle(my_predbat, 425, slots=slots)
+        saved = run_async(storage.load("predbat", "dynamic_load_car"))
+        failed |= _check("t52 expired confirmation not saved", saved["cars"]["0"]["confirmed"] is None and saved["cars"]["0"]["run"] is not None, "saved {}".format(saved))
         _at(my_predbat, 455)
         _restart(my_predbat)
         failed |= _check(
@@ -1167,22 +1175,42 @@ def _run_persistence(my_predbat):
             "confirmed {} cancelled {} run {}".format(my_predbat.dynamic_load_car_confirmed, my_predbat.dynamic_load_car_cancelled, my_predbat.dynamic_load_car_run),
         )
 
-        print("Test 53: a comparison run, a car with no dispatch and a missing or broken store write and restore nothing")
+        print("Test 53: what is still current is judged on the clock_skew clock the times were recorded on")
+        saved_skew = my_predbat.args.get("clock_skew", None)
+        try:
+            _reset(my_predbat)
+            my_predbat.components = MockStorageComponents(storage)
+            _sensor(my_predbat, "on")
+            # With the clock 5 minutes fast, 06:52 real is 06:57 on the plan's clock
+            my_predbat.args["clock_skew"] = 5
+            _cycle(my_predbat, 387, slots=slots)
+            failed |= _check("t53 confirmed 06:30-07:00 on the skewed clock", my_predbat.dynamic_load_car_confirmed.get(0) == my_predbat.midnight_utc + timedelta(minutes=420), "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+            # Real 06:57 is 07:02 on the plan's clock: that half hour is over
+            _at(my_predbat, 417)
+            _restart(my_predbat)
+            failed |= _check("t53 over on the skewed clock is not restored", my_predbat.dynamic_load_car_confirmed.get(0) is None, "confirmed {}".format(my_predbat.dynamic_load_car_confirmed))
+        finally:
+            if saved_skew is None:
+                my_predbat.args.pop("clock_skew", None)
+            else:
+                my_predbat.args["clock_skew"] = saved_skew
+
+        print("Test 54: a comparison run, a car with no dispatch and a missing or broken store write and restore nothing")
         tmpdir2 = tempfile.mkdtemp()
         try:
-            storage2 = _make_storage(my_predbat, tmpdir2)
+            storage2 = make_test_storage(my_predbat, tmpdir2)
             _reset(my_predbat)
-            my_predbat.components = _MockComponents(storage2)
+            my_predbat.components = MockStorageComponents(storage2)
             _sensor(my_predbat, "on")
             _cycle(my_predbat, 395, slots=slots, save=False)
             _cycle(my_predbat, 395, slots=[])
-            failed |= _check("t53 nothing written", run_async(storage2.load("predbat", "dynamic_load_car")) is None)
+            failed |= _check("t54 nothing written", run_async(storage2.load("predbat", "dynamic_load_car")) is None)
             run_async(storage2.save("predbat", "dynamic_load_car", ["not", "a", "dict"], format="json"))
             _restart(my_predbat)
             run_async(storage2.save("predbat", "dynamic_load_car", {"cars": {"x": 1, "0": {"confirmed": "junk", "run": {"start": "junk"}}}}, format="json"))
             _restart(my_predbat)
-            failed |= _check("t53 junk ignored", not my_predbat.dynamic_load_car_confirmed and not my_predbat.dynamic_load_car_run, "confirmed {} run {}".format(my_predbat.dynamic_load_car_confirmed, my_predbat.dynamic_load_car_run))
-            for components in (None, _MockComponents(None)):
+            failed |= _check("t54 junk ignored", not my_predbat.dynamic_load_car_confirmed and not my_predbat.dynamic_load_car_run, "confirmed {} run {}".format(my_predbat.dynamic_load_car_confirmed, my_predbat.dynamic_load_car_run))
+            for components in (None, MockStorageComponents(None)):
                 my_predbat.components = components
                 _cycle(my_predbat, 395, slots=slots)
                 _restart(my_predbat)
