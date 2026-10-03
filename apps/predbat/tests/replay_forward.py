@@ -40,6 +40,9 @@ DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
 NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), (\w+), ([\d.]+)\)")
 VERSION_RE = re.compile(r"version (\S+) currently running")
+# Lines written by Predbat versions that log the inputs a replay cannot otherwise recover
+LOAD_INPUT_RE = re.compile(r"Replay input: load forecast, 5-minute Wh from (\d\d):(\d\d) \[([^\]]*)\]")
+PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from (\d\d):(\d\d) p50 \[([^\]]*)\] p10 \[([^\]]*)\] p90 \[([^\]]*)\]")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
@@ -107,10 +110,22 @@ def parse_log(path):
                 if found:
                     run["in_force"] = found.group(1)
                     continue
-            for regex, store in ((SOC_RE, "soc"), (TODAY_RE, "today"), (INDAY_RE, "inday"), (DIVERGENCE_RE, "divergence"), (COST_RE, "cost"), (NEXT_LIMIT_RE, "next_limit"), (VERSION_RE, "version"), (FILTERED_RE, "filtered"), (FORCE_RE, "force")):
+            for regex, store in (
+                (SOC_RE, "soc"),
+                (TODAY_RE, "today"),
+                (INDAY_RE, "inday"),
+                (DIVERGENCE_RE, "divergence"),
+                (COST_RE, "cost"),
+                (NEXT_LIMIT_RE, "next_limit"),
+                (VERSION_RE, "version"),
+                (LOAD_INPUT_RE, "load_input"),
+                (PV_INPUT_RE, "pv_input"),
+                (FILTERED_RE, "filtered"),
+                (FORCE_RE, "force"),
+            ):
                 found = regex.search(line)
                 if found:
-                    run[store] = found.groups() if store in ("soc", "today", "force", "next_limit") else found.group(1)
+                    run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "pv_input") else found.group(1)
     return [run for run in runs if run.get("soc")]
 
 
@@ -227,6 +242,8 @@ def apply_run(my_predbat, prev, run):
         my_predbat.cost_today_sofar = float(run["cost"])
     if run.get("today"):
         my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in run["today"])
+    if run.get("pv_input"):
+        apply_logged_pv_forecast(my_predbat, run["pv_input"])
     if run.get("inday"):
         my_predbat.load_inday_adjustment = float(run["inday"]) / 100.0
     # calculate_plan recomputes the load divergence from the load history, which the replay can only rebuild
@@ -352,6 +369,9 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_windows(my_predbat)
             rebuild_load_forecast(my_predbat)
+            if run.get("load_input"):
+                # A log that records the load forecast the plan used makes the rebuild unnecessary
+                apply_logged_load_forecast(my_predbat, run["load_input"])
             rebuild_load_pv_models(my_predbat)
             pv_step = my_predbat.pv_forecast_minute_step
             load_step = my_predbat.load_minutes_step
@@ -381,6 +401,56 @@ def rebuild_load_forecast(my_predbat):
     forecast = my_predbat.compute_load_forecast_history(my_predbat.now_utc)
     if forecast:
         my_predbat.load_forecast = dict(forecast)
+
+
+def parse_values(text):
+    """Parse a logged comma-separated list of numbers, empty when the list was."""
+    return [float(value) for value in text.split(",") if value.strip()]
+
+
+def apply_logged_load_forecast(my_predbat, load_input):
+    """Replace the load forecast from the run's logged "Replay input: load forecast" line.
+
+    The log gives Wh per 5 minutes from a slot start; load_forecast is cumulative kWh from midnight, so the
+    logged slots are stacked onto the forecast's own value at that start, spread evenly within each slot.
+    Minutes before the start keep their values, as the plan only reads them for the in-day comparison.
+    """
+    hours, minutes, text = load_input
+    start = int(hours) * 60 + int(minutes)
+    forecast = my_predbat.load_forecast or {}
+    base = 0.0
+    for minute in sorted(forecast):
+        if minute > start:
+            break
+        base = forecast[minute]
+    rebuilt = {minute: value for minute, value in forecast.items() if minute < start}
+    total = base
+    for index, wh in enumerate(parse_values(text)):
+        kwh = wh / 1000.0
+        for offset in range(PREDICT_STEP):
+            rebuilt[start + index * PREDICT_STEP + offset] = total + kwh * offset / PREDICT_STEP
+        total += kwh
+    rebuilt[start + len(parse_values(text)) * PREDICT_STEP] = total
+    my_predbat.load_forecast = rebuilt
+
+
+def apply_logged_pv_forecast(my_predbat, pv_input):
+    """Update the PV forecasts from a logged "Replay input: PV forecast changed" line.
+
+    Each series is logged as kWh per half hour from a half-hour start, which is spread evenly over the minutes of
+    its half hour. Minutes outside the logged span keep their values; a series logged empty is left alone.
+    """
+    hours, minutes = pv_input[0], pv_input[1]
+    start = int(hours) * 60 + int(minutes)
+    for name, text in zip(("pv_forecast_minute", "pv_forecast_minute10", "pv_forecast_minute90"), pv_input[2:]):
+        values = parse_values(text)
+        if not values:
+            continue
+        series = dict(getattr(my_predbat, name) or {})
+        for index, kwh in enumerate(values):
+            for offset in range(30):
+                series[start + index * 30 + offset] = kwh / 30.0
+        setattr(my_predbat, name, series)
 
 
 def capture_candidate(my_predbat):
