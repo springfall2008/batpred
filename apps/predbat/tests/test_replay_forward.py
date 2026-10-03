@@ -11,10 +11,14 @@ from tests.replay_forward import parse_windows, parse_log, shift_counter, set_ex
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:02.135467: Current data so far today: load 5.74kWh, import 17.74kWh, export 4.57kWh, PV 0.21kWh
 2026-10-01 08:30:02.324401: Today's load divergence 100.0%, in-day adjustment 92.66%, damping 0.95x, yesterday 88.64% today 100.0% blend 64.58%
+2026-10-01 08:30:02.269308: Today's energy total net 13.17kWh, import 17.74kWh, export 4.57kWh, cost 66.82c, import 151.37c, export -84.54c, carbon 0.0kg
 2026-10-01 08:30:02.366949: Inverter 0 SoC: 14.27kWh 85%, current charge rate 9200W, current discharge rate 9660W, current battery power -40W, current battery voltage 52.0V, grid power 6W, load power 506W, PV Power 558W
 2026-10-01 08:30:02.468111: PV Forecast 44.6kWh and 10% Forecast 30.6kWh; PV cloud factor 0.2
 2026-10-01 08:30:02.469744: Load divergence over 8.0 hours mean 363.79W, min 254.4W, max 748.8W, std dev 73.34W, divergence 10.08%
+2026-10-01 08:30:02.467699: Best export window [ 01-10 08:35:00 - 01-10 12:30:00 @ 18.5c 51.0% ]
+2026-10-01 08:30:03.627292: Best export window [ 01-10 09:00:00 - 01-10 09:30:00 @ 18.5c 100.0% ]
 2026-10-01 08:30:04.419814: Export windows filtered [ 01-10 09:00:00 - 01-10 12:00:00 @ 18.5c 55.0%, 01-10 13:00:00 - 01-10 13:30:00 @ 18.5c 84.0% ]
+2026-10-01 08:30:05.663044: Next export window will be: 2026-10-01 09:00:00+01:00 - 2026-10-01 12:01:00+01:00 at reserve (0, 55, 1.0)
 2026-10-01 08:30:05.663103: Inverter 0 Adjust force export to True, change times from 00:00:00 - 00:00:00 to 09:00:00 - 12:01:00
 2026-10-01 08:35:00.575570: --------------- PredBat - update at 2026-10-01 08:35:00+01:00 with clock skew 0 minutes, minutes now 515
 2026-10-01 08:35:02.366949: Inverter 0 SoC: 13.92kWh 83%, current charge rate 9200W, current discharge rate 9660W, current battery power 4930W, current battery voltage 52.0V, grid power 6W, load power 412W, PV Power 570W
@@ -63,11 +67,20 @@ def test_parse_log():
     if first["soc"] != ("14.27", "85", "-40") or first["today"] != ("5.74", "17.74", "4.57", "0.21"):
         print("ERROR: SoC or day counters parsed wrongly: {} {}".format(first["soc"], first["today"]))
         failed = 1
+    if first["cost"] != "66.82":
+        print("ERROR: cost so far today parsed wrongly: {}".format(first["cost"]))
+        failed = 1
     if first["inday"] != "92.66" or first["divergence"] != "10.08" or first["force"] != ("True", "09", "00", "12", "01"):
         print("ERROR: in-day adjustment, load divergence or force export parsed wrongly: {} {} {}".format(first["inday"], first["divergence"], first["force"]))
         failed = 1
     if parse_windows(first["filtered"], "01-10") != [(540, 720, 18.5, 55.0), (780, 810, 18.5, 84.0)]:
         print("ERROR: filtered windows parsed wrongly: {}".format(first["filtered"]))
+        failed = 1
+    if parse_windows(first["in_force"], "01-10") != [(515, 750, 18.5, 51.0)]:
+        print("ERROR: the plan in force should be the run's first Best export window line: {}".format(first["in_force"]))
+        failed = 1
+    if first["next_limit"] != ("0", "55", "1.0"):
+        print("ERROR: next export limit parsed wrongly: {}".format(first["next_limit"]))
         failed = 1
     if second["filtered"] is not None or second["force"] is not None:
         print("ERROR: a run that logged no re-plan should carry no windows")
@@ -84,6 +97,10 @@ def test_shift_counter():
     if got != expected or len(shifted) != 5:
         print("ERROR: shift_counter gave {} expected {}".format(got, expected))
         return 1
+    sparse = shift_counter({0: 3.0, 5: 1.0}, 2, 1.0)
+    if sparse != {0: 4.0, 1: 3.5, 2: 3.0, 7: 1.0}:
+        print("ERROR: a sparse dict history should shift its keys: {}".format(sparse))
+        return 1
     if shift_counter(history, 0, 4.0) is not history:
         print("ERROR: a zero-minute shift should leave the history alone")
         return 1
@@ -93,8 +110,8 @@ def test_shift_counter():
 def test_set_export_window():
     """The log's force export line becomes the inverter's window, and a False clears it."""
     bat = FakeBat(rate_export={540: 18.5})
-    set_export_window(bat, ("True", "09", "00", "12", "01"), 545)
-    if bat.export_window != [{"start": 540, "end": 721, "average": 18.5}] or not bat.isExporting:
+    set_export_window(bat, ("True", "09", "00", "12", "01"), 545, ("0", "55", "1.0"))
+    if bat.export_window != [{"start": 540, "end": 721, "average": 18.5}] or not bat.isExporting or bat.export_limits != [(0, 55, 1.0)]:
         print("ERROR: window not set from the force export line: {} {}".format(bat.export_window, bat.isExporting))
         return 1
     set_export_window(bat, ("True", "09", "00", "12", "01"), 500)
@@ -106,7 +123,7 @@ def test_set_export_window():
         print("ERROR: a window crossing midnight should end the next day: {}".format(bat.export_window))
         return 1
     set_export_window(bat, ("False", "00", "00", "00", "00"), 545)
-    if bat.export_window != [] or bat.isExporting:
+    if bat.export_window != [] or bat.isExporting or bat.export_limits != []:
         print("ERROR: force export False should clear the window")
         return 1
     return 0
