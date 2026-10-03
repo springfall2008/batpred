@@ -170,6 +170,7 @@ dtype
 dwindow
 eauth
 echargingpile
+ecoflow
 Eddi
 eddis
 efgh
@@ -412,6 +413,7 @@ mppt
 mprn
 mpxn
 mqtt
+mqtts
 mtok
 mult
 multiarray
@@ -492,6 +494,7 @@ popv
 postdata
 powercontrolmode
 powerline
+powerocean
 Powerwall
 ppdetails
 ppkwh
