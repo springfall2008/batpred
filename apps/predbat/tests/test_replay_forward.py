@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -257,6 +257,46 @@ def test_version_change():
     return 0
 
 
+class InputBat:
+    """The forecast attributes the replay-input helpers replace."""
+
+    def __init__(self):
+        """Start with a flat 0.1 kWh per 5 minutes load forecast and a flat PV forecast."""
+        self.load_forecast = {minute: minute / 50.0 for minute in range(0, 24 * 60)}
+        self.pv_forecast_minute = {minute: 0.01 for minute in range(24 * 60)}
+        self.pv_forecast_minute10 = dict(self.pv_forecast_minute)
+        self.pv_forecast_minute90 = dict(self.pv_forecast_minute)
+
+
+def test_replay_inputs():
+    """Logged load and PV forecasts are parsed and replace the replay's own from the logged start onwards."""
+    lines = """2026-10-01 09:05:00.000000: --------------- PredBat - update at 2026-10-01 09:05:00+01:00 with clock skew 0 minutes, minutes now 545
+2026-10-01 09:05:01.000000: Inverter 0 SoC: 10.0kWh 60%, current charge rate 9200W, current discharge rate 9660W, current battery power 0W
+2026-10-01 09:05:01.100000: Replay input: PV forecast changed, 30-minute kWh from 09:00 p50 [1.5, 3.0] p10 [0.6, 1.2] p90 []
+2026-10-01 09:05:01.200000: Replay input: load forecast, 5-minute Wh from 09:05 [200, 50]
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(lines)
+        run = parse_log(path)[0]
+    bat = InputBat()
+    apply_logged_load_forecast(bat, run["load_input"])
+    apply_logged_pv_forecast(bat, run["pv_input"])
+    failed = 0
+    # Forecast at 09:05 was 10.9 kWh cumulative; the log adds 0.2 then 0.05
+    if abs(bat.load_forecast[545] - 10.9) > 1e-9 or abs(bat.load_forecast[550] - 11.1) > 1e-9 or abs(bat.load_forecast[555] - 11.15) > 1e-9 or bat.load_forecast[100] != 2.0:
+        print("ERROR: logged load forecast applied wrongly: {} {} {}".format(bat.load_forecast[545], bat.load_forecast[550], bat.load_forecast[555]))
+        failed = 1
+    if abs(bat.pv_forecast_minute[545] - 0.05) > 1e-9 or abs(bat.pv_forecast_minute[575] - 0.1) > 1e-9 or bat.pv_forecast_minute[700] != 0.01:
+        print("ERROR: logged PV forecast applied wrongly")
+        failed = 1
+    if bat.pv_forecast_minute90[545] != 0.01:
+        print("ERROR: an empty logged series should leave that forecast alone")
+        failed = 1
+    return failed
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -271,4 +311,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_logged_load_divergence(my_predbat)
     failed += test_soc_rms_error()
     failed += test_version_change()
+    failed += test_replay_inputs()
     return failed
