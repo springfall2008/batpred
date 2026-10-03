@@ -68,6 +68,15 @@ def restore_debug_state(my_predbat, debug_file):
     my_predbat.args["threads"] = 0
 
 
+def apply_overrides(my_predbat, overrides):
+    """Set each name=value override on the instance after a debug yaml is restored (--override), rejecting unknown names."""
+    for name, value in (overrides or {}).items():
+        if not hasattr(my_predbat, name):
+            raise ValueError("Unknown setting {} for --override".format(name))
+        print("Override: {} = {} (was {})".format(name, value, getattr(my_predbat, name)))
+        setattr(my_predbat, name, value)
+
+
 def rebuild_load_pv_models(my_predbat, load_override=1.0):
     """Rebuild the stepped load and PV models from the history and forecasts now held on the instance."""
     my_predbat.load_minutes_step = my_predbat.step_data_history(
@@ -131,7 +140,7 @@ def rescan_rate_windows(my_predbat):
             my_predbat.rate_import_cost_threshold = highest
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False, overrides=None):
     print("**** Running debug test {} ****\n".format(debug_file))
     # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
     # debug_cases regression suite exercise the same code path and produce the same result.
@@ -144,6 +153,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     print("**** Test {} ****".format(test_name))
     restore_debug_state(my_predbat, debug_file)
+    apply_overrides(my_predbat, overrides)
     # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:

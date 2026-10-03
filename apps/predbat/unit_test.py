@@ -812,7 +812,7 @@ def main():
     parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
     parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at this HH:MM")
     parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
-    parser.add_argument("--replay_set", action="append", help="With --replay_log: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
+    parser.add_argument("--override", action="append", help="With --debug_file: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
     parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
@@ -905,8 +905,8 @@ def main():
         )
         sys.exit(0)
 
+    overrides = dict(parse_override(text) for text in (args.override or []))
     if args.debug_file and args.replay_log:
-        overrides = dict(parse_override(text) for text in (args.replay_set or []))
         rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until, simulate=args.replay_simulate, overrides=overrides)
         if args.replay_chart:
             chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
@@ -925,7 +925,7 @@ def main():
         sys.exit(0)
 
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
     # Collect tests to run based on arguments

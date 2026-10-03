@@ -52,6 +52,8 @@ There are two modes:
 - **Exact replay** (the default) takes the battery SoC from the log at every run, so each re-plan starts from exactly what the live system saw. Use it to check the replay reproduces the live plans before changing anything.
 - **Simulated** (`--replay_simulate`) steps the battery forward itself under the replayed plan, using the actual PV and load from the log and Predbat's own battery and inverter model (rate curves, losses, reserve, the inverter and export limits). Use it once the code is changed: the SoC then follows the changed plan instead of being pinned to what the unchanged code did.
 
+`--override name=value` (repeatable) changes a setting after the yaml is restored, for what-if replays - for example `--override pv_metric90_weight=0.25`. It works for a plain `--debug_file` replay as well.
+
 `--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and shows when each plan says to export.
 
 In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
