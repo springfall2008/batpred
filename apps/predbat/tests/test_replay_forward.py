@@ -6,9 +6,10 @@ import os
 import tempfile
 
 from utils import MinuteArray
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
+2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
 2026-10-01 08:30:02.135467: Current data so far today: load 5.74kWh, import 17.74kWh, export 4.57kWh, PV 0.21kWh
 2026-10-01 08:30:02.324401: Today's load divergence 100.0%, in-day adjustment 92.66%, damping 0.95x, yesterday 88.64% today 100.0% blend 64.58%
 2026-10-01 08:30:02.269308: Today's energy total net 13.17kWh, import 17.74kWh, export 4.57kWh, cost 66.82c, import 151.37c, export -84.54c, carbon 0.0kg
@@ -66,6 +67,9 @@ def test_parse_log():
     failed = 0
     if first["soc"] != ("14.27", "85", "-40") or first["today"] != ("5.74", "17.74", "4.57", "0.21"):
         print("ERROR: SoC or day counters parsed wrongly: {} {}".format(first["soc"], first["today"]))
+        failed = 1
+    if first["version"] != "v9.3.3":
+        print("ERROR: version parsed wrongly: {}".format(first["version"]))
         failed = 1
     if first["cost"] != "66.82":
         print("ERROR: cost so far today parsed wrongly: {}".format(first["cost"]))
@@ -240,6 +244,15 @@ def test_soc_rms_error():
     return 0
 
 
+def test_version_change():
+    """The first run logging a different version is found; runs without a version line are skipped over."""
+    runs = [{"version": "v9.3.1"}, {}, {"version": "v9.3.1"}, {"version": "v9.3.3"}, {"version": "v9.3.3"}]
+    if version_change(runs) != (3, "v9.3.1", "v9.3.3") or version_change(runs[:3]) is not None:
+        print("ERROR: version_change gave {}".format(version_change(runs)))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -253,4 +266,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_simulate_soc(my_predbat)
     failed += test_logged_load_divergence(my_predbat)
     failed += test_soc_rms_error()
+    failed += test_version_change()
     return failed
