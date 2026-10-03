@@ -904,7 +904,9 @@ def main():
             chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
             print("Wrote replay chart to {}".format(args.replay_chart))
         replanned, identical, same_start = summarise(rows)
-        print("Replay: of {} re-plans, {} reproduce the logged export windows exactly and {} the first window's start".format(replanned, identical, same_start))
+        print("Replay: adopted plans - of {} re-plans, {} identical to the log and {} with the same first export window start".format(replanned, identical, same_start))
+        replanned, identical, same_start = summarise(rows, logged="logged_candidate", replayed="replayed_candidate")
+        print("Replay: candidate plans - of {} re-plans, {} identical to the log and {} with the same first export window start".format(replanned, identical, same_start))
         rms = soc_rms_error(rows)
         if rms is not None:
             print("Replay: simulated SoC differs from the logged SoC by {:.2f}% RMS over {} runs".format(rms, len(rows)))
