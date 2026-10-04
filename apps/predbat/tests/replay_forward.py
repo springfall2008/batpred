@@ -370,6 +370,9 @@ def apply_run(my_predbat, prev, run):
         my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in run["today"])
     if run.get("pv_input"):
         apply_logged_pv_forecast(my_predbat, run["pv_input"])
+    # Fetch clears these every run, so the plan's stale-p90 guard only ever compares within one cycle. Left set,
+    # a PV update that moves p50 but not p90 reads as a p90 left behind, and the plan replaces p90 with p50
+    my_predbat.pv_forecast_minute90_signatures = None
     if run.get("inday"):
         my_predbat.load_inday_adjustment = float(run["inday"]) / 100.0
     # calculate_plan recomputes the load divergence from the load history, which the replay can only rebuild
@@ -531,6 +534,8 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             "replayed_candidate": None,
             "after_version_change": change_index is not None and index >= change_index,
         }
+        # Marks the replay's own log the way the live log marks each run, so the two can be read side by side
+        my_predbat.log("--------------- Replay of run at {} minutes now {}".format(run["time"], my_predbat.minutes_now))
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_stats(my_predbat)
