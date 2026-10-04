@@ -1695,7 +1695,7 @@ This provides more accurate load predictions than simple averaging, especially f
 - Optionally incorporates PV generation and temperature forecast data
 - Trains a multi-layer neural network on your historical patterns
 - Makes autoregressive predictions for 48 hours ahead in 5-minute intervals
-- Fine-tunes periodically (every 2 hours) to adapt to changing patterns
+- Fine-tunes periodically (every 2 hours by default) to adapt to changing patterns
 - Validates predictions and falls back gracefully if accuracy is poor
 - Publishes predictions to `sensor.predbat_load_ml_forecast`
 
@@ -1711,6 +1711,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_source` | Boolean | No | false | `load_ml_source` | Set to `true` to use ML predictions in Predbat battery planning |
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
+| `load_ml_retrain_interval_hours` | Integer | No | 2 | `load_ml_retrain_interval_hours` | Hours between training cycles (1–48); use 24 for daily retraining. Predictions still update every 30 minutes |
 
 Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
@@ -1728,6 +1729,9 @@ predbat:
 
   # Optional: days of history to accumulate on disk for training (default 90)
   # load_ml_database_days: 90
+
+  # Optional: hours between training cycles (default 2, range 1-48)
+  # load_ml_retrain_interval_hours: 24
 
   # Optional but recommended: enable temperature forecasts
   temperature_enable: true
