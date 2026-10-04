@@ -496,20 +496,32 @@ def test_set_export_window_after_midnight():
 INVALID_LOG = """2026-10-04 04:01:03.000000: --------------- PredBat - update at 2026-10-04 04:00:00+01:00 with clock skew 0 minutes, minutes now 240
 2026-10-04 04:01:18.000000: Inverter 0 SoC: 18.08kWh 100%, current charge rate 5500W, current discharge rate 5500W, current battery power 159W
 2026-10-04 04:01:20.198077: Will recompute the plan as it is invalid
+2026-10-04 04:01:20.198100: Recompute, previous plan is invalid...
 2026-10-04 04:01:20.203586: Best export window [ 04-10 04:00:00 - 04-10 04:30:00 @ 14.95p 100.0% ]
 2026-10-04 04:01:21.000000: Export windows filtered [ 04-10 06:00:00 - 04-10 07:00:00 @ 15.8p 63.0% ]
+2026-10-04 12:05:16.706970: --------------- PredBat - update at 2026-10-04 12:05:00+01:00 with clock skew 0 minutes, minutes now 725
+2026-10-04 12:05:16.800000: Inverter 0 SoC: 16.20kWh 90%, current charge rate 5500W, current discharge rate 5500W, current battery power 159W
+2026-10-04 12:05:16.900000: Sensor changes require a replan, will recompute the plan
+2026-10-04 12:05:17.111032: Will recompute the plan as it is invalid
+2026-10-04 12:05:17.111195: Recompute is saving previous plan...
+2026-10-04 12:05:17.115425: Best export window [ 04-10 14:00:00 - 04-10 14:30:00 @ 7.45p 100.0% ]
+2026-10-04 12:05:19.357686: Export windows filtered [ 04-10 16:50:00 - 04-10 19:00:00 @ 23.02p 29.0% ]
 """
 
 
 def test_parse_log_invalid_plan():
-    """A run that found its plan invalid is marked, and its working window list is not taken as the plan in force."""
+    """Only a run whose plan was really invalid is marked invalid; no recomputing run's working window list is taken as the plan in force."""
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "predbat.log")
         with open(path, "w") as handle:
             handle.write(INVALID_LOG)
-        run = parse_log(path)[0]
+        run, recompute = parse_log(path)
     if not run.get("invalid") or run["in_force"] is not None or run["filtered"] is None:
         print("ERROR: an invalid-plan run parsed wrongly: invalid {} in force {} filtered {}".format(run.get("invalid"), run["in_force"], run["filtered"]))
+        return 1
+    # A sensor-triggered recompute logs the same "Will recompute" line, but its plan is valid and is compared with the new one
+    if recompute.get("invalid") or not recompute.get("recompute") or recompute["in_force"] is not None:
+        print("ERROR: a valid recompute parsed wrongly: invalid {} recompute {} in force {}".format(recompute.get("invalid"), recompute.get("recompute"), recompute["in_force"]))
         return 1
     return 0
 
