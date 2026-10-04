@@ -123,6 +123,9 @@ def parse_log(path):
                 (FILTERED_RE, "filtered"),
                 (FORCE_RE, "force"),
             ):
+                # A run logs the inverter's SoC again after executing the plan; the plan started from the first
+                if store == "soc" and run.get("soc"):
+                    continue
                 found = regex.search(line)
                 if found:
                     run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "pv_input") else found.group(1)
