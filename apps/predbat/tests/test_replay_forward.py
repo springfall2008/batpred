@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -620,6 +620,26 @@ def test_apply_logged_rates_from_before_midnight():
     return 0
 
 
+def test_load_exact():
+    """The exact load forecast line sets the two values per step the plan reads, removes ones logged None, and wins over the older slot line."""
+    lines = """2026-10-04 19:30:00.000000: --------------- PredBat - update at 2026-10-04 19:30:00+01:00 with clock skew 0 minutes, minutes now 1170
+2026-10-04 19:30:01.000000: Inverter 0 SoC: 10.0kWh 60%, current charge rate 9200W, current discharge rate 9660W, current battery power 0W
+2026-10-04 19:30:01.200000: Replay input: load forecast, cumulative kWh at each 5-minute step and the minute after from 19:30 [[12.3456, 12.3489], [12.4, None]]
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(lines)
+        run = parse_log(path)[0]
+    bat = SimpleNamespace(load_forecast={minute: 1.0 for minute in range(1160, 1190)})
+    apply_logged_load_exact(bat, run["load_exact"])
+    forecast = bat.load_forecast
+    if forecast[1170] != 12.3456 or forecast[1171] != 12.3489 or forecast[1175] != 12.4 or 1176 in forecast or forecast[1172] != 1.0 or forecast[1160] != 1.0:
+        print("ERROR: exact load forecast applied wrongly: {}".format({minute: forecast.get(minute) for minute in (1170, 1171, 1172, 1175, 1176)}))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -647,4 +667,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_apply_run_clears_p90_signatures()
     failed += test_replay_state_and_rates()
     failed += test_apply_logged_rates_from_before_midnight()
+    failed += test_load_exact()
     return failed
