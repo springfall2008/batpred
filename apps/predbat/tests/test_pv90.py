@@ -285,7 +285,7 @@ def test_pv90_forecast_fallback_to_p50(my_predbat):
                 "forecast10": {"0": 0.005, "60": 0.01},
             },
         )
-        pv50, pv10, pv90 = my_predbat.fetch_pv_forecast()
+        pv50, pv10, pv90, _, _ = my_predbat.fetch_pv_forecast()
         if not pv50:
             print("ERROR: p50 series is empty, test setup failed")
             return True
@@ -323,7 +323,7 @@ def test_pv90_forecast_uses_published_p90(my_predbat):
                 "forecast90": {"0": 0.03, "60": 0.04},
             },
         )
-        pv50, pv10, pv90 = my_predbat.fetch_pv_forecast()
+        pv50, pv10, pv90, _, _ = my_predbat.fetch_pv_forecast()
         if pv90.get(0) != 0.03:
             print("ERROR: pv90[0] is {}, expected the published 0.03".format(pv90.get(0)))
             failed = True
