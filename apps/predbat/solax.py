@@ -390,6 +390,9 @@ class SolaxAPI(ComponentBase):
         # Plants whose PV energy has been built from their inverters, these never drop back to the plant total
         self.plant_pv_from_devices = set()
 
+        # Last known lifetime yield of each inverter, so that a failed read does not drop it from the plant sum
+        self.inverter_last_yield = {}
+
         # When the plant and device info was last read successfully, seeded from the storage cache on
         # startup so that a restart does not re-read data that is still current, plus when it was last
         # attempted so that a failing read is retried at a sensible rate rather than every cycle
@@ -613,19 +616,49 @@ class SolaxAPI(ComponentBase):
         await self.publish_controls()
         return True
 
+    def inverter_expected(self, device_sn):
+        """
+        True unless the device info says the inverter is offline, an offline inverter is not expected to answer
+        """
+        return self.device_info.get(device_sn, {}).get("onlineStatus", 1) != 0
+
+    def get_inverter_last_yield(self, plant_id, device_sn):
+        """
+        Last known lifetime yield of an inverter in kWh, or None if it has never given one
+
+        Updated only when a read returns a number. With nothing known yet it is seeded from the inverter's
+        own total yield sensor, which survives a restart, so that an inverter which no longer answers
+        stays in the plant sum rather than stepping it down
+        """
+        device_yield = None
+        if device_sn not in self.realtime_device_failed:
+            device_yield = self.realtime_device_data.get(device_sn, {}).get("totalYield")
+        elif device_sn not in self.inverter_last_yield:
+            device_yield = self.get_state_wrapper(f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_total_yield", default=None)
+        try:
+            self.inverter_last_yield[device_sn] = float(device_yield)
+        except (ValueError, TypeError):
+            pass
+        return self.inverter_last_yield.get(device_sn)
+
     def get_plant_pv_yield(self, plant_id, plant_yield):
         """
         Lifetime PV energy for a plant in kWh, summed from its inverters rather than taken from the plant total
 
         The plant level totalYield includes the AC output of an AC-coupled battery inverter, so battery
-        discharge reads as generation (GH#5356). Returns None when the value should be held: a sum with an
-        inverter missing dips and then recovers, which reads as a burst of generation on a cumulative counter
+        discharge reads as generation (GH#5356). Each inverter contributes its last known yield, a lifetime
+        counter does not go backwards so a failed read cannot make the sum dip. An inverter with no yield of
+        its own counts as 0. Returns None when the value should be held, which is only when an inverter that
+        should be answering failed its read and has never given a yield
         """
         pv_yield = 0.0
         for device_sn in self.plant_inverters.get(plant_id, []):
-            device_yield = self.realtime_device_data.get(device_sn, {}).get("totalYield")
-            if device_sn in self.realtime_device_failed or device_yield is None:
-                return None
+            device_yield = self.get_inverter_last_yield(plant_id, device_sn)
+            if device_yield is None:
+                read_ok = device_sn in self.realtime_device_data and device_sn not in self.realtime_device_failed
+                if not read_ok and self.inverter_expected(device_sn):
+                    return None
+                device_yield = 0.0
             pv_yield += device_yield
         if pv_yield > 0:
             self.plant_pv_from_devices.add(plant_id)
@@ -2520,9 +2553,9 @@ class SolaxAPI(ComponentBase):
             battery = saved["battery"] if saved["battery"] is not None else 0
             load_power = pv - battery - grid
 
-            # Plant PV and grid power, held when an inverter in the plant was not read on this cycle as a
-            # sum with one inverter missing would under-read
-            if not any(inverter_sn in self.realtime_device_failed or inverter_sn not in self.realtime_device_data for inverter_sn in self.plant_inverters.get(plant_id, [])):
+            # Plant PV and grid power, held when an inverter that should be answering was not read on this
+            # cycle as a sum with it missing would under-read. An offline inverter counts as 0W
+            if not any((inverter_sn in self.realtime_device_failed or inverter_sn not in self.realtime_device_data) and self.inverter_expected(inverter_sn) for inverter_sn in self.plant_inverters.get(plant_id, [])):
                 plant_name = next((plant.get("plantName", plant_id) for plant in self.plant_info if plant.get("plantId", "unknown").lower().replace(" ", "_") == plant_id), plant_id)
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_pv_power",

@@ -41,6 +41,7 @@ class MockSolaxAPI(SolaxAPI):
         self.realtime_plant_failed = set()  # Plants whose last realtime read failed
         self.realtime_device_failed = set()  # Devices whose last realtime read failed
         self.plant_pv_from_devices = set()  # Plants whose PV energy has been built from their inverters
+        self.inverter_last_yield = {}  # Last known lifetime yield of each inverter
         self._storage = None  # No storage cache by default in tests
         self.log_messages = []
         self.dashboard_items = {}
@@ -1462,46 +1463,52 @@ async def test_plant_pv_yield_main(my_predbat):
     else:
         print("✓ PV yield and load built from the inverters, plant total yield unchanged")
 
-    # Test 2: A failed inverter read holds the PV yield and load, a sum with one inverter missing would dip
-    print("Test 2: Failed inverter read holds PV yield and load")
-    api.realtime_device_data[pv_sn]["totalYield"] = 10270.0
-    api.realtime_device_failed.add(hybrid_sn)
+    # Test 2: A failed inverter read uses that inverter's last known yield, a lifetime counter does not go
+    # backwards so the sum cannot dip, and the load keeps following the plant counters
+    print("Test 2: Failed inverter read uses its last known yield")
+    api.realtime_data[test_plant_id]["totalImported"] = 8001.0
+    api.realtime_device_failed.add(pv_sn)
     await api.publish_plant_info()
 
     if state_of(api, pv_entity) != 10269.0:
-        print(f"**** ERROR: PV yield should be held at 10269.0 while an inverter read failed, got {state_of(api, pv_entity)} ****")
+        print(f"**** ERROR: PV yield should stay at the last known 10269.0 while an inverter read failed, got {state_of(api, pv_entity)} ****")
         failed = True
-    elif abs(state_of(api, load_entity) - expected_load) > 0.01:
-        print(f"**** ERROR: Total load should be held at {expected_load} while an inverter read failed, got {state_of(api, load_entity)} ****")
+    elif abs(state_of(api, load_entity) - (expected_load + 1.0)) > 0.01:
+        print(f"**** ERROR: Total load should still be published while an inverter read failed, expected {expected_load + 1.0}, got {state_of(api, load_entity)} ****")
         failed = True
     else:
-        print("✓ PV yield and load held on a failed inverter read")
+        print("✓ Last known yield used on a failed inverter read, load still published")
 
-    # Test 3: The next good read publishes again
-    print("Test 3: A good read publishes again")
-    api.realtime_device_failed.discard(hybrid_sn)
+    # Test 3: The next good read moves on from the last known value
+    print("Test 3: A good read publishes the new yield")
+    api.realtime_device_data[pv_sn]["totalYield"] = 10270.0
+    api.realtime_device_failed.discard(pv_sn)
     await api.publish_plant_info()
 
     if state_of(api, pv_entity) != 10270.0:
-        print(f"**** ERROR: PV yield should be 10270.0 once every inverter is read, got {state_of(api, pv_entity)} ****")
+        print(f"**** ERROR: PV yield should be 10270.0 once the inverter is read again, got {state_of(api, pv_entity)} ****")
         failed = True
     else:
-        print("✓ PV yield published once every inverter is read")
+        print("✓ PV yield follows the inverter once it is read again")
 
-    # Test 4: An inverter that has not been read yet, or has no yield in its data, also holds
-    print("Test 4: An unread inverter holds")
-    api = build_api()
-    del api.realtime_device_data[pv_sn]
-    await api.publish_plant_info()
+    # Test 4: An inverter that should be answering but has never given a yield holds, this is the startup case
+    print("Test 4: An unread inverter with no known yield holds")
+    for online_status in [None, 1]:
+        api = build_api()
+        del api.realtime_device_data[pv_sn]
+        api.realtime_device_failed.add(pv_sn)
+        if online_status is not None:
+            api.device_info[pv_sn]["onlineStatus"] = online_status
+        await api.publish_plant_info()
 
-    if pv_entity in api.dashboard_items or load_entity in api.dashboard_items:
-        print("**** ERROR: PV yield and load should not be published before every inverter is read ****")
-        failed = True
-    elif yield_entity not in api.dashboard_items:
-        print("**** ERROR: The plant totals do not depend on the inverters and should still be published ****")
-        failed = True
-    else:
-        print("✓ PV yield and load not published before every inverter is read")
+        if pv_entity in api.dashboard_items or load_entity in api.dashboard_items:
+            print(f"**** ERROR: PV yield and load should not be published before an online inverter is read (onlineStatus {online_status}) ****")
+            failed = True
+        elif yield_entity not in api.dashboard_items:
+            print("**** ERROR: The plant totals do not depend on the inverters and should still be published ****")
+            failed = True
+        else:
+            print(f"✓ PV yield and load not published before an online inverter is read (onlineStatus {online_status})")
 
     # Test 5: No inverter reports a yield of its own, so the plant figure is used as before
     print("Test 5: Falls back to the plant yield when no inverter reports one")
@@ -1527,6 +1534,72 @@ async def test_plant_pv_yield_main(my_predbat):
         failed = True
     else:
         print("✓ PV yield held rather than switching to the plant figure")
+
+    # Test 7: An inverter that reads fine but has no totalYield counts as 0, alone in a plant that leaves the
+    # plant figure as the only PV figure there is
+    print("Test 7: An inverter with no totalYield of its own counts as 0")
+    api = build_api()
+    api.plant_inverters[test_plant_id] = [hybrid_sn]
+    del api.realtime_device_data[hybrid_sn]["totalYield"]
+    await api.publish_plant_info()
+    alone_yield = state_of(api, pv_entity)
+
+    api = build_api()
+    del api.realtime_device_data[hybrid_sn]["totalYield"]
+    await api.publish_plant_info()
+
+    if alone_yield != 19569.5:
+        print(f"**** ERROR: PV yield should fall back to the plant figure 19569.5 when the only inverter has no totalYield, got {alone_yield} ****")
+        failed = True
+    elif state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should be 10269.0 from the other inverter when one has no totalYield, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ An inverter with no totalYield counts as 0 rather than holding the plant")
+
+    # Test 8: An offline inverter that has never reported contributes 0 rather than holding the plant
+    print("Test 8: An offline inverter that never reported contributes 0")
+    api = build_api()
+    del api.realtime_device_data[hybrid_sn]
+    api.realtime_device_failed.add(hybrid_sn)
+    api.device_info[hybrid_sn]["onlineStatus"] = 0
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) != 10269.0:
+        print(f"**** ERROR: PV yield should be 10269.0 with an offline inverter counted as 0, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Offline inverter with no known yield counted as 0")
+
+    # Test 9: After a restart the last known yield is seeded from the inverter's own sensor, so a dead
+    # inverter stays in the sum rather than stepping the total down
+    print("Test 9: Last known yield is seeded from the inverter sensor after a restart")
+    api = build_api()
+    api.realtime_device_data[hybrid_sn] = {}
+    api.realtime_device_failed.add(hybrid_sn)
+    api.device_info[hybrid_sn]["onlineStatus"] = 0
+    api.dashboard_items[f"sensor.predbat_solax_{test_plant_id}_{hybrid_sn}_total_yield"] = {"state": 459.1, "attributes": {}}
+    await api.publish_plant_info()
+
+    if state_of(api, pv_entity) is None or abs(state_of(api, pv_entity) - 10728.1) > 0.01:
+        print(f"**** ERROR: PV yield should be 10728.1 with the dead inverter seeded from its sensor, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Dead inverter's yield seeded from its sensor")
+
+    # Test 10: A sensor state that is not a number is not used as a seed
+    print("Test 10: A non-numeric sensor state is not a seed")
+    api = build_api()
+    del api.realtime_device_data[pv_sn]
+    api.realtime_device_failed.add(pv_sn)
+    api.dashboard_items[f"sensor.predbat_solax_{test_plant_id}_{pv_sn}_total_yield"] = {"state": "unknown", "attributes": {}}
+    await api.publish_plant_info()
+
+    if pv_entity in api.dashboard_items:
+        print(f"**** ERROR: PV yield should be held when the only seed is not a number, got {state_of(api, pv_entity)} ****")
+        failed = True
+    else:
+        print("✓ Non-numeric sensor state ignored")
 
     return failed
 
@@ -6230,6 +6303,16 @@ async def test_publish_device_realtime_data_main():
         print("✓ Plant pv_power and grid_power held when an inverter failed its read")
 
     # Republished on the next good read
+    # An offline inverter is not expected to answer, so it counts as 0W rather than holding the plant
+    api10.device_info["INV_B"]["onlineStatus"] = 0
+    await api10.publish_device_realtime_data()
+    if api10.dashboard_items[plant_pv_sensor10]["state"] != 900 or api10.dashboard_items[plant_grid_sensor10]["state"] != -200:
+        print(f"**** ERROR: Plant pv_power/grid_power should be 900/-200 with the offline inverter counted as 0, got {api10.dashboard_items[plant_pv_sensor10]['state']}/{api10.dashboard_items[plant_grid_sensor10]['state']} ****")
+        failed = True
+    else:
+        print("✓ Offline inverter counted as 0W in the plant pv_power and grid_power")
+    api10.device_info["INV_B"]["onlineStatus"] = 1
+
     api10.realtime_device_failed.discard("INV_B")
     await api10.publish_device_realtime_data()
     if api10.dashboard_items[plant_pv_sensor10]["state"] != 1400:
