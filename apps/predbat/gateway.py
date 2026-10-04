@@ -201,6 +201,15 @@ def extract_rate_anchors(rate_min, rate_max, import_rate, export_rate):
     return {"rate_min": rate_min, "rate_max": rate_max, "import_rate": rate_import, "export_rate": rate_export}
 
 
+# gateway_shared_ct: power is not taken to have held across a telemetry gap longer than this, so
+# nothing is integrated over it
+GATEWAY_SHARED_CT_MAX_GAP_SECONDS = 15 * 60
+# gateway_shared_ct: the most PV the hub's pv_today counter can gain between two samples, as a rate
+# plus one counter step. A larger rise is the counter returning from a dropped sample, not generation
+GATEWAY_SHARED_CT_MAX_PV_W = 50000
+GATEWAY_SHARED_CT_PV_STEP_WH = 200
+
+
 class GatewayMQTT(ComponentBase):
     """ESP32 Gateway MQTT component for PredBat.
 
@@ -211,6 +220,10 @@ class GatewayMQTT(ComponentBase):
     # Guards the command id counter and the in-flight command map, which are touched both by
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
+
+    # Defaults for an instance built without initialize(), where the shared CT handling is off
+    gateway_shared_ct = False
+    _shared_ct_energy = None
 
     def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=False, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
@@ -238,6 +251,9 @@ class GatewayMQTT(ComponentBase):
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
         self.gateway_shared_ct = bool(gateway_shared_ct)
+        # Today's import, export and load integrated from power while gateway_shared_ct is on
+        # (see _update_shared_ct_energy()). None while it is off or fewer than two inverters are bound.
+        self._shared_ct_energy = None
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -840,6 +856,7 @@ class GatewayMQTT(ComponentBase):
         self._last_telemetry_time = time.time()
         self.update_success_timestamp()
 
+        self._update_shared_ct_energy(status)
         self._inject_entities(status)
 
         if self._needs_reconfigure(status):
@@ -926,7 +943,7 @@ class GatewayMQTT(ComponentBase):
             # that would double up on the dashboard.
             if not inv.primary and not self._is_bound_target(inv):
                 continue
-            self._inject_inverter_entities(inv, _serial_suffix(inv.serial))
+            self._inject_inverter_entities(inv, _serial_suffix(inv.serial), site_energy=self._shared_ct_site_energy(inv))
 
         # EV charger entities (device-level, present only when a charge point is connected)
         self._inject_ev_entities(status)
@@ -953,10 +970,92 @@ class GatewayMQTT(ComponentBase):
                 self.dashboard_item(f"{sp}_grid_power", sub.grid_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
                 self.dashboard_item(f"{sp}_temp", sub.temp_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("temp", {}), app="gateway")
 
-    def _inject_inverter_entities(self, inv, suffix):
+    def _update_shared_ct_energy(self, status):
+        """Integrate grid and battery power into today's import, export and load (gateway_shared_ct).
+
+        Inverters sharing one grid CT clamp do not keep usable grid energy counters: the hub's
+        import/export "today" figures for them run at many times the real rate and its load, which is
+        derived from them, is wrong with them. The power readings are sound, so with the option on the
+        day's figures are built from those instead, once per telemetry message:
+
+        - grid power from the first inverter (they all read the same clamp) is split by sign, positive
+          to export and negative to import, and each side is integrated;
+        - each inverter's battery power is split into charge and discharge the same way and summed, so
+          one battery charging from the other counts on both sides;
+        - PV is the rise in the first inverter's pv_today counter, which is sound;
+        - load = pv + import - export + battery discharge - battery charge.
+
+        Each interval uses the mean of the readings at its two ends. The figures return to zero at
+        local midnight. They are kept in memory only, so they also restart from zero when Predbat
+        restarts, which Predbat reads the same way as the midnight reset.
+        """
+        if not self.gateway_shared_ct:
+            return
+        serials = self._inverter_slot_serials
+        if len(serials) < 2:
+            self._shared_ct_energy = None
+            return
+        by_serial = {inv.serial: inv for inv in status.inverters}
+        inverters = [by_serial[serial] for serial in serials if serial in by_serial]
+        if len(inverters) != len(serials) or not all(inv.connected for inv in inverters):
+            # A missing or disconnected unit reports no power or a stale one
+            return
+
+        now = status.timestamp if status.timestamp > 0 else int(time.time())
+        day = datetime.datetime.fromtimestamp(now, tz=self.local_tz).date()
+        grid_w = inverters[0].grid.power_w
+        power = {
+            "import": max(-grid_w, 0),
+            "export": max(grid_w, 0),
+            # The hub reports battery power as positive = charging
+            "charge": sum(max(inv.battery.power_w, 0) for inv in inverters),
+            "discharge": sum(max(-inv.battery.power_w, 0) for inv in inverters),
+        }
+        pv_wh = inverters[0].energy.pv_today_wh
+
+        state = self._shared_ct_energy
+        if state is None:
+            state = {"day": day, "import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0}
+            self._shared_ct_energy = state
+        else:
+            elapsed = now - state["time"]
+            if elapsed <= 0:
+                # The same status again (a re-inject), or the hub's clock stepping back
+                return
+            if day != state["day"]:
+                state.update({"day": day, "import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0})
+            if elapsed <= GATEWAY_SHARED_CT_MAX_GAP_SECONDS:
+                hours = elapsed / 3600.0
+                energy = {name: (state["power"][name] + power[name]) / 2.0 * hours for name in power}
+                pv_rise_wh = pv_wh - state["pv_wh"]
+                if pv_rise_wh < 0 or pv_rise_wh > GATEWAY_SHARED_CT_MAX_PV_W * hours + GATEWAY_SHARED_CT_PV_STEP_WH:
+                    pv_rise_wh = 0
+                for name in energy:
+                    state[name + "_wh"] += energy[name]
+                state["load_wh"] += pv_rise_wh + energy["import"] - energy["export"] + energy["discharge"] - energy["charge"]
+                # Grid and battery are read moments apart, so the sum can dip; a counter that goes
+                # backwards would read as a reset
+                state["load_published_wh"] = max(state["load_published_wh"], state["load_wh"])
+        state["time"] = now
+        state["power"] = power
+        state["pv_wh"] = pv_wh
+
+    def _shared_ct_site_energy(self, inv):
+        """Today's integrated import, export and load in Wh for the inverter that carries the site
+        figures, the first one - or None for any other inverter, or while gateway_shared_ct is not
+        integrating (see _update_shared_ct_energy())."""
+        state = self._shared_ct_energy
+        if state is None or not self._inverter_slot_serials or inv.serial != self._inverter_slot_serials[0]:
+            return None
+        return {"import_wh": state["import_wh"], "export_wh": state["export_wh"], "load_wh": state["load_published_wh"]}
+
+    def _inject_inverter_entities(self, inv, suffix, site_energy=None):
         """Inject entities for a single inverter using HA-style naming.
 
         Entity naming pattern: {type}.{prefix}_gateway_{suffix}_{attribute}
+
+        site_energy, when given, replaces the hub's import/export/load today counters for this
+        inverter (see _shared_ct_site_energy()).
         """
         pfx = f"{self.prefix}_gateway_{suffix}"
 
@@ -1047,10 +1146,17 @@ class GatewayMQTT(ComponentBase):
         # Energy counters (Wh → kWh)
         # Always set with defaults so PredBat doesn't crash on missing load_today
         energy = inv.energy if inv.energy.ByteSize() > 0 else None
+        import_today_wh = getattr(energy, "grid_import_today_wh", 0) if energy else 0
+        export_today_wh = getattr(energy, "grid_export_today_wh", 0) if energy else 0
+        load_today_wh = getattr(energy, "consumption_today_wh", 0) if energy else 0
+        if site_energy is not None:
+            import_today_wh = site_energy["import_wh"]
+            export_today_wh = site_energy["export_wh"]
+            load_today_wh = site_energy["load_wh"]
         self.dashboard_item(f"sensor.{pfx}_pv_today", round(getattr(energy, "pv_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_import_today", round(getattr(energy, "grid_import_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("import_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_export_today", round(getattr(energy, "grid_export_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_today", {}), app="gateway")
-        self.dashboard_item(f"sensor.{pfx}_load_today", round(getattr(energy, "consumption_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_import_today", round(import_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("import_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_export_today", round(export_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_load_today", round(load_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_today", {}), app="gateway")
         if energy:
             self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")

@@ -5947,6 +5947,242 @@ class TestCommandAck:
         assert [s["command_id"] for s in sent] == ["PBAT42", "PBAT8"]
 
 
+class TestSharedCtEnergy:
+    """gateway_shared_ct: today's import, export and load are integrated from grid and battery power.
+
+    Inverters sharing one grid CT clamp do not keep usable grid energy counters, so the hub's
+    import/export/load "today" figures for them are wrong. The power readings are sound.
+    """
+
+    BASE_TIME = 1791126000  # 2026-10-04 16:00:00 BST
+
+    def _make_gateway(self, shared_ct=True):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.log = MagicMock()
+        gw.prefix = "predbat"
+        gw._last_status = None
+        gw._auto_configured = False
+        gw._suffix_to_serial = {}
+        gw._inverter_slot_serials = []
+        gw.args = {}
+        gw._args = {}
+        gw.local_tz = pytz.timezone("Europe/London")
+        gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw.gateway_shared_ct = shared_ct
+        gw._shared_ct_energy = None
+        gw._last_read_only = None
+        gw._read_only_mismatch_logged = False
+        gw._dashboard_calls = {}
+
+        def capture_set_arg(key, value):
+            gw._args[key] = value
+
+        def capture_dashboard(entity_id, state=None, attributes=None, app=None):
+            gw._dashboard_calls[entity_id] = (state, attributes)
+
+        gw.set_arg = capture_set_arg
+        gw.dashboard_item = capture_dashboard
+        return gw
+
+    def _status(self, timestamp, grid_w, battery_w=(0, 0), pv_today_wh=2082100, serials=("CE2223G800", "CE2225G400")):
+        """A hub status: every inverter reports the same grid power, as they share the CT clamp.
+
+        battery_w is per inverter in the hub's convention, positive = charging. The hub's own
+        import/export/load counters are set to the implausible values seen on a shared CT.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_shared"
+        status.firmware = "1.0.22"
+        status.timestamp = timestamp
+        status.schema_version = 1
+        for serial, power in zip(serials, battery_w):
+            inv = status.inverters.add()
+            inv.type = pb.INVERTER_TYPE_GIVENERGY
+            inv.serial = serial
+            inv.primary = True
+            inv.connected = True
+            inv.active = True
+            inv.battery.soc_percent = 50
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 3000
+            inv.battery.power_w = power
+            inv.grid.power_w = grid_w
+            inv.energy.pv_today_wh = pv_today_wh if serial == serials[0] else 0
+            inv.energy.grid_import_today_wh = 4726400
+            inv.energy.grid_export_today_wh = 4721400
+            inv.energy.consumption_today_wh = 2993200
+        return status
+
+    def _feed(self, gw, status):
+        """Deliver one status the way _process_telemetry does once auto-config has bound the inverters."""
+        gw._last_status = status
+        if not gw._inverter_slot_serials:
+            gw.automatic_config()
+        gw._update_shared_ct_energy(status)
+        gw._inject_entities(status)
+
+    def _today(self, gw, name, suffix="23g800"):
+        return gw._dashboard_calls[f"sensor.predbat_gateway_{suffix}_{name}"][0]
+
+    def test_import_and_load_are_integrated_from_power(self):
+        """6 kW of import for 6 minutes is 0.6 kWh; 3 kW of that went into a battery, so load is 0.3 kWh."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000, battery_w=(0, 3000)))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=-6000, battery_w=(0, 3000)))
+
+        assert self._today(gw, "import_today") == 0.6
+        assert self._today(gw, "export_today") == 0.0
+        assert self._today(gw, "load_today") == 0.3
+
+    def test_export_discharge_and_pv_feed_the_load(self):
+        """load = pv + import - export + battery discharge - battery charge."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=2000, battery_w=(-1000, 0), pv_today_wh=2082100))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=2000, battery_w=(-1000, 0), pv_today_wh=2082600))
+
+        assert self._today(gw, "import_today") == 0.0
+        assert self._today(gw, "export_today") == 0.2
+        # 0.5 pv + 0 import - 0.2 export + 0.1 discharge - 0 charge
+        assert self._today(gw, "load_today") == 0.4
+
+    def test_grid_power_is_split_by_sign_before_integrating(self):
+        """A swing from import to export inside one interval counts towards both, not their net."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-4000))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=2000))
+
+        assert self._today(gw, "import_today") == 0.2
+        assert self._today(gw, "export_today") == 0.1
+
+    def test_one_battery_charging_the_other_counts_as_both_charge_and_discharge(self):
+        """Charge and discharge are taken per inverter, so a cross-charge does not hide either."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=0, battery_w=(2000, -2000)))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=0, battery_w=(2000, -2000)))
+
+        state = gw._shared_ct_energy
+        assert round(state["charge_wh"]) == 200
+        assert round(state["discharge_wh"]) == 200
+        assert self._today(gw, "load_today") == 0.0
+
+    def test_hub_counters_are_kept_when_the_option_is_off(self):
+        """Without gateway_shared_ct the hub's own counters are published unchanged."""
+        gw = self._make_gateway(shared_ct=False)
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=-6000))
+
+        assert self._today(gw, "import_today") == 4726.4
+        assert self._today(gw, "export_today") == 4721.4
+        assert self._today(gw, "load_today") == 2993.2
+
+    def test_hub_counters_are_kept_for_a_single_inverter(self):
+        """One inverter has no shared clamp, so the option changes nothing."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000, battery_w=(0,), serials=("CE2223G800",)))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=-6000, battery_w=(0,), serials=("CE2223G800",)))
+
+        assert self._today(gw, "import_today") == 4726.4
+        assert gw._shared_ct_energy is None
+
+    def test_only_the_first_inverter_carries_the_site_figures(self):
+        """PredBat reads import/export/load today from the first inverter; the others keep the hub's values."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=-6000))
+
+        assert self._today(gw, "import_today") == 0.6
+        assert self._today(gw, "import_today", suffix="25g400") == 4726.4
+
+    def test_pv_today_is_left_alone(self):
+        """pv_today is still the hub's counter."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=0, pv_today_wh=2082100))
+
+        assert self._today(gw, "pv_today") == 2082.1
+
+    def test_the_same_status_injected_twice_is_counted_once(self):
+        """_inject_entities re-runs on a refused command; that must not add energy."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        status = self._status(self.BASE_TIME + 360, grid_w=-6000)
+        self._feed(gw, status)
+        self._feed(gw, status)
+        gw._inject_entities(status)
+
+        assert self._today(gw, "import_today") == 0.6
+
+    def test_a_long_gap_in_telemetry_adds_no_energy(self):
+        """Power is not assumed to have held across a gap longer than the limit."""
+        from gateway import GATEWAY_SHARED_CT_MAX_GAP_SECONDS
+
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        self._feed(gw, self._status(self.BASE_TIME + GATEWAY_SHARED_CT_MAX_GAP_SECONDS + 1, grid_w=-6000))
+        assert self._today(gw, "import_today") == 0.0
+
+        self._feed(gw, self._status(self.BASE_TIME + GATEWAY_SHARED_CT_MAX_GAP_SECONDS + 361, grid_w=-6000))
+        assert self._today(gw, "import_today") == 0.6
+
+    def test_a_disconnected_inverter_skips_the_sample(self):
+        """A unit that is not connected reports stale power, so nothing is integrated from that status."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        status = self._status(self.BASE_TIME + 360, grid_w=-6000)
+        status.inverters[1].connected = False
+        self._feed(gw, status)
+
+        assert self._today(gw, "import_today") == 0.0
+
+    def test_a_pv_counter_glitch_to_zero_and_back_adds_no_load(self):
+        """The hub's pv counter drops to zero for a sample around midnight; its return is not generation."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=0, pv_today_wh=2082100))
+        self._feed(gw, self._status(self.BASE_TIME + 120, grid_w=0, pv_today_wh=0))
+        self._feed(gw, self._status(self.BASE_TIME + 240, grid_w=0, pv_today_wh=2082100))
+
+        assert self._today(gw, "load_today") == 0.0
+
+    def test_load_today_does_not_go_backwards_within_a_day(self):
+        """Grid and battery are read at slightly different moments, so the sum can dip; the published load holds."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=-6000))
+        assert self._today(gw, "load_today") == 0.6
+
+        # The battery now reads as charging at 3 kW with no import to feed it
+        self._feed(gw, self._status(self.BASE_TIME + 720, grid_w=0, battery_w=(3000, 0)))
+        assert self._today(gw, "load_today") == 0.75
+        self._feed(gw, self._status(self.BASE_TIME + 1080, grid_w=0, battery_w=(3000, 0)))
+        assert round(gw._shared_ct_energy["load_wh"]) == 450
+        assert self._today(gw, "load_today") == 0.75
+
+    def test_counters_restart_at_local_midnight(self):
+        """The figures are today's, so they return to zero when the local date changes."""
+        import datetime as _datetime
+
+        local_tz = pytz.timezone("Europe/London")
+        before = int(local_tz.localize(_datetime.datetime(2026, 10, 4, 23, 50, 0)).timestamp())
+        gw = self._make_gateway()
+        self._feed(gw, self._status(before, grid_w=-6000))
+        self._feed(gw, self._status(before + 360, grid_w=-6000))
+        assert self._today(gw, "import_today") == 0.6
+
+        # 00:02 the next day, 6 minutes after the last sample
+        self._feed(gw, self._status(before + 720, grid_w=-6000))
+        assert self._today(gw, "import_today") == 0.6
+        assert self._today(gw, "load_today") == 0.6
+        assert gw._shared_ct_energy["day"] == _datetime.date(2026, 10, 5)
+
+        self._feed(gw, self._status(before + 1080, grid_w=0))
+        assert self._today(gw, "import_today") == 0.9
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -5959,6 +6195,7 @@ def run_gateway_tests(my_predbat=None):
         TestInjectEntities,
         TestDebugLogging,
         TestAutomaticConfig,
+        TestSharedCtEnergy,
         TestBoundEntitiesAreWritten,
         TestGatewayUnitControlBinding,
         TestEvTelemetry,
