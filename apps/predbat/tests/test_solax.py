@@ -1601,6 +1601,29 @@ async def test_plant_pv_yield_main(my_predbat):
     else:
         print("✓ Non-numeric sensor state ignored")
 
+    # Test 11: The inverters are stored under the plant ID as SolaX gives it while the entities use a tidied
+    # form of it, a plant ID the tidying changes must still find its inverters and its seed sensor
+    print("Test 11: A plant ID that is changed for the entity names still finds its inverters")
+    raw_plant_id = "Plant A"
+    api = build_api()
+    api.plant_info[0]["plantId"] = raw_plant_id
+    api.plant_inverters[raw_plant_id] = api.plant_inverters.pop(test_plant_id)
+    api.plant_batteries[raw_plant_id] = api.plant_batteries.pop(test_plant_id)
+    api.realtime_data[raw_plant_id] = api.realtime_data.pop(test_plant_id)
+    for device_sn in [pv_sn, hybrid_sn, battery_sn]:
+        api.device_info[device_sn]["plantId"] = raw_plant_id
+    api.realtime_device_data[hybrid_sn] = {}
+    api.realtime_device_failed.add(hybrid_sn)
+    api.dashboard_items[f"sensor.predbat_solax_plant_a_{hybrid_sn}_total_yield"] = {"state": 459.1, "attributes": {}}
+    await api.publish_plant_info()
+
+    raw_pv_yield = state_of(api, "sensor.predbat_solax_plant_a_pv_yield")
+    if raw_pv_yield is None or abs(raw_pv_yield - 10728.1) > 0.01:
+        print(f"**** ERROR: PV yield should be 10728.1 from the inverters and the seed sensor, not the plant figure, got {raw_pv_yield} ****")
+        failed = True
+    else:
+        print("✓ Inverters and seed sensor found for a plant ID that is changed for the entity names")
+
     return failed
 
 
@@ -6320,6 +6343,24 @@ async def test_publish_device_realtime_data_main():
         failed = True
     else:
         print("✓ Plant pv_power republished once every inverter is read again")
+
+    # The plant powers are held for a plant ID that is changed for the entity names too
+    api10c = MockSolaxAPI()
+    api10c.initialize(client_id="test", client_secret="test", region="eu")
+    api10c.plant_inverters["Plant A"] = ["INV_C", "INV_D"]
+    api10c.device_info["INV_C"] = {"deviceSn": "INV_C", "deviceType": 1, "deviceModel": 3, "plantId": "Plant A"}
+    api10c.device_info["INV_D"] = {"deviceSn": "INV_D", "deviceType": 1, "deviceModel": 3, "plantId": "Plant A"}
+    api10c.realtime_device_data["INV_C"] = {"deviceSn": "INV_C", "gridPower": -200, "pvMap": {"pv1Power": 1500}, "deviceStatus": 102}
+    api10c.realtime_device_failed.add("INV_D")
+    await api10c.publish_device_realtime_data()
+    if "sensor.predbat_solax_plant_a_pv_power" in api10c.dashboard_items:
+        print(f"**** ERROR: Plant pv_power should be held while an inverter is unread, got {api10c.dashboard_items['sensor.predbat_solax_plant_a_pv_power']['state']} ****")
+        failed = True
+    elif "sensor.predbat_solax_plant_a_INV_C_load_power" not in api10c.dashboard_items:
+        print("**** ERROR: load_power should still be published under the plant's first inverter ****")
+        failed = True
+    else:
+        print("✓ Plant pv_power held for a plant ID that is changed for the entity names")
 
     # Test 11: Battery SOH sensor published correctly, including zero-SOH guard and aggregate
     print("Test 11: Battery SOH sensor published correctly")
