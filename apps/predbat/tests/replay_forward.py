@@ -59,7 +59,10 @@ RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
 RATES_ATTRIBUTES = {"import": "rate_import", "export": "rate_export", "import_base": "rate_import_base", "export_base": "rate_export_base"}
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
-INVALID_RE = re.compile(r"Will recompute the plan as it is invalid")
+# Logged for every recompute, whatever triggered it (a sensor change too), despite its wording
+RECOMPUTE_RE = re.compile(r"Will recompute the plan as it is invalid")
+# Logged by calculate_plan only when the plan really is invalid, so the new plan is adopted without comparing it to the old
+INVALID_RE = re.compile(r"Recompute, previous plan is invalid")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
 WINDOW_RE = re.compile(r"(\d\d-\d\d) (\d\d):(\d\d):\d\d - (\d\d-\d\d) (\d\d):(\d\d):\d\d @ ([\d.]+)\S+ ([\d.]+)%")
 # The four day counters in the order the log prints them, and the history arrays that mirror them
@@ -159,14 +162,18 @@ def parse_log(path):
             if COMPARE_RE.search(line):
                 run["comparing"] = True
                 continue
+            # A recomputing run prints the re-plan's fresh window list before any plan in force, so has none to read
+            if RECOMPUTE_RE.search(line):
+                run["recompute"] = True
+                continue
             # A run that finds the plan invalid (the previous run's adoption was overridden, as when the 8-hourly
-            # config refresh is pending) re-plans from scratch and has no plan in force
+            # config refresh is pending) adopts its re-plan without comparing it to the old plan
             if INVALID_RE.search(line):
                 run["invalid"] = True
                 continue
             # The first "Best export window" of a run is the plan in force when it starts - the one the previous
             # run adopted. Later ones in the same run are the re-plan's working lists.
-            if run["in_force"] is None and not run.get("invalid"):
+            if run["in_force"] is None and not run.get("recompute"):
                 found = IN_FORCE_RE.search(line)
                 if found:
                     run["in_force"] = found.group(1)
