@@ -773,6 +773,10 @@ class GatewayMQTT(ComponentBase):
                 self._gateway_online = payload == "1"
                 if self._gateway_online != was_online:
                     self.log(f"Info: GatewayMQTT: Gateway is {'online' if self._gateway_online else 'offline'}")
+                    # A hub that has been away may be on new firmware or have lost its stored
+                    # rate caps, so send them again. Done here, not only in _check_rate_caps():
+                    # a reboot is quicker than the gap between two run() cycles.
+                    self._rate_caps_sent.clear()
                     self.dashboard_item(
                         f"binary_sensor.{self.prefix}_gateway_online",
                         self._gateway_online,

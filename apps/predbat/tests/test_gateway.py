@@ -3876,6 +3876,36 @@ class TestCheckRateCaps:
         self._run(gw._check_rate_caps())
         assert len(gw._published) == 2
 
+    def test_hub_restart_between_cycles_is_told_again(self):
+        """A hub that goes offline and returns between two run() cycles is still re-sent its caps.
+
+        A reboot after a firmware update takes well under the 60 seconds between cycles, so
+        _check_rate_caps() never sees the hub offline. The online message itself must clear
+        what was sent.
+        """
+        from unittest.mock import MagicMock
+
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+        gw.prefix = "predbat"
+        gw.topic_status = "predbat/devices/pbgw_test/status"
+        gw.topic_online = "predbat/devices/pbgw_test/online"
+        gw.dashboard_item = MagicMock()
+        gw._error_count = 0
+        self._run(gw._check_rate_caps())
+        assert len(gw._published) == 1
+
+        for payload in (b"0", b"1"):
+            message = MagicMock()
+            message.topic = gw.topic_online
+            message.payload = payload
+            self._run(gw._handle_message(message))
+
+        self._run(gw._check_rate_caps())
+        assert len(gw._published) == 2
+        assert gw._error_count == 0
+
     def test_nothing_sent_before_auto_config(self):
         """Until auto-config has bound slots to serials there is nothing to key a cap on."""
         gw = self._make_gateway(auto_configured=False)
