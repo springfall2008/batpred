@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -514,6 +514,26 @@ def test_parse_log_invalid_plan():
     return 0
 
 
+def test_apply_run_clears_p90_signatures():
+    """Each replayed run clears the p90 guard's signatures, as fetch does, so a p50-only PV change keeps the real p90."""
+    bat = SimpleNamespace(
+        minutes_now=500,
+        now_utc=datetime(2026, 10, 4, 8, 20, tzinfo=timezone.utc),
+        load_minutes={},
+        import_today={},
+        export_today={},
+        pv_today={},
+        inverters=[],
+        rate_export={},
+        pv_forecast_minute90_signatures=((1, 1.0, 0, 0), (1, 1.0, 0, 0)),
+    )
+    apply_run(bat, {"today": None, "force": None, "time": "2026-10-04 08:20:00+01:00"}, {"time": "2026-10-04 08:25:00+01:00", "minutes_now": 505, "soc": ("10.0", "55", "0")})
+    if bat.pv_forecast_minute90_signatures is not None or bat.minutes_now != 505:
+        print("ERROR: apply_run should clear the p90 signatures: {}".format(bat.pv_forecast_minute90_signatures))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -538,4 +558,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_roll_over_midnight()
     failed += test_set_export_window_after_midnight()
     failed += test_parse_log_invalid_plan()
+    failed += test_apply_run_clears_p90_signatures()
     return failed
