@@ -22,6 +22,7 @@ SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 
 2026-10-01 08:30:04.419814: Export windows filtered [ 01-10 09:00:00 - 01-10 12:00:00 @ 18.5c 55.0%, 01-10 13:00:00 - 01-10 13:30:00 @ 18.5c 84.0% ]
 2026-10-01 08:30:05.663044: Next export window will be: 2026-10-01 09:00:00+01:00 - 2026-10-01 12:01:00+01:00 at reserve (0, 55, 1.0)
 2026-10-01 08:30:05.663103: Inverter 0 Adjust force export to True, change times from 00:00:00 - 00:00:00 to 09:00:00 - 12:01:00
+2026-10-01 08:30:05.700000: Inverter 0 SoC: 14.20kWh 84%, current charge rate 9200W, current discharge rate 9660W, current battery power -40W, current battery voltage 52.0V, grid power 6W, load power 506W, PV Power 558W
 2026-10-01 08:35:00.575570: --------------- PredBat - update at 2026-10-01 08:35:00+01:00 with clock skew 0 minutes, minutes now 515
 2026-10-01 08:35:02.366949: Inverter 0 SoC: 13.92kWh 83%, current charge rate 9200W, current discharge rate 9660W, current battery power 4930W, current battery voltage 52.0V, grid power 6W, load power 412W, PV Power 570W
 2026-10-01 08:40:00.575570: --------------- PredBat - update at 2026-10-01 08:40:00+01:00 with clock skew 0 minutes, minutes now 520
