@@ -613,6 +613,22 @@ See also **ge_cloud_automatic_split_ct** which takes priority over this setting 
 Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
 This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
 
+- **gateway_shared_ct** - Optional, defaults to true. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
+When `true`, Predbat treats multiple inverters as sharing a single physical CT clamp for grid and load measurement,
+so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
+The import, export and load energy for the day are likewise taken from the first inverter only.
+Battery and solar readings are unaffected and are still taken from, and added up across, each inverter.
+This is the usual arrangement for two or more inverters with no EMS or Gateway coordinating them. The Predbat Gateway cannot detect how the CT clamps are fitted, so
+set this to `false` if each of your inverters has its own CT clamp measuring a separate supply; Predbat then adds up the grid and load power, and the import, export and load energy, of every inverter.
+It has no effect with a single inverter.
+
+- **gateway_integrate_power** - Optional, defaults to false. When set to `true`, Predbat works out today's import, export and house load itself from the power readings, rather than using the Predbat Gateway's energy counters.
+Use this where the Gateway's daily import, export or load figures are wrong for your inverters. GivEnergy AC-coupled inverters sharing a single CT clamp are one known case, and there you would set this together with **gateway_shared_ct**.
+Grid power is split into import and export and each is added up over the day, the battery power of every inverter is added up as charge and discharge in the same way, and the house load is then
+solar + import - export + battery discharge - battery charge. Solar still comes from the Gateway's **pv_today** counters, added up across the inverters.
+With **gateway_shared_ct** the grid power of the first inverter is used; without it the grid power of every inverter is added together.
+These figures return to zero at midnight and also restart from zero if Predbat is restarted during the day.
+
 - **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
 Use this if you have a separate PV-only inverter alongside your battery inverter(s) and want its solar generation included in Predbat's totals. Leave this off (the default) if your battery inverters already report all of your solar generation, to avoid duplicating or including unwanted readings.
 
@@ -707,7 +723,10 @@ When SolaX Cloud is configured, Predbat creates the following entities for each 
 - `sensor.predbat_solax_{plant_id}_battery_max_power` - Battery maximum power (W)
 - `sensor.predbat_solax_{plant_id}_inverter_max_power` - Inverter maximum power (W)
 - `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
-- `sensor.predbat_solax_{plant_id}_total_yield` - Total PV generation (kWh)
+- `sensor.predbat_solax_{plant_id}_pv_power` - Current PV power (W), summed over the plant's inverters and used for **pv_power**
+- `sensor.predbat_solax_{plant_id}_grid_power` - Current grid power (W), summed over the plant's inverters and used for **grid_power**
+- `sensor.predbat_solax_{plant_id}_pv_yield` - Total PV generation (kWh), summed from the plant's inverters and used for **pv_today**. It reads 0 on a plant whose inverters have no PV inputs, such as a lone AC-coupled battery inverter; PV on a separate inverter that SolaX does not measure is not seen, so set **pv_today** from another source if you have one
+- `sensor.predbat_solax_{plant_id}_total_yield` - Total yield as reported by SolaX for the plant (kWh); on a plant with an AC-coupled battery inverter this includes battery discharge
 - `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_imported` - Total grid import (kWh)
