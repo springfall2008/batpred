@@ -715,6 +715,7 @@ COMPONENT_LIST = {
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
             "gateway_shared_ct": {"required": False, "config": "gateway_shared_ct", "default": False},
+            "gateway_integrate_power": {"required": False, "config": "gateway_integrate_power", "default": False},
         },
         "phase": 1,
         "can_restart": True,

@@ -201,13 +201,13 @@ def extract_rate_anchors(rate_min, rate_max, import_rate, export_rate):
     return {"rate_min": rate_min, "rate_max": rate_max, "import_rate": rate_import, "export_rate": rate_export}
 
 
-# gateway_shared_ct: power is not taken to have held across a telemetry gap longer than this, so
-# nothing is integrated over it
-GATEWAY_SHARED_CT_MAX_GAP_SECONDS = 15 * 60
-# gateway_shared_ct: the most PV the hub's pv_today counter can gain between two samples, as a rate
+# gateway_integrate_power: power is not taken to have held across a telemetry gap longer than this,
+# so nothing is integrated over it
+GATEWAY_INTEGRATE_MAX_GAP_SECONDS = 15 * 60
+# gateway_integrate_power: the most PV a hub pv_today counter can gain between two samples, as a rate
 # plus one counter step. A larger rise is the counter returning from a dropped sample, not generation
-GATEWAY_SHARED_CT_MAX_PV_W = 50000
-GATEWAY_SHARED_CT_PV_STEP_WH = 200
+GATEWAY_INTEGRATE_MAX_PV_W = 50000
+GATEWAY_INTEGRATE_PV_STEP_WH = 200
 
 
 class GatewayMQTT(ComponentBase):
@@ -221,11 +221,12 @@ class GatewayMQTT(ComponentBase):
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
 
-    # Defaults for an instance built without initialize(), where the shared CT handling is off
+    # Defaults for an instance built without initialize(), where these options are off
     gateway_shared_ct = False
-    _shared_ct_energy = None
+    gateway_integrate_power = False
+    _integrated_energy = None
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=False, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=False, gateway_integrate_power=False, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -245,15 +246,19 @@ class GatewayMQTT(ComponentBase):
                 same grid and load power. Only the first inverter's readings are then used, so the
                 house's grid and load are not counted once per inverter. Off by default, where each
                 inverter is taken to have its own clamp and the readings are summed.
+            gateway_integrate_power: When True, today's import, export and load are integrated from grid
+                and battery power instead of taken from the hub's energy counters, for inverters whose
+                counters cannot be trusted (see _update_integrated_energy()). Off by default.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
         self.gateway_shared_ct = bool(gateway_shared_ct)
-        # Today's import, export and load integrated from power while gateway_shared_ct is on
-        # (see _update_shared_ct_energy()). None while it is off or fewer than two inverters are bound.
-        self._shared_ct_energy = None
+        self.gateway_integrate_power = bool(gateway_integrate_power)
+        # Today's import, export and load integrated from power while gateway_integrate_power is on
+        # (see _update_integrated_energy()). None while it is off or no inverter is bound yet.
+        self._integrated_energy = None
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -856,7 +861,7 @@ class GatewayMQTT(ComponentBase):
         self._last_telemetry_time = time.time()
         self.update_success_timestamp()
 
-        self._update_shared_ct_energy(status)
+        self._update_integrated_energy(status)
         self._inject_entities(status)
 
         if self._needs_reconfigure(status):
@@ -943,7 +948,7 @@ class GatewayMQTT(ComponentBase):
             # that would double up on the dashboard.
             if not inv.primary and not self._is_bound_target(inv):
                 continue
-            self._inject_inverter_entities(inv, _serial_suffix(inv.serial), site_energy=self._shared_ct_site_energy(inv))
+            self._inject_inverter_entities(inv, _serial_suffix(inv.serial), site_energy=self._integrated_site_energy(inv))
 
         # EV charger entities (device-level, present only when a charge point is connected)
         self._inject_ev_entities(status)
@@ -970,16 +975,18 @@ class GatewayMQTT(ComponentBase):
                 self.dashboard_item(f"{sp}_grid_power", sub.grid_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
                 self.dashboard_item(f"{sp}_temp", sub.temp_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("temp", {}), app="gateway")
 
-    def _update_shared_ct_energy(self, status):
-        """Integrate grid and battery power into today's import, export and load (gateway_shared_ct).
+    def _update_integrated_energy(self, status):
+        """Integrate grid and battery power into today's import, export and load (gateway_integrate_power).
 
-        Inverters sharing one grid CT clamp do not keep usable grid energy counters: the hub's
-        import/export "today" figures for them run at many times the real rate and its load, which is
-        derived from them, is wrong with them. The power readings are sound, so with the option on the
-        day's figures are built from those instead, once per telemetry message:
+        Some inverters do not keep usable grid energy counters. GivEnergy AC inverters sharing one
+        grid CT clamp are one case: the hub's import/export "today" figures for them run at many times
+        the real rate and its load, which is derived from them, is wrong with them. The power readings
+        are sound, so with the option on the day's figures are built from those instead, once per
+        telemetry message:
 
-        - grid power from the first inverter (they all read the same clamp) is split by sign, positive
-          to export and negative to import, and each side is integrated;
+        - the site's grid power is split by sign, positive to export and negative to import, and each
+          side is integrated. It is the first inverter's reading on a shared clamp (gateway_shared_ct,
+          where they all read the same one), otherwise the sum of every inverter's;
         - each inverter's battery power is split into charge and discharge the same way and summed, so
           one battery charging from the other counts on both sides;
         - PV is the rise in each inverter's pv_today counter, which is sound, summed;
@@ -989,11 +996,11 @@ class GatewayMQTT(ComponentBase):
         local midnight. They are kept in memory only, so they also restart from zero when Predbat
         restarts, which Predbat reads the same way as the midnight reset.
         """
-        if not self.gateway_shared_ct:
+        if not self.gateway_integrate_power:
             return
         serials = self._inverter_slot_serials
-        if len(serials) < 2:
-            self._shared_ct_energy = None
+        if not serials:
+            self._integrated_energy = None
             return
         by_serial = {inv.serial: inv for inv in status.inverters}
         inverters = [by_serial[serial] for serial in serials if serial in by_serial]
@@ -1003,7 +1010,7 @@ class GatewayMQTT(ComponentBase):
 
         now = status.timestamp if status.timestamp > 0 else int(time.time())
         day = datetime.datetime.fromtimestamp(now, tz=self.local_tz).date()
-        grid_w = inverters[0].grid.power_w
+        grid_w = inverters[0].grid.power_w if self.gateway_shared_ct else sum(inv.grid.power_w for inv in inverters)
         power = {
             "import": max(-grid_w, 0),
             "export": max(grid_w, 0),
@@ -1013,10 +1020,10 @@ class GatewayMQTT(ComponentBase):
         }
         pv_wh = [inv.energy.pv_today_wh for inv in inverters]
 
-        state = self._shared_ct_energy
+        state = self._integrated_energy
         if state is None:
             state = {"day": day, "import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0}
-            self._shared_ct_energy = state
+            self._integrated_energy = state
         else:
             elapsed = now - state["time"]
             if elapsed <= 0:
@@ -1024,11 +1031,11 @@ class GatewayMQTT(ComponentBase):
                 return
             if day != state["day"]:
                 state.update({"day": day, "import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0})
-            if elapsed <= GATEWAY_SHARED_CT_MAX_GAP_SECONDS:
+            if elapsed <= GATEWAY_INTEGRATE_MAX_GAP_SECONDS:
                 hours = elapsed / 3600.0
                 energy = {name: (state["power"][name] + power[name]) / 2.0 * hours for name in power}
                 # Per inverter, so one counter dropping a sample does not hide the others' generation
-                pv_rise_limit_wh = GATEWAY_SHARED_CT_MAX_PV_W * hours + GATEWAY_SHARED_CT_PV_STEP_WH
+                pv_rise_limit_wh = GATEWAY_INTEGRATE_MAX_PV_W * hours + GATEWAY_INTEGRATE_PV_STEP_WH
                 pv_rise_wh = sum(rise for rise in (now_wh - was_wh for now_wh, was_wh in zip(pv_wh, state["pv_wh"])) if 0 <= rise <= pv_rise_limit_wh)
                 for name in energy:
                     state[name + "_wh"] += energy[name]
@@ -1040,11 +1047,11 @@ class GatewayMQTT(ComponentBase):
         state["power"] = power
         state["pv_wh"] = pv_wh
 
-    def _shared_ct_site_energy(self, inv):
+    def _integrated_site_energy(self, inv):
         """Today's integrated import, export and load in Wh for the inverter that carries the site
-        figures, the first one - or None for any other inverter, or while gateway_shared_ct is not
-        integrating (see _update_shared_ct_energy())."""
-        state = self._shared_ct_energy
+        figures, the first one - or None for any other inverter, or while gateway_integrate_power is
+        not integrating (see _update_integrated_energy())."""
+        state = self._integrated_energy
         if state is None or not self._inverter_slot_serials or inv.serial != self._inverter_slot_serials[0]:
             return None
         return {"import_wh": state["import_wh"], "export_wh": state["export_wh"], "load_wh": state["load_published_wh"]}
@@ -1055,7 +1062,7 @@ class GatewayMQTT(ComponentBase):
         Entity naming pattern: {type}.{prefix}_gateway_{suffix}_{attribute}
 
         site_energy, when given, replaces the hub's import/export/load today counters for this
-        inverter (see _shared_ct_site_energy()).
+        inverter (see _integrated_site_energy()).
         """
         pfx = f"{self.prefix}_gateway_{suffix}"
 
@@ -1503,12 +1510,13 @@ class GatewayMQTT(ComponentBase):
 
         # Energy counters. PV is measured by each inverter itself, so every inverter's counter is
         # bound and Predbat sums them. Import, export and load are the same when each inverter has its
-        # own clamp; on one shared clamp (gateway_shared_ct) they describe the whole site once, so only
-        # the first inverter's are bound - and those are the ones _update_shared_ct_energy() fills in.
+        # own clamp. Only the first inverter's are bound where they describe the whole site once: on
+        # one shared clamp (gateway_shared_ct), and when _update_integrated_energy() fills them in
+        # (gateway_integrate_power).
         suffix0 = inverters[0].serial[-6:].lower()
         base0 = f"{self.prefix}_gateway_{suffix0}"
         bases = [f"{self.prefix}_gateway_{inv.serial[-6:].lower()}" for inv in inverters]
-        site_bases = bases[:1] if self.gateway_shared_ct else bases
+        site_bases = bases[:1] if self.gateway_shared_ct or self.gateway_integrate_power else bases
         self.set_arg("pv_today", [f"sensor.{base}_pv_today" for base in bases])
         self.set_arg("import_today", [f"sensor.{base}_import_today" for base in site_bases])
         self.set_arg("export_today", [f"sensor.{base}_export_today" for base in site_bases])

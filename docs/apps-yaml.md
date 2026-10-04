@@ -618,10 +618,14 @@ When set to `true`, Predbat will treat multiple inverters as sharing a single ph
 so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
 Use this if you have two or more inverters connected to a single CT clamp with no EMS or Gateway coordinating them. The Predbat Gateway does not detect a shared CT automatically.
 Battery and solar readings are unaffected and are still taken from each inverter.
-Inverters sharing a CT clamp also do not keep usable grid energy counters, so with this setting on Predbat works out today's import, export and house load itself rather than using the Gateway's figures.
+The import, export and load energy for the day are likewise taken from the first inverter only. Solar energy is still added up across every inverter.
+Without this setting, Predbat adds up the import, export, load and solar energy of every inverter on the Gateway, as each is taken to have its own CT clamp.
+
+- **gateway_integrate_power** - Optional, defaults to false. When set to `true`, Predbat works out today's import, export and house load itself from the power readings, rather than using the Predbat Gateway's energy counters.
+Use this where the Gateway's daily import, export or load figures are wrong for your inverters. GivEnergy AC-coupled inverters sharing a single CT clamp are one known case, and there you would set this together with **gateway_shared_ct**.
 Grid power is split into import and export and each is added up over the day, the battery power of every inverter is added up as charge and discharge in the same way, and the house load is then
 solar + import - export + battery discharge - battery charge. Solar still comes from the Gateway's **pv_today** counters, added up across the inverters.
-Without this setting, Predbat adds up the import, export, load and solar energy of every inverter on the Gateway, as each is taken to have its own CT clamp.
+With **gateway_shared_ct** the grid power of the first inverter is used; without it the grid power of every inverter is added together.
 These figures return to zero at midnight and also restart from zero if Predbat is restarted during the day.
 
 - **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
