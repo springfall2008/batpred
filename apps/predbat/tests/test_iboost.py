@@ -31,72 +31,6 @@ def set_rate_profile(my_predbat, profile, default_rate=20.0, export_rate=0.0):
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
-RATE_STATE_ATTRS = [
-    "rate_min",
-    "rate_max",
-    "rate_average",
-    "rate_min_minute",
-    "rate_max_minute",
-    "rate_min_forward",
-    "rate_min_base",
-    "rate_max_base",
-    "rate_export_min",
-    "rate_export_max",
-    "rate_export_average",
-    "rate_export_min_minute",
-    "rate_export_max_minute",
-    "rate_export_max_forward",
-]
-
-
-def snapshot_rate_state(my_predbat):
-    """
-    Snapshot the shared fixture's rate dicts and the scalars rate_scan/rate_scan_export derive
-    from them, so a suite that rewrites rates with set_rate_profile can restore them however it
-    exits (GH#5079 test-order state leaks)
-    """
-    state = {"rate_import": dict(my_predbat.rate_import), "rate_export": dict(my_predbat.rate_export), "low_rates": list(my_predbat.low_rates)}
-    for name in RATE_STATE_ATTRS:
-        if hasattr(my_predbat, name):
-            value = getattr(my_predbat, name)
-            state[name] = dict(value) if isinstance(value, dict) else value
-    return state
-
-
-def restore_rate_state(my_predbat, state):
-    """
-    Restore the rate state captured by snapshot_rate_state
-    """
-    for name, value in state.items():
-        setattr(my_predbat, name, dict(value) if isinstance(value, dict) else value)
-
-
-def restore_iboost_state(my_predbat):
-    """
-    Restore the shared fixture's iBoost configuration to its config defaults, with the rate
-    thresholds back at the reset() default of 9999, so no iBoost test state leaks into later
-    suites
-    """
-    my_predbat.iboost_smart = False
-    my_predbat.iboost_slots = []
-    my_predbat.iboost_today = 0
-    my_predbat.iboost_max_energy = my_predbat.get_arg("iboost_max_energy")
-    my_predbat.iboost_max_power = my_predbat.get_arg("iboost_max_power") / (60 * 1000)
-    my_predbat.iboost_smart_min_length = my_predbat.get_arg("iboost_smart_min_length")
-    my_predbat.iboost_rate_threshold = 9999
-    my_predbat.iboost_rate_threshold_export = 9999
-    my_predbat.iboost_gas = False
-    my_predbat.iboost_gas_export = False
-    my_predbat.iboost_gas_scale = my_predbat.get_arg("iboost_gas_scale")
-    my_predbat.iboost_tank_capacity = my_predbat.get_arg("iboost_tank_capacity")
-    my_predbat.iboost_tank_reserve = my_predbat.get_arg("iboost_tank_reserve")
-    my_predbat.iboost_fill_rate_threshold = my_predbat.get_arg("iboost_fill_rate_threshold")
-    my_predbat.iboost_forecast = {}
-    my_predbat.iboost_forecast_extent = None
-    my_predbat.iboost_tank_soc_percent = None
-    my_predbat.minutes_now = 12 * 60
-
-
 def check_slot_invariants(test_name, slots):
     """
     Check the invariants all iBoost plans must hold: sorted by time, no duplicate slot starts,
@@ -121,6 +55,18 @@ def check_slot_invariants(test_name, slots):
     return failed
 
 
+# Everything run_iboost_smart_test sets on the instance, restored to its entry value after each case
+SMART_TEST_ATTRS = (
+    "minutes_now",
+    "iboost_rate_threshold",
+    "iboost_smart",
+    "iboost_today",
+    "iboost_max_energy",
+    "iboost_max_power",
+    "iboost_smart_min_length",
+)
+
+
 def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0, minutes_now=None, rate_threshold=None):
     """
     Run a single iBoost smart planner test case and check the resulting plan totals
@@ -128,13 +74,12 @@ def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_powe
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
-    orig_rate_threshold = my_predbat.iboost_rate_threshold
+    saved = {name: getattr(my_predbat, name) for name in SMART_TEST_ATTRS}
     if minutes_now is not None:
         my_predbat.minutes_now = minutes_now
     if rate_threshold is not None:
         my_predbat.iboost_rate_threshold = rate_threshold
     my_predbat.iboost_smart = True
-    my_predbat.iboost_slots = []
     my_predbat.iboost_today = today
     my_predbat.iboost_max_energy = max_energy
     my_predbat.iboost_max_power = max_power / 60
@@ -162,12 +107,8 @@ def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_powe
         failed = True
     failed |= check_slot_invariants(test_name, slots)
 
-    my_predbat.iboost_smart = False
-    my_predbat.iboost_slots = []
-    my_predbat.iboost_today = 0
-    if minutes_now is not None:
-        my_predbat.minutes_now = 12 * 60
-    my_predbat.iboost_rate_threshold = orig_rate_threshold
+    for name, value in saved.items():
+        setattr(my_predbat, name, value)
 
     return failed
 
@@ -240,20 +181,7 @@ def run_iboost_smart_average_test(my_predbat):
 
 def run_iboost_smart_tests(my_predbat):
     """
-    Test for Iboost smart, with the shared fixture's rate and iBoost state snapshotted and
-    restored however the suite exits
-    """
-    saved_rates = snapshot_rate_state(my_predbat)
-    try:
-        return run_iboost_smart_test_cases(my_predbat)
-    finally:
-        restore_rate_state(my_predbat, saved_rates)
-        restore_iboost_state(my_predbat)
-
-
-def run_iboost_smart_test_cases(my_predbat):
-    """
-    The iBoost smart planner test cases, run under run_iboost_smart_tests' state guard
+    Test for Iboost smart
     """
     failed = False
     reset_inverter(my_predbat)
@@ -317,6 +245,8 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
+    orig_minutes_now = my_predbat.minutes_now
+    orig_extent = my_predbat.iboost_forecast_extent
     if minutes_now is not None:
         my_predbat.minutes_now = minutes_now
     for key, value in config.items():
@@ -348,9 +278,8 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
         del my_predbat.args[key]
     for entity_id in states:
         del my_predbat.ha_interface.dummy_items[entity_id]
-    my_predbat.iboost_forecast_extent = None
-    if minutes_now is not None:
-        my_predbat.minutes_now = 12 * 60
+    my_predbat.iboost_forecast_extent = orig_extent
+    my_predbat.minutes_now = orig_minutes_now
 
     return failed
 
@@ -418,6 +347,28 @@ def run_load_forecast_fetch_test(my_predbat):
     return failed
 
 
+# Everything run_iboost_forecast_plan_test sets on the instance, restored to its entry value after each case
+PLAN_TEST_ATTRS = (
+    "minutes_now",
+    "iboost_smart",
+    "iboost_today",
+    "iboost_max_energy",
+    "iboost_max_power",
+    "iboost_smart_min_length",
+    "iboost_rate_threshold",
+    "iboost_rate_threshold_export",
+    "iboost_tank_capacity",
+    "iboost_tank_reserve",
+    "iboost_tank_soc_percent",
+    "iboost_fill_rate_threshold",
+    "iboost_forecast",
+    "iboost_forecast_extent",
+    "iboost_gas",
+    "iboost_gas_scale",
+    "rate_gas",
+)
+
+
 def run_iboost_forecast_plan_test(
     test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, fill_rate_threshold=-99.0, minutes_now=None, rate_threshold=100, rate_threshold_export=100, gas_rate=None, expect_slots=None
 ):
@@ -431,6 +382,7 @@ def run_iboost_forecast_plan_test(
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
+    saved = {name: getattr(my_predbat, name) for name in PLAN_TEST_ATTRS}
     if minutes_now is not None:
         my_predbat.minutes_now = minutes_now
     my_predbat.iboost_smart = True
@@ -446,9 +398,7 @@ def run_iboost_forecast_plan_test(
     my_predbat.iboost_fill_rate_threshold = fill_rate_threshold
     my_predbat.iboost_forecast = forecast
     my_predbat.iboost_forecast_extent = None
-    saved_gas = None
     if gas_rate is not None:
-        saved_gas = (my_predbat.iboost_gas, my_predbat.iboost_gas_scale, my_predbat.rate_gas)
         my_predbat.iboost_gas = True
         my_predbat.iboost_gas_scale = 1.0
         my_predbat.rate_gas = {minute: gas_rate for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now + 120)}
@@ -456,17 +406,8 @@ def run_iboost_forecast_plan_test(
     try:
         slots = my_predbat.plan_iboost_smart()
     finally:
-        my_predbat.iboost_forecast = {}
-        my_predbat.iboost_tank_soc_percent = None
-        my_predbat.iboost_fill_rate_threshold = -99.0
-        my_predbat.iboost_smart = False
-        my_predbat.iboost_today = 0
-        my_predbat.iboost_rate_threshold = 9999
-        my_predbat.iboost_rate_threshold_export = 9999
-        if saved_gas is not None:
-            my_predbat.iboost_gas, my_predbat.iboost_gas_scale, my_predbat.rate_gas = saved_gas
-        if minutes_now is not None:
-            my_predbat.minutes_now = 12 * 60
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
 
     if slots != expect_slots:
         print("ERROR: {} expected slots {} got {}".format(test_name, expect_slots, slots))
@@ -478,20 +419,7 @@ def run_iboost_forecast_plan_test(
 
 def run_iboost_forecast_tests(my_predbat):
     """
-    Tests for the iBoost demand forecast planner and its forecast ingestion, with the shared
-    fixture's rate and iBoost state snapshotted and restored however the suite exits
-    """
-    saved_rates = snapshot_rate_state(my_predbat)
-    try:
-        return run_iboost_forecast_test_cases(my_predbat)
-    finally:
-        restore_rate_state(my_predbat, saved_rates)
-        restore_iboost_state(my_predbat)
-
-
-def run_iboost_forecast_test_cases(my_predbat):
-    """
-    The iBoost demand forecast test cases, run under run_iboost_forecast_tests' state guard
+    Tests for the iBoost demand forecast planner and its forecast ingestion
     """
     failed = False
     reset_inverter(my_predbat)
