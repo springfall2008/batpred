@@ -2896,6 +2896,8 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA
