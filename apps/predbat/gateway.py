@@ -1005,11 +1005,15 @@ class GatewayMQTT(ComponentBase):
         by_serial = {inv.serial: inv for inv in status.inverters}
         inverters = [by_serial[serial] for serial in serials if serial in by_serial]
         if len(inverters) != len(serials) or not all(inv.connected for inv in inverters):
-            # A missing or disconnected unit reports no power or a stale one
+            # A missing or disconnected unit reports no power or a stale one. Drop the baseline too,
+            # so the next good status starts a new interval rather than filling in the time away
+            if self._integrated_energy is not None:
+                self._integrated_energy["time"] = None
             return
 
         now = status.timestamp if status.timestamp > 0 else int(time.time())
-        day = datetime.datetime.fromtimestamp(now, tz=self.local_tz).date()
+        local_now = datetime.datetime.fromtimestamp(now, tz=self.local_tz)
+        day = local_now.date()
         grid_w = inverters[0].grid.power_w if self.gateway_shared_ct else sum(inv.grid.power_w for inv in inverters)
         power = {
             "import": max(-grid_w, 0),
@@ -1019,33 +1023,71 @@ class GatewayMQTT(ComponentBase):
             "discharge": sum(max(-inv.battery.power_w, 0) for inv in inverters),
         }
         pv_wh = [inv.energy.pv_today_wh for inv in inverters]
+        zeroed = {"import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0}
 
         state = self._integrated_energy
         if state is None:
-            state = {"day": day, "import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0}
+            state = {"day": day, "time": None, **zeroed}
             self._integrated_energy = state
+        previous = state["time"]
+        if previous is not None and now <= previous:
+            # The same status again (a re-inject), or the hub's clock stepping back
+            return
+
+        # The share of this interval that belongs to today: all of it, unless it began before midnight
+        today_share = 1.0
+        if day != state["day"]:
+            state.update(zeroed)
+            state["day"] = day
+            if previous is not None:
+                midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                today_share = min(max((now - midnight) / (now - previous), 0.0), 1.0)
+
+        if previous is None:
+            state["pv"] = [{"base": wh, "high": None, "high_time": 0} for wh in pv_wh]
         else:
-            elapsed = now - state["time"]
-            if elapsed <= 0:
-                # The same status again (a re-inject), or the hub's clock stepping back
-                return
-            if day != state["day"]:
-                state.update({"day": day, "import_wh": 0.0, "export_wh": 0.0, "charge_wh": 0.0, "discharge_wh": 0.0, "load_wh": 0.0, "load_published_wh": 0.0})
+            elapsed = now - previous
+            hours = elapsed / 3600.0
+            # Per inverter, so one counter dropping a sample does not hide the others' generation
+            pv_rise_limit_wh = GATEWAY_INTEGRATE_MAX_PV_W * hours + GATEWAY_INTEGRATE_PV_STEP_WH
+            pv_rise_wh = sum(self._pv_counter_rise(track, wh, now, pv_rise_limit_wh) for track, wh in zip(state["pv"], pv_wh))
             if elapsed <= GATEWAY_INTEGRATE_MAX_GAP_SECONDS:
-                hours = elapsed / 3600.0
-                energy = {name: (state["power"][name] + power[name]) / 2.0 * hours for name in power}
-                # Per inverter, so one counter dropping a sample does not hide the others' generation
-                pv_rise_limit_wh = GATEWAY_INTEGRATE_MAX_PV_W * hours + GATEWAY_INTEGRATE_PV_STEP_WH
-                pv_rise_wh = sum(rise for rise in (now_wh - was_wh for now_wh, was_wh in zip(pv_wh, state["pv_wh"])) if 0 <= rise <= pv_rise_limit_wh)
+                energy = {name: (state["power"][name] + power[name]) / 2.0 * hours * today_share for name in power}
                 for name in energy:
                     state[name + "_wh"] += energy[name]
-                state["load_wh"] += pv_rise_wh + energy["import"] - energy["export"] + energy["discharge"] - energy["charge"]
+                state["load_wh"] += pv_rise_wh * today_share + energy["import"] - energy["export"] + energy["discharge"] - energy["charge"]
                 # Grid and battery are read moments apart, so the sum can dip; a counter that goes
                 # backwards would read as a reset
                 state["load_published_wh"] = max(state["load_published_wh"], state["load_wh"])
         state["time"] = now
         state["power"] = power
-        state["pv_wh"] = pv_wh
+
+    @staticmethod
+    def _pv_counter_rise(track, wh, now, limit_wh):
+        """The generation one pv_today counter shows since its last sample, in Wh.
+
+        track holds the counter's last value ("base") and, after a drop, the value it dropped from
+        ("high") and when. A counter that drops and comes back to where it was has only dropped a
+        sample, so nothing is counted until it passes "high" again. One that drops and stays down has
+        reset for the day, so it counts from its new start straight away; "high" is forgotten once a
+        return would no longer be a dropped sample. A rise above limit_wh is never generation.
+        """
+        if wh < track["base"]:
+            if track["high"] is None:
+                track["high"] = track["base"]
+                track["high_time"] = now
+            track["base"] = wh
+            return 0
+        base = track["base"]
+        if track["high"] is not None:
+            if now - track["high_time"] > GATEWAY_INTEGRATE_MAX_GAP_SECONDS:
+                track["high"] = None
+            elif wh >= track["high"]:
+                base = track["high"]
+                track["high"] = None
+        track["base"] = wh
+        rise = wh - base
+        return rise if rise <= limit_wh else 0
 
     def _integrated_site_energy(self, inv):
         """Today's integrated import, export and load in Wh for the inverter that carries the site

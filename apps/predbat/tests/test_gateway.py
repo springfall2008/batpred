@@ -6242,6 +6242,20 @@ class TestIntegratePower:
 
         assert self._today(gw, "import_today") == 0.0
 
+    def test_nothing_is_integrated_across_a_disconnected_spell(self):
+        """The first status after a unit comes back only starts a new interval: the time it was away is not filled in."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-6000))
+        status = self._status(self.BASE_TIME + 120, grid_w=-6000)
+        status.inverters[1].connected = False
+        self._feed(gw, status)
+
+        self._feed(gw, self._status(self.BASE_TIME + 240, grid_w=-6000))
+        assert self._today(gw, "import_today") == 0.0
+
+        self._feed(gw, self._status(self.BASE_TIME + 600, grid_w=-6000))
+        assert self._today(gw, "import_today") == 0.6
+
     def test_a_pv_counter_glitch_to_zero_and_back_adds_no_load(self):
         """The hub's pv counter drops to zero for a sample around midnight; its return is not generation."""
         gw = self._make_gateway()
@@ -6250,6 +6264,28 @@ class TestIntegratePower:
         self._feed(gw, self._status(self.BASE_TIME + 240, grid_w=0, pv_today_wh=2082100))
 
         assert self._today(gw, "load_today") == 0.0
+
+    def test_a_small_pv_counter_dropping_and_returning_adds_no_load(self):
+        """A drop and return small enough to pass as generation is still only the counter coming back."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=0, pv_today_wh=1000))
+        self._feed(gw, self._status(self.BASE_TIME + 120, grid_w=0, pv_today_wh=0))
+        self._feed(gw, self._status(self.BASE_TIME + 240, grid_w=0, pv_today_wh=1000))
+        assert self._today(gw, "load_today") == 0.0
+
+        # Generation past the value it dropped from counts as normal
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=0, pv_today_wh=1200))
+        assert self._today(gw, "load_today") == 0.2
+
+    def test_a_pv_counter_that_resets_counts_from_its_new_start(self):
+        """A counter that drops and stays down has reset for the day; generation after it counts straight away."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=0, pv_today_wh=9000))
+        self._feed(gw, self._status(self.BASE_TIME + 120, grid_w=0, pv_today_wh=0))
+        self._feed(gw, self._status(self.BASE_TIME + 240, grid_w=0, pv_today_wh=100))
+        self._feed(gw, self._status(self.BASE_TIME + 360, grid_w=0, pv_today_wh=300))
+
+        assert self._today(gw, "load_today") == 0.3
 
     def test_load_today_does_not_go_backwards_within_a_day(self):
         """Grid and battery are read at slightly different moments, so the sum can dip; the published load holds."""
@@ -6266,24 +6302,26 @@ class TestIntegratePower:
         assert self._today(gw, "load_today") == 0.75
 
     def test_counters_restart_at_local_midnight(self):
-        """The figures are today's, so they return to zero when the local date changes."""
+        """The figures are today's: they return to zero at local midnight, and an interval that spans
+        midnight only gives the new day the part of it after midnight."""
         import datetime as _datetime
 
         local_tz = pytz.timezone("Europe/London")
         before = int(local_tz.localize(_datetime.datetime(2026, 10, 4, 23, 50, 0)).timestamp())
         gw = self._make_gateway()
-        self._feed(gw, self._status(before, grid_w=-6000))
-        self._feed(gw, self._status(before + 360, grid_w=-6000))
+        self._feed(gw, self._status(before, grid_w=-6000, pv_today_wh=1000))
+        self._feed(gw, self._status(before + 360, grid_w=-6000, pv_today_wh=1000))
         assert self._today(gw, "import_today") == 0.6
 
-        # 00:02 the next day, 6 minutes after the last sample
-        self._feed(gw, self._status(before + 720, grid_w=-6000))
-        assert self._today(gw, "import_today") == 0.6
-        assert self._today(gw, "load_today") == 0.6
+        # 00:02 the next day, 6 minutes after the 23:56 sample: 2 of them are today's. The 300 Wh
+        # the pv counter gained over the interval is shared out the same way
+        self._feed(gw, self._status(before + 720, grid_w=-6000, pv_today_wh=1300))
+        assert self._today(gw, "import_today") == 0.2
+        assert self._today(gw, "load_today") == 0.3
         assert gw._integrated_energy["day"] == _datetime.date(2026, 10, 5)
 
-        self._feed(gw, self._status(before + 1080, grid_w=0))
-        assert self._today(gw, "import_today") == 0.9
+        self._feed(gw, self._status(before + 1080, grid_w=0, pv_today_wh=1300))
+        assert self._today(gw, "import_today") == 0.5
 
 
 def run_gateway_tests(my_predbat=None):
