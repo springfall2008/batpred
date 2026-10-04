@@ -1,17 +1,16 @@
 .power-flow-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  color: var(--color-text);
-  border-radius: 16px;
-  padding: 1.5rem;
   margin: 1.5rem 0;
+  padding: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-surface);
+  color: var(--color-text);
   box-shadow: var(--shadow-card);
 }
 
 .power-flow-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -25,57 +24,6 @@
 .power-flow-subtitle {
   display: block;
   margin-top: 0.2rem;
+  color: var(--color-text-muted);
   font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
-
-/* Simple / Detailed switch */
-
-.power-flow-view-toggle {
-  display: flex;
-  padding: 3px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-}
-
-.power-flow-view-toggle button {
-  border: none;
-  background: transparent;
-  color: var(--color-text-muted);
-  padding: 0.45rem 1rem;
-  border-radius: 999px;
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background 0.2s ease,
-    color 0.2s ease;
-}
-
-.power-flow-view-toggle button.active {
-  background: var(--color-charge);
-  color: var(--color-semantic-contrast);
-}
-
-@media (max-width: 700px) {
-  .power-flow-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .power-flow-view-toggle {
-    width: 100%;
-  }
-
-  .power-flow-view-toggle button {
-    flex: 1;
-  }
-}
-
-.detailed-flow-icon {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
 }

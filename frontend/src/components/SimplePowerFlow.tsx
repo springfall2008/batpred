@@ -496,7 +496,7 @@ function SimplePowerFlow({ data }: SimplePowerFlowProps) {
        */}
       <div className="simple-node simple-battery">
         <div className="simple-node-circle" ref={batteryRef}>
-          <FontAwesomeIcon icon={batteryIcon} className="detailed-flow-icon-large" />
+          <FontAwesomeIcon icon={batteryIcon} />
         </div>
 
         <strong>Battery</strong>
@@ -533,7 +533,7 @@ function SimplePowerFlow({ data }: SimplePowerFlowProps) {
        */}
       <div className="simple-node simple-grid">
         <div className="simple-node-circle" ref={gridRef}>
-          <GridIcon className="detailed-flow-icon" />
+          <GridIcon />
         </div>
 
         <strong>Grid</strong>

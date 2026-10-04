@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# WebP copies generated from the house PNG masters
+src/assets/house/*.webp

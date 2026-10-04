@@ -10,6 +10,7 @@ import MetricsPanel from './components/MetricsPanel'
 import PlanPage from './pages/PlanPage'
 import ChartsPage from './pages/ChartsPage'
 import { useStoredState } from './hooks/useStoredState'
+import { resolvePlanData, type PlanDataResponse } from './utils/planData'
 
 const AppsEditorPage = lazy(() => import('./pages/AppsEditorPage'))
 const DocsPage = lazy(() => import('./pages/DocsPage'))
@@ -25,6 +26,7 @@ const AppsPage = lazy(() => import('./pages/AppsPage'))
 const EntitiesPage = lazy(() => import('./pages/EntitiesPage'))
 const DiscoveryPage = lazy(() => import('./pages/DiscoveryPage'))
 const CardsPage = lazy(() => import('./pages/CardsPage'))
+const OverviewPage = lazy(() => import('./pages/OverviewPage'))
 
 import type { PlanData } from './types/plan'
 import type { PredbatStatus } from './types/status'
@@ -54,6 +56,7 @@ function App() {
   const previousCalculatingRef = useRef<boolean | null>(null)
 
   const [planData, setPlanData] = useState<PlanData | null>(null)
+  const planDataRef = useRef<PlanData | null>(null)
 
   const [statusData, setStatusData] = useState<PredbatStatus | null>(null)
 
@@ -203,9 +206,19 @@ function App() {
    * Fetch the Predbat plan.
    */
   async function fetchPlan() {
-    const data = await fetchJson<PlanData>('plan', './api/plan_data')
+    const response = await fetchJson<PlanDataResponse>('plan', './api/plan_data')
+    const data = resolvePlanData(response, planDataRef.current)
 
-    setPlanData(data)
+    if (!data) {
+      const error = new Error('Predbat has not published a plan yet')
+      recordFetchFailure('plan', error)
+      throw error
+    }
+
+    if (data !== planDataRef.current) {
+      planDataRef.current = data
+      setPlanData(data)
+    }
 
     return data
   }
@@ -472,7 +485,7 @@ function App() {
    * Polling continues in the background, so the dashboard can
    * recover automatically once Predbat becomes available.
    */
-  if (initialError && (!planData || !statusData)) {
+  if (initialError && (!planData?.plan || !statusData)) {
     return (
       <main id="main-content" className="dashboard-loading">
         <div className="dashboard-load-error">
@@ -491,7 +504,7 @@ function App() {
   /*
    * Normal first-load state.
    */
-  if (!planData || !statusData) {
+  if (!planData?.plan || !statusData) {
     return <main id="main-content" className="dashboard-loading"><div className="dashboard-loading-status" role="status" aria-live="polite">Loading Predbat dashboard…</div></main>
   }
 
@@ -516,7 +529,7 @@ function App() {
         />
 
         <div className="app-content">
-          <main id="main-content" tabIndex={-1} className={currentPage === 'plan' || currentPage === 'charts' ? undefined : 'dashboard-main'}>
+          <main id="main-content" tabIndex={-1} className={currentPage === 'plan' || currentPage === 'charts' || currentPage === 'overview' ? undefined : 'dashboard-main'}>
             {currentPage === 'dash' && <h1 className="visually-hidden">Predbat Dashboard</h1>}
 
             {currentPage === 'plan' ? (
@@ -534,6 +547,14 @@ function App() {
                   })
                 }}
               />
+            ) : currentPage === 'overview' ? (
+              powerFlowData ? (
+                <Suspense fallback={<div className="page-loading">Loading overview…</div>}>
+                  <OverviewPage plan={planData.plan} powerFlow={powerFlowData} />
+                </Suspense>
+              ) : (
+                <div className="page-loading">Live power data is unavailable.</div>
+              )
             ) : currentPage === 'charts' ? (
               <ChartsPage plan={planData.plan} loadMlEnabled={statusData.load_ml_enabled} />
             ) : (
@@ -569,7 +590,7 @@ function App() {
                 <PlanDescription description={planData.plan?.description} />
 
                 {powerFlowData && (
-                  <PowerFlow data={powerFlowData} numCars={planData.plan.num_cars} />
+                  <PowerFlow data={powerFlowData} />
                 )}
 
                 <MetricsPanel lastStarted={statusData.last_started} />

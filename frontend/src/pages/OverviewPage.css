@@ -1,0 +1,1102 @@
+.app-content > main:has(> .overview-page) {
+  max-width: none;
+  min-height: calc(100dvh - 56px);
+  margin: 0;
+}
+
+.overview-page {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  overflow: hidden;
+  min-height: calc(100dvh - 56px);
+  padding: clamp(0.75rem, 1.5vw, 1.5rem);
+  color: var(--color-text);
+  background:
+    radial-gradient(circle at 50% 42%, rgb(255 255 255 / 82%) 0, rgb(255 255 255 / 36%) 34%, transparent 62%),
+    linear-gradient(145deg, #cbd4dc 0%, #e6e9ec 48%, #c2ccd4 100%);
+}
+
+[data-theme='dark'] .overview-page {
+  background:
+    radial-gradient(circle at 50% 42%, rgb(61 71 82 / 78%) 0, rgb(36 44 53 / 58%) 36%, transparent 64%),
+    linear-gradient(145deg, #222a32 0%, #303a44 48%, #1c242c 100%);
+}
+
+/* The house render follows sun.sun, so a night scene always gets a night canvas. */
+.overview-page.is-night {
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 50% 42%, rgb(61 71 82 / 78%) 0, rgb(36 44 53 / 58%) 36%, transparent 64%),
+    linear-gradient(145deg, #18212a 0%, #2b3641 48%, #111820 100%);
+}
+
+.overview-page.is-night .overview-page-header p {
+  color: #cbd5e1;
+}
+
+.overview-page-header {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  margin: 0 0 0.75rem;
+}
+
+.overview-weather-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  margin-inline: 0.25rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgb(100 116 139 / 28%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 55%);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+[data-theme='dark'] .overview-weather-toggle,
+.overview-page.is-night .overview-weather-toggle {
+  border-color: rgb(255 255 255 / 22%);
+  background: rgb(15 23 42 / 45%);
+}
+
+.overview-weather-toggle-track {
+  position: relative;
+  width: 2rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: rgb(100 116 139 / 38%);
+  transition: background-color 160ms ease;
+}
+
+.overview-weather-toggle-track i {
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 28%);
+  transition: transform 160ms ease;
+}
+
+.overview-weather-toggle[aria-checked='true'] {
+  border-color: color-mix(in srgb, var(--color-success) 55%, transparent);
+}
+
+.overview-weather-toggle[aria-checked='true'] .overview-weather-toggle-track {
+  background: var(--color-success);
+}
+
+.overview-weather-toggle[aria-checked='true'] .overview-weather-toggle-track i {
+  transform: translateX(0.9rem);
+}
+
+.overview-weather-toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.overview-page-header h1 {
+  margin: 0;
+  font-size: clamp(1.55rem, 2vw, 2rem);
+  letter-spacing: -0.03em;
+}
+
+.overview-page-header p {
+  margin: 0.25rem 0 0;
+  color: var(--color-text-secondary);
+}
+
+.overview-stage {
+  /*
+   * Live SVG alignment controls. Every target, energy path and grid marker
+   * uses the house image's 1500 x 1200 coordinates. These can be edited
+   * directly in browser DevTools and remain attached when the image resizes.
+   */
+  --overview-card-grid-x: 1295px;
+  --overview-card-grid-y: 840px;
+  --overview-card-solar-x: 915px;
+  --overview-card-solar-y: 360px;
+  --overview-card-home-x: 765px;
+  --overview-card-home-y: 690px;
+  --overview-card-battery-x: 1188px;
+  --overview-card-battery-y: 680px;
+  --overview-card-car-x: 792px;
+  --overview-card-car-y: 705px;
+  --overview-card-heat-pump-x: 1125px;
+  --overview-card-heat-pump-y: 760px;
+  --overview-card-connector-bend: 140px;
+  --overview-flow-solar-path: path("M 920 355 L 1180 500 L 1180 663");
+  --overview-flow-battery-to-home-path: path("M 1180 690 L 1026 515 L 775 680");
+  --overview-flow-battery-to-grid-path: path("M 1190 730 L 1196 738 L 1295 840");
+  --overview-flow-grid-to-battery-path: path("M 1295 840 L 1196 738 L 1190 730");
+  --overview-grid-point-x: 1295px;
+  --overview-grid-point-y: 840px;
+
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr) minmax(15rem, 18rem);
+  align-items: stretch;
+  gap: clamp(0.75rem, 1.5vw, 1.75rem);
+  width: 100%;
+  min-height: calc(100dvh - 10rem);
+  margin: 0;
+  padding: 0;
+}
+
+.overview-connectors {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.overview-connectors line {
+  fill: none;
+  stroke: rgb(255 255 255 / 90%);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.overview-connector-end {
+  fill: transparent;
+  stroke: rgb(255 255 255 / 90%);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.overview-column {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  gap: 1rem;
+  width: 100%;
+  min-height: 0;
+}
+
+.overview-card {
+  width: 100%;
+  color: var(--color-text);
+  padding: 1rem;
+  border: 1px solid rgb(255 255 255 / 92%);
+  border-radius: 0.8rem;
+  background: rgb(255 255 255 / 78%);
+  box-shadow: 0 8px 28px rgb(34 46 58 / 12%);
+  backdrop-filter: blur(14px);
+}
+
+[data-theme='dark'] .overview-card {
+  border-color: rgb(255 255 255 / 52%);
+  background: rgb(24 30 37 / 78%);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 24%);
+}
+
+.overview-card header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.65rem;
+}
+
+.overview-card h2 {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.overview-card-icon {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.55rem;
+  background: rgb(255 255 255 / 58%);
+  color: var(--color-text);
+  font-size: 1rem;
+}
+
+[data-theme='dark'] .overview-card-icon {
+  background: rgb(255 255 255 / 8%);
+}
+
+.overview-card-icon img {
+  width: 1.6rem;
+  height: 1.6rem;
+  object-fit: contain;
+}
+
+.overview-card-icon > svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.overview-card-main {
+  display: block;
+  margin-bottom: 0.85rem;
+  font-size: clamp(1.35rem, 2vw, 2rem);
+  font-weight: 760;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.overview-card-details {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.overview-predbat-next {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgb(100 116 139 / 20%);
+  color: var(--color-text-secondary);
+  font-size: 0.83rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.overview-predbat-next-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  text-align: left;
+}
+
+.overview-predbat-next-row strong {
+  text-align: right;
+}
+
+.overview-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: baseline;
+  gap: 0.75rem;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding-top: 0.45rem;
+  padding-inline: 0.2rem;
+  border-top: 1px solid rgb(100 116 139 / 20%);
+  font-size: 0.83rem;
+}
+
+.overview-detail span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-detail strong {
+  justify-self: end;
+  min-width: max-content;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.overview-detail-subvalue {
+  grid-column: 2;
+  justify-self: end;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.overview-card-main,
+.overview-weather strong {
+  white-space: nowrap;
+}
+
+.overview-card-main:has(+ .overview-card-main-subvalue) {
+  margin-bottom: 0.2rem;
+}
+
+.overview-card-main-subvalue {
+  display: block;
+  margin-bottom: 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.overview-weather {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-secondary);
+  font-size: 0.83rem;
+}
+
+.overview-weather span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-weather strong {
+  color: var(--color-text);
+}
+
+.overview-scene {
+  position: relative;
+  z-index: auto;
+  align-self: center;
+  justify-self: center;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.overview-scene > img {
+  position: relative;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 24px 20px rgb(28 39 49 / 24%));
+}
+
+.overview-weather-effect {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.overview-weather-effect::before,
+.overview-weather-effect::after {
+  position: absolute;
+  content: '';
+  pointer-events: none;
+}
+
+.overview-cloud-composite {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.overview-cloud-filter-definitions {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.overview-cloud-layer {
+  position: absolute;
+  top: -17rem;
+  left: -28rem;
+  width: 32rem;
+  height: 18rem;
+  border-radius: 50%;
+  will-change: transform;
+  animation: overview-cloud-composite-drift 260s ease-in-out infinite alternate;
+}
+
+.overview-cloud-layer.is-back {
+  filter: url('#overview-cloud-filter-back');
+  box-shadow:
+    24rem 20rem 2rem -1rem rgb(255 255 255 / 54%),
+    64rem 25rem 3rem -2rem rgb(255 255 255 / 48%),
+    104rem 17rem 2.5rem -1.5rem rgb(248 250 252 / 50%),
+    145rem 24rem 3rem -2rem rgb(255 255 255 / 46%),
+    185rem 19rem 2.5rem -1.5rem rgb(241 245 249 / 48%);
+  animation-duration: 320s;
+  animation-delay: -130s;
+}
+
+.overview-cloud-layer.is-middle {
+  filter: url('#overview-cloud-filter-middle');
+  box-shadow:
+    23rem 23rem 4rem -3rem rgb(148 163 184 / 32%),
+    65rem 28rem 4.5rem -3.5rem rgb(148 163 184 / 28%),
+    103rem 21rem 4rem -3rem rgb(148 163 184 / 30%),
+    146rem 27rem 4.5rem -3.5rem rgb(148 163 184 / 26%),
+    184rem 22rem 4rem -3rem rgb(148 163 184 / 28%);
+  animation-duration: 280s;
+  animation-delay: -210s;
+}
+
+.overview-cloud-layer.is-front {
+  filter: url('#overview-cloud-filter-front');
+  box-shadow:
+    22rem 26rem 4rem -5rem rgb(51 65 85 / 18%),
+    66rem 31rem 4.5rem -5.5rem rgb(51 65 85 / 16%),
+    102rem 24rem 4rem -5rem rgb(51 65 85 / 17%),
+    147rem 30rem 4.5rem -5.5rem rgb(51 65 85 / 15%),
+    183rem 25rem 4rem -5rem rgb(51 65 85 / 16%);
+  animation-duration: 235s;
+  animation-delay: -75s;
+}
+
+[data-theme='dark'] .overview-cloud-composite,
+.overview-page.is-night .overview-cloud-composite {
+  opacity: 0.72;
+  filter: brightness(0.72) saturate(0.7);
+}
+
+.overview-weather-effect.is-fog::before,
+.overview-weather-effect.is-fog::after {
+  inset: 8% -4rem 4%;
+  background-image:
+    radial-gradient(ellipse at 18% 42%, rgb(226 232 240 / 30%) 0 16%, transparent 48%),
+    radial-gradient(ellipse at 52% 56%, rgb(203 213 225 / 28%) 0 20%, transparent 54%),
+    radial-gradient(ellipse at 84% 38%, rgb(226 232 240 / 24%) 0 18%, transparent 50%);
+  background-repeat: repeat-x;
+  background-size: 64rem 100%;
+  filter: blur(14px);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+  animation: overview-clouds 64s linear infinite;
+}
+
+.overview-weather-effect.is-fog::after {
+  inset-block: 22% -8%;
+  opacity: 0.55;
+  animation-duration: 88s;
+  animation-direction: reverse;
+}
+
+/* Two depth layers, fading stems and impact splats adapt the referenced CodePen rain model. */
+.overview-rain-row {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.overview-rain-row.is-front {
+  z-index: 1;
+}
+
+.overview-rain-row.is-back {
+  z-index: 0;
+  opacity: 0.36;
+  transform: translateY(-2rem) scale(0.92);
+}
+
+.overview-rain-drop {
+  position: absolute;
+  width: 0.95rem;
+  height: 7.5rem;
+  pointer-events: none;
+  animation-name: overview-rain-drop;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.overview-rain-stem {
+  display: block;
+  width: 1px;
+  height: 62%;
+  margin-inline: auto;
+  background: linear-gradient(to bottom, transparent, rgb(219 234 254 / 58%));
+  animation-name: overview-rain-stem;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.overview-rain-splat {
+  display: block;
+  width: 0.95rem;
+  height: 0.6rem;
+  border-top: 2px dotted rgb(219 234 254 / 64%);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0);
+  animation-name: overview-rain-splat;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.overview-weather-effect.is-storm {
+  background: rgb(15 23 42 / 12%);
+}
+
+.overview-weather-effect.is-storm::after {
+  inset: 0;
+  background: rgb(255 255 255 / 70%);
+  opacity: 0;
+  animation: overview-lightning 7s ease-out infinite;
+}
+
+.overview-snow-layer,
+.overview-snow-layer::before,
+.overview-snow-layer::after {
+  --overview-snow-particles:
+    radial-gradient(circle 2px at 18px 42px, rgb(255 255 255 / 92%) 99%, transparent),
+    radial-gradient(circle 3px at 54px 166px, rgb(255 255 255 / 82%) 99%, transparent),
+    radial-gradient(circle 2px at 87px 302px, rgb(255 255 255 / 90%) 99%, transparent),
+    radial-gradient(circle 3px at 118px 83px, rgb(255 255 255 / 76%) 99%, transparent),
+    radial-gradient(circle 2px at 151px 231px, rgb(255 255 255 / 88%) 99%, transparent),
+    radial-gradient(circle 4px at 184px 354px, rgb(255 255 255 / 72%) 99%, transparent),
+    radial-gradient(circle 2px at 216px 129px, rgb(255 255 255 / 92%) 99%, transparent),
+    radial-gradient(circle 3px at 248px 274px, rgb(255 255 255 / 80%) 99%, transparent),
+    radial-gradient(circle 2px at 281px 25px, rgb(255 255 255 / 86%) 99%, transparent),
+    radial-gradient(circle 3px at 314px 194px, rgb(255 255 255 / 78%) 99%, transparent),
+    radial-gradient(circle 2px at 347px 333px, rgb(255 255 255 / 94%) 99%, transparent),
+    radial-gradient(circle 4px at 379px 102px, rgb(255 255 255 / 70%) 99%, transparent),
+    radial-gradient(circle 2px at 412px 247px, rgb(255 255 255 / 90%) 99%, transparent),
+    radial-gradient(circle 3px at 445px 382px, rgb(255 255 255 / 82%) 99%, transparent),
+    radial-gradient(circle 2px at 478px 151px, rgb(255 255 255 / 88%) 99%, transparent),
+    radial-gradient(circle 3px at 511px 316px, rgb(255 255 255 / 76%) 99%, transparent),
+    radial-gradient(circle 2px at 544px 69px, rgb(255 255 255 / 92%) 99%, transparent),
+    radial-gradient(circle 3px at 571px 218px, rgb(255 255 255 / 80%) 99%, transparent),
+    radial-gradient(circle 2px at 36px 457px, rgb(255 255 255 / 86%) 99%, transparent),
+    radial-gradient(circle 4px at 103px 548px, rgb(255 255 255 / 72%) 99%, transparent),
+    radial-gradient(circle 2px at 171px 438px, rgb(255 255 255 / 92%) 99%, transparent),
+    radial-gradient(circle 3px at 238px 521px, rgb(255 255 255 / 78%) 99%, transparent),
+    radial-gradient(circle 2px at 306px 472px, rgb(255 255 255 / 88%) 99%, transparent),
+    radial-gradient(circle 3px at 373px 563px, rgb(255 255 255 / 82%) 99%, transparent),
+    radial-gradient(circle 2px at 441px 449px, rgb(255 255 255 / 94%) 99%, transparent),
+    radial-gradient(circle 4px at 507px 536px, rgb(255 255 255 / 70%) 99%, transparent),
+    radial-gradient(circle 2px at 562px 421px, rgb(255 255 255 / 90%) 99%, transparent);
+  position: absolute;
+  inset: -600px 0 0;
+  display: block;
+  background-image: var(--overview-snow-particles);
+  background-repeat: repeat;
+  background-size: 600px 600px;
+  pointer-events: none;
+  animation: overview-snow-fall 5s linear infinite;
+}
+
+.overview-snow-layer::before,
+.overview-snow-layer::after {
+  content: '';
+}
+
+.overview-snow-layer::before {
+  margin-left: -300px;
+  opacity: 0.65;
+  filter: blur(1.5px);
+  animation-duration: 9s;
+  animation-direction: reverse;
+}
+
+.overview-snow-layer::after {
+  margin-left: -200px;
+  opacity: 0.4;
+  filter: blur(3px);
+  animation-duration: 6s;
+  animation-direction: reverse;
+}
+
+.overview-flow-lines {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.overview-flow {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 10 14;
+  opacity: 0.34;
+  transition: opacity 180ms ease, stroke 180ms ease;
+}
+
+.overview-flow.is-active {
+  opacity: 0.96;
+  animation: overview-flow 1.2s linear infinite;
+}
+
+.overview-flow-solar {
+  stroke: var(--color-flow-solar);
+}
+
+.overview-flow-battery {
+  stroke: var(--color-flow-battery);
+}
+
+.overview-flow-grid {
+  stroke: var(--color-text-secondary);
+}
+
+.overview-flow-grid.is-import {
+  stroke: var(--color-flow-grid);
+}
+
+.overview-flow-grid.is-export {
+  stroke: var(--color-export);
+}
+
+#overview-arrow-solar path {
+  fill: var(--color-flow-solar);
+}
+
+#overview-arrow-battery path {
+  fill: var(--color-flow-battery);
+}
+
+#overview-arrow-grid-import path {
+  fill: var(--color-flow-grid);
+}
+
+#overview-arrow-grid-export path {
+  fill: var(--color-export);
+}
+
+.overview-page:not(.is-night) .overview-flow-grid:not(.is-export) {
+  stroke: #374151;
+}
+
+.overview-page:not(.is-night) #overview-arrow-grid-import path {
+  fill: #374151;
+}
+
+.overview-page:not(.is-night) .overview-grid-point circle {
+  stroke: #374151;
+}
+
+.overview-page:not(.is-night) .overview-grid-point text {
+  fill: #1f2937;
+}
+
+.overview-grid-point circle {
+  fill: var(--color-surface);
+  stroke: var(--color-flow-grid);
+  stroke-width: 7;
+}
+
+.overview-grid-point text {
+  fill: var(--color-text);
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.overview-battery-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+
+.overview-battery-charge-badge {
+  position: absolute;
+  right: -0.45rem;
+  bottom: -0.35rem;
+  padding: 0.12rem;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-charge);
+  font-size: 0.58rem;
+}
+
+.overview-battery-soc {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--color-success);
+}
+
+.overview-battery-track {
+  height: 0.45rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(100 116 139 / 20%);
+}
+
+.overview-battery-track span {
+  position: relative;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width 180ms ease, background-color 180ms ease;
+}
+
+.overview-battery-soc.is-charging .overview-battery-track span {
+  animation: overview-battery-charge-pulse 1.8s ease-in-out infinite;
+}
+
+.overview-battery-soc.is-charging .overview-battery-track span::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 12%) 32%, rgb(255 255 255 / 62%) 50%, rgb(255 255 255 / 12%) 68%, transparent 100%);
+  content: '';
+  transform: translateX(-110%);
+  animation: overview-battery-charge-fill 1.8s ease-in-out infinite;
+}
+
+.overview-battery-icon.is-charging,
+.overview-battery-soc.is-charging {
+  color: var(--color-charge);
+}
+
+.overview-battery-icon.is-low,
+.overview-battery-soc.is-low {
+  color: var(--color-danger);
+}
+
+.overview-battery-icon.is-medium,
+.overview-battery-soc.is-medium {
+  color: var(--color-warning);
+}
+
+.overview-battery-icon.is-healthy,
+.overview-battery-soc.is-healthy {
+  color: var(--color-success);
+}
+
+.overview-card-solar .overview-card-icon {
+  color: var(--color-flow-solar);
+}
+
+.overview-card-grid .overview-card-icon {
+  color: var(--color-flow-grid);
+}
+
+.overview-card-grid .overview-card-main-subvalue,
+.overview-card-grid .overview-detail-subvalue {
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.overview-card-home .overview-card-icon,
+.overview-card-ashp .overview-card-icon {
+  color: var(--color-flow-home);
+}
+
+.overview-card-battery .overview-card-icon {
+  color: inherit;
+}
+
+.overview-card-ev .overview-card-icon,
+.is-car {
+  color: var(--color-charge);
+}
+
+.is-solar {
+  color: var(--color-flow-solar);
+}
+
+.is-charge {
+  color: var(--color-charge);
+}
+
+.is-export {
+  color: var(--color-export);
+}
+
+.is-import {
+  color: var(--color-flow-grid);
+}
+
+.is-muted {
+  color: var(--color-text-secondary);
+}
+
+.is-home,
+.is-demand {
+  color: var(--color-flow-home);
+}
+
+@keyframes overview-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+
+@media (min-width: 901px) {
+  .app-content > main:has(> .overview-page) {
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .app-shell.navigation-horizontal .app-content > main:has(> .overview-page) {
+    height: calc(100dvh - 56px);
+  }
+
+  .overview-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .overview-stage {
+    flex: 1;
+    min-height: 0;
+    container-type: size;
+  }
+
+  .overview-scene {
+    width: min(100%, 125cqh);
+    max-width: 100%;
+    height: auto;
+    max-height: 100%;
+    min-height: 0;
+    aspect-ratio: 5 / 4;
+  }
+
+  .overview-scene > img {
+    width: 100%;
+    height: auto;
+  }
+}
+
+@media (min-width: 901px) and (max-height: 820px) {
+  .overview-page {
+    padding-block: 0.75rem;
+  }
+
+  .overview-page-header p {
+    display: none;
+  }
+
+  .overview-column {
+    gap: 0.5rem;
+  }
+
+  .overview-card {
+    padding: 0.7rem 0.8rem;
+  }
+
+  .overview-card header,
+  .overview-card-main {
+    margin-bottom: 0.4rem;
+  }
+
+  .overview-card-details {
+    gap: 0.25rem;
+  }
+
+  .overview-detail {
+    padding-top: 0.3rem;
+    font-size: 0.76rem;
+  }
+}
+
+@media (max-width: 1180px) {
+  .overview-stage {
+    grid-template-columns: minmax(13.5rem, 15rem) minmax(20rem, 1fr) minmax(13.5rem, 15rem);
+    gap: 0.75rem;
+    padding: 0;
+  }
+
+  .overview-card {
+    padding: 0.85rem;
+  }
+
+  .overview-card-main {
+    font-size: 1.35rem;
+  }
+}
+
+@media (max-width: 900px), (update: slow) {
+  .overview-cloud-layer {
+    filter: none;
+    will-change: auto;
+  }
+
+  .overview-cloud-layer.is-back {
+    box-shadow:
+      24rem 20rem 2rem -1rem rgb(255 255 255 / 50%),
+      82rem 24rem 3rem -2rem rgb(255 255 255 / 44%),
+      140rem 18rem 2.5rem -1.5rem rgb(248 250 252 / 46%);
+  }
+
+  .overview-cloud-layer.is-middle {
+    box-shadow:
+      23rem 23rem 4rem -3rem rgb(148 163 184 / 28%),
+      83rem 27rem 4.5rem -3.5rem rgb(148 163 184 / 24%),
+      139rem 22rem 4rem -3rem rgb(148 163 184 / 26%);
+  }
+
+  .overview-cloud-layer.is-front {
+    box-shadow:
+      22rem 26rem 4rem -5rem rgb(51 65 85 / 16%),
+      84rem 30rem 4.5rem -5.5rem rgb(51 65 85 / 14%),
+      138rem 25rem 4rem -5rem rgb(51 65 85 / 15%);
+  }
+}
+
+@media (max-width: 900px) {
+  .overview-page {
+    padding: 0.75rem;
+  }
+
+  .overview-stage {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .overview-connectors {
+    display: none;
+  }
+
+  .overview-column {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-column-left {
+    order: 1;
+  }
+
+  .overview-scene {
+    order: 2;
+    width: min(100%, 42rem);
+  }
+
+  .overview-column-right {
+    order: 3;
+  }
+}
+
+@media (max-width: 560px) {
+  .overview-page-header {
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+  }
+
+  .overview-weather-toggle {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .overview-weather-toggle > span:not(.overview-weather-toggle-track) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .overview-page-header p {
+    font-size: 0.9rem;
+  }
+
+  .overview-stage {
+    gap: 0.75rem;
+    padding: 0;
+  }
+
+  .overview-column {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .overview-card-main {
+    font-size: 1.5rem;
+  }
+
+  .overview-detail {
+    font-size: 0.9rem;
+  }
+}
+
+.overview-card-ashp.is-running .overview-card-icon > svg {
+  transform-origin: center;
+  animation: overview-ashp-spin 2.4s linear infinite;
+}
+
+@keyframes overview-ashp-spin {
+  to { transform: rotate(1turn); }
+}
+
+@keyframes overview-battery-charge-pulse {
+  0%, 100% { opacity: 0.72; box-shadow: 0 0 0 rgb(37 99 235 / 0%); }
+  50% { opacity: 1; box-shadow: 0 0 0.55rem rgb(37 99 235 / 42%); }
+}
+
+@keyframes overview-battery-charge-fill {
+  0% { transform: translateX(-110%); }
+  65%, 100% { transform: translateX(110%); }
+}
+
+@keyframes overview-clouds {
+  from { background-position: 0 0; }
+  to { background-position: 64rem 0; }
+}
+
+@keyframes overview-cloud-composite-drift {
+  from { transform: translate3d(-8rem, 0, 0); }
+  to { transform: translate3d(28rem, 0, 0); }
+}
+
+@keyframes overview-rain-drop {
+  0% { transform: translateY(0); }
+  75%, 100% { transform: translateY(calc(100dvh + 10rem)); }
+}
+
+@keyframes overview-rain-stem {
+  0%, 65% { opacity: 1; }
+  75%, 100% { opacity: 0; }
+}
+
+@keyframes overview-rain-splat {
+  0%, 78% { opacity: 0; transform: scale(0); }
+  88% { opacity: 0.55; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.55); }
+}
+
+@keyframes overview-snow-fall {
+  to { transform: translateY(600px); }
+}
+
+@keyframes overview-lightning {
+  0%, 86%, 89%, 92%, 100% { opacity: 0; }
+  87%, 90% { opacity: 0.48; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overview-flow.is-active,
+  .overview-weather-effect::before,
+  .overview-weather-effect::after,
+  .overview-cloud-layer,
+  .overview-snow-layer,
+  .overview-snow-layer::before,
+  .overview-snow-layer::after,
+  .overview-rain-drop,
+  .overview-rain-stem,
+  .overview-rain-splat,
+  .overview-card-ashp.is-running .overview-card-icon > svg,
+  .overview-battery-soc.is-charging .overview-battery-track span,
+  .overview-battery-soc.is-charging .overview-battery-track span::after {
+    animation: none;
+  }
+}

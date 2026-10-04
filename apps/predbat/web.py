@@ -112,6 +112,15 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
+def _optional_float(value):
+    """Return a finite float for an optional Home Assistant value, otherwise None."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result == result and abs(result) != float("inf") else None
+
+
 def _apps_schema_value(spec):
     """Convert one Predbat validation spec to JSON Schema."""
     scalar_types = {
@@ -145,7 +154,12 @@ def build_apps_json_schema():
         "module": {"type": "string", "const": "predbat", "description": "Predbat Python module name."},
         "class": {"type": "string", "const": "PredBat", "description": "Predbat application class."},
         "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Other AppDaemon apps that must start first."},
-        "prefix": {"type": "string", "default": "predbat", "description": "Prefix used for Predbat Home Assistant entities."},
+        "prefix": {
+            "type": "string",
+            "default": "predbat",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "description": "Prefix used for Predbat Home Assistant entities. Use lowercase letters, numbers and underscores.",
+        },
         "timezone": {"type": "string", "default": "Europe/London", "description": "IANA timezone used by Predbat."},
         "template": {"type": "boolean", "description": "Remove this setting once configuration is complete."},
         "grid_power": {
@@ -157,7 +171,9 @@ def build_apps_json_schema():
     for name, spec in APPS_SCHEMA.items():
         value_schema = _apps_schema_value(spec)
         label = name.replace("_", " ")
-        if "sensor" in spec.get("type", ""):
+        if spec.get("description"):
+            value_schema["description"] = spec["description"]
+        elif "sensor" in spec.get("type", ""):
             value_schema["description"] = f"Home Assistant entity or entities used for {label}."
         elif "boolean" in spec.get("type", ""):
             value_schema["description"] = f"Enable or disable {label}."
@@ -694,6 +710,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/api/status", self.html_api_get_status)
         app.router.add_post("/api/dashboard_control", self.html_api_dashboard_control)
         app.router.add_get("/api/power_flow", self.html_api_power_flow)
+        app.router.add_get("/overview", self.html_modern_ui if modern_ui else self.html_dash_legacy)
         app.router.add_get("/metrics", metrics_handler)
         app.router.add_get("/metrics/json", metrics_json_handler)
         app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
@@ -2741,10 +2758,12 @@ chart.render();
 
     async def html_api_power_flow(self, request):
         """
-        Return live power-flow data for the React dashboard.
+        Return live power-flow and Overview data for the React dashboard.
 
-        Uses the same values and sign conventions as the legacy SVG diagram
-        so the React UI does not have to reinterpret inverter data.
+        Uses the same values and sign conventions as the legacy SVG diagram so
+        the React UI does not have to reinterpret inverter data. Optional
+        Overview entities resolve here so the browser never needs Home
+        Assistant credentials.
         """
         try:
             grid_power = self.base.grid_power
@@ -2756,10 +2775,59 @@ chart.render();
             car_configured = self.base.car_charging_power_configured
             car_power = self.base.car_charging_power
             car_inside_clamp = self.base.car_energy_reported_load
-
             house_power = max(0, load_power - car_power) if car_configured and car_inside_clamp else load_power
 
             sun_state = self.get_state_wrapper(entity_id="sun.sun", default=None)
+            weather_entity = "weather.forecast_home"
+            weather_state = self.get_state_wrapper(entity_id=weather_entity, default=None)
+            weather_temperature = _optional_float(self.get_state_wrapper(entity_id=weather_entity, attribute="temperature", default=None))
+            weather_temperature_unit = self.get_state_wrapper(entity_id=weather_entity, attribute="temperature_unit", default="")
+            weather = None
+            if weather_state not in (None, "unknown", "unavailable") or weather_temperature is not None:
+                weather = {
+                    "state": weather_state,
+                    "temperature": weather_temperature,
+                    "temperature_unit": weather_temperature_unit or "",
+                }
+
+            pv_forecast_today = _optional_float(self.get_arg("pv_forecast_today", default=None, required_unit="kWh"))
+
+            car_status_values = self.get_arg("car_charging_status", default=[])
+            if not car_status_values:
+                car_status_values = self.get_arg("car_charging_planned", default=[])
+            if not isinstance(car_status_values, list):
+                car_status_values = [car_status_values] if car_status_values else []
+            car_status = next((str(value) for value in car_status_values if value not in (None, "unknown", "unavailable")), None)
+
+            car_soc = _optional_float(self.get_arg("car_charging_soc", default=None, index=0))
+
+            car_energy_values = self.get_arg("car_charging_energy", default=[])
+            if not isinstance(car_energy_values, list):
+                car_energy_values = [car_energy_values] if car_energy_values else []
+            resolved_car_energy = [_optional_float(value) for value in car_energy_values]
+            car_energy_today = sum(value for value in resolved_car_energy if value is not None) if any(value is not None for value in resolved_car_energy) else None
+            if car_energy_today is None and getattr(self.base, "car_charging_energy", None):
+                car_energy_today = sum(self.base.get_from_incrementing(self.base.car_charging_energy, minute) for minute in range(self.base.minutes_now + 1))
+
+            ashp = None
+            if self.get_arg("ashp_enable", default=False, indirect=False):
+                ashp_power_entity = self.get_arg("ashp_power", default=None, indirect=False)
+                ashp_status_entity = self.get_arg("ashp_status", default=None, indirect=False)
+                ashp_energy_entity = self.get_arg("ashp_energy_today", default=None, indirect=False)
+                ashp_power = None
+                ashp_status = None
+                ashp_energy = None
+
+                if ashp_power_entity:
+                    ashp_power = _optional_float(self.get_state_wrapper(entity_id=ashp_power_entity, default=None, required_unit="W"))
+                if ashp_status_entity:
+                    status_value = self.get_state_wrapper(entity_id=ashp_status_entity, default=None)
+                    if status_value not in (None, "unknown", "unavailable"):
+                        ashp_status = str(status_value)
+                if ashp_energy_entity:
+                    ashp_energy = _optional_float(self.get_state_wrapper(entity_id=ashp_energy_entity, default=None, required_unit="kWh"))
+
+                ashp = {"power": ashp_power, "status": ashp_status, "energy_today": ashp_energy}
 
             # Match the existing diagram's direction thresholds/sign conventions.
             grid_importing = grid_power <= -10
@@ -2779,21 +2847,32 @@ chart.render();
                     "battery_charging": battery_charging,
                     "battery_discharging": battery_discharging,
                     "pv_generating": pv_generating,
-                    # Home Assistant Sun integration.
-                    # Usually "above_horizon" or "below_horizon".
                     "sun_state": sun_state,
+                    "currency_symbols": self.currency_symbols,
+                    "pv_forecast_today": pv_forecast_today,
+                    "totals": {
+                        "load_today": _optional_float(getattr(self.base, "load_minutes_now", None)),
+                        "pv_today": _optional_float(getattr(self.base, "pv_today_now", None)),
+                        "import_today": _optional_float(getattr(self.base, "import_today_now", None)),
+                        "export_today": _optional_float(getattr(self.base, "export_today_now", None)),
+                        "cost_today": _optional_float(getattr(self.base, "cost_today_sofar", None)) or 0,
+                    },
+                    "weather": weather,
                     "car": {
                         "configured": car_configured,
                         "power": car_power,
                         "inside_clamp": car_inside_clamp,
                         "charging": car_configured and car_power >= 10,
+                        "status": car_status,
+                        "soc": car_soc,
+                        "energy_today": car_energy_today,
                     },
+                    "ashp": ashp,
                 }
             )
 
         except Exception as e:
             self.log(f"ERROR: Failed to get power-flow data: {str(e)}")
-
             return web.json_response({"error": str(e)}, status=500)
 
     async def html_api_ping(self, request):

@@ -19,3 +19,19 @@ assert.equal(schema.properties.source.anyOf[0].type, 'string')
 assert.equal(schema.properties.source.anyOf[1].$ref, '#/$defs/haEntitySuggestion')
 assert.equal(schema.$defs.haEntitySuggestion.enum[0], 'sensor.battery_soc')
 assert.equal(schema.$defs.haEntitySuggestion.markdownEnumDescriptions[0], 'Battery state of charge (%)')
+
+const listSchema = module.exports.addEntitySuggestions(
+  {
+    $defs: {},
+    properties: {
+      cars: {
+        type: 'array',
+        items: { type: ['string', 'number'], 'x-ha-entity': true }
+      }
+    }
+  },
+  [{ id: 'sensor.ev_soc', name: 'EV state of charge (%)' }]
+)
+
+assert.deepEqual(Array.from(listSchema.properties.cars.items.anyOf[0].type), ['string', 'number'])
+assert.equal(listSchema.properties.cars.items.anyOf[1].$ref, '#/$defs/haEntitySuggestion')

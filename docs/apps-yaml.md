@@ -427,13 +427,14 @@ Docker users can change the web port for the Predbat web interface by setting **
   web_port: 5052
 ```
 
-The existing interface remains the default. To use the new interface, set:
+The existing interface remains the default. To use the modern interface, set:
 
 ```yaml
+  # Load the modern React interface. Use legacy to select the original UI.
   web_ui: modern
 ```
 
-Set `web_ui: legacy`, or remove the setting, to use the existing interface.
+Set `web_ui: legacy`, or remove the setting, to use the existing interface. See [Use the modern interface](web-interface.md#use-the-modern-interface) for the optional EV and ASHP entities used by Overview.
 
 ### notify_devices
 

@@ -20,6 +20,7 @@ import {
   faComments,
   faFileCode,
   faGear,
+  faGaugeHigh,
   faHouse,
   faList,
   faMicrochip,
@@ -93,6 +94,11 @@ const navigationGroups: NavigationGroup[] = [
         label: 'Plan',
         href: './plan',
         icon: faCalendarDays
+      },
+      {
+        label: 'Overview',
+        href: './overview',
+        icon: faGaugeHigh
       },
       {
         label: 'Charts',
@@ -197,7 +203,7 @@ const navigationGroups: NavigationGroup[] = [
   }
 ]
 
-const horizontalShortcuts = navigationGroups[0].items.slice(0, 2)
+const horizontalShortcuts = navigationGroups[0].items.slice(0, 3)
 
 function getBatteryIcon(soc: number) {
   if (soc >= 88) {
@@ -465,7 +471,7 @@ export default function AppNavigation({
             <details
               className="navigation-group"
               key={group.label}
-              name={layout === 'horizontal' ? 'predbat-navigation' : undefined}
+              name={layout === 'horizontal' && !mobileOpen ? 'predbat-navigation' : undefined}
               open={layout === 'side' || mobileOpen || undefined}
             >
               <summary className="navigation-group-label">{group.label}</summary>

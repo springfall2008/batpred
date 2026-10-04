@@ -84,6 +84,7 @@ from utils import (
     dp3,
     find_unmasked_secret_paths,
     is_entity_id,
+    normalise_entity_prefix,
     mask_secret_args,
     malloc_trim,
     limit_malloc_arenas,
@@ -362,7 +363,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.dashboard_index = []
         self.dashboard_index_app = {}
         self.dashboard_values = {}
-        self.prefix = self.args.get("prefix", "predbat")
+        self.configured_prefix = self.args.get("prefix", "predbat")
+        self.prefix = normalise_entity_prefix(self.configured_prefix)
+        self.args["prefix"] = self.prefix
         self.current_status = None
         self.previous_status = None
         self.had_errors = False
@@ -1791,8 +1794,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
                                     if prefix not in ["switch", "select", "input_number", "number", "time", "input_number", "input_datetime"]:
-                                        if sensor.startswith("sensor.predbat_"):
-                                            # We can ignore predbat generated sensors as they are control placeholders
+                                        if sensor.startswith("sensor.{}_".format(self.prefix)):
+                                            # Generated sensor controls are placeholders implemented by the inverter adapter.
                                             pass
                                         else:
                                             self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} which cannot be modified".format(name, sensor))
@@ -2017,6 +2020,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         try:
             self.reset()
             self.update_time(print=False)
+            if str(self.configured_prefix) != self.prefix:
+                self.log("Warn: apps.yaml prefix '{}' is not valid in a Home Assistant entity ID; using '{}' instead".format(self.configured_prefix, self.prefix))
 
             # Start all sub-components
             self.components = Components(self)

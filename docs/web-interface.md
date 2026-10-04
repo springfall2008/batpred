@@ -4,6 +4,67 @@ The Predbat Web Interface provides an easy to use way to see and change differen
 
 The existing interface is used by default. Add `web_ui: modern` to the `pred_bat` section of `apps.yaml` to use the new interface, or set `web_ui: legacy` to select the existing interface explicitly.
 
+## Use the modern interface
+
+The modern interface includes the Overview, Dashboard, Plan, Charts, Compare, configuration and system pages in one responsive interface. Select it in the `pred_bat` section of `apps.yaml`:
+
+```yaml
+pred_bat:
+  # Load the modern React interface. Use legacy to select the original UI.
+  web_ui: modern
+```
+
+Predbat uses the legacy interface when `web_ui` is missing. Saving `apps.yaml` restarts Predbat and applies the selection.
+
+### Configure the Overview page
+
+Overview reads the standard grid, solar, home and battery data from your existing Predbat configuration. You don't need to duplicate those entities. The electric vehicle (EV) and air-source heat pump (ASHP) cards accept extra, optional entities.
+
+Add the EV entries only when Predbat's supported charger integrations haven't configured them automatically. Use one list item per car, in the same order for every setting:
+
+```yaml
+pred_bat:
+  # Tell Predbat how many cars the lists below describe.
+  num_cars: 1
+
+  # Current charger power in W, kW or another convertible power unit.
+  car_charging_power:
+    - sensor.your_ev_charger_power
+
+  # Charger connection state, such as unplugged, connected or charging.
+  car_charging_status:
+    - sensor.your_ev_charger_status
+
+  # Current vehicle battery state of charge as a percentage.
+  car_charging_soc:
+    - sensor.your_ev_battery_percentage
+
+  # Daily incrementing charger energy in kWh.
+  car_charging_energy:
+    - sensor.your_ev_charger_energy_today
+```
+
+Enable the ASHP card and add whichever readings your heat pump exposes. The card hides any row whose entity is missing or unavailable:
+
+```yaml
+pred_bat:
+  # Show the ASHP card on Overview.
+  ashp_enable: true
+
+  # Current heat-pump electrical power draw.
+  ashp_power: sensor.heat_pump_power
+
+  # Current mode, such as off, heating or hot_water.
+  ashp_status: sensor.heat_pump_status
+
+  # Daily incrementing heat-pump electricity use in kWh.
+  ashp_energy_today: sensor.heat_pump_energy_today
+```
+
+Overview checks `weather.forecast_home` for the current weather and temperature. If that entity doesn't exist, Overview hides the weather reading, weather effects and their toggle. No weather setting is required in `apps.yaml`.
+
+The modern `apps.yaml` editor validates these settings and suggests entity IDs from Home Assistant. Open **Configuration > Editor**, enter one of the entity settings, then choose the matching entity from the suggestions. Hover over a setting to read its schema description.
+
 ![image](images/web-interface-plan-view.png)
 
 ## Accessing the Web Interface
