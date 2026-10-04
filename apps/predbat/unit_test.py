@@ -810,7 +810,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
-    parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at this HH:MM")
+    parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at the first HH:MM after the yaml (the next day if that time has passed)")
     parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
     parser.add_argument("--override", action="append", help="With --debug_file: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
     parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
