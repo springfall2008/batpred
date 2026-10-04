@@ -1439,7 +1439,7 @@ async def test_plant_pv_yield_main(my_predbat):
         api.device_info[battery_sn] = {"deviceSn": battery_sn, "deviceType": 2, "plantId": test_plant_id, "ratedPower": 3.0}
         # The plant yield is well above what the panels produced, as it includes the battery inverter's output
         api.realtime_data[test_plant_id] = {"totalYield": 19569.5, "totalCharged": 10183.5, "totalDischarged": 9016.5, "totalImported": 8000.0, "totalExported": 3000.0, "totalEarnings": 0.0}
-        api.realtime_device_data[pv_sn] = {"deviceSn": pv_sn, "deviceStatus": 102, "totalYield": 10269.0, "totalACOutput": 10269.0}
+        api.realtime_device_data[pv_sn] = {"deviceSn": pv_sn, "deviceStatus": 102, "totalYield": 10269.0, "totalACOutput": 10269.0, "mpptMap": {"MPPT1Power": 500.0}}
         api.realtime_device_data[hybrid_sn] = {"deviceSn": hybrid_sn, "deviceStatus": 102, "totalYield": 0.0, "totalACOutput": 3676.8}
         api.realtime_device_data[battery_sn] = {"deviceSn": battery_sn, "batterySOC": 50, "batteryRemainings": 2.9, "batteryTemperature": 20.0}
         return api
@@ -1539,8 +1539,8 @@ async def test_plant_pv_yield_main(my_predbat):
     else:
         print("✓ PV yield held rather than switching to the plant figure")
 
-    # Test 7: An inverter that reads fine but has no totalYield counts as 0, alone in a plant that leaves the
-    # plant figure as the only PV figure there is
+    # Test 7: An inverter that reads fine but has no totalYield counts as 0. Alone in a plant, with no PV inputs
+    # either, there is no PV figure at all and 0 is published rather than the plant total (GH#5388)
     print("Test 7: An inverter with no totalYield of its own counts as 0")
     api = build_api()
     api.plant_inverters[test_plant_id] = [hybrid_sn]
@@ -1552,8 +1552,8 @@ async def test_plant_pv_yield_main(my_predbat):
     del api.realtime_device_data[hybrid_sn]["totalYield"]
     await api.publish_plant_info()
 
-    if alone_yield != 19569.5:
-        print(f"**** ERROR: PV yield should fall back to the plant figure 19569.5 when the only inverter has no totalYield, got {alone_yield} ****")
+    if alone_yield != 0.0:
+        print(f"**** ERROR: PV yield should be 0.0 when the only inverter has no totalYield and no PV inputs, got {alone_yield} ****")
         failed = True
     elif state_of(api, pv_entity) != 10269.0:
         print(f"**** ERROR: PV yield should be 10269.0 from the other inverter when one has no totalYield, got {state_of(api, pv_entity)} ****")
@@ -1772,8 +1772,9 @@ async def test_counter_dip_main(my_predbat):
         else:
             print("✓ Inverter reading 0.0 keeps its known yield")
 
-    # Test 7: A plant with no PV inputs and no yield counter warns once that its PV figure is not PV
-    print("Test 7: A plant with no PV source warns once")
+    # Test 7: A plant with no PV inputs and no yield counter publishes 0 PV rather than the plant total, which
+    # there is the inverter AC output and so battery discharge, and warns once
+    print("Test 7: A plant with no PV source publishes 0 PV and warns once")
     api = build_api()
     api.plant_inverters[test_plant_id] = [inv_a]
     api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": None, "mpptMap": {}, "pvMap": {}}
@@ -1781,27 +1782,37 @@ async def test_counter_dip_main(my_predbat):
     await api.publish_plant_info()
     warnings = [message for message in api.log_messages if "with PV inputs" in message]
 
-    if state_of(api, entity("pv_yield")) != 4437.8:
-        print(f"**** ERROR: PV yield should still fall back to the plant figure 4437.8, got {state_of(api, entity('pv_yield'))} ****")
+    # 6000.0 + 4487.66 - 3000.0 - 5000.0 + 0.0, the battery discharge is counted once
+    if state_of(api, entity("pv_yield")) != 0.0:
+        print(f"**** ERROR: PV yield should be 0.0 for a plant with no PV source, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif abs(state_of(api, entity("total_load")) - 2487.66) > 0.01:
+        print(f"**** ERROR: Total load should be 2487.66 with no PV term, got {state_of(api, entity('total_load'))} ****")
+        failed = True
+    elif state_of(api, entity("total_yield")) != 4437.8:
+        print(f"**** ERROR: Total yield should still publish the plant figure 4437.8, got {state_of(api, entity('total_yield'))} ****")
         failed = True
     elif len(warnings) != 1:
         print(f"**** ERROR: Expected one warning that the plant has no PV source, got {len(warnings)} ****")
         failed = True
     else:
-        print("✓ Plant with no PV source warned once")
+        print("✓ Plant with no PV source publishes 0 PV and warned once")
 
-    # Test 8: An inverter with panels but no yield yet does not warn
-    print("Test 8: An inverter with PV inputs does not warn")
+    # Test 8: Inverters with panels but no yield of their own still use the plant figure, and do not warn
+    print("Test 8: Inverters with PV inputs but no yield use the plant figure")
     api = build_api()
     api.realtime_device_data[inv_a]["totalYield"] = 0.0
     api.realtime_device_data[inv_b]["totalYield"] = 0.0
     await api.publish_plant_info()
 
-    if any("with PV inputs" in message for message in api.log_messages):
+    if state_of(api, entity("pv_yield")) != 4437.8:
+        print(f"**** ERROR: PV yield should fall back to the plant figure 4437.8 when the inverters have PV inputs, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif any("with PV inputs" in message for message in api.log_messages):
         print("**** ERROR: A plant whose inverters have PV inputs should not warn ****")
         failed = True
     else:
-        print("✓ No warning for a plant whose inverters have PV inputs")
+        print("✓ Plant figure used and no warning for a plant whose inverters have PV inputs")
 
     return failed
 

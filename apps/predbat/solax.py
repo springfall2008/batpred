@@ -693,8 +693,9 @@ class SolaxAPI(ComponentBase):
         The plant level totalYield includes the AC output of an AC-coupled battery inverter, so battery
         discharge reads as generation (GH#5356). Each inverter contributes its last known yield, a lifetime
         counter does not go backwards so a failed read cannot make the sum dip. An inverter with no yield of
-        its own counts as 0. Returns None when the value should be held, which is only when an inverter that
-        should be answering failed its read and has never given a yield
+        its own counts as 0, and a plant where no inverter has PV inputs either gives 0 rather than the plant
+        total. Returns None when the value should be held, which is only when an inverter that should be
+        answering failed its read and has never given a yield
 
         plant_id is the ID as SolaX gives it, which is what the inverters are stored under. The entity names
         use a tidied form of it
@@ -714,11 +715,15 @@ class SolaxAPI(ComponentBase):
             return pv_yield
         if plant_id in self.plant_pv_from_devices:
             return None
-        # No inverter reports a yield of its own, so the plant total is the only PV figure there is. On a plant
-        # with no PV inputs at all that figure is the inverter AC output, which is battery discharge
-        if plant_id not in self.plant_no_pv_warned and not self.plant_has_pv_source(plant_id):
-            self.plant_no_pv_warned.add(plant_id)
-            self.log(f"Warn: SolaX API: Plant {plant_id} has no inverter with PV inputs or a yield counter, PV today is taken from the plant total yield which may be battery discharge rather than generation, and load today is built from it")
+        # A plant with no PV inputs at all has no PV figure. Its plant total is the inverter AC output, which is
+        # battery discharge, so 0 is published rather than that. Any PV on the site is on an inverter SolaX
+        # does not measure, and the load then excludes whatever that PV supplies (GH#5388)
+        if not self.plant_has_pv_source(plant_id):
+            if plant_id not in self.plant_no_pv_warned:
+                self.plant_no_pv_warned.add(plant_id)
+                self.log(f"Warn: SolaX API: Plant {plant_id} has no inverter with PV inputs or a yield counter, PV today is published as 0. If the site has PV on another inverter it is not measured, and load today will be low by whatever that PV supplies")
+            return 0.0
+        # The inverters have PV inputs but report no yield of their own, so the plant total is the only PV figure there is
         return plant_yield
 
     def get_max_power_inverter(self, plant_id):
