@@ -3373,6 +3373,64 @@ class TestGatewayUnitControlBinding:
         gw.update_success_timestamp = MagicMock()
         return gw
 
+    def _pv_only_site_status(self, battery_ready):
+        """Build a field topology with a PV-only unit plus one battery inverter.
+
+        The Hub currently marks both units primary.  Early startup telemetry can
+        contain neither battery message; a later frame fills the battery fields on
+        the battery inverter while the PV-only unit correctly remains empty.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_pv_only_site"
+        status.firmware = "1.0.23"
+        status.schema_version = 1
+
+        pv_only = status.inverters.add()
+        pv_only.type = pb.INVERTER_TYPE_GIVENERGY
+        pv_only.serial = "FD0000P001"
+        pv_only.primary = True
+        pv_only.connected = True
+        pv_only.active = True
+
+        battery = status.inverters.add()
+        battery.type = pb.INVERTER_TYPE_GIVENERGY
+        battery.serial = "CH0000B002"
+        battery.primary = True
+        battery.connected = True
+        battery.active = True
+        if battery_ready:
+            battery.battery.soc_percent = 16
+            battery.battery.capacity_wh = 16000
+            battery.battery.rate_max_w = 6000
+        return status
+
+    def test_incomplete_battery_telemetry_waits_then_excludes_pv_only_unit(self):
+        """Do not bind every primary unit when the first frame lacks battery data.
+
+        The serial selection can legitimately contain every discovered inverter,
+        because discovery does not know which units have batteries.  Auto-config
+        must wait for capability data rather than making the PV-only unit a write
+        target permanently from an incomplete first frame.
+        """
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["FD0000P001", "CH0000B002"]
+
+        initial = self._pv_only_site_status(battery_ready=False)
+        gw._process_telemetry(initial.SerializeToString())
+
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+        assert "num_inverters" not in gw._args
+
+        ready = self._pv_only_site_status(battery_ready=True)
+        gw._process_telemetry(ready.SerializeToString())
+
+        assert gw._auto_configured is True
+        assert gw.api_started is True
+        assert gw._args["num_inverters"] == 1
+        assert gw._args["charge_start_time"] == ["select.predbat_gateway_00b002_charge_slot1_start"]
+        assert all("00p001" not in entity for entity in gw._args["charge_start_time"])
+
     def test_scenario_second_aio_via_telemetry_moves_control_to_gateway(self):
         """End-to-end through the telemetry handler (_process_telemetry).
 
