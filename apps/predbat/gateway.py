@@ -1251,10 +1251,19 @@ class GatewayMQTT(ComponentBase):
             # NOTE: control commands are addressed to the Gateway/EMS serial — the firmware
             # must fan these out to the AIOs (tracked separately in command_handler.cpp).
             inverters = gateway_units[:1]
-        else:
+        elif aios:
             inverters = aios
-        if not inverters:
-            inverters = candidate_aios or list(all_inverters)  # last resort
+        else:
+            # A retained startup frame can contain the discovered inverter list before
+            # battery telemetry has been populated.  Treating every discovered unit as
+            # a last-resort control target makes a PV-only inverter writable and the
+            # decision then stays sticky because its serial is not new on later frames.
+            # Keep auto-config incomplete so _needs_reconfigure() retries when the next
+            # status supplies enough capability data to identify a battery inverter.
+            available = [inv.serial for inv in candidate_aios]
+            self.log(f"Warn: GatewayMQTT: no battery-capable inverter telemetry yet (discovered serials: {available}); auto-config deferred")
+            self._auto_configured = False
+            return
 
         # Apply serial filter if configured. A no-match is an error — configuring the
         # wrong inverter set is worse than not configuring at all. Leave _auto_configured
