@@ -202,23 +202,9 @@ message PlanEntry {
   bool   use_native    = 10; // true = write to inverter schedule registers
 }
 
-// The highest charge / discharge rate PredBat allows for ONE inverter: its limit
-// after inverter_limit_* and battery_rate_max. Matched to a hub slot by serial
-// (either the inverter's or the dongle's, as commands are).
-message InverterRateCap {
-  string serial           = 1;
-  uint32 charge_cap_w     = 2;  // W; 0 = no cap for this direction
-  uint32 discharge_cap_w  = 3;  // W; 0 = no cap for this direction
-}
-
 message ExecutionPlan {
   uint32 timestamp        = 1;  // when plan was generated (unix epoch)
   uint32 plan_version     = 2;  // monotonic, gateway skips stale plans
   string timezone         = 3;  // POSIX TZ rule (e.g. "GMT0BST,M3.5.0/1,M10.5.0") — set by cloud, applied via setenv("TZ")
   repeated PlanEntry entries = 4;
-  // Per-inverter rate caps. In autonomous mode the hub never writes an inverter
-  // a rate above its own cap (gw#424). An inverter with no entry here (PredBat
-  // predating this field, or a serial it did not name) falls back to its rated
-  // power.
-  repeated InverterRateCap rate_caps = 5;
 }

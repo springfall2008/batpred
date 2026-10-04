@@ -138,24 +138,6 @@ class TestPlanSerialization:
         assert plan.entries[1].mode == 2
         assert plan.entries[1].use_native is False
 
-    def test_plan_carries_rate_caps_per_inverter(self):
-        """Each inverter's charge/discharge rate cap is sent under its own serial (predbat-gateway#424)."""
-        from gateway import GatewayMQTT
-
-        data = GatewayMQTT.build_execution_plan([], plan_version=1, timezone="UTC", rate_caps=[("CH2330G098", 3000, 3600), ("FD2321G797", 2600, 5000)])
-        plan = pb.ExecutionPlan()
-        plan.ParseFromString(data)
-        assert [(cap.serial, cap.charge_cap_w, cap.discharge_cap_w) for cap in plan.rate_caps] == [("CH2330G098", 3000, 3600), ("FD2321G797", 2600, 5000)]
-
-    def test_plan_without_rate_caps_sends_none(self):
-        """With no caps the list is empty, which the hub reads as 'not sent'."""
-        from gateway import GatewayMQTT
-
-        data = GatewayMQTT.build_execution_plan([], plan_version=1, timezone="UTC")
-        plan = pb.ExecutionPlan()
-        plan.ParseFromString(data)
-        assert len(plan.rate_caps) == 0
-
     def test_empty_plan(self):
         from gateway import GatewayMQTT
 
@@ -176,6 +158,17 @@ class TestCommandFormat:
         parsed = json.loads(cmd)
         assert parsed["command"] == "set_charge_rate"
         assert parsed["power_w"] == 2500
+
+    def test_set_rate_cap_command(self):
+        """set_rate_cap carries the inverter serial and both caps (predbat-gateway#424)."""
+        from gateway import GatewayMQTT
+        import json
+
+        cmd = json.loads(GatewayMQTT.build_command("set_rate_cap", serial="CH2330G098", charge_cap_w=3000, discharge_cap_w=3600))
+        assert cmd["command"] == "set_rate_cap"
+        assert cmd["serial"] == "CH2330G098"
+        assert cmd["charge_cap_w"] == 3000
+        assert cmd["discharge_cap_w"] == 3600
 
     def test_set_reserve_command(self):
         from gateway import GatewayMQTT
@@ -1083,79 +1076,7 @@ class TestPlanHookConversion:
         gw._mqtt_connected = False
         gw._last_plan_data = None
         gw._last_plan_publish_time = 0
-        gw._plan_caps = ()
-        gw._last_plan_caps = None
-        gw._inverter_slot_serials = []
         return gw
-
-    def _inverter(self, slot, charge_w, discharge_w, inverter_type="GWMQTT"):
-        """A PredBat inverter stand-in with its rate limits in kW per minute, as inverter.py holds them."""
-        from unittest.mock import MagicMock
-
-        inverter = MagicMock()
-        inverter.id = slot
-        inverter.inverter_type = inverter_type
-        inverter.battery_rate_max_charge = charge_w / 60000.0
-        inverter.battery_rate_max_discharge = discharge_w / 60000.0
-        return inverter
-
-    def _execute_empty_plan(self, gw):
-        """Run the plan hook with no windows, as PredBat does when nothing is planned."""
-        gw._on_plan_executed(charge_windows=[], charge_limits=[], export_windows=[], export_limits=[], charge_rate_w=5600, discharge_rate_w=8600)
-
-    def test_rate_caps_name_each_inverter_by_serial(self):
-        """Two inverters with different limits each get their own cap, keyed by the serial of their slot."""
-        gw = self._make_gateway()
-        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
-        gw.base.inverters = [self._inverter(0, 3000, 3600), self._inverter(1, 2600, 5000)]
-
-        self._execute_empty_plan(gw)
-
-        assert gw._plan_caps == (("CH2330G098", 3000, 3600), ("FD2321G797", 2600, 5000))
-
-    def test_rate_caps_follow_the_slot_not_list_order(self):
-        """The serial comes from the inverter's slot id, whatever order PredBat lists its inverters in."""
-        gw = self._make_gateway()
-        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
-        gw.base.inverters = [self._inverter(1, 2600, 5000), self._inverter(0, 3000, 3600)]
-
-        self._execute_empty_plan(gw)
-
-        assert gw._plan_caps == (("CH2330G098", 3000, 3600), ("FD2321G797", 2600, 5000))
-
-    def test_rate_caps_skip_inverters_the_gateway_does_not_drive(self):
-        """An inverter of another type has no hub slot, so no cap is sent for it."""
-        gw = self._make_gateway()
-        gw._inverter_slot_serials = ["CH2330G098"]
-        gw.base.inverters = [self._inverter(0, 3000, 3600), self._inverter(1, 1000, 1000, inverter_type="GE")]
-
-        self._execute_empty_plan(gw)
-
-        assert gw._plan_caps == (("CH2330G098", 3000, 3600),)
-
-    def test_rate_caps_empty_before_auto_config(self):
-        """Until auto-config has bound slots to serials there is nothing to key a cap on, so none is sent."""
-        gw = self._make_gateway()
-        gw.base.inverters = [self._inverter(0, 3000, 3600)]
-
-        self._execute_empty_plan(gw)
-
-        assert gw._plan_caps == ()
-
-    def test_rate_cap_change_alone_queues_a_plan(self):
-        """A changed cap must reach the hub even when the windows are unchanged."""
-        gw = self._make_gateway()
-        gw._inverter_slot_serials = ["CH2330G098"]
-        gw.base.inverters = [self._inverter(0, 3000, 3600)]
-        gw._last_published_plan = []
-        gw._last_plan_caps = (("CH2330G098", 3000, 3600),)
-
-        self._execute_empty_plan(gw)
-        assert gw._pending_plan is None  # nothing changed
-
-        gw.base.inverters = [self._inverter(0, 3000, 2000)]
-        self._execute_empty_plan(gw)
-        assert gw._pending_plan is not None
 
     def test_charge_window_conversion(self):
         """Charge windows are converted to mode=1 plan entries."""
@@ -1559,8 +1480,6 @@ class TestPlanRepublish:
         gw._plan_version = 0
         gw._last_published_plan = None
         gw._pending_plan = None
-        gw._plan_caps = ()
-        gw._last_plan_caps = None
         gw.topic_schedule = "predbat/schedule"
         gw._published = []
 
@@ -1608,36 +1527,6 @@ class TestPlanRepublish:
         assert second_plan.plan_version == first_plan.plan_version  # content unchanged → same version
         # The cached bytes are refreshed so subsequent reads reflect the new timestamp.
         assert gw._last_plan_data == second_payload
-
-    def test_publish_and_republish_carry_rate_caps(self):
-        """The caps go out with the plan and survive the timestamp-refresh rebuild."""
-        gw = self._make_gateway()
-        gw._plan_caps = (("CH2330G098", 3000, 3600),)
-        self._run(gw.publish_plan(self._entries(), "Europe/London"))
-
-        from gateway import _PLAN_REPUBLISH_INTERVAL
-
-        gw._last_plan_publish_time -= _PLAN_REPUBLISH_INTERVAL + 60
-        self._run(gw._republish_plan_if_stale())
-
-        assert len(gw._published) == 2
-        for _, payload, _ in gw._published:
-            plan = pb.ExecutionPlan()
-            plan.ParseFromString(payload)
-            assert [(cap.serial, cap.charge_cap_w, cap.discharge_cap_w) for cap in plan.rate_caps] == [("CH2330G098", 3000, 3600)]
-
-    def test_rate_cap_change_publishes_new_version(self):
-        """Same windows, different caps: published again with a higher version."""
-        gw = self._make_gateway()
-        gw._plan_caps = (("CH2330G098", 3000, 3600),)
-        self._run(gw.publish_plan(self._entries(), "Europe/London"))
-        self._run(gw.publish_plan(self._entries(), "Europe/London"))
-        assert len(gw._published) == 1  # unchanged, skipped
-
-        gw._plan_caps = (("CH2330G098", 3000, 2000),)
-        self._run(gw.publish_plan(self._entries(), "Europe/London"))
-        assert len(gw._published) == 2
-        assert gw._plan_version == 2
 
     def test_no_republish_before_interval(self):
         """A plan younger than the re-publish interval is not re-sent."""
@@ -3833,6 +3722,180 @@ class TestCheckInverterResets:
         assert gw.log.call_count == 2
 
 
+class TestCheckRateCaps:
+    """Tests for GatewayMQTT._check_rate_caps() - the per-inverter set_rate_cap command (predbat-gateway#424)."""
+
+    def _make_gateway(self, read_only=False, alive=True, auto_configured=True):
+        """Build a minimal GatewayMQTT stub for _check_rate_caps() tests."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.base = MagicMock()
+        gw.base.inverters = []
+        gw._inverter_slot_serials = []
+        import time as time_mod
+
+        gw._rate_caps_sent = {}
+        gw._mqtt_connected = alive
+        gw._gateway_online = True
+        gw._last_telemetry_time = time_mod.time()  # fresh telemetry -> is_alive() True when connected
+        gw._auto_configured = auto_configured
+        gw._read_only = read_only
+        gw._published = []
+
+        def fake_get_arg(key, default=None):
+            if key == "set_read_only":
+                return gw._read_only
+            return default
+
+        gw.get_arg = fake_get_arg
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
+    def _inverter(self, slot, charge_w, discharge_w, inverter_type="GWMQTT"):
+        """A PredBat inverter stand-in with its rate limits in kW per minute, as inverter.py holds them."""
+        from unittest.mock import MagicMock
+
+        inverter = MagicMock()
+        inverter.id = slot
+        inverter.inverter_type = inverter_type
+        inverter.battery_rate_max_charge = charge_w / 60000.0 if charge_w is not None else None
+        inverter.battery_rate_max_discharge = discharge_w / 60000.0 if discharge_w is not None else None
+        return inverter
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_each_inverter_gets_its_own_cap_under_its_serial(self):
+        """Two inverters with different limits are sent separately, each keyed by the serial of its slot."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600), self._inverter(1, 2600, 5000)]
+
+        self._run(gw._check_rate_caps())
+
+        assert gw._published == [
+            ("set_rate_cap", {"serial": "CH2330G098", "charge_cap_w": 3000, "discharge_cap_w": 3600}),
+            ("set_rate_cap", {"serial": "FD2321G797", "charge_cap_w": 2600, "discharge_cap_w": 5000}),
+        ]
+
+    def test_serial_follows_the_slot_not_list_order(self):
+        """The serial comes from the inverter's slot id, whatever order PredBat lists its inverters in."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098", "FD2321G797"]
+        gw.base.inverters = [self._inverter(1, 2600, 5000)]
+
+        self._run(gw._check_rate_caps())
+
+        assert gw._published == [("set_rate_cap", {"serial": "FD2321G797", "charge_cap_w": 2600, "discharge_cap_w": 5000})]
+
+    def test_inverter_the_gateway_does_not_drive_is_skipped(self):
+        """An inverter of another type has no hub slot, so no cap is sent for it."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600), self._inverter(1, 1000, 1000, inverter_type="GE")]
+
+        self._run(gw._check_rate_caps())
+
+        assert [kwargs["serial"] for _, kwargs in gw._published] == ["CH2330G098"]
+
+    def test_sent_once_not_every_cycle(self):
+        """An unchanged cap is not re-sent on later run() cycles."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+
+        self._run(gw._check_rate_caps())
+        self._run(gw._check_rate_caps())
+
+        assert len(gw._published) == 1
+
+    def test_changed_cap_is_sent_again(self):
+        """When the user changes a limit the hub is told the new cap."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+        self._run(gw._check_rate_caps())
+
+        gw.base.inverters = [self._inverter(0, 3000, 2000)]
+        self._run(gw._check_rate_caps())
+
+        assert gw._published[-1] == ("set_rate_cap", {"serial": "CH2330G098", "charge_cap_w": 3000, "discharge_cap_w": 2000})
+        assert len(gw._published) == 2
+
+    def test_nothing_sent_in_read_only_then_sent_on_leaving_it(self):
+        """Like inverter_reset: held back in read-only mode and sent afresh once it is switched off."""
+        gw = self._make_gateway(read_only=True)
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+        gw._rate_caps_sent = {"CH2330G098": (3000, 3600)}  # sent before read-only was switched on
+
+        self._run(gw._check_rate_caps())
+        assert gw._published == []
+
+        gw._read_only = False
+        self._run(gw._check_rate_caps())
+        assert len(gw._published) == 1
+
+    def test_nothing_sent_when_not_alive(self):
+        """No command is published while the gateway link is down, and it is not marked as sent."""
+        gw = self._make_gateway(alive=False)
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+
+        self._run(gw._check_rate_caps())
+
+        assert gw._published == []
+        assert gw._rate_caps_sent == {}
+
+    def test_held_while_hub_offline_and_sent_again_when_it_returns(self):
+        """Commands are not retained, so nothing is sent to an offline hub; a hub that comes back is told again.
+
+        The re-send covers a hub that was offline when the cap was first due, and one that has
+        since been updated to firmware that understands the command or has lost its stored caps.
+        """
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+        self._run(gw._check_rate_caps())
+        assert len(gw._published) == 1
+
+        gw._gateway_online = False
+        self._run(gw._check_rate_caps())
+        assert len(gw._published) == 1
+
+        gw._gateway_online = True
+        self._run(gw._check_rate_caps())
+        assert len(gw._published) == 2
+
+    def test_nothing_sent_before_auto_config(self):
+        """Until auto-config has bound slots to serials there is nothing to key a cap on."""
+        gw = self._make_gateway(auto_configured=False)
+        gw.base.inverters = [self._inverter(0, 3000, 3600)]
+
+        self._run(gw._check_rate_caps())
+
+        assert gw._published == []
+
+    def test_inverter_with_no_rates_yet_is_skipped(self):
+        """Before PredBat has read an inverter's limits there is no cap to send; a 0 would mean 'no cap' to the hub."""
+        gw = self._make_gateway()
+        gw._inverter_slot_serials = ["CH2330G098"]
+        gw.base.inverters = [self._inverter(0, None, None)]
+
+        self._run(gw._check_rate_caps())
+
+        assert gw._published == []
+
+
 class TestCheckReadOnlyState:
     """Tests for GatewayMQTT._check_read_only_state()."""
 
@@ -5753,6 +5816,7 @@ def run_gateway_tests(my_predbat=None):
         TestPublishPredbatData,
         TestIanaToPosixTz,
         TestCheckInverterResets,
+        TestCheckRateCaps,
         TestCheckReadOnlyState,
         TestRunStartupWait,
         TestSetChargeSlotPayload,
