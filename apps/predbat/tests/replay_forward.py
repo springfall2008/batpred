@@ -47,6 +47,7 @@ LOAD_INPUT_RE = re.compile(r"Replay input: load forecast, 5-minute Wh from (\d\d
 PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from (\d\d):(\d\d) p50 \[([^\]]*)\] p10 \[([^\]]*)\] p90 \[([^\]]*)\]")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
+INVALID_RE = re.compile(r"Will recompute the plan as it is invalid")
 FORCE_RE = re.compile(r"Inverter 0 Adjust force export to (True|False), change times from \S+ - \S+ to (\d+):(\d+):\d+ - (\d+):(\d+):\d+")
 WINDOW_RE = re.compile(r"(\d\d-\d\d) (\d\d):(\d\d):\d\d - (\d\d-\d\d) (\d\d):(\d\d):\d\d @ ([\d.]+)\S+ ([\d.]+)%")
 # The four day counters in the order the log prints them, and the history arrays that mirror them
@@ -146,9 +147,14 @@ def parse_log(path):
             if COMPARE_RE.search(line):
                 run["comparing"] = True
                 continue
+            # A run that finds the plan invalid (the previous run's adoption was overridden, as when the 8-hourly
+            # config refresh is pending) re-plans from scratch and has no plan in force
+            if INVALID_RE.search(line):
+                run["invalid"] = True
+                continue
             # The first "Best export window" of a run is the plan in force when it starts - the one the previous
             # run adopted. Later ones in the same run are the re-plan's working lists.
-            if run["in_force"] is None:
+            if run["in_force"] is None and not run.get("invalid"):
                 found = IN_FORCE_RE.search(line)
                 if found:
                     run["in_force"] = found.group(1)
@@ -537,6 +543,9 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             pv_step = my_predbat.pv_forecast_minute_step
             load_step = my_predbat.load_minutes_step
             my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+            if run.get("invalid"):
+                # The live run found its plan invalid, so it adopted the new plan without comparing it to the old
+                my_predbat.plan_valid = False
             candidate = capture_candidate(my_predbat)
             row["replayed_candidate"] = parse_windows(candidate, plan_day) if candidate else None
             adopted = parse_windows(my_predbat.window_as_text(my_predbat.export_window_best, my_predbat.export_limits_best), plan_day)

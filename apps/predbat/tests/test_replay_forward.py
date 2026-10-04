@@ -493,6 +493,27 @@ def test_set_export_window_after_midnight():
     return 0
 
 
+INVALID_LOG = """2026-10-04 04:01:03.000000: --------------- PredBat - update at 2026-10-04 04:00:00+01:00 with clock skew 0 minutes, minutes now 240
+2026-10-04 04:01:18.000000: Inverter 0 SoC: 18.08kWh 100%, current charge rate 5500W, current discharge rate 5500W, current battery power 159W
+2026-10-04 04:01:20.198077: Will recompute the plan as it is invalid
+2026-10-04 04:01:20.203586: Best export window [ 04-10 04:00:00 - 04-10 04:30:00 @ 14.95p 100.0% ]
+2026-10-04 04:01:21.000000: Export windows filtered [ 04-10 06:00:00 - 04-10 07:00:00 @ 15.8p 63.0% ]
+"""
+
+
+def test_parse_log_invalid_plan():
+    """A run that found its plan invalid is marked, and its working window list is not taken as the plan in force."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(INVALID_LOG)
+        run = parse_log(path)[0]
+    if not run.get("invalid") or run["in_force"] is not None or run["filtered"] is None:
+        print("ERROR: an invalid-plan run parsed wrongly: invalid {} in force {} filtered {}".format(run.get("invalid"), run["in_force"], run["filtered"]))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -516,4 +537,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_shift_day_series()
     failed += test_roll_over_midnight()
     failed += test_set_export_window_after_midnight()
+    failed += test_parse_log_invalid_plan()
     return failed
