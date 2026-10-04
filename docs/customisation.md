@@ -699,8 +699,9 @@ tank headroom regardless of the forecast, e.g. set it to 0 to heat fully on free
 The fill threshold replaces **input_number.predbat_iboost_rate_threshold** for these slots, but the export rate threshold and the gas rate
 comparison still apply to them.
 
-Note that **input_number.predbat_iboost_max_energy** remains a per-calendar-day cap on boost energy and should be set at or above the tank capacity
-when a demand forecast is used, otherwise the cap can prevent the forecast being covered.
+Note that **input_number.predbat_iboost_max_energy** remains a per-calendar-day cap on boost energy, and energy already boosted today counts
+against it. Set it at or above the most energy the forecast needs boosted in any one day, which can exceed the tank capacity when the tank
+is refilled between draws, otherwise the cap can prevent the forecast being covered.
 
 If the forecast sensor is missing, unavailable, stale or empty then Predbat logs a warning and falls back to the standard smart plan for that cycle.
 
