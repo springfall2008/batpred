@@ -59,6 +59,8 @@ RATES_INPUT_RE = re.compile(r"Replay input: rates changed, from (\d\d):(\d\d) (.
 RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
 # Rate series in the rates line and the instance attributes they replace
 RATES_ATTRIBUTES = {"import": "rate_import", "export": "rate_export", "import_base": "rate_import_base", "export_base": "rate_export_base"}
+# The PV forecast per minute from now to the end of the plan, exactly, as runs of [kWh per minute, minutes]
+PV_EXACT_RE = re.compile(r"Replay input: PV forecast changed, per-minute kWh runs from (\d\d):(\d\d) p50 (\[.*?\]\]) p10 (\[.*?\]\]) p90 (\[.*?\]\])$")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 # Logged for every recompute, whatever triggered it (a sensor change too), despite its wording
@@ -191,6 +193,7 @@ def parse_log(path):
                 (LOAD_INPUT_RE, "load_input"),
                 (LOAD_EXACT_RE, "load_exact"),
                 (PV_INPUT_RE, "pv_input"),
+                (PV_EXACT_RE, "pv_exact"),
                 (STATE_INPUT_RE, "state"),
                 (RATES_INPUT_RE, "rates"),
                 (FILTERED_RE, "filtered"),
@@ -206,7 +209,7 @@ def parse_log(path):
                     elif store == "rates":
                         run[store] = parse_rates(found.groups())
                     else:
-                        run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "load_exact", "pv_input") else found.group(1)
+                        run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "load_exact", "pv_input", "pv_exact") else found.group(1)
     kept = []
     rates = None
     for run in runs:
@@ -438,7 +441,9 @@ def apply_run(my_predbat, prev, run):
         my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in now_today)
     if run.get("rates"):
         apply_logged_rates(my_predbat, run["rates"])
-    if run.get("pv_input"):
+    if run.get("pv_exact"):
+        apply_logged_pv_exact(my_predbat, run["pv_exact"])
+    elif run.get("pv_input"):
         apply_logged_pv_forecast(my_predbat, run["pv_input"])
     # Fetch clears these every run, so the plan's stale-p90 guard only ever compares within one cycle. Left set,
     # a PV update that moves p50 but not p90 reads as a p90 left behind, and the plan replaces p90 with p50
@@ -778,6 +783,27 @@ def apply_logged_rates(my_predbat, rates_input):
             for minute in range(start + offset, start + until):
                 rates[minute] = rate
         setattr(my_predbat, attribute, rates)
+
+
+def apply_logged_pv_exact(my_predbat, pv_exact):
+    """Set the PV forecasts from a logged "Replay input: PV forecast changed, per-minute kWh runs" line.
+
+    Each series is given per minute from the logged start to the end of the plan as runs of [kWh, minutes], so the
+    minutes it covers are set exactly, and removed where the log gave None. Minutes outside it keep their values.
+    """
+    hours, minutes = pv_exact[0], pv_exact[1]
+    start = int(hours) * 60 + int(minutes)
+    for name, text in zip(("pv_forecast_minute", "pv_forecast_minute10", "pv_forecast_minute90"), pv_exact[2:]):
+        series = dict(getattr(my_predbat, name) or {})
+        minute = start
+        for value, count in ast.literal_eval(text):
+            for _ in range(count):
+                if value is None:
+                    series.pop(minute, None)
+                else:
+                    series[minute] = float(value)
+                minute += 1
+        setattr(my_predbat, name, series)
 
 
 def capture_candidate(my_predbat):
