@@ -44,6 +44,9 @@ class MockSolaxAPI(SolaxAPI):
         self.plant_pv_from_devices = set()  # Plants whose PV energy has been built from their inverters
         self.counter_last = {}  # Last value published for each lifetime counter
         self.counter_dip_since = {}  # When a lifetime counter first read lower than its last published value
+        self.counter_stored = {}  # Last values restored from storage, used when the sensor is gone
+        self.counter_save_due = False  # A dip started or ended, save the counter state now
+        self.counter_saved = None  # When the counter state was last saved
         self.plant_no_pv_warned = set()  # Plants already warned for having no PV source
         self._storage = None  # No storage cache by default in tests
         self.log_messages = []
@@ -1813,6 +1816,89 @@ async def test_counter_dip_main(my_predbat):
         failed = True
     else:
         print("✓ Plant figure used and no warning for a plant whose inverters have PV inputs")
+
+    # Test 9: A yield counter that reads 0.0 is still a PV source, as on a newly commissioned inverter
+    print("Test 9: An inverter with a yield counter at 0.0 and no PV maps is a PV source")
+    api = build_api()
+    api.plant_inverters[test_plant_id] = [inv_a]
+    api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": 0.0, "mpptMap": {}, "pvMap": {}}
+    await api.publish_plant_info()
+
+    if any("with PV inputs" in message for message in api.log_messages):
+        print("**** ERROR: An inverter with a yield counter should not be warned about as having no PV source ****")
+        failed = True
+    elif state_of(api, entity("pv_yield")) != 4437.8:
+        print(f"**** ERROR: PV yield should use the plant figure 4437.8 while the inverter's own counter reads 0.0, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Yield counter at 0.0 counts as a PV source")
+
+    # Test 10: The time a dip started is saved, so a restart does not start the hold period again. A system
+    # restarted every day would otherwise hold the old total for ever after a genuine reset
+    print("Test 10: The dip start time survives a restart")
+    storage = MockStorage()
+    api = build_api()
+    api.storage = storage
+    await api.publish_plant_info()
+    api.realtime_data[test_plant_id]["totalYield"] = 10.0
+    await api.publish_plant_info()
+    await api.save_counter_state()
+    saved = storage.data.get("counters", {})
+
+    if entity("total_yield") not in saved.get("dip_since", {}):
+        print(f"**** ERROR: The dip start time should be saved to storage, got {saved} ****")
+        failed = True
+    else:
+        # The restart: a new instance, the sensor still holding the old value, the dip now over a day old
+        saved["dip_since"][entity("total_yield")] = (datetime.now(timezone.utc) - timedelta(hours=SOLAX_COUNTER_DIP_HOLD_HOURS, minutes=1)).isoformat()
+        restarted = build_api()
+        restarted.storage = storage
+        restarted.dashboard_items = {entity_id: dict(item) for entity_id, item in api.dashboard_items.items()}
+        restarted.realtime_data[test_plant_id]["totalYield"] = 10.0
+        await restarted.load_counter_state()
+        await restarted.publish_plant_info()
+
+        if state_of(restarted, entity("total_yield")) != 10.0:
+            print(f"**** ERROR: A reset older than the hold period should be accepted after a restart, got {state_of(restarted, entity('total_yield'))} ****")
+            failed = True
+        else:
+            print("✓ Dip start time restored from storage, reset accepted after a restart")
+
+    # Test 11: With the sensors gone after a restart the last values come from storage, so a dip is still held
+    print("Test 11: The last values come from storage when the sensors are gone")
+    storage = MockStorage()
+    api = build_api()
+    api.storage = storage
+    await api.publish_plant_info()
+    await api.save_counter_state()
+    restarted = build_api()
+    restarted.storage = storage
+    restarted.realtime_data[test_plant_id]["totalYield"] = 4260.4
+    await restarted.load_counter_state()
+    await restarted.publish_plant_info()
+
+    if state_of(restarted, entity("total_yield")) != 4437.8:
+        print(f"**** ERROR: Total yield should be held at the stored 4437.8 when the sensor is gone, got {state_of(restarted, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Dip held against the stored value when the sensors are gone")
+
+    # Test 12: Nothing is written while nothing has changed, and an unchanged dip is not written every cycle
+    print("Test 12: The counter state is only saved when it needs to be")
+    saves_before = len(storage.saved)
+    await restarted.save_counter_state()
+    saves_after_dip = len(storage.saved)
+    await restarted.publish_plant_info()
+    await restarted.save_counter_state()
+
+    if saves_after_dip != saves_before + 1:
+        print(f"**** ERROR: A new dip should be saved straight away, {saves_after_dip - saves_before} saves ****")
+        failed = True
+    elif len(storage.saved) != saves_after_dip:
+        print(f"**** ERROR: An unchanged dip should not be saved again, {len(storage.saved) - saves_after_dip} extra saves ****")
+        failed = True
+    else:
+        print("✓ Counter state saved only when needed")
 
     return failed
 

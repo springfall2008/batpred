@@ -50,6 +50,8 @@ SOLAX_DEVICE_INFO_MAX_AGE = 30  # Device info changes rarely, re-poll it once th
 SOLAX_CACHE_EXPIRY_HOURS = 24  # Cached plant and device info is discarded by the storage layer after this long
 SOLAX_INFO_RETRY_MINUTES = 5  # Wait this long before retrying a plant or device info read that failed
 SOLAX_COUNTER_DIP_HOLD_HOURS = 24  # A lifetime counter reading below its last published value is held this long before the lower value is taken as a genuine reset
+SOLAX_COUNTER_SAVE_MINUTES = 15  # The last counter values are saved to storage this often, a dip starting or ending is saved at once
+SOLAX_COUNTER_EXPIRY_DAYS = 30  # Saved counter state is discarded by the storage layer after this long
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
@@ -396,6 +398,12 @@ class SolaxAPI(ComponentBase):
         self.counter_last = {}
         self.counter_dip_since = {}
 
+        # The same state as restored from storage. The sensors do not survive a Home Assistant restart and the
+        # dip start time is nowhere else, so both are saved (see save_counter_state)
+        self.counter_stored = {}
+        self.counter_save_due = False
+        self.counter_saved = None
+
         # Plants already warned for having no inverter with PV inputs or a yield counter
         self.plant_no_pv_warned = set()
 
@@ -637,6 +645,9 @@ class SolaxAPI(ComponentBase):
         value is seeded from the sensor itself so that a dip straight after a restart is held too. A lower
         value that lasts SOLAX_COUNTER_DIP_HOLD_HOURS is taken as a genuine reset. Returns the last published
         value when there is no reading, or None if there has never been one
+
+        The sensor is the first choice for the last published value as it is exact, the value restored from
+        storage can be a few minutes old and is for when the sensor is gone
         """
         try:
             value = float(value)
@@ -647,21 +658,67 @@ class SolaxAPI(ComponentBase):
             try:
                 last = float(self.get_state_wrapper(entity_id, default=None))
             except (ValueError, TypeError):
-                last = None
+                last = self.counter_stored.get(entity_id)
         if value is None:
             return last
         if last is not None and value < last:
             now = datetime.now(timezone.utc)
             if entity_id not in self.counter_dip_since:
                 self.counter_dip_since[entity_id] = now
+                self.counter_save_due = True
                 self.log(f"Warn: SolaX API: {entity_id} read {value} which is lower than the last value {last}, keeping the last value")
             if now - self.counter_dip_since[entity_id] < timedelta(hours=SOLAX_COUNTER_DIP_HOLD_HOURS):
                 self.counter_last[entity_id] = last
                 return last
             self.log(f"Warn: SolaX API: {entity_id} has read lower than {last} for {SOLAX_COUNTER_DIP_HOLD_HOURS} hours, taking {value} as a reset")
-        self.counter_dip_since.pop(entity_id, None)
+        if self.counter_dip_since.pop(entity_id, None) is not None:
+            self.counter_save_due = True
         self.counter_last[entity_id] = value
         return value
+
+    async def load_counter_state(self):
+        """
+        Restore the lifetime counter state from storage: the last values, and when any dip in progress started
+
+        Without the start time a restart would begin the hold period again, and a system restarted every day
+        would hold the old total for ever after a genuine reset
+        """
+        if not self.storage:
+            return
+        cached = await self.storage.load("solax", "counters")
+        if not isinstance(cached, dict):
+            return
+        for entity_id, value in (cached.get("last") or {}).items():
+            try:
+                self.counter_stored[entity_id] = float(value)
+            except (ValueError, TypeError):
+                pass
+        for entity_id, since in (cached.get("dip_since") or {}).items():
+            try:
+                self.counter_dip_since.setdefault(entity_id, datetime.fromisoformat(since))
+            except (ValueError, TypeError):
+                pass
+        self.log(f"SolaX API: Restored {len(self.counter_stored)} lifetime counter(s) from storage, {len(self.counter_dip_since)} held on a dip")
+
+    async def save_counter_state(self):
+        """
+        Save the lifetime counter state to storage, at once when a dip started or ended and otherwise every
+        SOLAX_COUNTER_SAVE_MINUTES
+
+        Returns:
+            True if the state was saved
+        """
+        if not self.storage or not self.counter_last:
+            return False
+        now = datetime.now(timezone.utc)
+        if not self.counter_save_due and self.counter_saved and now - self.counter_saved < timedelta(minutes=SOLAX_COUNTER_SAVE_MINUTES):
+            return False
+        data = {"last": dict(self.counter_last), "dip_since": {entity_id: since.isoformat() for entity_id, since in self.counter_dip_since.items()}}
+        if not await self.storage.save("solax", "counters", data, format="json", expiry=now + timedelta(days=SOLAX_COUNTER_EXPIRY_DAYS)):
+            return False
+        self.counter_save_due = False
+        self.counter_saved = now
+        return True
 
     def get_inverter_last_yield(self, entity_plant_id, device_sn):
         """
@@ -678,11 +735,12 @@ class SolaxAPI(ComponentBase):
 
     def plant_has_pv_source(self, plant_id):
         """
-        True if any inverter in the plant has PV inputs, an inverter that has not been read counts as having them
+        True if any inverter in the plant has PV inputs or a yield counter, a counter reading 0.0 included. An
+        inverter that has not been read counts as having them
         """
         for device_sn in self.plant_inverters.get(plant_id, []):
             realtime = self.realtime_device_data.get(device_sn)
-            if realtime is None or device_sn in self.realtime_device_failed or realtime.get("mpptMap") or realtime.get("pvMap"):
+            if realtime is None or device_sn in self.realtime_device_failed or realtime.get("mpptMap") or realtime.get("pvMap") or realtime.get("totalYield") is not None:
                 return True
         return False
 
@@ -2912,6 +2970,7 @@ class SolaxAPI(ComponentBase):
         if first:
             # Reuse whatever hardware information is still current, a restart then avoids re-reading it all
             await self.load_static_info()
+            await self.load_counter_state()
 
         # Plant info is static, it is only re-read once the data itself has aged out
         plant_info_refreshed = False
@@ -2989,6 +3048,7 @@ class SolaxAPI(ComponentBase):
             await self.publish_device_info()
             await self.publish_device_realtime_data()
             await self.publish_controls()
+            await self.save_counter_state()
 
         # Automatic configuration
         if first and self.automatic:
