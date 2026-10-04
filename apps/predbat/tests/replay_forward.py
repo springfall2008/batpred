@@ -49,6 +49,8 @@ NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), 
 VERSION_RE = re.compile(r"version (\S+) currently running")
 # Lines written by Predbat versions that log the inputs a replay cannot otherwise recover
 LOAD_INPUT_RE = re.compile(r"Replay input: load forecast, 5-minute Wh from (\d\d):(\d\d) \[([^\]]*)\]")
+# The cumulative load forecast at each 5-minute step the plan builds and the minute after, exactly as the plan reads it
+LOAD_EXACT_RE = re.compile(r"Replay input: load forecast, cumulative kWh at each 5-minute step and the minute after from (\d\d):(\d\d) (\[.*\])$")
 PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from (\d\d):(\d\d) p50 \[([^\]]*)\] p10 \[([^\]]*)\] p90 \[([^\]]*)\]")
 # The plan's starting state, each value written so it reads back as the same float (or None)
 STATE_INPUT_RE = re.compile(r"Replay input: state (.*)$")
@@ -187,6 +189,7 @@ def parse_log(path):
                 (NEXT_LIMIT_RE, "next_limit"),
                 (VERSION_RE, "version"),
                 (LOAD_INPUT_RE, "load_input"),
+                (LOAD_EXACT_RE, "load_exact"),
                 (PV_INPUT_RE, "pv_input"),
                 (STATE_INPUT_RE, "state"),
                 (RATES_INPUT_RE, "rates"),
@@ -203,7 +206,7 @@ def parse_log(path):
                     elif store == "rates":
                         run[store] = parse_rates(found.groups())
                     else:
-                        run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "pv_input") else found.group(1)
+                        run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "load_exact", "pv_input") else found.group(1)
     kept = []
     rates = None
     for run in runs:
@@ -609,8 +612,11 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             rescan_rate_stats(my_predbat)
             rescan_rate_windows(my_predbat)
             rebuild_load_forecast(my_predbat)
-            if run.get("load_input"):
-                # A log that records the load forecast the plan used makes the rebuild unnecessary
+            if run.get("load_exact"):
+                # A log that records the load forecast exactly as the plan reads it makes the rebuild unnecessary
+                apply_logged_load_exact(my_predbat, run["load_exact"])
+            elif run.get("load_input"):
+                # Older logs give it per 5-minute slot, rounded
                 apply_logged_load_forecast(my_predbat, run["load_input"])
             rebuild_load_pv_models(my_predbat)
             pv_step = my_predbat.pv_forecast_minute_step
@@ -692,6 +698,26 @@ def apply_logged_load_forecast(my_predbat, load_input):
         total += kwh
     rebuilt[start + len(parse_values(text)) * PREDICT_STEP] = total
     my_predbat.load_forecast = rebuilt
+
+
+def apply_logged_load_exact(my_predbat, load_exact):
+    """Set the load forecast from the run's logged "Replay input: load forecast, cumulative kWh" line.
+
+    The line gives, for each 5-minute step from the logged start, load_forecast at the step's start and the minute
+    after - the two values step_data_history() reads - so those are set exactly, and removed where the log gave
+    None. Other minutes keep their values; the plan does not read them.
+    """
+    hours, minutes, text = load_exact
+    start = int(hours) * 60 + int(minutes)
+    forecast = dict(my_predbat.load_forecast or {})
+    for index, values in enumerate(ast.literal_eval(text)):
+        for offset, value in enumerate(values):
+            minute = start + index * PREDICT_STEP + offset
+            if value is None:
+                forecast.pop(minute, None)
+            else:
+                forecast[minute] = float(value)
+    my_predbat.load_forecast = forecast
 
 
 def apply_logged_pv_forecast(my_predbat, pv_input):
