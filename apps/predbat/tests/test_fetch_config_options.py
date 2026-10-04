@@ -409,11 +409,14 @@ def test_fetch_config_options(my_predbat):
     # as a list and raising TypeError every cycle (GH#5366).
     print("\n*** Test 16: car_charging_rate apps.yaml list is split per car ***")
 
-    rate_items = [item for item in my_predbat.CONFIG_ITEMS if item["name"] in ["car_charging_rate", "car_charging_rate_1"]]
-    assert len(rate_items) == 2, "car_charging_rate and car_charging_rate_1 config items should exist"
+    rate_names = ["car_charging_rate", "car_charging_rate_1", "car_charging_loss", "car_charging_manual_soc_kwh", "car_charging_manual_soc_kwh_1"]
+    rate_items = [item for item in my_predbat.CONFIG_ITEMS if item["name"] in rate_names]
+    assert len(rate_items) == len(rate_names), "the car config items under test should exist"
+    item_by_name = {item["name"]: item for item in rate_items}
     original_rate_defaults = [item.get("default") for item in rate_items]
     original_rate_values = [item.get("value") for item in rate_items]
     original_args = my_predbat.args
+    original_num_cars = my_predbat.num_cars
     original_history_loader = my_predbat.load_previous_value_from_ha
     rate_entities = ["input_number.{}_{}".format(my_predbat.prefix, item["name"]) for item in rate_items]
 
@@ -431,8 +434,8 @@ def test_fetch_config_options(my_predbat):
         """
         my_predbat.args = original_args.copy()
         my_predbat.args["num_cars"] = 2
-        my_predbat.args.pop("car_charging_rate", None)
-        my_predbat.args.pop("car_charging_rate_1", None)
+        for name in rate_names:
+            my_predbat.args.pop(name, None)
         my_predbat.args.update(rate_args)
         for item, default in zip(rate_items, original_rate_defaults):
             item["default"] = default
@@ -462,6 +465,25 @@ def test_fetch_config_options(my_predbat):
         # The per-car keys still work as before
         rates = load_car_rates({"car_charging_rate": 11.0, "car_charging_rate_1": 5.0})
         assert rates == [11.0, 5.0], "scalar per-car rates should be unchanged, got {}".format(rates)
+
+        # A list on a car's own key is ignored rather than reaching float() as a list
+        rates = load_car_rates({"car_charging_rate_1": [8.0, 6.5]})
+        assert rates == [7.4, 7.4], "a list on car_charging_rate_1 should be ignored, got {}".format(rates)
+        rates = load_car_rates({"car_charging_rate": [11.0, 6.5], "car_charging_rate_1": [8.0]})
+        assert rates == [11.0, 6.5], "a list on car_charging_rate_1 should fall back to the base list entry, got {}".format(rates)
+
+        # A car item with no per-car siblings takes the first entry of a list rather than the list itself
+        load_car_rates({"car_charging_loss": [0.1, 0.2]})
+        loss = my_predbat.get_arg("car_charging_loss")
+        assert loss == 0.1, "car_charging_loss list should resolve to its first entry, got {}".format(loss)
+        load_car_rates({"car_charging_loss": ["not_a_number"]})
+        loss = my_predbat.get_arg("car_charging_loss")
+        assert loss == 0.08, "non-numeric car_charging_loss entry should fall back to the default, got {}".format(loss)
+
+        # A per-car family that is not enabled by num_cars is split the same way
+        load_car_rates({"car_charging_manual_soc_kwh": [5.0, 8.0]})
+        soc_defaults = [item_by_name[name]["default"] for name in ["car_charging_manual_soc_kwh", "car_charging_manual_soc_kwh_1"]]
+        assert soc_defaults == [5.0, 8.0], "car_charging_manual_soc_kwh list should be split per car, got {}".format(soc_defaults)
     finally:
         my_predbat.load_previous_value_from_ha = original_history_loader
         my_predbat.args = original_args
