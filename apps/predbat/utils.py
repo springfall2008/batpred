@@ -37,6 +37,7 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    POWER_SERVICES,
 )
 import copy
 import json
@@ -889,6 +890,26 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def services_send_power(args):
+    """
+    Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    A service given by name alone is passed every default option, power included. A template entry
+    passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    """
+    for service in POWER_SERVICES:
+        templates = args.get(service)
+        if not templates:
+            continue
+        for template in templates if isinstance(templates, list) else [templates]:
+            if isinstance(template, str):
+                return True
+            # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+            if isinstance(template, dict) and any(re.search(r"\{power[}:!]", str(value)) for key, value in template.items() if key != "service"):
+                return True
+    return False
 
 
 def is_entity_id(value):

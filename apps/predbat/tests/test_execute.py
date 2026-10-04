@@ -33,6 +33,8 @@ class ActiveTestInverter:
         self.immediate_discharge_soc_target = -1
         self.immediate_charge_soc_freeze = False
         self.immediate_discharge_soc_freeze = False
+        self.immediate_charge_power = None
+        self.immediate_discharge_power = None
         self.charge_start_time_minutes = -1
         self.charge_end_time_minutes = -1
         self.charge_rate = 1000
@@ -117,10 +119,15 @@ class ActiveTestInverter:
     def adjust_charge_immediate(self, target_soc, freeze=False):
         self.immediate_charge_soc_target = target_soc
         self.immediate_charge_soc_freeze = freeze
+        # The {power} the real service call would carry: the rate stored when it is made (#5252)
+        if target_soc > 0:
+            self.immediate_charge_power = self.charge_rate
 
     def adjust_export_immediate(self, target_soc, freeze=False):
         self.immediate_discharge_soc_target = target_soc
         self.immediate_discharge_soc_freeze = freeze
+        if target_soc < 100:
+            self.immediate_discharge_power = self.discharge_rate
 
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         self.force_export = force_export
@@ -319,6 +326,8 @@ def run_execute_test(
         # rather than inheriting whatever the previous scenario in this run happened to leave behind.
         inverter.immediate_charge_soc_target = -1
         inverter.immediate_discharge_soc_target = -1
+        inverter.immediate_charge_power = None
+        inverter.immediate_discharge_power = None
         if soc_kw_array:
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
@@ -494,6 +503,14 @@ def run_execute_test(
             failed = True
         if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze is not True:
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
+            failed = True
+        # A service-driven inverter is sent {power} in the same cycle the rate is planned, so it must be
+        # the rate this cycle writes - not the previous cycle's (#5252)
+        if inverter.immediate_charge_power is not None and inverter.immediate_charge_power != inverter.charge_rate:
+            print("ERROR: Inverter {} charge service power {} should match this cycle's charge rate {}".format(inverter.id, inverter.immediate_charge_power, inverter.charge_rate))
+            failed = True
+        if inverter.immediate_discharge_power is not None and inverter.immediate_discharge_power != inverter.discharge_rate:
+            print("ERROR: Inverter {} export service power {} should match this cycle's discharge rate {}".format(inverter.id, inverter.immediate_discharge_power, inverter.discharge_rate))
             failed = True
 
     # Validate isCharging binary sensor state: must be True for any charging status (Freeze charging, Hold charging, Charging variants)
@@ -1413,6 +1430,10 @@ def run_execute_tests(my_predbat):
         return failed
 
     reset_inverter(my_predbat)
+    # Service-driven inverters, so execute_plan() makes the immediate calls after the rates are set and
+    # each scenario's {power} check applies (#5252). The test inverters stub the calls, so no service runs.
+    my_predbat.args["charge_start_service"] = "charge_start"
+    my_predbat.args["discharge_start_service"] = "discharge_start"
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 7.5}]
@@ -2464,9 +2485,10 @@ def run_execute_tests(my_predbat):
     # breaks out of the loop. The headline status must stay "Calibration", not resolve back to the
     # stale "Charging" state inverter 0 left behind in status_per_inverter.
     # The per-inverter asserts below capture the real half-processed state the break leaves behind:
-    # inverter 0 keeps the charge window/immediate targets it was already given, inverter 1 never
-    # reached those calls, and isCharging stays True from inverter 0 (pre-existing behaviour, since
-    # the calibration branch breaks without resetting it).
+    # inverter 0 keeps the charge window it was already given, inverter 1 never reached those calls,
+    # and isCharging stays True from inverter 0 (pre-existing behaviour, since the calibration branch
+    # breaks without resetting it). With start services sending {power}, inverter 0's immediate calls
+    # are queued and still made, after the calibration writes.
     failed |= run_execute_test(
         my_predbat,
         "calibration_after_charging_inverter",
