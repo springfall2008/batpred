@@ -658,6 +658,8 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 - Set **input_number.predbat_car_charging_rate** to the car's charging rate in kW per hour (e.g. 7.5 for 7.5kWh)
 
 - If you have more than one car then **input_number.predbat_car_charging_rate_1** will be the second car etc.
+To set the starting values in `apps.yaml` instead, use either a key per car (`car_charging_rate: 11.0` and `car_charging_rate_1: 7.4`) or one list with an entry per car (`car_charging_rate: [11.0, 7.4]`).
+As with any Predbat setting these are only the initial values, once the input_number exists in Home Assistant its value is what Predbat uses.
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
