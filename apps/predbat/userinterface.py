@@ -1069,6 +1069,52 @@ class UserInterface:
         self.log("New install detected")
         return True
 
+    def car_list_families(self):
+        """
+        Return the base names of the per-car config item families (name, name_1, ...)
+        """
+        names = set(item["name"] for item in self.CONFIG_ITEMS)
+        return set(name for name in names if name.startswith("car_") and name + "_1" in names)
+
+    def car_list_arg(self, item, car_families):
+        """
+        For a car config item given in apps.yaml as a list, return (True, this car's entry or None), otherwise (False, None)
+        """
+        name = item["name"]
+        base_name, car_n = name, 0
+        match = re.match(r"^(.+)_(\d+)$", name)
+        if match and match.group(1) in car_families:
+            base_name, car_n = match.group(1), int(match.group(2))
+
+        is_family = base_name in car_families
+        if not base_name.startswith("car_") or not (is_family or item.get("enable") == "num_cars"):
+            return False, None
+
+        own_list = False
+        if car_n and name in self.args:
+            if not isinstance(self.args[name], list):
+                # The car's own key in apps.yaml wins over the list
+                return False, None
+            # A list on a car's own key has no meaning, don't let it become the item default
+            self.log("Warn: Config item {} in apps.yaml is a list but sets a single car - ignoring it, use one value here or a list on {}".format(name, base_name))
+            own_list = True
+
+        values = self.args.get(base_name)
+        if not isinstance(values, list):
+            return own_list, None
+
+        if not is_family and len(values) > 1:
+            self.log("Warn: Config item {} in apps.yaml is a list but is one setting for all cars - using the first entry {}".format(base_name, values[0]))
+
+        value = values[car_n] if car_n < len(values) else None
+        if value is not None and item["type"] == "input_number":
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                self.log("Warn: Config item {} entry {} for car {} in apps.yaml is not a number - ignoring it".format(base_name, value, car_n))
+                value = None
+        return True, value
+
     def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
@@ -1081,6 +1127,7 @@ class UserInterface:
         new_install = self.is_new_install()
 
         # Build config index
+        car_families = self.car_list_families()
         for item in self.CONFIG_ITEMS:
             name = item["name"]
             self.config_index[name] = item
@@ -1088,7 +1135,12 @@ class UserInterface:
             if name == "mode" and new_install:
                 item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
-            if name in self.args:
+            car_list, car_default = self.car_list_arg(item, car_families)
+            if car_list:
+                # A car item given as an apps.yaml list, each car takes its own entry
+                if car_default is not None:
+                    item["default"] = car_default
+            elif name in self.args:
                 # If the item is in args, use it as the default
                 item["default"] = self.args[name]
 
