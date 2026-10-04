@@ -2941,10 +2941,12 @@ class Fetch:
         Each entry points to a sensor (optionally sensor$attribute) whose state or attribute
         holds either a dict of ISO timestamp -> kWh or a list of {last_updated, energy}
         entries. Returns a list of (entity_id, forecast, first_minute, last_minute) tuples,
-        one per source that yielded data: forecast is the minute-resolution cumulative dict
-        from minute_data and first/last_minute bound that source's own raw timestamps (needed
-        because minute_data back-fills its output beyond the data). Shared by the extra load
-        forecast and the iBoost demand forecast so both read the same formats.
+        one per source minute_data returned data for: forecast is the minute-resolution
+        cumulative dict from minute_data and first/last_minute bound that source's own usable
+        raw timestamps (needed because minute_data back-fills its output beyond the data), or
+        are None when no item was usable - minute_data still returns an all-zero series then,
+        which the load forecast counts as before and the iBoost forecast skips. Shared by the
+        extra load forecast and the iBoost demand forecast so both read the same formats.
         """
         sources = []
         entity_ids = self.get_arg(arg_name, indirect=False)
@@ -2972,7 +2974,7 @@ class Fetch:
                 for key, value in data.items():
                     data_array.append({"energy": value, "last_updated": key})
                 data = data_array
-            if (data is not None) and (not isinstance(data, list)):
+            if (data is not None) and (not isinstance(data, (list, str))):
                 self.log("Warn: {} data from {} is not in a supported format. Skipping forecast source.".format(name, entity_id))
                 data = None
 
@@ -3008,7 +3010,7 @@ class Fetch:
                 required_unit="kWh",
             )
 
-            if forecast and (last_minute is not None):
+            if forecast:
                 sources.append((entity_id, forecast, first_minute, last_minute))
             else:
                 self.log("Warn: Unable to load the {} from {}. Skipping forecast source.".format(name, entity_id))
@@ -3055,7 +3057,12 @@ class Fetch:
             return {}
 
         iboost_forecast_scaling = self.get_arg("iboost_forecast_scaling", 1.0)
-        sources = self.fetch_cumulative_forecasts("iboost_forecast", "iBoost demand forecast", scale=iboost_forecast_scaling)
+        sources = []
+        for source in self.fetch_cumulative_forecasts("iboost_forecast", "iBoost demand forecast", scale=iboost_forecast_scaling):
+            if source[3] is None:
+                self.log("Warn: iBoost demand forecast from {} holds no usable data points. Skipping forecast source.".format(source[0]))
+            else:
+                sources.append(source)
         if not sources:
             self.log("Warn: iboost_forecast is configured but no forecast data could be loaded, using the legacy iBoost smart plan")
             return {}

@@ -10,6 +10,7 @@
 from datetime import timedelta
 
 from tests.test_infra import reset_rates2, reset_inverter
+from utils import minute_data
 
 
 def set_rate_profile(my_predbat, profile, default_rate=20.0, export_rate=0.0):
@@ -354,6 +355,69 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
     return failed
 
 
+def run_load_forecast_fetch_test(my_predbat):
+    """
+    The load forecast shares fetch_cumulative_forecasts() with the iBoost forecast: every source
+    must be summed exactly as minute_data() reads it, a source with no usable points (all
+    'unavailable', or a plain sensor state) still counts as an all-zero series as it always has,
+    and a non-iterable attribute is skipped rather than raising
+    """
+    failed = False
+    print("**** Running Test: load_forecast_fetch ****")
+
+    dict_data = make_forecast_attribute(my_predbat, [(780, 0.0), (810, 1.0), (900, 2.5)])
+    list_data = [{"last_updated": key, "energy": value} for key, value in make_forecast_attribute(my_predbat, [(720, 0.0), (840, 0.75), (960, 1.5)]).items()]
+    junk_data = [{"last_updated": key, "energy": "unavailable"} for key in make_forecast_attribute(my_predbat, [(780, 0.0), (840, 0.0)])]
+    sources = ["sensor.lf_dict$results", "sensor.lf_list$results", "sensor.lf_junk$results", "sensor.lf_state", "sensor.lf_scalar$results"]
+    states = {
+        "sensor.lf_dict": {"results": dict_data},
+        "sensor.lf_list": {"results": list_data},
+        "sensor.lf_junk": {"results": junk_data},
+        "sensor.lf_scalar": {"results": 5.2},
+    }
+
+    had_load_forecast = "load_forecast" in my_predbat.args
+    orig_load_forecast = my_predbat.args.get("load_forecast")
+    my_predbat.args["load_forecast"] = sources
+    for entity_id, attributes in states.items():
+        my_predbat.ha_interface.set_state(entity_id, "ok", attributes=attributes)
+    my_predbat.ha_interface.set_state("sensor.lf_state", "unknown")
+    try:
+        total, loaded = my_predbat.fetch_extra_load_forecast(my_predbat.now_utc)
+    finally:
+        if had_load_forecast:
+            my_predbat.args["load_forecast"] = orig_load_forecast
+        else:
+            del my_predbat.args["load_forecast"]
+        for entity_id in list(states) + ["sensor.lf_state"]:
+            del my_predbat.ha_interface.dummy_items[entity_id]
+
+    expected = []
+    for data in [[{"energy": value, "last_updated": key} for key, value in dict_data.items()], list_data, junk_data, "unknown"]:
+        series, _ = minute_data(data, my_predbat.forecast_days + 1, my_predbat.midnight_utc, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0, required_unit="kWh")
+        expected.append(series)
+
+    if len(loaded) != len(expected):
+        print("ERROR: load_forecast_fetch expected {} loaded sources (the non-iterable one skipped), got {}".format(len(expected), len(loaded)))
+        failed = True
+    else:
+        for index, series in enumerate(expected):
+            if loaded[index] != series:
+                print("ERROR: load_forecast_fetch source {} does not match minute_data's reading of the same data".format(sources[index]))
+                failed = True
+    if (not expected[2]) or any(expected[2].values()) or (not expected[3]) or any(expected[3].values()):
+        print("ERROR: load_forecast_fetch expected the unusable sources to read as all-zero series")
+        failed = True
+    expected_total = {}
+    for series in expected:
+        for minute, value in series.items():
+            expected_total[minute] = expected_total.get(minute, 0) + value
+    if total != expected_total:
+        print("ERROR: load_forecast_fetch summed load forecast does not match the sum of its sources")
+        failed = True
+    return failed
+
+
 def run_iboost_forecast_plan_test(
     test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, fill_rate_threshold=-99.0, minutes_now=None, rate_threshold=100, rate_threshold_export=100, gas_rate=None, expect_slots=None
 ):
@@ -436,6 +500,8 @@ def run_iboost_forecast_test_cases(my_predbat):
     # must clamp to zero not negative demand) over 14:00-14:30, then a 1 kWh draw over 14:30-15:00.
     forecast_points = [(780, 0.0), (810, 1.0), (840, 1.0), (870, 0.5), (900, 1.5)]
     forecast_attribute = make_forecast_attribute(my_predbat, forecast_points)
+
+    failed |= run_load_forecast_fetch_test(my_predbat)
 
     failed |= run_iboost_fetch_test(
         "iboost_fetch_basic",
