@@ -451,10 +451,13 @@ class SolaxAPI(ComponentBase):
         self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_battery_charge_discharge_power" for plant in plants])
         self.set_arg("battery_power_invert", [f"True" for plant in plants])
 
-        # Power and SOC from device realtime data (using first inverter)
+        # PV and grid power are plant sensors summed over every inverter, as a plant can have a PV-only
+        # inverter and a separate battery inverter and either of them can be listed first
+        self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_grid_power" for plant in plants])
+        self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_pv_power" for plant in plants])
+
+        # Load power and battery health are plant values too, published under the first inverter
         inverter_list = [self.plant_inverters[plant][0] for plant in plants]
-        self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
-        self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_load_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_solax_{plant}_{inv}_battery_soh" for plant, inv in zip(plants, inverter_list)])
 
@@ -2516,6 +2519,34 @@ class SolaxAPI(ComponentBase):
             pv = saved["pv"] if saved["pv"] is not None else 0
             battery = saved["battery"] if saved["battery"] is not None else 0
             load_power = pv - battery - grid
+
+            # Plant PV and grid power, held when an inverter in the plant was not read on this cycle as a
+            # sum with one inverter missing would under-read
+            if not any(inverter_sn in self.realtime_device_failed or inverter_sn not in self.realtime_device_data for inverter_sn in self.plant_inverters.get(plant_id, [])):
+                plant_name = next((plant.get("plantName", plant_id) for plant in self.plant_info if plant.get("plantId", "unknown").lower().replace(" ", "_") == plant_id), plant_id)
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_pv_power",
+                    state=pv,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} PV Power",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_grid_power",
+                    state=grid,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Grid Power",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+
             self.dashboard_item(
                 f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_load_power",
                 state=load_power,
