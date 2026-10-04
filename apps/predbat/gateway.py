@@ -212,7 +212,7 @@ class GatewayMQTT(ComponentBase):
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=False, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -228,11 +228,16 @@ class GatewayMQTT(ComponentBase):
             gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
                 the current time falls inside a planned car-charging window and send RemoteStartTransaction
                 plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit.
+            gateway_shared_ct: When True, several inverters share one grid CT clamp, so each reports the
+                same grid and load power. Only the first inverter's readings are then used, so the
+                house's grid and load are not counted once per inverter. Off by default, where each
+                inverter is taken to have its own clamp and the readings are summed.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
+        self.gateway_shared_ct = bool(gateway_shared_ct)
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -1368,6 +1373,12 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("soc_max", soc_max_entities)
         self.set_arg("battery_power", battery_power_entities)
         self.set_arg("pv_power", pv_power_entities)
+        # Inverters sharing one grid CT clamp each report the same grid and load reading, so they must
+        # not be summed. Same "single source + zeros" pattern as gecloud.py's ge_cloud_automatic_shared_ct.
+        if self.gateway_shared_ct and num_inverters > 1:
+            self.log("Info: GatewayMQTT: Multiple inverters sharing a single CT clamp (gateway_shared_ct) — using first inverter only for grid and load measurements")
+            grid_power_entities = grid_power_entities[:1] + [0 for _ in range(num_inverters - 1)]
+            load_power_entities = load_power_entities[:1] + [0 for _ in range(num_inverters - 1)]
         self.set_arg("grid_power", grid_power_entities)
         self.set_arg("load_power", load_power_entities)
         self.set_arg("charge_rate", charge_rate_entities)
