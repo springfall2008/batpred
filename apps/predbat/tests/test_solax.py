@@ -15,6 +15,7 @@ import json
 from solax import (
     SolaxAPI,
     SOLAX_MIN_RESERVE_PERCENT,
+    SOLAX_COUNTER_DIP_HOLD_HOURS,
     SOLAX_CONTROL_RETRY_BACKOFF,
     SOLAX_CONTROL_RETRY_MAX,
     SOLAX_PLANT_INFO_MAX_AGE,
@@ -41,7 +42,9 @@ class MockSolaxAPI(SolaxAPI):
         self.realtime_plant_failed = set()  # Plants whose last realtime read failed
         self.realtime_device_failed = set()  # Devices whose last realtime read failed
         self.plant_pv_from_devices = set()  # Plants whose PV energy has been built from their inverters
-        self.inverter_last_yield = {}  # Last known lifetime yield of each inverter
+        self.counter_last = {}  # Last value published for each lifetime counter
+        self.counter_dip_since = {}  # When a lifetime counter first read lower than its last published value
+        self.plant_no_pv_warned = set()  # Plants already warned for having no PV source
         self._storage = None  # No storage cache by default in tests
         self.log_messages = []
         self.dashboard_items = {}
@@ -192,6 +195,7 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_static_info_cache_main(my_predbat))
         failed |= asyncio.run(test_realtime_publish_gating_main(my_predbat))
         failed |= asyncio.run(test_plant_pv_yield_main(my_predbat))
+        failed |= asyncio.run(test_counter_dip_main(my_predbat))
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
@@ -1623,6 +1627,181 @@ async def test_plant_pv_yield_main(my_predbat):
         failed = True
     else:
         print("✓ Inverters and seed sensor found for a plant ID that is changed for the entity names")
+
+    return failed
+
+
+async def test_counter_dip_main(my_predbat):
+    """
+    Test a lifetime counter that dips and recovers is held rather than read as generation (GH#5388)
+
+    SolaX can return a lower value for a plant total for a while and then the right one again. Published as
+    received the recovery is counted as energy produced that day
+    """
+    failed = False
+    print("\n=== Testing lifetime counter dips are held ===")
+
+    test_plant_id = "1618699116555534337"
+    inv_a = "H4000000000001"
+    inv_b = "H4000000000002"
+    battery_sn = "TP123456123123"
+    totals = {"total_yield": "totalYield", "total_charged": "totalCharged", "total_discharged": "totalDischarged", "total_imported": "totalImported", "total_exported": "totalExported"}
+
+    def entity(name):
+        """Return the plant sensor entity for a name"""
+        return f"sensor.predbat_solax_{test_plant_id}_{name}"
+
+    def build_api():
+        """Build a plant with two hybrid inverters that each have panels"""
+        api = MockSolaxAPI(prefix="predbat")
+        api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "batteryCapacity": 5.8, "pvCapacity": 3.4}]
+        api.plant_inverters[test_plant_id] = [inv_a, inv_b]
+        api.plant_batteries[test_plant_id] = [battery_sn]
+        api.device_info[inv_a] = {"deviceSn": inv_a, "deviceType": 1, "plantId": test_plant_id, "ratedPower": 3.7}
+        api.device_info[inv_b] = {"deviceSn": inv_b, "deviceType": 1, "plantId": test_plant_id, "ratedPower": 3.7}
+        api.device_info[battery_sn] = {"deviceSn": battery_sn, "deviceType": 2, "plantId": test_plant_id, "ratedPower": 3.0}
+        api.realtime_data[test_plant_id] = {"totalYield": 4437.8, "totalCharged": 5000.0, "totalDischarged": 4487.66, "totalImported": 6000.0, "totalExported": 3000.0, "totalEarnings": 0.0}
+        api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": 100.0, "mpptMap": {"MPPT1Power": 500.0}}
+        api.realtime_device_data[inv_b] = {"deviceSn": inv_b, "deviceStatus": 102, "totalYield": 50.0, "mpptMap": {"MPPT1Power": 200.0}}
+        api.realtime_device_data[battery_sn] = {"deviceSn": battery_sn, "batterySOC": 50, "batteryRemainings": 2.9, "batteryTemperature": 20.0}
+        return api
+
+    def state_of(api, entity_id):
+        """Return the published state of an entity, or None if it was not published"""
+        return api.dashboard_items.get(entity_id, {}).get("state")
+
+    # Test 1: A dip in the plant totals is held, so is the load that is built from them
+    print("Test 1: A dip in the plant totals is held")
+    api = build_api()
+    await api.publish_plant_info()
+    load_before = state_of(api, entity("total_load"))
+    api.realtime_data[test_plant_id].update({"totalYield": 4260.4, "totalDischarged": 4280.26, "totalImported": 5990.0, "totalExported": 2990.0, "totalCharged": 4990.0})
+    await api.publish_plant_info()
+
+    expected = {"total_yield": 4437.8, "total_charged": 5000.0, "total_discharged": 4487.66, "total_imported": 6000.0, "total_exported": 3000.0}
+    wrong = {name: state_of(api, entity(name)) for name in expected if state_of(api, entity(name)) != expected[name]}
+    if wrong:
+        print(f"**** ERROR: Plant totals should be held at their previous values on a dip, got {wrong} ****")
+        failed = True
+    elif state_of(api, entity("total_load")) != load_before:
+        print(f"**** ERROR: Total load should be held at {load_before} while the plant totals dip, got {state_of(api, entity('total_load'))} ****")
+        failed = True
+    elif not any("lower than" in message for message in api.log_messages):
+        print("**** ERROR: A held dip should be logged ****")
+        failed = True
+    else:
+        print("✓ Plant totals and load held on a dip")
+
+    # Test 2: The recovery publishes the new value, which is the true change across the dip
+    print("Test 2: The recovery publishes the true value")
+    api.realtime_data[test_plant_id].update({"totalYield": 4441.7, "totalDischarged": 4491.56, "totalImported": 6000.0, "totalExported": 3000.0, "totalCharged": 5000.0})
+    await api.publish_plant_info()
+
+    if state_of(api, entity("total_yield")) != 4441.7 or state_of(api, entity("total_discharged")) != 4491.56:
+        print(f"**** ERROR: Plant totals should follow the counter once it recovers, got {state_of(api, entity('total_yield'))}/{state_of(api, entity('total_discharged'))} ****")
+        failed = True
+    else:
+        print("✓ Plant totals follow the counter once it recovers")
+
+    # Test 3: A lower value that stays for the hold period is a genuine reset and is accepted
+    print("Test 3: A lower value is accepted once it has lasted the hold period")
+    api.realtime_data[test_plant_id]["totalYield"] = 10.0
+    await api.publish_plant_info()
+    held = state_of(api, entity("total_yield"))
+    api.counter_dip_since[entity("total_yield")] -= timedelta(hours=SOLAX_COUNTER_DIP_HOLD_HOURS, minutes=1)
+    await api.publish_plant_info()
+
+    if held != 4441.7:
+        print(f"**** ERROR: A reset should be held at 4441.7 at first, got {held} ****")
+        failed = True
+    elif state_of(api, entity("total_yield")) != 10.0:
+        print(f"**** ERROR: A lower value should be accepted after the hold period, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Lower value accepted as a reset after the hold period")
+
+    # Test 4: After a restart the last published value comes from the sensor, so a dip is still held
+    print("Test 4: A dip straight after a restart is held against the sensor value")
+    api = build_api()
+    for name, key in totals.items():
+        api.dashboard_items[entity(name)] = {"state": api.realtime_data[test_plant_id][key], "attributes": {}}
+    api.realtime_data[test_plant_id]["totalYield"] = 4260.4
+    await api.publish_plant_info()
+
+    if state_of(api, entity("total_yield")) != 4437.8:
+        print(f"**** ERROR: Total yield should be held at the sensor value 4437.8 after a restart, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Dip after a restart held against the sensor value")
+
+    # Test 5: An upward step is published as received
+    print("Test 5: An upward step is published")
+    api = build_api()
+    await api.publish_plant_info()
+    api.realtime_data[test_plant_id]["totalYield"] = 8318.7
+    await api.publish_plant_info()
+
+    if state_of(api, entity("total_yield")) != 8318.7:
+        print(f"**** ERROR: An upward step should be published, got {state_of(api, entity('total_yield'))} ****")
+        failed = True
+    else:
+        print("✓ Upward step published")
+
+    # Test 6: An inverter that reads 0.0 for a while keeps its known yield, in the plant sum and its own sensor
+    print("Test 6: An inverter reading 0.0 keeps its known yield")
+    api = build_api()
+    await api.publish_plant_info()
+    await api.publish_device_realtime_data()
+    api.realtime_device_data[inv_a]["totalYield"] = 0.0
+    await api.publish_plant_info()
+    await api.publish_device_realtime_data()
+    inverter_entity = f"sensor.predbat_solax_{test_plant_id}_{inv_a}_total_yield"
+
+    if state_of(api, entity("pv_yield")) != 150.0:
+        print(f"**** ERROR: PV yield should stay at 150.0 while an inverter reads 0.0, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif state_of(api, inverter_entity) != 100.0:
+        print(f"**** ERROR: The inverter's own total yield should stay at 100.0 while it reads 0.0, got {state_of(api, inverter_entity)} ****")
+        failed = True
+    else:
+        api.realtime_device_data[inv_a]["totalYield"] = 101.0
+        await api.publish_plant_info()
+        if state_of(api, entity("pv_yield")) != 151.0:
+            print(f"**** ERROR: PV yield should be 151.0 once the inverter reads again, got {state_of(api, entity('pv_yield'))} ****")
+            failed = True
+        else:
+            print("✓ Inverter reading 0.0 keeps its known yield")
+
+    # Test 7: A plant with no PV inputs and no yield counter warns once that its PV figure is not PV
+    print("Test 7: A plant with no PV source warns once")
+    api = build_api()
+    api.plant_inverters[test_plant_id] = [inv_a]
+    api.realtime_device_data[inv_a] = {"deviceSn": inv_a, "deviceStatus": 102, "totalYield": None, "mpptMap": {}, "pvMap": {}}
+    await api.publish_plant_info()
+    await api.publish_plant_info()
+    warnings = [message for message in api.log_messages if "with PV inputs" in message]
+
+    if state_of(api, entity("pv_yield")) != 4437.8:
+        print(f"**** ERROR: PV yield should still fall back to the plant figure 4437.8, got {state_of(api, entity('pv_yield'))} ****")
+        failed = True
+    elif len(warnings) != 1:
+        print(f"**** ERROR: Expected one warning that the plant has no PV source, got {len(warnings)} ****")
+        failed = True
+    else:
+        print("✓ Plant with no PV source warned once")
+
+    # Test 8: An inverter with panels but no yield yet does not warn
+    print("Test 8: An inverter with PV inputs does not warn")
+    api = build_api()
+    api.realtime_device_data[inv_a]["totalYield"] = 0.0
+    api.realtime_device_data[inv_b]["totalYield"] = 0.0
+    await api.publish_plant_info()
+
+    if any("with PV inputs" in message for message in api.log_messages):
+        print("**** ERROR: A plant whose inverters have PV inputs should not warn ****")
+        failed = True
+    else:
+        print("✓ No warning for a plant whose inverters have PV inputs")
 
     return failed
 
