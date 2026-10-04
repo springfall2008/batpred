@@ -1,5 +1,4 @@
 import './StatusCard.css'
-import { MODERN_UI_VERSION } from '../version'
 
 type StatusCardProps = {
   status: string
@@ -87,7 +86,7 @@ function StatusCard({
         <h2>Predbat Status</h2>
 
         <span className="status-card-version">
-          Predbat {version} · Modern UI {MODERN_UI_VERSION}
+          Predbat {version}
         </span>
       </div>
 

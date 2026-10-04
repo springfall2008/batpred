@@ -46,7 +46,6 @@ import batLogoLight from '../assets/bat_logo_light.png'
 import batLogoDark from '../assets/bat_logo_dark.png'
 
 import './AppNavigation.css'
-import { MODERN_UI_VERSION } from '../version'
 import { getNextThemePreference, readThemePreference, resolveTheme, type ThemePreference } from './theme'
 
 type AppNavigationProps = {
@@ -538,8 +537,8 @@ export default function AppNavigation({
           </div>
 
           {layout === 'side' && (
-            <span className="navigation-version" title={`Predbat ${version} · Modern UI ${MODERN_UI_VERSION}`}>
-              {version} · UI {MODERN_UI_VERSION}
+            <span className="navigation-version" title={`Predbat ${version}`}>
+              {version}
             </span>
           )}
         </footer>
