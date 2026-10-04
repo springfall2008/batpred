@@ -404,5 +404,75 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ 8-car config resolution test passed")
 
+    # Test 16: car_charging_rate given in apps.yaml as one list on the base name is split across
+    # the per-car items (car_charging_rate, car_charging_rate_1, ...) rather than reaching float()
+    # as a list and raising TypeError every cycle (GH#5366).
+    print("\n*** Test 16: car_charging_rate apps.yaml list is split per car ***")
+
+    rate_items = [item for item in my_predbat.CONFIG_ITEMS if item["name"] in ["car_charging_rate", "car_charging_rate_1"]]
+    assert len(rate_items) == 2, "car_charging_rate and car_charging_rate_1 config items should exist"
+    original_rate_defaults = [item.get("default") for item in rate_items]
+    original_rate_values = [item.get("value") for item in rate_items]
+    original_args = my_predbat.args
+    original_history_loader = my_predbat.load_previous_value_from_ha
+    rate_entities = ["input_number.{}_{}".format(my_predbat.prefix, item["name"]) for item in rate_items]
+
+    def fresh_rate_history(entity, attribute=None):
+        """
+        Hide any stored rate entity state, so the items behave as freshly enabled ones
+        """
+        if entity in rate_entities:
+            return None
+        return original_history_loader(entity, attribute=attribute)
+
+    def load_car_rates(rate_args):
+        """
+        Load the config with the given car rate args on freshly enabled rate items, and return the per-car rates
+        """
+        my_predbat.args = original_args.copy()
+        my_predbat.args["num_cars"] = 2
+        my_predbat.args.pop("car_charging_rate", None)
+        my_predbat.args.pop("car_charging_rate_1", None)
+        my_predbat.args.update(rate_args)
+        for item, default in zip(rate_items, original_rate_defaults):
+            item["default"] = default
+            item["value"] = None
+        my_predbat.load_user_config()
+        my_predbat.num_cars = 2
+        my_predbat.get_car_charging_planned()
+        return my_predbat.car_charging_rate
+
+    my_predbat.load_previous_value_from_ha = fresh_rate_history
+    try:
+        rates = load_car_rates({"car_charging_rate": [11.0, 6.5]})
+        assert rates == [11.0, 6.5], "car_charging_rate list should be split per car, got {}".format(rates)
+
+        # A list shorter than num_cars leaves the remaining cars on their default
+        rates = load_car_rates({"car_charging_rate": [11.0]})
+        assert rates == [11.0, 7.4], "short car_charging_rate list should leave car 1 on its default, got {}".format(rates)
+
+        # The car's own key wins over the list entry
+        rates = load_car_rates({"car_charging_rate": [11.0, 6.5], "car_charging_rate_1": 3.6})
+        assert rates == [11.0, 3.6], "car_charging_rate_1 should win over the list entry, got {}".format(rates)
+
+        # A list entry that is not a number is ignored rather than crashing
+        rates = load_car_rates({"car_charging_rate": ["input_number.not_a_rate", 6.5]})
+        assert rates == [7.4, 6.5], "non-numeric car_charging_rate entry should fall back to the default, got {}".format(rates)
+
+        # The per-car keys still work as before
+        rates = load_car_rates({"car_charging_rate": 11.0, "car_charging_rate_1": 5.0})
+        assert rates == [11.0, 5.0], "scalar per-car rates should be unchanged, got {}".format(rates)
+    finally:
+        my_predbat.load_previous_value_from_ha = original_history_loader
+        my_predbat.args = original_args
+        for item, default, value in zip(rate_items, original_rate_defaults, original_rate_values):
+            item["default"] = default
+            item["value"] = value
+        my_predbat.num_cars = original_num_cars
+        my_predbat.load_user_config()
+        my_predbat.fetch_config_options()
+
+    print("✓ car_charging_rate list test passed")
+
     print("\n**** All fetch_config_options tests passed! ****")
     return False

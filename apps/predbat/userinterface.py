@@ -1069,6 +1069,38 @@ class UserInterface:
         self.log("New install detected")
         return True
 
+    def car_list_arg(self, item):
+        """
+        For a per-car config item (name, name_1, ...) given in apps.yaml as one list on its base name, return (True, this car's entry or None), otherwise (False, None)
+        """
+        name = item["name"]
+        if item.get("enable") != "num_cars":
+            return False, None
+
+        match = re.match(r"^(.+)_(\d+)$", name)
+        if match:
+            if name in self.args:
+                # The car's own key in apps.yaml wins over the list
+                return False, None
+            base_name, car_n = match.group(1), int(match.group(2))
+        else:
+            if not any(other["name"] == name + "_1" for other in self.CONFIG_ITEMS):
+                return False, None
+            base_name, car_n = name, 0
+
+        values = self.args.get(base_name)
+        if not isinstance(values, list):
+            return False, None
+
+        value = values[car_n] if car_n < len(values) else None
+        if value is not None and item["type"] == "input_number":
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                self.log("Warn: Config item {} entry {} for car {} in apps.yaml is not a number - ignoring it".format(base_name, value, car_n))
+                value = None
+        return True, value
+
     def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
@@ -1088,7 +1120,12 @@ class UserInterface:
             if name == "mode" and new_install:
                 item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
-            if name in self.args:
+            car_list, car_default = self.car_list_arg(item)
+            if car_list:
+                # A per-car item given as one apps.yaml list on its base name, each car takes its own entry
+                if car_default is not None:
+                    item["default"] = car_default
+            elif name in self.args:
                 # If the item is in args, use it as the default
                 item["default"] = self.args[name]
 
