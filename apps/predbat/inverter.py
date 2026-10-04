@@ -45,7 +45,7 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
 )
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
+from utils import services_send_power, calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -85,9 +85,9 @@ class Inverter:
         self.adjust_battery_target(99, False)
         self.adjust_battery_target(100, False)
         self.adjust_charge_rate(215)
-        self.adjust_charge_rate(self.battery_rate_max_charge)
+        self.adjust_charge_rate(self.battery_rate_max_charge * MINUTE_WATT)
         self.adjust_discharge_rate(220)
-        self.adjust_discharge_rate(self.battery_rate_max_discharge)
+        self.adjust_discharge_rate(self.battery_rate_max_discharge * MINUTE_WATT)
         self.adjust_reserve(100)
         self.adjust_reserve(6)
         self.adjust_reserve(4)
@@ -368,6 +368,9 @@ class Inverter:
         self.registers_moved = 0
         # Per-control write backoff state, keyed by entity_id - see _write_attempts().
         self.write_backoff = {}
+        # The last charge and discharge rate set, in W, keyed "charge"/"discharge", for an inverter with
+        # no rate entity of its own - see rate_without_entity().
+        self.rate_last_set = {}
 
         self._init_attribute_defaults()
 
@@ -505,6 +508,8 @@ class Inverter:
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
+        # Whether a start or freeze service sends the rate as {power} - see rate_without_entity()
+        self.inv_services_send_power = services_send_power(self.base.args)
         self.inv_charge_control_immediate = INVERTER_DEF[self.inverter_type]["charge_control_immediate"]
         self.inv_current_dp = INVERTER_DEF[self.inverter_type].get("current_dp", 1)
         self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
@@ -2075,12 +2080,12 @@ class Inverter:
         if "discharge_rate_percent" in self.base.args:
             current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
         else:
-            current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
+            current_rate = self.rate_or_last_set("discharge")
 
         try:
             current_rate = int(current_rate)
         except (ValueError, TypeError):
-            self.base.log("Error: Inverter {} charge discharge {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
+            self.base.log("Error: Inverter {} discharge rate {} is not a number, setting to {}W".format(self.id, current_rate, self.battery_rate_max_raw))
             current_rate = self.battery_rate_max_raw
 
         return current_rate
@@ -2092,14 +2097,64 @@ class Inverter:
         if "charge_rate_percent" in self.base.args:
             current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
         else:
-            current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
+            current_rate = self.rate_or_last_set("charge")
         try:
             current_rate = int(current_rate)
         except (ValueError, TypeError):
-            self.base.log("Error: Inverter {} charge rate {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
+            self.base.log("Error: Inverter {} charge rate {} is not a number, setting to {}W".format(self.id, current_rate, self.battery_rate_max_raw))
             current_rate = self.battery_rate_max_raw
 
         return current_rate
+
+    def rate_without_entity(self, direction):
+        """
+        Whether Predbat holds this inverter's charge or discharge rate itself, having nowhere else to store it.
+
+        True for a "power" inverter that is sent its rate as {power} by a start or freeze service, with
+        neither a rate entity nor a rate percentage for this direction: a script-driven inverter such as
+        the Solax SX4 template (#3311). Without those services nothing applies a rate Predbat held, so
+        reading one back would claim a rate the inverter never got. "current" inverters get a rate entity
+        of their own, and a "none" inverter (Sofar over MQTT, Solar Assistant, Tesla) is left as it was.
+        """
+        if self.inv_output_charge_control != "power" or not self.inv_services_send_power:
+            return False
+        # get_current_*_rate() reads the percentage whenever the key is present, so this does too
+        if direction + "_rate_percent" in self.base.args:
+            return False
+        # A plain number is not somewhere to store a rate: in a mixed fleet create_missing_arg() fills the
+        # other inverters' entries with a "current" inverter's default, which is not this inverter's rate
+        return not is_entity_id(self.base.get_arg(direction + "_rate", indirect=False, index=self.id, default=None))
+
+    def rate_changed(self, current_rate, new_rate, fuzzy, fuzzy_below, held_by_predbat):
+        """
+        Whether adjust_charge_rate()/adjust_discharge_rate() treat new_rate as a change from current_rate.
+
+        Outside the deadband (within_fuzzy()) it is, as for a rate register; a small change is held, so a
+        start service's {power} - part of its dedup - does not re-send the script every cycle. A rate
+        Predbat holds itself also treats any move to or from 0 as a change: 0 holds the battery, so it is a
+        different state rather than a slightly different rate, and on a 10kW battery (a 500W deadband) a
+        400W low power charge straight after an export would otherwise stay at the export's 0. A register
+        is left out: one that stores a small rate as 0 (GivEnergy's whole-percent step, a *_rate_percent
+        under 1%) would be rewritten every cycle.
+        """
+        if held_by_predbat and (current_rate == 0) != (new_rate == 0):
+            return True
+        return not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below)
+
+    def rate_or_last_set(self, direction):
+        """
+        This inverter's charge or discharge rate in W, from its rate entity, or the rate last set when Predbat holds it.
+
+        With nothing to read back (rate_without_entity()), falling back to battery_rate_max sent the
+        maximum as the start script's {power} however low the planned rate was. Predbat chose the rate
+        itself, so it is held on this object instead, which outlives the plan cycle (#5126). It is lost
+        on a restart, which reads battery_rate_max until the next rate is set.
+
+        adjust_charge_rate()/adjust_discharge_rate() move it as they would a register - see rate_changed().
+        """
+        if self.rate_without_entity(direction):
+            return self.rate_last_set.get(direction, self.battery_rate_max_raw)
+        return self.base.get_arg(direction + "_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
 
     def rate_tolerances(self, rate_max):
         """
@@ -2149,10 +2204,11 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
+        held_by_predbat = self.rate_without_entity("charge")
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
-        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
+        if self.rate_changed(current_rate, new_rate, fuzzy, fuzzy_below, held_by_predbat):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            if "charge_rate" in self.base.args:
+            if "charge_rate" in self.base.args and not held_by_predbat:
                 self.write_and_poll_value(
                     "charge_rate",
                     self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
@@ -2167,6 +2223,8 @@ class Inverter:
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} charge rate changes to {new_rate}W at {self.base.time_now_str()}")
             self.mqtt_message(topic="set/charge_rate", payload=new_rate)
+            if held_by_predbat:
+                self.rate_last_set["charge"] = new_rate
 
         # Re-assert the timed current register on every call, not just when charge_rate itself
         # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
@@ -2198,10 +2256,11 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_discharge_rate()
 
+        held_by_predbat = self.rate_without_entity("discharge")
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
-        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
+        if self.rate_changed(current_rate, new_rate, fuzzy, fuzzy_below, held_by_predbat):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            if "discharge_rate" in self.base.args:
+            if "discharge_rate" in self.base.args and not held_by_predbat:
                 self.write_and_poll_value(
                     "discharge_rate",
                     self.base.get_arg("discharge_rate", indirect=False, index=self.id),
@@ -2216,6 +2275,8 @@ class Inverter:
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} discharge rate changes to {new_rate}W at {self.base.time_now_str()}")
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
+            if held_by_predbat:
+                self.rate_last_set["discharge"] = new_rate
 
         # Re-assert the timed current register on every call, not just when discharge_rate itself
         # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
