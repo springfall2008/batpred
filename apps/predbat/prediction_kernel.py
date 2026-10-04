@@ -33,7 +33,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 7
-KERNEL_PARITY_REVISION = 14
+KERNEL_PARITY_REVISION = 16
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -896,6 +896,7 @@ def reset_kernel_run_state(pred):
     pred.predict_iboost_best = {}
     pred.predict_carbon_best = {}
     pred.predict_clipped_best = {}
+    pred.predict_car_hold_best = {}
     pred.iboost_running = False
     pred.iboost_running_solar = False
     pred.iboost_running_full = False

@@ -189,7 +189,9 @@ This setting will not impact the real calculated costs and is only used for plan
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
-If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
+Checking Octopus Intelligent slots against whether the car is actually charging is a separate switch, **switch.predbat_octopus_intelligent_dynamic** - see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car).
+Whether or not this switch is On, if **car_charging_now** reports your car charging but no charging slot covers the current time, Predbat predicts the car's load at **input_number.predbat_car_charging_rate** until the end of the current slot, with the battery held for the car (unless **switch.predbat_car_charging_from_battery** is On) and no export planned over it. With the switch On, that load is also taken out of the recent-load reading above, so it is not counted twice.
+This is used only for the plan; it is never added as a car charging slot, so it does not turn on **binary_sensor.predbat_car_charging_slot**.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
@@ -268,6 +270,11 @@ If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are sc
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
+The comparison is made against the forecast your solar provider gave, recorded in `sensor.predbat_pv_forecast_h0_uncalibrated`, rather than against Predbat's own calibrated figure,
+so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
+Until that sensor has a week of history, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
+The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
+(equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
 Predbat relies upon your solar generation being accurate so if your export generation can be curtailed by your solar inverter or your electricity supplier in periods when there is excess electricity in the grid,
 then you must turn PV calibration Off as otherwise Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
@@ -297,9 +304,11 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
 - **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
+- **switch.predbat_octopus_intelligent_dynamic** (_expert mode_) - On by default: cancels Octopus Intelligent slots, and their cheap rate, while the car is in a dispatch but not charging (from **car_charging_now**, or the house load when the car is inside the CT clamp), see [Checking Intelligent dispatches against the car](car-charging.md#checking-intelligent-dispatches-against-the-car)
+- **switch.predbat_octopus_intelligent_trust_slots** (_expert mode_) - when Off, Octopus Intelligent slots are assumed not to happen until the car is seen charging in one, see [Car charging](car-charging.md)
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
-- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
+- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` (car 0)
@@ -343,7 +352,7 @@ By default with this option On the latest export slots of the same value will be
 
 **switch.predbat_export_more_solar** When turned On, late in the planning stage Predbat will try enabling Freeze Export on every otherwise Idle slot that has predicted solar generation. With Freeze Export the battery is not charged from the surplus solar, so that solar is exported to the grid instead.
 
-This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour.
+This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour. If you turn this on when it cannot have any effect - **switch.predbat_set_export_freeze** is off, your inverter does not support freeze export, or **select.predbat_mode** is not _Control charge & discharge_ - Predbat will log a warning saying so.
 
 ## Battery margins and metrics options
 
@@ -524,19 +533,25 @@ A value of 0 applies no limit.
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-If you do use Predbat's balance inverter function then be aware that Predbat will start repeatedly and rapidly updating your inverter settings to keep the inverters in balance with each other.
-This can be a problem with inverters that have a [limited life-span flash memory](caution.md#flash-memory).
-If available, you are strongly recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for GivEnergy inverters controlled via GivTCP, or an equivalent function for your inverter.
+Balancing runs as part of Predbat's normal control cycle rather than on a timer of its own, and it adjusts
+the charge and discharge rates Predbat was already going to set rather than overriding them afterwards.
+Rate changes below 5% of the inverter's maximum are not written at all, so balancing only writes a register
+when it genuinely changes what the inverter is doing.
 
-The `apps.yaml` contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+If your inverter has a [limited life-span flash memory](caution.md#flash-memory) and the option is available,
+you are still recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for
+GivEnergy inverters controlled via GivTCP, or the equivalent for your inverter.
 
 Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It is Off by default. When turned on a number of other balance controls and configurations are made available:
 
-- **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
-- **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
-- **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
+- **switch.predbat_balance_inverters_crosscharge** - Toggles stopping one inverter charging from another when the fleet is in Eco/Demand mode. **On by default** - this is the case worth correcting, because that energy makes a round trip through two batteries for no benefit
+- **switch.predbat_balance_inverters_charge** - Toggles balancing the batteries' SoC while they are charging. Off by default
+- **switch.predbat_balance_inverters_discharge** - Toggles balancing the batteries' SoC while they are discharging. Off by default
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
+
+Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
+off by default. They remain fully functional if you want them.
 
 ## Freeze Export during Demand
 
@@ -787,7 +802,7 @@ Selected slots will be shown in the list in square brackets, and you can cancel 
 
 When you use the Manual Control features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-The **off** option at the bottom of the list will cancel all selected force charges.
+The **off** option at the top of the list will cancel all selected force charges.
 
 ![image](images/manual_select.png)
 
@@ -841,9 +856,9 @@ the rate selected will be that configured in **input_number.predbat_manual_expor
 
 Similar to manual_import_rates, if this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
-The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
+The **select.predbat_manual_load_adjust** selector is used to make positive or negative adjustments to the predicted load in kWh for a slot, the load adjustment amount will be that configured in **input_number.predbat_manual_load_value** (default 0.5kWh)
 which can be adjusted prior to making a selection.
-Predbat will add the adjustment amount to the kWh predicted load for those slots.
+Predbat will add the adjustment amount (which can be positive or negative) to the kWh predicted load for those slots.
 
 If this selector is used in an automation you can set the time and kWh load adjustment amount together by making a selection in the format HH:MM=adjustment e.g. 12:30=0.5
 
@@ -926,11 +941,15 @@ mode: single
 Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
 
 - **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
-- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0 - maximum 500).
 - **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
 - **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
 
-Retained snapshots can all be downloaded together as a single gzip tarball from a link on the web interface's dashboard **Debug** panel. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself is usually under 5MB. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
+The retained window is simply `debug_history_count` x `debug_history_interval`, so a longer window can be had either by keeping more snapshots or by spacing them further apart. If you are chasing something intermittent that only shows up on the odd night, 336 snapshots at a 1-hour interval covers a fortnight, and 112 snapshots at 3-hourly covers the same fortnight for a third of the disk space.
+
+_CAUTION: each snapshot is a complete debug dump rather than a delta, roughly 2MB-5MB of YAML apiece depending on your system's configuration (so a 15-snapshot history measures around 30MB-75MB on disk), which puts the 500-snapshot maximum of the order of 1GB-2.5GB retained in the `debug/` folder. Raise the count only as far as the window you actually need, and put it back to the default once your investigation is finished - especially on an SD-card based install, where the write volume matters as much as the space._
+
+The most recent 16 retained snapshots can be downloaded together as a single gzip tarball from the **Download recent** link on the web interface's dashboard **Debug** panel. That archive is built in memory, so it is deliberately capped rather than bundling the whole retained history - with the count raised for a long investigation, use the plan's **History** view to download individual snapshots, or copy them straight out of the `debug/` folder over a Samba share. It downloads as `predbat_debug_history.tgz.dmp` - open it with `tar xzf predbat_debug_history.tgz.dmp`; the contents are an ordinary gzip tarball, only the filename differs from a `.tgz`. The trailing `.dmp` is there because some browsers unpack downloads by extension, and a history that arrives unpacked is both too large for GitHub's 25MB attachment limit and a file type GitHub will not accept, where the archive itself compresses down a great deal. Individual snapshots can also be downloaded from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
 
 Each snapshot is written as a plain `predbat_debug_<timestamp>.yaml.txt` file into the same `debug/` folder as the `switch.predbat_debug_enable` output described above - useful in its own right (a full rolling history sitting on disk, not just what the switch happened to catch), and it's the way to get a snapshot to attach to a GitHub issue from the HA Companion app, where the archive/single-file download links above don't work (see the note above). The contents are ordinary YAML; the `.txt` on the end is there because GitHub refuses to accept a `.yaml` file as an issue attachment, so a snapshot picked up from `debug/` can be attached to a bug report as-is with no renaming. These files are pruned in step with the ring buffer itself, so there are never more of them on disk than `debug_history_count` snapshots. Snapshots written by a version before this naming change (`predbat_debug_<timestamp>.yaml`) still download and are still pruned normally, but they keep the old plain-`.yaml` name on disk until that happens, so they need renaming to `.yaml.txt` before GitHub will accept them as an attachment.
 

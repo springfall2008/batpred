@@ -503,17 +503,14 @@ def test_calc_dawn(my_predbat):
 
 def test_calc_pv_light_dark(my_predbat):
     """
-    Tests for calc_pv_light_dark: decides whether calc_dawn is worth computing at all.
+    Tests for calc_pv_light_dark: always returns calc_dawn's result.
 
-    Only combine_charge_slots can merge a charge window across dawn, so that's what gates the split -
-    not set_charge_low_power. With combine_charge_slots off, find_charge_window already forces a break
-    every charge_slot_split (=plan_interval_minutes) minutes regardless, so the dawn boundary could
-    never be reached and computing it would be a no-op:
-
-      - combine_charge_slots=True, set_charge_low_power=False -> dawn split still runs (the new case -
-        the optimizer can pick the dark portion of a combined window on its own merits)
-      - combine_charge_slots=True, set_charge_low_power=True -> dawn split runs (unchanged behaviour)
-      - combine_charge_slots=False, regardless of set_charge_low_power -> {} (moot, skipped)
+    calc_dawn is computed regardless of combine_charge_slots or set_charge_low_power -
+    binary_sensor.predbat_dawn (published from this same result) is a useful standalone light/dark
+    signal even when neither feature is enabled, and used to read permanently "off" whenever
+    combine_charge_slots was off (the default), which is not what the sensor is meant to mean. The
+    combine_charge_slots gate on window-splitting itself lives in find_charge_window instead, where it
+    is moot anyway (a break every charge_slot_split minutes already happens there regardless).
     """
     failed = 0
     old_pv_forecast_minute = my_predbat.pv_forecast_minute
@@ -528,38 +525,17 @@ def test_calc_pv_light_dark(my_predbat):
     for m in range(30, 60, 5):
         my_predbat.pv_forecast_minute[m] = 1.0  # light, crosses the threshold
 
-    print("Test calc_pv_light_dark: combine_charge_slots=True, set_charge_low_power=False -> dawn split still runs")
-    my_predbat.combine_charge_slots = True
-    my_predbat.set_charge_low_power = False
-    result = my_predbat.calc_pv_light_dark()
-    if result != my_predbat.calc_dawn():
-        print("ERROR: calc_pv_light_dark: expected calc_dawn's result when combine_charge_slots is True, got {}".format(result))
-        failed = 1
-    if result.get(0) != 0 or result.get(30) != 1:
-        print("ERROR: calc_pv_light_dark: expected a dark->light split at minute 30, got {}".format({m: result.get(m) for m in (0, 30)}))
-        failed = 1
-
-    print("Test calc_pv_light_dark: combine_charge_slots=True, set_charge_low_power=True -> dawn split runs")
-    my_predbat.set_charge_low_power = True
-    result = my_predbat.calc_pv_light_dark()
-    if result != my_predbat.calc_dawn():
-        print("ERROR: calc_pv_light_dark: expected calc_dawn's result when combine_charge_slots is True, got {}".format(result))
-        failed = 1
-
-    print("Test calc_pv_light_dark: combine_charge_slots=False, set_charge_low_power=True -> {} (moot, skipped)")
-    my_predbat.combine_charge_slots = False
-    my_predbat.set_charge_low_power = True
-    result = my_predbat.calc_pv_light_dark()
-    if result != {}:
-        print("ERROR: calc_pv_light_dark: expected {{}} when combine_charge_slots is False, got {}".format(result))
-        failed = 1
-
-    print("Test calc_pv_light_dark: combine_charge_slots=False, set_charge_low_power=False -> {}")
-    my_predbat.set_charge_low_power = False
-    result = my_predbat.calc_pv_light_dark()
-    if result != {}:
-        print("ERROR: calc_pv_light_dark: expected {{}} when combine_charge_slots is False, got {}".format(result))
-        failed = 1
+    for combine_charge, low_power in ((True, False), (True, True), (False, True), (False, False)):
+        print("Test calc_pv_light_dark: combine_charge_slots={}, set_charge_low_power={} -> dawn split always runs".format(combine_charge, low_power))
+        my_predbat.combine_charge_slots = combine_charge
+        my_predbat.set_charge_low_power = low_power
+        result = my_predbat.calc_pv_light_dark()
+        if result != my_predbat.calc_dawn():
+            print("ERROR: calc_pv_light_dark: expected calc_dawn's result, got {}".format(result))
+            failed = 1
+        if result.get(0) != 0 or result.get(30) != 1:
+            print("ERROR: calc_pv_light_dark: expected a dark->light split at minute 30, got {}".format({m: result.get(m) for m in (0, 30)}))
+            failed = 1
 
     my_predbat.pv_forecast_minute = old_pv_forecast_minute
     my_predbat.plan_interval_minutes = old_plan_interval

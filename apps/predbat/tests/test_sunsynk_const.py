@@ -18,7 +18,6 @@ from sunsynk_const import (
     SUNSYNK_DAY_FIELDS,
     TOU_FIELD,
     TOU_SLOT_COUNT,
-    TOU_FILLER_TIMES,
     FREEZE_EXPORT_SOC,
     encode_setting,
 )
@@ -91,26 +90,6 @@ def test_tou_field_templates():
             print(f"ERROR: TOU_FIELD {concept} does not render 6 distinct names: {names}")
             failed = True
     assert not failed, "test_tou_field_templates"
-
-
-def test_tou_filler_times_sufficient():
-    """There are enough distinct filler times to pad any schedule out to 6 slots."""
-    failed = False
-    if len(set(TOU_FILLER_TIMES)) != len(TOU_FILLER_TIMES):
-        print(f"ERROR: filler times not distinct: {TOU_FILLER_TIMES}")
-        failed = True
-    # A schedule contributes at most 4 boundary times (charge start/end, export start/end),
-    # so padding needs TOU_SLOT_COUNT distinct fillers to survive every one colliding.
-    if len(TOU_FILLER_TIMES) <= TOU_SLOT_COUNT:
-        print(f"ERROR: need more than {TOU_SLOT_COUNT} filler times, got {len(TOU_FILLER_TIMES)}")
-        failed = True
-    if TOU_FILLER_TIMES != sorted(TOU_FILLER_TIMES):
-        print(f"ERROR: filler times not ascending: {TOU_FILLER_TIMES}")
-        failed = True
-    if TOU_FILLER_TIMES[0] != "00:00":
-        print(f"ERROR: first filler time must be 00:00, got {TOU_FILLER_TIMES[0]}")
-        failed = True
-    assert not failed, "test_tou_filler_times_sufficient"
 
 
 def test_telemetry_maps_cover_predbat_args():
@@ -192,7 +171,6 @@ def run_sunsynk_const_tests(my_predbat):
         ("endpoints", test_sunsynk_endpoints),
         ("workmode_semantics", test_sunsynk_workmode_semantics),
         ("tou_field_templates", test_tou_field_templates),
-        ("tou_filler_times", test_tou_filler_times_sufficient),
         ("telemetry_maps", test_telemetry_maps_cover_predbat_args),
         ("encode_setting", test_encode_setting_types),
         ("freeze_export_soc", test_freeze_export_soc),

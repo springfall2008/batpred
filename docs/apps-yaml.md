@@ -205,7 +205,8 @@ pred_bat:
   ha_key: !secret ha_key  # Home Assistant Long-Lived Access Token
   octopus_api_key: !secret octopus_api_key  # Octopus API key (if using Octopus direct)
   solcast_api_key: !secret solcast_api_key  # Solcast API key (if using Solcast direct)
-  forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
+  forecast_solar:
+    - api_key: !secret forecast_solar_api_key  # Forecast.solar API key, per array (if using a paid Forecast.solar account)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
   myenergi_api_key: !secret myenergi_api_key  # myenergi API key (if using the myenergi direct transport)
@@ -221,6 +222,22 @@ pred_bat:
   axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
   kraken_key: !secret kraken_key  # Kraken API key (if using Kraken component)
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
+  solis_api_key: !secret solis_api_key  # Solis Cloud API key (if using Solis Cloud)
+  solis_api_secret: !secret solis_api_secret  # Solis Cloud API secret (if using Solis Cloud)
+  solax_client_id: !secret solax_client_id  # SolaX Cloud client id (if using SolaX Cloud)
+  solax_client_secret: !secret solax_client_secret  # SolaX Cloud client secret (if using SolaX Cloud)
+  sunsynk_username: !secret sunsynk_username  # Sunsynk Connect e-mail (if using Sunsynk Cloud)
+  sunsynk_password: !secret sunsynk_password  # Sunsynk Connect password (if using Sunsynk Cloud)
+  sigenergy_app_key: !secret sigenergy_app_key  # Sigenergy app key (if using Sigenergy Cloud)
+  sigenergy_app_secret: !secret sigenergy_app_secret  # Sigenergy app secret (if using Sigenergy Cloud)
+  sigenergy_ca_pem: !secret sigenergy_ca_pem  # Sigenergy CA certificate (if using Sigenergy Cloud)
+  sigenergy_client_pem: !secret sigenergy_client_pem  # Sigenergy client certificate (if using Sigenergy Cloud)
+  sigenergy_client_key: !secret sigenergy_client_key  # Sigenergy client private key (if using Sigenergy Cloud)
+  alphaess_app_id: !secret alphaess_app_id  # AlphaESS developer AppID (if using AlphaESS Cloud)
+  alphaess_app_secret: !secret alphaess_app_secret  # AlphaESS developer AppSecret (if using AlphaESS Cloud)
+  teslemetry_key: !secret teslemetry_key  # Teslemetry token (if using Teslemetry)
+  ohme_login: !secret ohme_login  # Ohme account e-mail (if using Ohme direct)
+  ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -235,6 +252,32 @@ If a secret is referenced in `apps.yaml` but not found in `secrets.yaml`, Predba
 - Makes it safer to share your `apps.yaml` for troubleshooting
 - All secrets stored in one centralized location
 - Compatible with Home Assistant's secrets system
+
+### Redaction in logs and debug files
+
+Credential values - whether stored in `secrets.yaml` and referenced with `!secret`, or written directly in `apps.yaml` - are masked wherever Predbat writes them out: `predbat.log`, a `predbat_debug_*.yaml` file, and the apps.yaml downloads on the [web interface](web-interface.md). This happens at the point each line is written, not only when a file is later downloaded, so the on-disk files themselves never carry the plaintext value - including if you copy `predbat.log` directly off a Samba share rather than downloading it through Predbat.
+
+A masked value appears with a label naming which credential it was, e.g. `<octopus_api_key>`, rather than a generic placeholder, so a log line stays useful for diagnosing a problem without ever showing the value itself.
+
+#### redact_strings and redact_strings_labelled
+
+Predbat can only recognise a value as a credential by its `apps.yaml` key name (`_key`, `password`, `secret`, `token`) or from the list of account/meter/serial-number-style identifiers it knows about internally. It has no way to know that a value coming from a third-party Home Assistant integration - an MPAN embedded in a sensor's `entity_id` or attributes, say - is sensitive. For anything like that, list the value yourself, preferably with `redact_strings_labelled` - a name -> value mapping, so the masked line reads with your own label instead of a generic one:
+
+```yaml
+pred_bat:
+  redact_strings_labelled:
+    my_mpan: "1234567890123"  # e.g. an MPAN surfaced by a third-party integration
+```
+
+That masks as `<my_mpan>` wherever it appears. If you don't need a label, `redact_strings` is a bare list instead:
+
+```yaml
+pred_bat:
+  redact_strings:
+    - "1234567890123"
+```
+
+Each entry there is masked generically as `<redact_strings>`. As with any other credential, you can reference a `!secret` here too rather than writing the value inline. Both settings are themselves masked wholesale if they ever appear in a debug dump, so the denylist doesn't leak the very values (or, for the labelled form, the label names) it exists to hide.
 
 ## Basics
 
@@ -299,10 +342,10 @@ In future versions of Predbat, AppDaemon will be removed.
 
 ```yaml
   ha_url: 'http://homeassistant.local:8123'
-  ha_key: 'xxxxxxxxxxx'
+  ha_key: !secret ha_key
 ```
 
-**Note:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
+Keep `ha_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -551,12 +594,12 @@ you will need to wait until you have a few days of history established (at least
   ge_cloud_direct: true
   ge_cloud_automatic: true
   ge_cloud_serial: '{geserial}'
-  ge_cloud_key: 'xxxxx'
+  ge_cloud_key: !secret ge_cloud_key
   ge_cloud_data: true
   ge_cloud_load_today_ignore: false
 ```
 
-**Note:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
+Keep `ge_cloud_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 - **ge_cloud_load_today_ignore** - Optional, defaults to false. When set to `true`, Predbat will override the **ge_cloud_automatic** setting and use the **load_today** sensor configured in `apps.yaml`.
 This can be useful if the **load_today** data in the GivEnergy Cloud does not accurately reflect your house load (e.g. multiple inverters that share load) and you want to use a custom load_today sensor.  All other sensors will use either the `apps.yaml` entries or the GivEnergy Cloud entities depending upon **ge_cloud_automatic**.
@@ -610,21 +653,14 @@ To use SolaX Cloud Direct, you need to obtain API credentials (client ID and cli
 If you set **solax_automatic** to `true`, Predbat will automatically discover your plants, inverters, and batteries, and configure all necessary entities without manual intervention.
 
 ```yaml
-  solax_client_id: 'your_client_id_here'
-  solax_client_secret: 'your_client_secret_here'
+  solax_client_id: !secret solax_client_id
+  solax_client_secret: !secret solax_client_secret
   solax_region: 'eu'  # Options: 'eu', 'us', or 'cn'
   solax_automatic: true
   solax_enable_controls: true
 ```
 
-**Note:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
-
-```yaml
-  solax_client_id: !secret solax_client_id
-  solax_client_secret: !secret solax_client_secret
-```
-
-See [Storing secrets](#storing-secrets) for more information.
+Keep `solax_client_id` and `solax_client_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 Set **solax_region** based on where your SolaX Cloud account is registered:
 
@@ -751,7 +787,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
   solis_cloud_pv_load_ignore: false
 ```
 
-**Note:** It's strongly recommended to store `api_key` and `api_secret` in `secrets.yaml` and reference them as `!secret solis_api_key` - see [Storing secrets](#storing-secrets).
+Keep `solis_api_key` and `solis_api_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -808,6 +844,8 @@ When `automatic: true` (recommended), Predbat will automatically create and conf
 - Battery protection settings
 
 No manual entity configuration is required when using automatic mode.
+
+Automatic mode plans each direction at the most a charge or discharge slot can actually be set to. Some inverters refuse slot currents well below the maximum current they report, with no way to read the real limit. For example, a 3.6kW inverter reports 100A but only accepts 60A. So when Predbat first sees an inverter, it measures the ceiling itself. It writes test currents to one of slots 2-6 that is not in use: first the inverter's reported maximum charge or discharge current, then lower values until one is accepted. It then puts back the value that slot held. It saves the result, and checks it again at most once a day, starting from the saved value. Until an inverter has been measured, the current it can deliver at its rated power is used as an estimate. Once measured, the measured ceiling replaces that estimate, so a hybrid that can charge from PV above its AC rating is not held back. Predbat only uses slot 1 itself, so the test does not touch the schedule. The results are published as `sensor.predbat_solis_<serial>_slot_charge_power_max` and `..._slot_discharge_power_max`, and used for `inverter_limit_charge` and `inverter_limit_discharge`. `battery_rate_max` is set to the larger of the two, so a battery allowed to discharge faster than it charges is planned at both rates. An `inverter_limit_charge` or `inverter_limit_discharge` you set in `apps.yaml` takes precedence - use it to state a lower limit such as your inverter's AC rating.
 
 #### Manual configuration (solis_automatic: false)
 
@@ -867,7 +905,7 @@ Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.
   deye_automatic: True
 ```
 
-**Note:** It's strongly recommended to store `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` and reference them as `!secret deye_app_id` etc - see [Storing secrets](#storing-secrets).
+Keep `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -898,14 +936,14 @@ Predbat includes support for Sunsynk (DEYE-family) hybrid inverters via the Suns
 Add your Sunsynk Connect account e-mail and password (the same login used by the Sunsynk phone app) to your `apps.yaml`:
 
 ```yaml
-  sunsynk_username: 'you@example.com'
-  sunsynk_password: 'your-password'
+  sunsynk_username: !secret sunsynk_username
+  sunsynk_password: !secret sunsynk_password
   sunsynk_region: 'sunsynk'
   sunsynk_automatic: true
   sunsynk_control_enable: true
 ```
 
-**Note:** It's strongly recommended to store `sunsynk_username` and `sunsynk_password` in `secrets.yaml` and reference them as `!secret sunsynk_username` etc - see [Storing secrets](#storing-secrets).
+Keep your Sunsynk login in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -957,7 +995,7 @@ Register a developer application at [open.alphaess.com](https://open.alphaess.co
   alphaess_control_enable: true
 ```
 
-**Note:** It's strongly recommended to store `alphaess_app_id` and `alphaess_app_secret` in `secrets.yaml` and reference them as `!secret alphaess_app_id` etc - see [Storing secrets](#storing-secrets).
+Keep `alphaess_app_id` and `alphaess_app_secret` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 **Configuration options:**
 
@@ -1171,12 +1209,12 @@ If you need to create a **ge_cloud_key**, in the GivEnergy cloud portal:
 - Select 'No expiry' for the token expiry duration, or choose a fixed duration but remember to create a new token before it expires as Predbat's access will stop once the token expires
 - Ensure that 'api:inverter' is ticked
 - Create token
-- Finally, copy/paste the token created into **ge_cloud_key** within `apps.yaml`, or [store the GE cloud key in secrets.yaml](#storing-secrets)
+- Finally, copy/paste the token created into `secrets.yaml` as **ge_cloud_key** and reference it from `apps.yaml` - see [Storing secrets](#storing-secrets)
 
 i.e.
 
 ```yaml
-  ge_cloud_key: API_key_consisting_of_long_string_of_numbers_and_letters
+  ge_cloud_key: !secret ge_cloud_key
 ```
 
 ### GivEnergy Cloud controls
@@ -1776,11 +1814,11 @@ Uncomment the following Solcast cloud interface settings in `apps.yaml` and set 
 
 ```yaml
   solcast_host: 'https://api.solcast.com.au/'
-  solcast_api_key: 'xxxx'
+  solcast_api_key: !secret solcast_api_key
   solcast_poll_hours: 8
 ```
 
-**Note:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
+Keep `solcast_api_key` in `secrets.yaml` rather than in `apps.yaml` - see [Storing secrets](#storing-secrets).
 
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:
@@ -1878,7 +1916,7 @@ Optionally you can set an api_key for personal or professional accounts and you 
 ``` yaml
   forecast_solar:
     - postcode: SW1A 2AB
-      api_key: 'xxxxx'
+      api_key: !secret forecast_solar_api_key
       days: 3
 ```
 
@@ -1936,7 +1974,11 @@ source changes. Do not judge the accuracy of the new source until the settling p
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a PV10 pessimistic estimate alongside the central PV50.
+Ensemble members are used to derive the PV10 pessimistic and PV90 optimistic estimates alongside the central PV50.
+For each hour Predbat takes the ensemble's 10th and 90th percentiles as a ratio of the ensemble's own median, and applies those ratios to the PV50,
+so the gap either side of PV50 is wider when the weather models disagree and narrower when they agree.
+When PV calibration is on, PV10 and PV90 are scaled by the same calibration as the PV50.
+If the ensemble data cannot be downloaded, PV10 and PV90 are created from the worst and best of your recent days instead.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
@@ -2058,8 +2100,8 @@ whether you are within an Octopus Energy "smart charge" slot
 - **octopus_slot_max** - Maximum number of 30-minute cheap rate slots per 24-hour period
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
-- **car_charging_now** - Sensor to indicate when the EV is charging
-- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging
+- **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
+- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
@@ -2262,11 +2304,12 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_saving_session}'
     - '+[car_charging_planned]'
     - '+[car_charging_soc]'
-    - '{car_charging_now}'
 ```
 
 Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
 but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+
+**car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
 
 ## Load Forecast
 
@@ -2311,14 +2354,13 @@ Set **load_forecast_only** to `true` if you do not wish to use the Predbat forec
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-Most of the Predbat configuration for balancing inverters is through a number of [Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters),
-but there is one configuration item in `apps.yaml`:
+The Predbat configuration for balancing inverters is entirely through the
+[Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters); there is nothing to set
+in `apps.yaml`.
 
-```yaml
-  balance_inverters_seconds: seconds
-```
-
-Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+Balancing used to have its own `balance_inverters_seconds` interval. It now runs as part of Predbat's normal
+control cycle, so that setting has been removed - if it is still present in your `apps.yaml` it is ignored and
+can be deleted.
 
 ## Config validation retries
 

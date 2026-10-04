@@ -24,6 +24,19 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 
+# Octopus Intelligent slot confirmation (octopus_intelligent_dynamic): how long a car inside a dispatch must
+# show "not charging" before its slots, and their cheap rate, are cancelled. car_charging_now reports the
+# car directly, so two minutes (one charger/integration update) is enough once the start band has passed;
+# the start band covers the car and charger waking up once Octopus starts the dispatch. The load test reads
+# PREDICT_STEP averages that must each lie inside the dispatch, so its grace is one more full window: two
+# low windows in a row, 10 minutes into a dispatch that starts on the 5 minute grid.
+DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
+DYNAMIC_LOAD_CAR_START_MINUTES = 3
+DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
+# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
+DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
+
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
 CLOUD_FACTOR_PV10 = 0.2
@@ -60,6 +73,13 @@ INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
 INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
+# Per-control write backoff, for inverter types that opt in with write_backoff in INVERTER_DEF (only
+# GWMQTT). A control whose write of the same target has failed to verify this many times in a row
+# (one write per plan cycle) is degraded: it is sent once rather than retried in a burst, and at most
+# once per INVERTER_WRITE_DEGRADED_INTERVAL seconds, until a write verifies, it reads back as wanted,
+# or the target changes. Every call still checks the read-back and reports a mismatch as a failure.
+INVERTER_WRITE_BACKOFF_FAILURES = 2
+INVERTER_WRITE_DEGRADED_INTERVAL = 300
 # Inverter clock skew bands, measured as (inverter time - Predbat computer time) in minutes.
 # At or above the restart threshold Predbat warns loudly and triggers auto_restart. Between the warn
 # and restart thresholds nothing used to be said at all, yet the drift still shifts every charge and
@@ -69,8 +89,13 @@ INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
-INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
+INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
+INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit
+EXPORT_LIMIT_DEFAULT_W = 99999.0  # Standing export limit when the user has not configured export_limit - effectively unlimited
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
+# A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
+# on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
+CAR_CHARGING_NOW_POWER_W = 200
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual

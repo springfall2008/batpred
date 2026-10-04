@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acks
 activepower
 adata
 adbase
@@ -64,6 +65,7 @@ BLAS
 boostable
 Bottlecap
 brickatius
+britkat1980
 bwignore
 byok
 cadata
@@ -134,6 +136,7 @@ dayname
 daynumber
 daysymbol
 deadband
+deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
@@ -163,11 +166,13 @@ dnoregion
 docstrings
 dstamp
 dstart
+dtype
 dwindow
 eauth
 echargingpile
 Eddi
 eddis
+efgh
 elif
 elinter
 eload
@@ -230,6 +235,7 @@ foxcloud
 foxess
 foxesscloud
 freephase
+fromisoformat
 fronius
 funcs
 futurerate
@@ -250,6 +256,7 @@ gitnexus
 giv
 GivEnergy
 givtcp
+gmtime
 gnueabihf
 GOELEC
 goldens
@@ -259,6 +266,7 @@ gridconsumption
 gridconsumptionpower
 Groq
 growatt
+growattsph
 GWMQTT
 HACS
 hadashboard
@@ -284,6 +292,7 @@ holdout
 homeassistant
 houseb
 htmlcov
+hultenvp
 husforbrukning
 hypervolt
 iboost
@@ -317,6 +326,7 @@ jstatus
 jsyaml
 kaiming
 keepalive
+kellerza
 keydb
 khtml
 killall
@@ -329,6 +339,7 @@ Krakenflex
 Kuzu
 kvar
 kvarh
+kwarg
 kwargs
 kwhb
 labelcolor
@@ -403,6 +414,7 @@ mpxn
 mqtt
 mtok
 mult
+multiarray
 myaccount
 myenergi
 mypy
@@ -418,6 +430,7 @@ newtok
 njpwerner
 nobat
 nocharge
+NODETAIL
 nodischarge
 nohup
 noopener
@@ -487,18 +500,24 @@ preclip
 pred
 predai
 predbat
+predbatsolcast
 predbatt
 predheat
 preseed
 preseeded
 prevs
 protobuf
+pseudonymisation
+pseudonymise
+pseudonymised
+pseudonymises
 psum
 pthread
 pvbat
 pvenergytotal
 pvlib
 pvlimit
+PVONLY
 pvpower
 pvwatts
 pwindow
@@ -512,6 +531,7 @@ pythonhashseed
 pytz
 Qwen
 randn
+rany2
 rarr
 reactivepower
 readback
@@ -561,6 +581,7 @@ sess
 setattr
 setdefault
 setpoints
+setstate
 SFMB
 sg05lp1
 SIGALRM
@@ -666,6 +687,7 @@ typecodes
 tzfile
 tzpath
 unasserted
+uncalibrated
 uncompilable
 unconfigured
 underivable
@@ -683,6 +705,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrepresentable
 unreproduced
 unsmoothed
 unstaged
@@ -697,9 +720,11 @@ varh
 venv
 Victron
 visibilitychange
+vvwwxxabcdefyyzzuu
 waf
 waitpid
 Wallbox
+weakref
 weblink
 welink
 Werror
@@ -707,8 +732,10 @@ WEXITSTATUS
 WIFEXITED
 WNOHANG
 workmode
+worktree
 writeonly
 wrongsha
+wwxxabcdefyyzz
 xaxis
 xaxistooltip
 xlabel
@@ -716,6 +743,7 @@ xlim
 xload
 xrtkq
 xticks
+xxabcdefyy
 yaxis
 yaxistooltip
 yday

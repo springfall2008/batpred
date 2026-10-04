@@ -57,27 +57,6 @@ SUNSYNK_MAX_DISCOVERY_PAGES = 500
 TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
 
-# Distinct ascending start times used to pad a schedule out to TOU_SLOT_COUNT.
-#
-# CONFIRMED by Sunsynk's own documentation ("Avoiding conflicts in the System Mode timer"):
-# the six slots are sequential chronological intervals, each running until the next slot
-# begins, and "Timers MUST be set chronologically from Timer 1 to Timer 6". Timer 6 is the
-# only one permitted to roll over midnight and continue until Timer 1 restarts. So distinct
-# ascending starts are a real requirement, not a Predbat preference.
-#
-# A slot is an interval regardless of its grid-charge flag: the documented factory default
-# runs all six timers as ranges with Grid Charge ticked on only two of them. That is what
-# makes Predbat's padding work - a filler slot with grid charge off still TERMINATES the
-# charge window before it.
-#
-# Note an inverter can nonetheless be found sitting with all six slots at 00:00 (an
-# unconfigured default). The API stores that happily; it is simply not a chronological
-# programme, so no conclusion about valid schedules should be drawn from it.
-#
-# Seven options guarantee TOU_SLOT_COUNT distinct times survive even if all four of a
-# schedule's own window boundaries collide with fillers.
-TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00"]
-
 # CONFIRMED live (inverter 2405116013, 2026-08-18). The Sunsynk app's System Mode screen
 # lists Work Mode as Selling First / Zero-Export + Limit To Load Only / Limited to Home, and
 # with "Limited to Home" selected the settings object reported sysWorkMode '2' - so the
@@ -146,6 +125,12 @@ SUNSYNK_SYSTEM_MODE_FIELDS = frozenset(
 )
 
 # Top-level settings keys Predbat owns.
+# Seconds the standalone CLI's --tou-test waits between writing the settings object and
+# reading it back. A settings write is collected by the dongle rather than applied
+# synchronously, so an immediate read shows the PREVIOUS programme and would report a
+# perfectly good write as a failure.
+SUNSYNK_TOU_TEST_SETTLE = 20
+
 SUNSYNK_WORKMODE_FIELD = "sysWorkMode"
 SUNSYNK_SOLAR_SELL_FIELD = "solarSell"
 SUNSYNK_TOU_ENABLE_FIELD = "peakAndVallery"
