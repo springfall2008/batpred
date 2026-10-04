@@ -709,7 +709,7 @@ When SolaX Cloud is configured, Predbat creates the following entities for each 
 - `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
 - `sensor.predbat_solax_{plant_id}_pv_power` - Current PV power (W), summed over the plant's inverters and used for **pv_power**
 - `sensor.predbat_solax_{plant_id}_grid_power` - Current grid power (W), summed over the plant's inverters and used for **grid_power**
-- `sensor.predbat_solax_{plant_id}_pv_yield` - Total PV generation (kWh), summed from the plant's inverters and used for **pv_today**
+- `sensor.predbat_solax_{plant_id}_pv_yield` - Total PV generation (kWh), summed from the plant's inverters and used for **pv_today**. It reads 0 on a plant whose inverters have no PV inputs, such as a lone AC-coupled battery inverter; PV on a separate inverter that SolaX does not measure is not seen, so set **pv_today** from another source if you have one
 - `sensor.predbat_solax_{plant_id}_total_yield` - Total yield as reported by SolaX for the plant (kWh); on a plant with an AC-coupled battery inverter this includes battery discharge
 - `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
