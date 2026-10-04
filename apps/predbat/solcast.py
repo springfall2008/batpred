@@ -1727,9 +1727,10 @@ class SolarAPI(ComponentBase):
                 )
             )
 
+        self.pv_historical = pv_historical
         if calibration_on:
             self.log("SolarAPI: PV Calibration: Using calibrated PV data")
-        return pv_forecast_minute_used, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, pv_historical
+        return pv_forecast_minute_used, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
 
     def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90=None, pv_clearsky_minute=None, pv_max_minute=None):
         """
@@ -1951,14 +1952,15 @@ class SolarAPI(ComponentBase):
                     pass
 
             # Optional overlay of ClearSky data from a secondary source
+            clipping_buffer_enable = self.get_arg("clipping_buffer_enable", False, indirect=False) or getattr(self.base, "clipping_buffer_enable", False)
             clipping_clearsky_source = self.get_arg("clipping_clearsky_source", "auto", indirect=False)
 
-            if clipping_clearsky_source == "auto":
+            if clipping_clearsky_source == "auto" and clipping_buffer_enable:
                 if any(getattr(self, argname, None) for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4", "pv_clearsky_d5", "pv_clearsky_d6", "pv_clearsky_d7"]):
                     clipping_clearsky_source = "ha_solcast_clearsky"
                 elif self.solcast_api_key:
                     clipping_clearsky_source = "solcast_api"
-                elif self.open_meteo_forecast:
+                elif self.open_meteo_forecast and active_source != "open_meteo":
                     clipping_clearsky_source = "openmeteo"
 
             if clipping_clearsky_source == "openmeteo" and self.open_meteo_forecast:
@@ -2083,11 +2085,11 @@ class SolarAPI(ComponentBase):
                 calibrate_band = True
 
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, pv_max_minute = self.pv_calibration(
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
                 pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period, calibrate_band=calibrate_band
             )
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
-            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_clearsky_minute, pv_max_minute)
+            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_clearsky_minute, getattr(self, "pv_historical", {}))
             self.update_success_timestamp()
             self.last_fetched_timestamp = self.now_utc_exact
         else:
