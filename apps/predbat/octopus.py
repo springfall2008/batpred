@@ -3769,8 +3769,10 @@ class Octopus:
                             # Mark the minutes this dispatch made cheaper in io_adjusted, as the Octopus Energy
                             # integration's feed does with is_intelligent_adjusted, so the plan treats them as a
                             # dispatch that may still move or vanish. A minute already off-peak by tariff is
-                            # certain and stays unmarked.
-                            if assumed_price < rates.get(minute, assumed_price):
+                            # certain and stays unmarked. Compare to the penny: rate_min_base is rounded by
+                            # dp2 but the tariff feed is not, so an off-peak 5.2314p would otherwise read as
+                            # lowered by the 5.23p dispatch (#5392).
+                            if dp2(assumed_price) < dp2(rates.get(minute, assumed_price)):
                                 self.io_adjusted[minute] = True
                             rates[minute] = assumed_price
 
