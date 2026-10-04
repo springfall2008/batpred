@@ -44,24 +44,46 @@ pred_bat:
     - sensor.your_ev_charger_energy_today
 ```
 
-Enable the ASHP card and add whichever readings your heat pump exposes. The card hides any row whose entity is missing or unavailable:
+PredHeat is optional. If you already use it in `pump` mode, Overview automatically reuses its `weather` entity and its calculated daily value from `heating_energy`. You only need to add the live readings that PredHeat does not provide. The card hides any row whose entity is missing or unavailable:
 
 ```yaml
 pred_bat:
-  # Show the ASHP card on Overview.
-  ashp_enable: true
+  predheat:
+    mode: pump
 
-  # Current heat-pump electrical power draw.
+    # Reused for the Overview weather reading and optional effects.
+    weather: weather.forecast_home
+
+    # PredHeat calculates today's ASHP energy from this cumulative meter;
+    # Overview displays that calculated daily value.
+    heating_energy: sensor.heat_pump_energy_total
+
+  # Optional: current electrical power draw is not supplied by PredHeat.
   ashp_power: sensor.heat_pump_power
 
-  # Current mode, such as off, heating or hot_water.
+  # Optional: current mode is not supplied by PredHeat.
   ashp_status: sensor.heat_pump_status
-
-  # Daily incrementing heat-pump electricity use in kWh.
-  ashp_energy_today: sensor.heat_pump_energy_today
 ```
 
-Overview checks `weather.forecast_home` for the current weather and temperature. If that entity doesn't exist, Overview hides the weather reading, weather effects and their toggle. No weather setting is required in `apps.yaml`.
+Without PredHeat, enable the card explicitly and provide a daily energy entity if one is available:
+
+```yaml
+pred_bat:
+  # Show the ASHP card without a PredHeat configuration.
+  ashp_enable: true
+
+  # Optional current electrical power draw and operating mode.
+  ashp_power: sensor.heat_pump_power
+  ashp_status: sensor.heat_pump_status
+
+  # Weather and temperature shown on Overview.
+  weather: weather.forecast_home
+
+  # Optional daily heat-pump electricity use in kWh.
+  heat_energy: sensor.heat_pump_energy_today
+```
+
+Overview uses `predheat.weather` when PredHeat is configured. Otherwise it uses the top-level `weather` setting shown above. For compatibility with earlier test releases it will still try `weather.forecast_home` when neither is set. If the selected entity does not exist, Overview hides the weather reading, weather effects and their toggle.
 
 The modern `apps.yaml` editor validates these settings and suggests entity IDs from Home Assistant. Open **Configuration > Editor**, enter one of the entity settings, then choose the matching entity from the suggestions. Hover over a setting to read its schema description.
 

@@ -148,37 +148,340 @@ def _apps_schema_value(spec):
     return schema
 
 
+APPS_SCHEMA_DESCRIPTIONS = {
+    "currency_symbols": "Currency symbols used throughout Predbat. Supply the major-unit symbol first and the minor-unit symbol second, for example ['£', 'p'] or ['$', 'c'].",
+    "db_enable": "Enables Predbat's local history database for longer-term statistics and charts.",
+    "db_days": "Number of days of Predbat history retained in the local database before older records are removed.",
+    "db_mirror_ha": "Copies relevant Home Assistant history into Predbat's local database so charts can use one consistent data source.",
+    "db_primary": "Uses Predbat's local database as the primary history source instead of Home Assistant where matching data is available.",
+    "threads": "Number of worker threads used to optimise the plan. Use 'auto' to match the host, 0 to disable parallel workers, or a fixed number to limit CPU use.",
+    "prediction_kernel_enable": "Uses Predbat's compiled prediction kernel for faster plan simulation. Disable only when diagnosing compatibility or calculation issues.",
+    "log_count": "Number of log files to retain, including the current predbat.log. Older rotated logs are deleted after this limit.",
+    "ha_url": "Base URL of the Home Assistant instance used when Predbat runs outside the add-on environment.",
+    "ha_key": "Home Assistant long-lived access token used to read entities and call services when Predbat connects remotely.",
+    "load_filter_threshold": "Maximum number of consecutive minutes with zero household load that Predbat fills from surrounding history. Set 1440 to disable gap filling.",
+    "web_port": "TCP port used by Predbat's built-in web server and modern dashboard.",
+    "web_ui": "Selects the dashboard served by Predbat: 'legacy' for the original interface or 'modern' for the new responsive interface.",
+    "chat": "Chat assistant configuration, including named providers, API endpoints, credentials, model selection and request timeout.",
+    "load_today": "One or more cumulative Home Assistant energy sensors reporting household consumption today in kWh. Multiple sensors are added together.",
+    "import_today": "One or more cumulative Home Assistant energy sensors reporting grid import today in kWh. Multiple sensors are added together.",
+    "export_today": "One or more cumulative Home Assistant energy sensors reporting grid export today in kWh. Multiple sensors are added together.",
+    "pv_today": "One or more cumulative Home Assistant energy sensors reporting solar generation today in kWh. Include every separate PV source that should be totalled.",
+    "load_forecast_only": "Uses the configured load_forecast data as the complete demand forecast instead of adding it to Predbat's historical household-load model.",
+    "load_forecast": "External forecast entities added to predicted household demand, such as a heat-pump forecast. Each source must expose timestamped incremental energy data.",
+    "ge_cloud_data": "Uses GivEnergy Cloud daily energy data instead of the configured load_today, import_today and export_today entities.",
+    "ge_cloud_serial": "GivEnergy inverter serial number used when requesting data from GivEnergy Cloud.",
+    "ge_cloud_key": "API credential used to authenticate requests to GivEnergy Cloud.",
+    "ge_cloud_direct": "Uses Predbat's direct GivEnergy Cloud integration for live inverter data and control.",
+    "ge_cloud_automatic": "Allows the GivEnergy Cloud integration to discover the inverter and populate its matching Predbat settings automatically.",
+    "ge_cloud_load_today_ignore": "Ignores GivEnergy Cloud's load-today total when automatic cloud configuration is active.",
+    "ge_cloud_automatic_evc": "Allows GivEnergy Cloud discovery to configure a connected GivEnergy EV charger automatically.",
+    "ge_cloud_evc_control": "Allows Predbat to send supported charging commands to the discovered GivEnergy EV charger.",
+    "ge_cloud_automatic_shared_ct": "Treats discovered GivEnergy inverters as sharing one grid current transformer when configuring power and energy sources.",
+    "ge_cloud_automatic_split_ct": "Treats discovered GivEnergy inverters as having separate grid current transformers and combines their readings.",
+    "ge_cloud_automatic_split_pv": "Combines separate PV readings discovered across multiple GivEnergy inverters.",
+    "num_inverters": "Number of battery inverters Predbat should model and control. Inverter-specific lists normally require one entry per inverter.",
+    "validate_config_retries": "Number of times Predbat retries unavailable Home Assistant entities while validating apps.yaml during startup.",
+    "validate_config_retry_minutes": "Minutes between startup configuration-validation retries when required entities are unavailable.",
+    "givtcp_rest": "GivTCP REST base URL for each inverter. Direct REST control is faster and more reliable than writing Home Assistant entities.",
+    "givtcp_automatic": "Allows Predbat to discover GivTCP REST entities and populate inverter settings automatically. Disable to keep all mappings under manual control.",
+    "charge_rate": "Writable Home Assistant number entity for each inverter's battery charge-rate limit.",
+    "discharge_rate": "Writable Home Assistant number entity for each inverter's battery discharge-rate limit.",
+    "battery_power": "Live battery power sensor for each inverter. Predbat uses its sign and magnitude to determine charging or discharging power.",
+    "pv_power": "Live solar generation power sensor for each inverter or PV source, normally reported in watts.",
+    "load_power": "Live household demand power sensor for each inverter or meter, normally reported in watts.",
+    "soc_kw": "Home Assistant sensor reporting usable energy currently stored in each battery, normally in kWh.",
+    "soc_max": "Home Assistant sensor reporting the usable full capacity of each battery in kWh.",
+    "reserve": "Writable reserve or minimum state-of-charge entity for each inverter.",
+    "inverter_mode": "Writable operating-mode selector for each inverter, used to switch between normal, charge and export behaviour.",
+    "inverter_time": "Entity reporting each inverter's internal clock, used to detect clock drift before programming timed slots.",
+    "inverter_type": "Predbat inverter-definition name for each inverter when it cannot be detected automatically.",
+    "charge_start_time": "Writable entity containing the programmed battery charge-window start time for each inverter.",
+    "charge_end_time": "Writable entity containing the programmed battery charge-window end time for each inverter.",
+    "charge_limit": "Writable target state-of-charge entity for each inverter's scheduled charge window.",
+    "scheduled_charge_enable": "Writable switch that enables or disables scheduled battery charging on each inverter.",
+    "scheduled_discharge_enable": "Writable switch that enables or disables scheduled battery discharge on each inverter.",
+    "discharge_start_time": "Writable entity containing the programmed forced-discharge start time for each inverter.",
+    "discharge_end_time": "Writable entity containing the programmed forced-discharge end time for each inverter.",
+    "battery_temperature": "Battery temperature sensor for each inverter, used when applying temperature-dependent charge limits.",
+    "battery_calibration": "Optional calibration-status entity for each inverter. Predbat pauses control while a battery calibration cycle is active.",
+    "pause_mode": "Optional writable inverter mode used to pause battery charge, discharge or both.",
+    "pause_start_time": "Optional writable start time for an inverter pause window.",
+    "pause_end_time": "Optional writable end time for an inverter pause window.",
+    "inverter_limit": "Maximum combined AC power of each inverter in watts, used to cap modelled import, generation and discharge.",
+    "inverter_can_charge_during_export": "Allows an inverter to charge one battery while another inverter is deliberately exporting.",
+    "inverter_freeze_export_discharge_rate": "Discharge rate used when implementing a freeze-export action on inverters that require a small forced-discharge setting.",
+    "pv_ac_limit": "Maximum AC output from connected PV in watts. Predbat uses it to cap modelled solar generation after inverter conversion.",
+    "inverter_limit_charge": "Maximum AC battery charging power for each inverter in watts.",
+    "inverter_limit_charge_dc": "Maximum DC battery charging power for each inverter in watts.",
+    "inverter_limit_discharge": "Maximum battery discharge power for each inverter in watts.",
+    "inverter_limit_export": "Maximum inverter export power for each inverter in watts.",
+    "battery_rate_max": "Maximum normal battery charge and discharge rate for each inverter, used by the optimiser when modelling slots.",
+    "export_limit": "Site or inverter export limit in watts. Predbat prevents the plan from modelling export above this value.",
+    "inverter_battery_rate_min": "Minimum practical battery charge or discharge rate in watts; lower planned rates are treated as ineffective.",
+    "inverter_reserve_max": "Highest reserve percentage Predbat may program while protecting a planned battery minimum.",
+    "battery_charge_power_curve": "Optional state-of-charge to power multiplier curve used to model battery charging slowdown. Use 'auto' to learn it from history.",
+    "battery_discharge_power_curve": "Optional state-of-charge to power multiplier curve used to model battery discharge limits. Use 'auto' to learn it from history.",
+    "battery_charge_power_curve_default": "Fallback state-of-charge to charge-power curve used when an automatic curve has insufficient data.",
+    "battery_discharge_power_curve_default": "Fallback state-of-charge to discharge-power curve used when an automatic curve has insufficient data.",
+    "clock_skew": "Manual inverter clock correction in minutes, applied when interpreting or programming inverter time windows.",
+    "predbat_repository": "Git repository used by Predbat's updater. Change this only to test a fork or development branch.",
+    "solcast_api_key": "Solcast API key used to download site-level solar forecasts directly.",
+    "solcast_host": "Solcast API base URL. Leave at the documented default unless using a compatible proxy or alternative endpoint.",
+    "solcast_poll_hours": "Minimum hours between direct Solcast forecast downloads, used to stay within API request limits.",
+    "solcast_sites": "Solcast rooftop site resource IDs to download and combine into the PV forecast.",
+    "pv_forecast_today": "Home Assistant energy entity containing today's total forecast solar generation in kWh, used by Overview and forecast comparison views.",
+    "pv_array_kwp": "Installed DC solar-array capacity in kWp, used to stop uncertainty modelling from exceeding the physical panel capacity.",
+    "pv_forecast_tomorrow": "Home Assistant energy entity containing tomorrow's total forecast solar generation in kWh.",
+    "pv_forecast_d3": "Home Assistant energy entity containing the solar forecast total for the third forecast day in kWh.",
+    "pv_forecast_d4": "Home Assistant energy entity containing the solar forecast total for the fourth forecast day in kWh.",
+    "car_charging_power": "Live EV-charger power entity or list of entities, used to show charging power and separate EV demand from household load.",
+    "num_cars": "Number of EVs or chargers Predbat should model. Car-specific lists normally require one entry per car.",
+    "car_charging_planned": "Entity for each car indicating whether a charging session is planned by its external charger or tariff integration.",
+    "car_charging_planned_response": "State values from car_charging_planned that Predbat should interpret as a planned charging session.",
+    "car_charging_now": "Entity for each car indicating whether it is currently charging.",
+    "car_charging_now_response": "State values from car_charging_now that Predbat should interpret as actively charging.",
+    "car_charging_battery_size": "Usable battery capacity for each EV in kWh, supplied as a value or Home Assistant sensor.",
+    "car_charging_limit": "Desired EV charge limit for each car, normally a percentage reported by the vehicle or charger.",
+    "car_charging_exclusive": "For each car, prevents its planned charging slots from overlapping other modelled EV charging.",
+    "carbon_intensity": "Home Assistant entity reporting current or forecast grid carbon intensity, normally in gCO2/kWh.",
+    "carbon_postcode": "UK postcode region used to request local carbon-intensity forecasts when no entity is configured.",
+    "carbon_automatic": "Automatically obtains carbon-intensity data for carbon-aware plan calculations.",
+    "axle_pence_per_kwh": "Reward rate in pence per kWh used to value Axle Energy flexibility events in the plan.",
+    "octopus_intelligent_slot": "Entity for each car containing Intelligent Octopus dispatch slots or whether a smart-charge slot is active.",
+    "octopus_ready_time": "Entity for each car containing the time by which Intelligent Octopus should complete charging.",
+    "octopus_charge_limit": "Entity for each car containing the energy or state-of-charge target supplied by Intelligent Octopus.",
+    "octopus_slot_low_rate": "Treats all Intelligent Octopus dispatch slots as low-rate import periods in the battery plan.",
+    "octopus_slot_max": "Maximum number of Intelligent Octopus dispatch slots Predbat imports into one plan.",
+    "octopus_saving_session_octopoints_per_penny": "Conversion rate between Octopoints and pence used when valuing Saving Session rewards.",
+    "octopus_saving_session_min_octopoints_per_kwh": "Minimum offered Octopoints per kWh required before Predbat joins a Saving Session automatically.",
+    "octopus_saving_session_rate": "Fallback Saving Session reward rate used when the event does not provide one.",
+    "octopus_free_url": "Octopus API URL used to retrieve Free Electricity session events.",
+    "octopus_night_times": "Time ranges that should be treated as Octopus overnight periods for tariff and charging logic.",
+    "metric_octopus_import": "Home Assistant entity containing Octopus import cost or consumption data used for metric comparisons.",
+    "metric_octopus_export": "Home Assistant entity containing Octopus export income or energy data used for metric comparisons.",
+    "octopus_api_key": "Octopus Energy API key used to retrieve account tariffs, rates and supported smart-tariff data.",
+    "octopus_api_account": "Octopus Energy account number associated with the configured API key.",
+    "rates_import": "Manual import-tariff periods. Each item defines a rate and its start and end time.",
+    "rates_export": "Manual export-tariff periods. Each item defines a rate and its start and end time.",
+    "alerts": "Alert-feed configuration used to adjust planning for forecast grid events or other supported warnings.",
+    "rates_import_octopus_url": "Octopus product API URL used to retrieve future electricity import rates.",
+    "rates_export_octopus_url": "Octopus product API URL used to retrieve future electricity export rates.",
+    "rates_import_override": "Import-rate overrides applied to selected times after the normal tariff has been loaded.",
+    "rates_export_override": "Export-rate overrides applied to selected times after the normal tariff has been loaded.",
+    "days_previous": "Historical day offsets used to build the household-load forecast, for example [1, 2, 7] for yesterday, two days ago and last week.",
+    "days_previous_weight": "Relative weight for each entry in days_previous when averaging historical household demand.",
+    "days_previous_auto": "Lets Predbat choose suitable historical days automatically instead of using only the configured day offsets.",
+    "forecast_hours": "Number of future hours of tariff, load and solar data Predbat fetches for planning.",
+    "notify_devices": "Home Assistant mobile-app notification services or device identifiers that should receive Predbat notifications.",
+    "battery_scaling": "Per-inverter capacity scaling values used to reconcile reported battery energy with usable capacity.",
+    "battery_scaling_auto": "Automatically learns battery capacity scaling from charge and discharge history.",
+    "import_export_scaling": "Scale factor applied when reconciling measured import and export energy with Predbat's model.",
+    "export_triggers": "Optional price or time rules that trigger export behaviour outside the normal optimised windows.",
+    "iboost_energy_today": "Home Assistant energy entity reporting today's hot-water diverter or iBoost consumption in kWh.",
+    "metric_octopus_gas": "Home Assistant entity containing Octopus gas cost or consumption data used for metric comparisons.",
+    "rates_gas": "Manual gas-tariff periods used by hot-water and gas-versus-electricity cost calculations.",
+    "futurerate_url": "Nord Pool or compatible future-rate API URL used before the supplier publishes final tariff prices.",
+    "futurerate_adjust_import": "Adjusts predicted future import prices to match the shape and level of recently published real prices.",
+    "futurerate_adjust_export": "Adjusts predicted future export prices to match the shape and level of recently published real prices.",
+    "futurerate_adjust_auto": "Automatically enables future-rate adjustment when enough published tariff data is available.",
+    "futurerate_peak_start": "Start time of the daily peak window used when shaping predicted future rates.",
+    "futurerate_peak_end": "End time of the daily peak window used when shaping predicted future rates.",
+    "octopus_region": "Octopus tariff region letter used when constructing product rate URLs automatically.",
+    "compare_list": "Tariff scenarios evaluated by the Compare page. Each entry has an id, display name and optional import or export rate definitions.",
+    "watch_list": "Additional Home Assistant entities copied into Predbat debug data so their values can be inspected during troubleshooting.",
+    "charge_start_service": "Home Assistant service call or ordered calls used to start battery charging on a custom inverter integration.",
+    "charge_stop_service": "Home Assistant service call or ordered calls used to stop battery charging on a custom inverter integration.",
+    "discharge_start_service": "Home Assistant service call or ordered calls used to start forced battery discharge on a custom inverter integration.",
+    "discharge_stop_service": "Home Assistant service call or ordered calls used to stop forced battery discharge on a custom inverter integration.",
+    "charge_freeze_service": "Home Assistant service call or ordered calls used to hold battery state of charge by preventing discharge.",
+    "discharge_freeze_service": "Home Assistant service call or ordered calls used to prevent charging while allowing normal discharge.",
+    "device_id": "Home Assistant device identifier associated with custom inverter service calls.",
+    "predheat": "PredHeat configuration block used to model building temperature and forecast electrical heating demand.",
+    "forecast_solar": "Forecast.Solar array definitions, including panel orientation, tilt, location and installed capacity.",
+    "forecast_solar_max_age": "Maximum age in hours of cached Forecast.Solar data before Predbat considers it stale and downloads it again.",
+    "forecast_solar_open_meteo_backup": "Uses Open-Meteo solar forecasting when Forecast.Solar data is unavailable or stale.",
+    "forecast_solar_open_meteo_first": "Prefers Open-Meteo solar forecasting and uses Forecast.Solar as the fallback source.",
+    "open_meteo_forecast": "Open-Meteo PV array definitions, including panel orientation, tilt, location and installed capacity.",
+    "open_meteo_forecast_max_age": "Maximum age in hours of cached Open-Meteo forecast data before Predbat refreshes it.",
+    "enable_coarse_fine_levels": "Enables the two-stage coarse and fine optimiser search. This can improve plan quality while controlling calculation time.",
+    "load_power_fill_enable": "Uses live load power to fill gaps in recent household-load history before forecasting.",
+    "load_ml_enable": "Enables Predbat's machine-learning load forecast in addition to the normal weighted historical model.",
+    "gateway_device_id": "Stable Home Assistant device identifier used by Predbat Gateway discovery and entity registration.",
+    "gateway_mqtt_host": "MQTT broker hostname used by Predbat Gateway.",
+    "gateway_mqtt_port": "MQTT broker port used by Predbat Gateway.",
+    "gateway_mqtt_token": "Authentication token used by Predbat Gateway when connecting to its MQTT broker.",
+    "redact_strings": "Extra literal values to mask in logs and debug archives when Predbat cannot identify them as credentials automatically.",
+    "redact_strings_labelled": "Named values to mask in logs and debug archives. The label is shown in place of each secret to make redacted diagnostics easier to understand.",
+}
+
+
+INTEGRATION_NAMES = {
+    "axle": "Axle Energy",
+    "sigenergy": "Sigenergy",
+    "solis": "Solis Cloud",
+    "myenergi": "myenergi",
+    "fox": "FoxESS Cloud",
+    "deye": "Deye Cloud",
+    "sunsynk": "Sunsynk Connect",
+    "alphaess": "AlphaESS",
+    "teslemetry": "Teslemetry",
+    "enphase": "Enphase Cloud",
+}
+
+
+INTEGRATION_SETTING_DESCRIPTIONS = {
+    "api_key": "{integration} API key used to authenticate Predbat's requests.",
+    "api_secret": "{integration} API secret paired with the configured API key.",
+    "app_id": "{integration} application identifier supplied for API access.",
+    "app_key": "{integration} application key supplied for API access.",
+    "app_secret": "{integration} application secret supplied for API access.",
+    "key": "{integration} API credential or access key.",
+    "username": "{integration} account username used to authenticate Predbat.",
+    "password": "{integration} account password used to authenticate Predbat.",
+    "inverter_sn": "{integration} inverter serial number or list of serial numbers Predbat should use.",
+    "system_id": "{integration} system identifier or list of system identifiers Predbat should use.",
+    "site_id": "{integration} site identifier or list of site identifiers Predbat should use.",
+    "hub_serial": "{integration} hub serial number associated with the configured account.",
+    "base_url": "{integration} API base URL. Change it only when the service documentation requires a different regional or compatible endpoint.",
+    "mqtt_host": "{integration} MQTT hostname used for live telemetry and control.",
+    "automatic": "Allows Predbat to discover {integration} devices and populate matching apps.yaml settings automatically.",
+    "automatic_ignore_pv": "Keeps {integration} automatic discovery enabled but ignores its PV data when solar generation comes from another source.",
+    "automatic_zappi": "Allows {integration} discovery to configure connected Zappi chargers automatically.",
+    "automatic_eddi": "Allows {integration} discovery to configure connected Eddi diverters automatically.",
+    "enable_controls": "Allows Predbat to send supported control commands to {integration}; disable for monitoring only.",
+    "control_enable": "Allows Predbat to send supported inverter control commands to {integration}; disable for monitoring only.",
+    "control": "Allows Predbat to dispatch supported demand-response or device controls through {integration}.",
+    "zappi_control": "Allows Predbat to control the configured {integration} Zappi charger.",
+    "tbc_control": "Allows Predbat to control the Tesla Backup Controller through {integration}.",
+    "poll_seconds": "Seconds between {integration} status refreshes. Shorter intervals increase API and network use.",
+    "nominal_voltage": "Nominal battery voltage used to convert {integration} current limits into power.",
+    "battery_nominal_voltage": "Nominal battery voltage used to convert {integration} current and power values.",
+    "battery_rate_max": "Maximum battery charge and discharge power reported to the optimiser for {integration}.",
+    "api_delay": "Minimum delay between {integration} API operations.",
+    "min_write_interval": "Minimum seconds between control writes sent to {integration}.",
+    "region": "{integration} account or API region used to select the correct service endpoint.",
+    "data_center": "{integration} data-centre identifier used to select the correct regional API.",
+    "company_id": "{integration} installer or company identifier required by the API.",
+    "auth_method": "Authentication method currently used for {integration}. This is normally managed automatically after sign-in.",
+    "access_token": "Saved {integration} access token. Predbat normally creates and refreshes this automatically.",
+    "token_expires_at": "Expiry time of the saved {integration} access token. Predbat maintains this value automatically.",
+    "token_hash": "Hash used to detect whether the stored {integration} token changed. Predbat maintains this value automatically.",
+    "ca_pem": "Certificate-authority PEM file used to verify the {integration} MQTT service.",
+    "client_pem": "Client certificate PEM file used to authenticate with the {integration} MQTT service.",
+    "client_key": "Private key PEM file paired with the {integration} client certificate.",
+    "cloud_pv_load_ignore": "Ignores {integration} cloud PV and load readings when those measurements are provided by another source.",
+    "hybrid": "Treats the {integration} site as a hybrid installation when interpreting power flow and controls.",
+}
+
+
+def _apps_schema_description(name, spec):
+    """Return purpose-aware help text for an apps.yaml property."""
+    description = APPS_SCHEMA_DESCRIPTIONS.get(name)
+    if description:
+        return description
+
+    for prefix, integration in INTEGRATION_NAMES.items():
+        marker = prefix + "_"
+        if not name.startswith(marker):
+            continue
+        suffix = name[len(marker) :]
+        template = INTEGRATION_SETTING_DESCRIPTIONS.get(suffix)
+        if template:
+            return template.format(integration=integration)
+
+    label = name.replace("_", " ")
+    setting_type = spec.get("type", "string")
+    if "sensor" in setting_type:
+        return f"Home Assistant entity or list of entities supplying {label} data to Predbat for planning, control or dashboard reporting."
+    if "boolean" in setting_type:
+        return f"Controls whether Predbat uses the {label} feature. Disable it when the related integration or behaviour is not required."
+    if "dict" in setting_type:
+        return f"Structured apps.yaml configuration for {label}. Each nested key controls part of this Predbat feature."
+    if "list" in setting_type:
+        return f"Ordered apps.yaml values for {label}. Supply one entry for each relevant device or configured source."
+    return f"Configuration value used by Predbat for {label}. Its expected format is {setting_type.replace('|', ' or ')}."
+
+
 def build_apps_json_schema():
     """Build the Monaco JSON Schema for a Predbat apps.yaml file."""
     properties = {
-        "module": {"type": "string", "const": "predbat", "description": "Predbat Python module name."},
-        "class": {"type": "string", "const": "PredBat", "description": "Predbat application class."},
-        "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Other AppDaemon apps that must start first."},
+        "module": {"type": "string", "const": "predbat", "description": "AppDaemon module to load for this app. Predbat must use the value 'predbat'."},
+        "class": {"type": "string", "const": "PredBat", "description": "Python application class AppDaemon starts. Predbat must use the value 'PredBat'."},
+        "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Names of other AppDaemon apps that must finish starting before Predbat is initialised."},
         "prefix": {
             "type": "string",
             "default": "predbat",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "description": "Prefix used for Predbat Home Assistant entities. Use lowercase letters, numbers and underscores.",
+            "description": "Prefix added to every Home Assistant entity Predbat creates. Change it only when running multiple instances; use lowercase letters, numbers and underscores.",
         },
-        "timezone": {"type": "string", "default": "Europe/London", "description": "IANA timezone used by Predbat."},
-        "template": {"type": "boolean", "description": "Remove this setting once configuration is complete."},
+        "timezone": {"type": "string", "default": "Europe/London", "description": "IANA timezone used to align tariffs, forecasts and plan times, for example Europe/London."},
+        "template": {"type": "boolean", "description": "Marks the file as the unconfigured example template. Remove this setting after replacing the example entities and credentials."},
         "grid_power": {
             **_apps_schema_value({"type": "sensor|sensor_list"}),
-            "description": "Home Assistant entity or entities reporting instantaneous grid power.",
+            "description": "Live grid power entity or list of entities, normally in watts. Predbat uses the sign to distinguish import from export and sums multiple meters.",
+        },
+        "geserial": {
+            "type": "string",
+            "description": "GivTCP serial-number value or regular-expression lookup used by {geserial} placeholders in entity IDs.",
+        },
+        "geserial2": {
+            "type": "string",
+            "description": "Second GivTCP serial-number value or lookup used by {geserial2} placeholders in multi-inverter entity IDs.",
+        },
+        "auto_restart": {
+            **_apps_schema_value({"type": "dict_list"}),
+            "description": "Home Assistant service calls Predbat may run to restart a failed inverter integration after repeated communication errors.",
+        },
+        "charge_limit_enable": {
+            **_apps_schema_value({"type": "sensor_list"}),
+            "description": "Writable switch for each inverter that enables its scheduled-charge target state of charge.",
+        },
+        "discharge_target_soc": {
+            **_apps_schema_value({"type": "sensor_list"}),
+            "description": "Writable state-of-charge target for each inverter's scheduled forced-discharge window.",
+        },
+        "battery_temperature_history": {
+            **_apps_schema_value({"type": "sensor"}),
+            "description": "Battery temperature history entity used to forecast temperature-dependent charge-rate limits.",
+        },
+        "battery_temperature_charge_curve": {
+            **_apps_schema_value({"type": "int_float_dict"}),
+            "description": "Battery-temperature to C-rate multiplier curve used to reduce charging power when the battery is cold or hot.",
+        },
+        "inverter_clock_skew_start": {
+            "type": "integer",
+            "description": "Minutes added when programming charge-window start times to compensate for an inaccurate inverter clock.",
+        },
+        "inverter_clock_skew_end": {
+            "type": "integer",
+            "description": "Minutes added when programming charge-window end times to compensate for an inaccurate inverter clock.",
+        },
+        "inverter_clock_skew_discharge_start": {
+            "type": "integer",
+            "description": "Minutes added when programming forced-discharge start times to compensate for an inaccurate inverter clock.",
+        },
+        "inverter_clock_skew_discharge_end": {
+            "type": "integer",
+            "description": "Minutes added when programming forced-discharge end times to compensate for an inaccurate inverter clock.",
+        },
+        "octopus_saving_session": {
+            **_apps_schema_value({"type": "sensor"}),
+            "description": "Octopus event or binary-sensor entity announcing Saving Sessions that Predbat may model or join.",
+        },
+        "octopus_free_session": {
+            **_apps_schema_value({"type": "sensor"}),
+            "description": "Octopus event entity announcing Free Electricity sessions that Predbat should include in the plan.",
+        },
+        "metric_standing_charge": {
+            **_apps_schema_value({"type": "sensor"}),
+            "description": "Current daily electricity standing-charge entity, included in Predbat cost totals and comparisons.",
         },
     }
     config_by_name = {item.get("name"): item for item in CONFIG_ITEMS if item.get("name")}
     for name, spec in APPS_SCHEMA.items():
         value_schema = _apps_schema_value(spec)
-        label = name.replace("_", " ")
-        if spec.get("description"):
-            value_schema["description"] = spec["description"]
-        elif "sensor" in spec.get("type", ""):
-            value_schema["description"] = f"Home Assistant entity or entities used for {label}."
-        elif "boolean" in spec.get("type", ""):
-            value_schema["description"] = f"Enable or disable {label}."
-        else:
-            value_schema["description"] = f"Predbat setting for {label}."
+        value_schema["description"] = spec.get("description") or _apps_schema_description(name, spec)
         properties[name] = value_schema
 
         for name, item in config_by_name.items():
@@ -214,6 +517,32 @@ def build_apps_json_schema():
                 value_schema["enum"] = item["options"]
             if isinstance(item.get("default"), (str, int, float, bool, list, dict)):
                 value_schema["default"] = item["default"]
+
+    # PredHeat already owns these entity mappings. Describing the nested keys
+    # here lets Monaco offer the same Home Assistant entity autocomplete inside
+    # the predheat block instead of encouraging duplicate Overview settings.
+    properties["predheat"].update(
+        {
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["gas", "pump"],
+                    "description": "Heating-system type modelled by PredHeat. Pump mode also enables the Overview ASHP card.",
+                },
+                "weather": {
+                    "type": "string",
+                    "x-ha-entity": True,
+                    "description": "Home Assistant weather entity used by PredHeat and by Overview for current conditions and weather effects.",
+                },
+                "heating_energy": {
+                    "type": "string",
+                    "x-ha-entity": True,
+                    "description": "Cumulative heating-energy entity used by PredHeat to calculate today's ASHP energy for Overview.",
+                },
+            },
+            "additionalProperties": True,
+        }
+    )
 
     required = ["module", "class"] + [name for name, spec in APPS_SCHEMA.items() if spec.get("required")]
     return {
@@ -2792,7 +3121,10 @@ chart.render();
             house_power = max(0, load_power - car_power) if car_configured and car_inside_clamp else load_power
 
             sun_state = self.get_state_wrapper(entity_id="sun.sun", default=None)
-            weather_entity = "weather.forecast_home"
+            predheat_config = self.get_arg("predheat", default={}, indirect=False)
+            if not isinstance(predheat_config, dict):
+                predheat_config = {}
+            weather_entity = predheat_config.get("weather") or self.get_arg("weather", default=None, indirect=False) or "weather.forecast_home"
             weather_state = self.get_state_wrapper(entity_id=weather_entity, default=None)
             weather_temperature = _optional_float(self.get_state_wrapper(entity_id=weather_entity, attribute="temperature", default=None))
             weather_temperature_unit = self.get_state_wrapper(entity_id=weather_entity, attribute="temperature_unit", default="")
@@ -2824,10 +3156,16 @@ chart.render();
                 car_energy_today = sum(self.base.get_from_incrementing(self.base.car_charging_energy, minute) for minute in range(self.base.minutes_now + 1))
 
             ashp = None
-            if self.get_arg("ashp_enable", default=False, indirect=False):
+            predheat_is_pump = bool(predheat_config) and str(predheat_config.get("mode", "pump")).lower() == "pump"
+            ashp_enabled = predheat_is_pump
+            if "ashp_enable" in self.base.args:
+                ashp_enabled = self.get_arg("ashp_enable", default=False, indirect=False)
+            if ashp_enabled:
                 ashp_power_entity = self.get_arg("ashp_power", default=None, indirect=False)
                 ashp_status_entity = self.get_arg("ashp_status", default=None, indirect=False)
-                ashp_energy_entity = self.get_arg("ashp_energy_today", default=None, indirect=False)
+                ashp_energy_entity = self.get_arg("heat_energy", default=None, indirect=False)
+                if not ashp_energy_entity:
+                    ashp_energy_entity = self.get_arg("ashp_energy_today", default=None, indirect=False)
                 ashp_power = None
                 ashp_status = None
                 ashp_energy = None
@@ -2840,6 +3178,8 @@ chart.render();
                         ashp_status = str(status_value)
                 if ashp_energy_entity:
                     ashp_energy = _optional_float(self.get_state_wrapper(entity_id=ashp_energy_entity, default=None, required_unit="kWh"))
+                elif predheat_is_pump:
+                    ashp_energy = _optional_float(getattr(getattr(self.base, "predheat", None), "heat_energy_today", None))
 
                 ashp = {"power": ashp_power, "status": ashp_status, "energy_today": ashp_energy}
 

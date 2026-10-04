@@ -52,6 +52,40 @@ const FRAME_STYLES = `
     line-height: 1.45;
   }
   .apps-guide strong { display: block; margin-bottom: .15rem; }
+  .apps-section-nav {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .4rem;
+    margin: .75rem 0;
+    padding: .65rem .75rem;
+    border: 1px solid var(--apps-border);
+    border-radius: 8px;
+    background: var(--apps-surface);
+  }
+  .apps-section-nav strong {
+    margin-right: .25rem;
+    color: var(--apps-muted);
+    font-size: .68rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .apps-section-nav a {
+    padding: .32rem .48rem;
+    border: 1px solid var(--apps-border);
+    border-radius: 5px;
+    background: var(--apps-bg);
+    color: var(--apps-text);
+    font-size: .7rem;
+    font-weight: 650;
+    text-decoration: none;
+  }
+  .apps-section-nav a:hover,
+  .apps-section-nav a:focus-visible {
+    border-color: #3b82f6;
+    color: #2563eb;
+    outline: none;
+  }
   .save-controls { display: none !important; }
   table.apps-settings-table {
     width: 100%;
@@ -163,6 +197,140 @@ const FRAME_STYLES = `
   table.apps-settings-table .apps-comparison-row > td:nth-child(2) > table > tbody > tr > td:first-child::after {
     content: 'Comparison ' counter(list-item);
   }
+  .apps-comparison-row {
+    --group-colour: #e76f51;
+    margin-bottom: .75rem;
+    border: 1px solid color-mix(in srgb, var(--group-colour) 32%, var(--apps-border));
+    border-left: 5px solid var(--group-colour);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--group-colour) 4%, var(--apps-surface));
+    overflow: hidden;
+  }
+  table.apps-settings-table > tbody > .apps-comparison-row > td:first-child,
+  table.apps-settings-table > tbody > .apps-comparison-row > .apps-description,
+  table.apps-settings-table > tbody > .apps-comparison-row > td:last-child:empty {
+    display: none;
+  }
+  table.apps-settings-table > tbody > .apps-comparison-row > td:nth-child(2) {
+    padding: 0 !important;
+  }
+  .apps-comparison-intro {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .9rem 1rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--group-colour) 28%, var(--apps-border));
+    background: color-mix(in srgb, var(--group-colour) 11%, var(--apps-surface));
+  }
+  .apps-comparison-intro h3,
+  .apps-comparison-intro p { margin: 0; }
+  .apps-comparison-intro h3 { font-size: .92rem; }
+  .apps-comparison-intro p { margin-top: .2rem; color: var(--apps-muted); font-size: .74rem; }
+  .apps-comparison-count {
+    flex: 0 0 auto;
+    padding: .28rem .5rem;
+    border: 1px solid color-mix(in srgb, var(--group-colour) 35%, var(--apps-border));
+    border-radius: 999px;
+    background: var(--apps-surface);
+    color: var(--apps-muted);
+    font-size: .68rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .apps-comparison-row > td:nth-child(2) > table { padding: .85rem; }
+  .apps-comparison-row > td:nth-child(2) > table > tbody { gap: .85rem; }
+  table.apps-settings-table .apps-comparison-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--group-colour) 34%, var(--apps-border));
+    border-left: 4px solid var(--group-colour);
+    border-radius: 9px;
+    background: var(--apps-surface);
+    box-shadow: 0 2px 7px rgb(15 23 42 / .06);
+    overflow: hidden;
+  }
+  table.apps-settings-table .apps-comparison-card > td:first-child {
+    display: flex;
+    align-items: center;
+    min-height: 2.6rem;
+    padding: .65rem .8rem;
+    background: color-mix(in srgb, var(--group-colour) 8%, var(--apps-surface));
+  }
+  table.apps-settings-table .apps-comparison-card > td:first-child::after {
+    content: attr(data-item-label);
+    color: var(--apps-text);
+    font-size: .78rem;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+  }
+  table.apps-settings-table .apps-comparison-card > td:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin: 0;
+    padding: .35rem .75rem .75rem;
+    border: 0;
+    border-top: 1px solid var(--apps-border);
+    border-radius: 0;
+    background: var(--apps-surface);
+  }
+  table.apps-settings-table .apps-comparison-card > td:last-child {
+    grid-column: 2;
+    grid-row: 1;
+    align-items: center;
+    padding: .45rem .7rem;
+    background: color-mix(in srgb, var(--group-colour) 8%, var(--apps-surface));
+  }
+  table.apps-settings-table .apps-comparison-card > td:nth-child(2) > table > tbody {
+    gap: 0;
+  }
+  table.apps-settings-table .apps-comparison-card > td:nth-child(2) > table > tbody > tr {
+    grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr) 8.5rem;
+  }
+  table.apps-settings-table .apps-rate-group {
+    margin: .55rem 0;
+    border: 1px solid var(--apps-border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--group-colour) 3%, var(--apps-surface));
+    overflow: hidden;
+  }
+  table.apps-settings-table .apps-rate-group > td:first-child {
+    display: flex;
+    align-items: center;
+    padding: .6rem .7rem;
+    background: color-mix(in srgb, var(--group-colour) 7%, var(--apps-surface));
+    font-size: 0;
+  }
+  table.apps-settings-table .apps-rate-group > td:first-child::after {
+    content: attr(data-item-label);
+    color: var(--apps-text);
+    font-size: .75rem;
+    font-weight: 700;
+  }
+  table.apps-settings-table .apps-rate-group > td:nth-child(2) {
+    margin: 0;
+    padding: .45rem .65rem .65rem;
+    border: 0;
+    border-top: 1px solid var(--apps-border);
+    border-radius: 0;
+  }
+  table.apps-settings-table .apps-rate-period {
+    grid-template-columns: minmax(6rem, .7fr) minmax(0, 2fr) 8.5rem;
+    margin-top: .35rem;
+    border: 1px solid color-mix(in srgb, var(--apps-border) 85%, transparent);
+    border-radius: 6px;
+    background: var(--apps-surface);
+  }
+  table.apps-settings-table .apps-rate-period > td:first-child {
+    font-size: 0;
+  }
+  table.apps-settings-table .apps-rate-period > td:first-child::after {
+    content: attr(data-item-label);
+    color: var(--apps-muted);
+    font-size: .7rem;
+    font-weight: 700;
+  }
   tr[data-apps-group] { --group-colour: #64748b; }
   tr[data-apps-group="system"] { --group-colour: #3b82f6; }
   tr[data-apps-group="solar"] { --group-colour: #d99a00; }
@@ -188,18 +356,46 @@ const FRAME_STYLES = `
     font-weight: 700;
   }
   tr[data-apps-group]:hover > td { background: color-mix(in srgb, var(--group-colour) 10%, var(--apps-surface)); }
+  .apps-group-row {
+    display: table;
+    width: 100%;
+    margin-top: .8rem;
+    table-layout: fixed;
+  }
   .apps-group-row th {
-    padding: .65rem .75rem;
-    border-top: 1px solid var(--apps-border);
-    border-bottom: 1px solid var(--apps-border);
-    background: color-mix(in srgb, var(--group-colour) 13%, var(--apps-surface));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .8rem .85rem;
+    border-top: 1px solid color-mix(in srgb, var(--group-colour) 34%, var(--apps-border));
+    border-bottom: 1px solid color-mix(in srgb, var(--group-colour) 34%, var(--apps-border));
+    border-left: 5px solid var(--group-colour);
+    background: color-mix(in srgb, var(--group-colour) 17%, var(--apps-surface));
     color: var(--apps-text);
     text-align: left;
-    font-size: .7rem;
+    font-size: .75rem;
     text-transform: uppercase;
-    letter-spacing: .04em;
+    letter-spacing: .055em;
   }
+  .apps-group-row th::after {
+    content: attr(data-item-count);
+    color: var(--apps-muted);
+    font-size: .65rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .apps-group-row:first-child { margin-top: 0; }
   .apps-group-row:first-child th { border-top: 0; }
+  .apps-group-row[id] { scroll-margin-top: 3.25rem; }
+  .apps-comparison-heading {
+    margin-top: 1.35rem;
+  }
+  .apps-comparison-heading th {
+    border-color: color-mix(in srgb, #e76f51 40%, var(--apps-border));
+    border-left-color: #e76f51;
+    background: color-mix(in srgb, #e76f51 20%, var(--apps-surface));
+  }
   .apps-description { color: var(--apps-muted) !important; line-height: 1.4; font-weight: 400; }
   .edit-input, .apps-choice-input {
     width: min(100%, 28rem) !important;
@@ -271,6 +467,47 @@ export default function AppsPage() {
     if (comparisonRow) {
       comparisonRow.classList.add('apps-comparison-row')
       comparisonRow.cells[1].colSpan = 3
+
+      const comparisonTable = comparisonRow.cells[1]?.querySelector('table')
+      const comparisonRows = Array.from(comparisonTable?.querySelectorAll<HTMLTableRowElement>('tr[data-nested-path]') ?? [])
+      const comparisonCards = comparisonRows.filter((row) => /^compare_list\[\d+\]$/.test(row.dataset.nestedPath ?? ''))
+
+      if (comparisonTable && !comparisonRow.querySelector('.apps-comparison-intro')) {
+        const intro = frameDocument.createElement('div')
+        intro.className = 'apps-comparison-intro'
+        const copy = frameDocument.createElement('div')
+        const title = frameDocument.createElement('h3')
+        title.textContent = 'Tariff comparisons'
+        const description = frameDocument.createElement('p')
+        description.textContent = 'Each tariff is shown separately, with its import and export periods grouped underneath.'
+        const count = frameDocument.createElement('span')
+        count.className = 'apps-comparison-count'
+        count.textContent = comparisonCards.length + ' tariff' + (comparisonCards.length === 1 ? '' : 's')
+        copy.append(title, description)
+        intro.append(copy, count)
+        comparisonTable.before(intro)
+      }
+
+      for (const [index, row] of comparisonCards.entries()) {
+        const path = row.dataset.nestedPath ?? ''
+        const nameRow = comparisonRows.find((candidate) => candidate.dataset.nestedPath === path + '.name')
+        const name = nameRow?.cells[1]?.textContent?.trim()
+        row.classList.add('apps-comparison-card')
+        if (row.cells[0]) row.cells[0].dataset.itemLabel = name ? 'Tariff ' + (index + 1) + ': ' + name : 'Tariff ' + (index + 1)
+      }
+
+      for (const row of comparisonRows) {
+        const path = row.dataset.nestedPath ?? ''
+        const rateGroup = path.match(/^compare_list\[\d+\]\.(rates_import|rates_export)$/)
+        const ratePeriod = path.match(/^compare_list\[\d+\]\.(rates_import|rates_export)\[(\d+)\]$/)
+        if (rateGroup) {
+          row.classList.add('apps-rate-group')
+          if (row.cells[0]) row.cells[0].dataset.itemLabel = rateGroup[1] === 'rates_import' ? 'Import rate periods' : 'Export rate periods'
+        } else if (ratePeriod) {
+          row.classList.add('apps-rate-period')
+          if (row.cells[0]) row.cells[0].dataset.itemLabel = 'Period ' + (Number(ratePeriod[2]) + 1)
+        }
+      }
     }
     const header = Array.from(body.rows).find((row) => !row.dataset.argName)
     if (header && !table.tHead) table.createTHead().append(header)
@@ -283,17 +520,24 @@ export default function AppsPage() {
     }
 
     body.querySelectorAll('.apps-group-row').forEach((row) => row.remove())
+    frameDocument.querySelector('.apps-section-nav')?.remove()
+    const sectionLinks: Array<{ id: string, label: string }> = []
+
     for (const group of CONFIG_GROUPS) {
-      const groupRows = rows.filter((row) => configGroup(row.dataset.argName ?? '') === group)
+      const groupRows = rows.filter((row) => row !== comparisonRow && configGroup(row.dataset.argName ?? '') === group)
       if (!groupRows.length) continue
 
+      const sectionId = 'apps-section-' + group.toLowerCase().replace(/[^a-z0-9]+/g, '-')
       const groupRow = body.insertRow()
+      groupRow.id = sectionId
       groupRow.className = 'apps-group-row'
       groupRow.dataset.appsGroup = group.toLowerCase()
       const groupHeading = frameDocument.createElement('th')
       groupHeading.colSpan = 4
-      groupHeading.textContent = `${group} · ${groupRows.length}`
+      groupHeading.textContent = group
+      groupHeading.dataset.itemCount = groupRows.length + ' setting' + (groupRows.length === 1 ? '' : 's')
       groupRow.append(groupHeading)
+      sectionLinks.push({ id: sectionId, label: group })
 
       for (const row of groupRows) {
         const name = row.dataset.argName ?? ''
@@ -335,6 +579,38 @@ export default function AppsPage() {
           input.after(list)
         }))
       }
+    }
+
+    if (comparisonRow) {
+      const comparisonHeading = body.insertRow()
+      comparisonHeading.id = 'apps-section-tariff-comparison'
+      comparisonHeading.className = 'apps-group-row apps-comparison-heading'
+      comparisonHeading.dataset.appsGroup = 'tariffs'
+      const heading = frameDocument.createElement('th')
+      heading.colSpan = 4
+      heading.textContent = 'Tariff comparison'
+      heading.dataset.itemCount = 'Configured scenarios'
+      comparisonHeading.append(heading)
+      body.append(comparisonRow)
+      sectionLinks.push({ id: comparisonHeading.id, label: 'Tariff comparison' })
+    }
+
+    if (sectionLinks.length) {
+      const nav = frameDocument.createElement('nav')
+      nav.className = 'apps-section-nav'
+      nav.setAttribute('aria-label', 'Apps sections')
+      const label = frameDocument.createElement('strong')
+      label.textContent = 'Jump to'
+      nav.append(label)
+      for (const section of sectionLinks) {
+        const link = frameDocument.createElement('a')
+        link.href = '#' + section.id
+        link.textContent = section.label
+        nav.append(link)
+      }
+      const guide = frameDocument.querySelector('.apps-guide')
+      if (guide) guide.after(nav)
+      else table.before(nav)
     }
   }
 

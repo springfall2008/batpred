@@ -12,6 +12,7 @@ import asyncio
 import json
 import math
 import re
+from types import SimpleNamespace
 
 from config import APPS_SCHEMA
 from web import WebInterface, build_apps_json_schema
@@ -338,9 +339,12 @@ def run_overview_api_tests(my_predbat, web_interface):
     failed = 0
     print("**** Running Overview API tests ****")
     original_args = my_predbat.args.copy()
+    original_predheat = my_predbat.predheat
     original_values = {name: getattr(my_predbat, name) for name in ("load_minutes_now", "pv_today_now", "import_today_now", "export_today_now", "cost_today_sofar")}
     added_entities = [
         "weather.forecast_home",
+        "weather.overview_test",
+        "weather.predheat_test",
         "sensor.predbat_pv_today",
         "sensor.configured_pv_forecast_today",
         "sensor.car_status",
@@ -353,8 +357,10 @@ def run_overview_api_tests(my_predbat, web_interface):
     original_entities = {name: my_predbat.ha_interface.dummy_items.get(name) for name in added_entities}
 
     try:
+        my_predbat.args.pop("predheat", None)
         my_predbat.args.update(
             {
+                "weather": "weather.overview_test",
                 "pv_forecast_today": "sensor.configured_pv_forecast_today",
                 "car_charging_planned": ["sensor.car_status"],
                 "car_charging_soc": ["sensor.car_soc"],
@@ -362,12 +368,13 @@ def run_overview_api_tests(my_predbat, web_interface):
                 "ashp_enable": True,
                 "ashp_power": "sensor.ashp_power",
                 "ashp_status": "sensor.ashp_status",
-                "ashp_energy_today": "sensor.ashp_energy",
+                "heat_energy": "sensor.ashp_energy",
             }
         )
         my_predbat.ha_interface.dummy_items.update(
             {
-                "weather.forecast_home": {"state": "sunny", "temperature": 17.5, "temperature_unit": "C"},
+                "weather.forecast_home": {"state": "cloudy", "temperature": 12.0, "temperature_unit": "C"},
+                "weather.overview_test": {"state": "sunny", "temperature": 17.5, "temperature_unit": "C"},
                 "sensor.predbat_pv_today": {"state": 12.12, "unit_of_measurement": "kWh"},
                 "sensor.configured_pv_forecast_today": {"state": 7.95, "unit_of_measurement": "kWh"},
                 "sensor.car_status": {"state": "EV Connected"},
@@ -387,7 +394,7 @@ def run_overview_api_tests(my_predbat, web_interface):
         response = asyncio.run(web_interface.html_api_power_flow(None))
         data = json.loads(response.text)
         if data.get("weather") != {"state": "sunny", "temperature": 17.5, "temperature_unit": "C"}:
-            print("  ERROR: weather data was not returned from weather.forecast_home")
+            print("  ERROR: weather data was not returned from the standalone Overview weather setting: " f"{data.get('weather')!r}, configured={web_interface.get_arg('weather', default=None, indirect=False)!r}")
             failed += 1
         if data.get("pv_forecast_today") != 7.95:
             print("  ERROR: today's configured PV forecast was not returned")
@@ -408,6 +415,25 @@ def run_overview_api_tests(my_predbat, web_interface):
             print("  ERROR: enabled ASHP should retain available values when an optional entity is missing")
             failed += 1
 
+        my_predbat.args.pop("ashp_enable")
+        my_predbat.args.pop("weather")
+        my_predbat.args.pop("heat_energy")
+        my_predbat.args["predheat"] = {
+            "mode": "pump",
+            "weather": "weather.predheat_test",
+            "heating_energy": "sensor.ashp_energy",
+        }
+        my_predbat.predheat = SimpleNamespace(heat_energy_today=3.25)
+        my_predbat.ha_interface.dummy_items["weather.predheat_test"] = {"state": "rainy", "temperature": 9.5, "temperature_unit": "C"}
+
+        predheat_data = json.loads(asyncio.run(web_interface.html_api_power_flow(None)).text)
+        if predheat_data.get("weather") != {"state": "rainy", "temperature": 9.5, "temperature_unit": "C"}:
+            print("  ERROR: Overview did not reuse the PredHeat weather entity")
+            failed += 1
+        if predheat_data.get("ashp") != {"power": 1250.0, "status": None, "energy_today": 3.25}:
+            print("  ERROR: pump-mode PredHeat should enable ASHP and provide its calculated daily energy")
+            failed += 1
+
         my_predbat.args["ashp_enable"] = False
         disabled_data = json.loads(asyncio.run(web_interface.html_api_power_flow(None)).text)
         if disabled_data.get("ashp") is not None:
@@ -415,6 +441,7 @@ def run_overview_api_tests(my_predbat, web_interface):
             failed += 1
     finally:
         my_predbat.args = original_args
+        my_predbat.predheat = original_predheat
         for name, value in original_values.items():
             setattr(my_predbat, name, value)
         for entity_id, value in original_entities.items():
@@ -423,16 +450,29 @@ def run_overview_api_tests(my_predbat, web_interface):
             else:
                 my_predbat.ha_interface.dummy_items[entity_id] = value
 
-    for name in ("car_charging_energy", "car_charging_status", "car_charging_soc", "ashp_enable", "ashp_power", "ashp_status", "ashp_energy_today"):
+    for name in ("car_charging_energy", "car_charging_status", "car_charging_soc", "weather", "ashp_enable", "ashp_power", "ashp_status", "heat_energy", "ashp_energy_today"):
         if name not in APPS_SCHEMA:
             print(f"  ERROR: {name} is missing from APPS_SCHEMA")
             failed += 1
 
     schema_properties = build_apps_json_schema()["$defs"]["predbatApp"]["properties"]
-    for name in ("car_charging_energy", "car_charging_status", "car_charging_soc", "ashp_power", "ashp_status", "ashp_energy_today"):
+    generic_description_starts = ("Predbat setting for ", "Enable or disable ", "Home Assistant entity or entities used for ")
+    for name, property_schema in schema_properties.items():
+        description = property_schema.get("description", "")
+        if len(description) < 24 or description.startswith(generic_description_starts):
+            print(f"  ERROR: {name} has an unhelpful apps.yaml schema description: {description!r}")
+            failed += 1
+
+    for name in ("car_charging_energy", "car_charging_status", "car_charging_soc", "weather", "ashp_power", "ashp_status", "heat_energy", "ashp_energy_today"):
         encoded = json.dumps(schema_properties[name])
         if '"x-ha-entity": true' not in encoded:
             print(f"  ERROR: {name} is not marked for Home Assistant entity autocomplete")
+            failed += 1
+
+    predheat_properties = schema_properties["predheat"].get("properties", {})
+    for name in ("weather", "heating_energy"):
+        if not predheat_properties.get(name, {}).get("x-ha-entity"):
+            print(f"  ERROR: predheat.{name} is not marked for Home Assistant entity autocomplete")
             failed += 1
 
     print("**** Overview API tests completed ****")
