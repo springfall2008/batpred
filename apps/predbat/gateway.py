@@ -1809,7 +1809,9 @@ class GatewayMQTT(ComponentBase):
         self._debug_dump(f"TX execution plan v{self._plan_version}", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_published_plan = plan_entries
-        self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries, rate caps " + (", ".join(f"{serial} charge {charge_w}W discharge {discharge_w}W" for serial, charge_w, discharge_w in rate_caps) or "none") + ")")
+        self.log(
+            f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries, rate caps " + (", ".join(f"{serial} charge {charge_w}W discharge {discharge_w}W" for serial, charge_w, discharge_w in rate_caps) or "none") + ")"
+        )
 
     async def _republish_plan_if_stale(self):
         """Re-publish the last plan periodically so its embedded timestamp stays fresh.
