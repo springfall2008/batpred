@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -534,6 +534,80 @@ def test_apply_run_clears_p90_signatures():
     return 0
 
 
+STATE_RATES_LOG = """2026-10-04 11:50:00.000000: --------------- PredBat - update at 2026-10-04 11:50:00+01:00 with clock skew 0 minutes, minutes now 710
+2026-10-04 11:50:01.000000: Replay input: rates changed, from 11:50 import [[0, 7.5], [10, 31.16]] 30 export [[0, 15.0]] 20 import_base [] 0 export_base [[0, 15.0]] 20
+2026-10-04 11:55:00.000000: --------------- PredBat - update at 2026-10-04 11:55:00+01:00 with clock skew 0 minutes, minutes now 715
+2026-10-04 11:55:01.000000: Current data so far today: load 3.96kWh, import 21.27kWh, export 8.57kWh, PV 3.46kWh
+2026-10-04 11:55:01.100000: Replay input: state soc_kw 15.495 soc_max 18.08 inday 0.9763652840196139 cost_today 47.02738900000056 load_today 3.9639999999999986 import_today 21.27000000000001 export_today 8.570000000000007 pv_today None
+2026-10-04 11:55:01.200000: Inverter 0 SoC: 15.50kWh 86%, current charge rate 9200W, current discharge rate 9660W, current battery power 0W
+"""
+
+
+def test_replay_state_and_rates():
+    """The exact state line overrides the rounded values, and a rates change logged by a dropped run reaches the next run."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(STATE_RATES_LOG)
+        runs = parse_log(path)
+    failed = 0
+    if len(runs) != 1 or runs[0].get("rates") is None:
+        print("ERROR: the dropped run's rates should carry to the next run: {}".format(runs))
+        return 1
+    run = runs[0]
+    if run["state"]["inday"] != 0.9763652840196139 or run["state"]["pv_today"] is not None:
+        print("ERROR: state line parsed wrongly: {}".format(run["state"]))
+        failed = 1
+    # pv_today is None in the state, so the counters fall back to the rounded line
+    if today_values(run) != ("3.96", "21.27", "8.57", "3.46"):
+        print("ERROR: today_values should fall back when the state lacks a counter: {}".format(today_values(run)))
+        failed = 1
+    if today_values({"state": dict(run["state"], pv_today=3.46)}) != (3.9639999999999986, 21.27000000000001, 8.570000000000007, 3.46):
+        print("ERROR: today_values should prefer the exact state counters")
+        failed = 1
+    inverter = SimpleNamespace(soc_kw=0, soc_percent=0)
+    bat = SimpleNamespace(
+        minutes_now=710,
+        now_utc=datetime(2026, 10, 4, 10, 50, tzinfo=timezone.utc),
+        load_minutes={},
+        import_today={},
+        export_today={},
+        pv_today={},
+        inverters=[inverter],
+        soc_max=18.0,
+        rate_import={minute: 20.0 for minute in range(0, 2000)},
+        rate_export={minute: 5.0 for minute in range(0, 2000)},
+        rate_import_base={minute: 20.0 for minute in range(0, 2000)},
+        rate_export_base={},
+    )
+    apply_run(bat, {"today": None, "force": None, "time": "2026-10-04 11:50:00+01:00"}, run)
+    if bat.soc_kw != 15.495 or inverter.soc_kw != 15.495 or bat.soc_max != 18.08 or bat.load_inday_adjustment != 0.9763652840196139 or bat.cost_today_sofar != 47.02738900000056:
+        print("ERROR: exact state not applied: soc {} max {} inday {} cost {}".format(bat.soc_kw, bat.soc_max, bat.load_inday_adjustment, bat.cost_today_sofar))
+        failed = 1
+    # Rebuilt from 11:50: 7.5 for 10 minutes then 31.16 to 30 minutes, nothing after; before 11:50 untouched
+    if bat.rate_import[709] != 20.0 or bat.rate_import[710] != 7.5 or bat.rate_import[719] != 7.5 or bat.rate_import[720] != 31.16 or bat.rate_import[739] != 31.16 or 740 in bat.rate_import:
+        print("ERROR: import rates rebuilt wrongly")
+        failed = 1
+    if bat.rate_export_base.get(729) != 15.0 or 730 in bat.rate_export_base or bat.rate_export[729] != 15.0 or 730 in bat.rate_export:
+        print("ERROR: export rates rebuilt wrongly")
+        failed = 1
+    # An empty series empties the rates from the start, as the live rates were
+    if bat.rate_import_base.get(709) != 20.0 or 710 in bat.rate_import_base:
+        print("ERROR: an empty series should leave no rates from its start")
+        failed = 1
+    return failed
+
+
+def test_apply_logged_rates_from_before_midnight():
+    """A rates line from the day before (carried over midnight by a dropped run) is moved back a day."""
+    bat = SimpleNamespace(minutes_now=5, rate_import={})
+    apply_logged_rates(bat, (23 * 60 + 55, {"import": ([(0, 10.0), (10, 20.0)], 20)}))
+    if bat.rate_import.get(-5) != 10.0 or bat.rate_import.get(5) != 20.0 or 15 in bat.rate_import:
+        print("ERROR: a rates line from before midnight applied wrongly: {}".format(sorted(bat.rate_import.items())[:3]))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -559,4 +633,6 @@ def run_replay_forward_tests(my_predbat):
     failed += test_set_export_window_after_midnight()
     failed += test_parse_log_invalid_plan()
     failed += test_apply_run_clears_p90_signatures()
+    failed += test_replay_state_and_rates()
+    failed += test_apply_logged_rates_from_before_midnight()
     return failed

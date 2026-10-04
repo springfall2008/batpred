@@ -22,9 +22,14 @@ Inputs taken from the log rather than recomputed: SoC, the cumulative load/PV/im
 in-day load adjustment, the load divergence, the cost so far today and the inverter's programmed export window. The PV forecast is
 the one in the yaml - the log records only its total.
 
+Newer Predbat versions also write "Replay input:" lines carrying what the human-readable lines round or leave out:
+the load and PV forecasts, the plan's starting state at full precision, and the rates whenever they change. Where a
+run has them they take precedence.
+
 The replay carries on across midnight (roll_over_midnight), so a late-evening yaml replays the whole next day.
 """
 import array
+import ast
 import math
 import re
 from datetime import date, timedelta
@@ -45,6 +50,13 @@ VERSION_RE = re.compile(r"version (\S+) currently running")
 # Lines written by Predbat versions that log the inputs a replay cannot otherwise recover
 LOAD_INPUT_RE = re.compile(r"Replay input: load forecast, 5-minute Wh from (\d\d):(\d\d) \[([^\]]*)\]")
 PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from (\d\d):(\d\d) p50 \[([^\]]*)\] p10 \[([^\]]*)\] p90 \[([^\]]*)\]")
+# The plan's starting state, each value written so it reads back as the same float (or None)
+STATE_INPUT_RE = re.compile(r"Replay input: state (.*)$")
+# The rates from now, as change points, logged only when they change
+RATES_INPUT_RE = re.compile(r"Replay input: rates changed, from (\d\d):(\d\d) (.*)$")
+RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
+# Rate series in the rates line and the instance attributes they replace
+RATES_ATTRIBUTES = {"import": "rate_import", "export": "rate_export", "import_base": "rate_import_base", "export_base": "rate_export_base"}
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 INVALID_RE = re.compile(r"Will recompute the plan as it is invalid")
@@ -169,6 +181,8 @@ def parse_log(path):
                 (VERSION_RE, "version"),
                 (LOAD_INPUT_RE, "load_input"),
                 (PV_INPUT_RE, "pv_input"),
+                (STATE_INPUT_RE, "state"),
+                (RATES_INPUT_RE, "rates"),
                 (FILTERED_RE, "filtered"),
                 (FORCE_RE, "force"),
             ):
@@ -177,8 +191,50 @@ def parse_log(path):
                     continue
                 found = regex.search(line)
                 if found:
-                    run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "pv_input") else found.group(1)
-    return [run for run in runs if run.get("soc")]
+                    if store == "state":
+                        run[store] = parse_state(found.group(1))
+                    elif store == "rates":
+                        run[store] = parse_rates(found.groups())
+                    else:
+                        run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "pv_input") else found.group(1)
+    kept = []
+    rates = None
+    for run in runs:
+        # Rates are logged only when they change, so a change logged by a dropped run still holds for the runs after it
+        rates = run.get("rates") or rates
+        if run.get("soc"):
+            if rates and not run.get("rates"):
+                run["rates"] = rates
+            rates = None
+            kept.append(run)
+    return kept
+
+
+def parse_state(text):
+    """Parse the name value pairs of a "Replay input: state" line into a dict of floats, None where the log had none."""
+    tokens = text.split()
+    return {name: None if value == "None" else float(value) for name, value in zip(tokens[::2], tokens[1::2])}
+
+
+def parse_rates(groups):
+    """Parse a "Replay input: rates changed" line into (start minute, {series: (change points, end)}).
+
+    Each series is a list of [minutes from start, rate] at every change of rate, followed by the minute from start it
+    runs to.
+    """
+    hours, minutes, text = groups
+    series = {}
+    for name, points, end in RATES_SERIES_RE.findall(text):
+        series[name] = ([(int(offset), float(rate)) for offset, rate in ast.literal_eval(points)], int(end))
+    return int(hours) * 60 + int(minutes), series
+
+
+def today_values(run):
+    """Return a run's four day counters (load, import, export, PV), exact from its state line when it has one, else None."""
+    state = run.get("state")
+    if state and all(state.get(name) is not None for name in ("load_today", "import_today", "export_today", "pv_today")):
+        return (state["load_today"], state["import_today"], state["export_today"], state["pv_today"])
+    return run.get("today")
 
 
 def shift_counter(history, minutes, delta):
@@ -311,8 +367,9 @@ def roll_over_midnight(my_predbat, days=1):
     midnight in the new day's minutes. Predbat counts wall-clock minutes from midnight, so a day is always 1440
     minutes, even when the clocks change.
 
-    Only what the yaml carried moves; nothing new arrives. Rates the live system would have fetched since - the
-    next day-ahead prices, say - are missing, and the plan sees the yaml's rates running out a day sooner.
+    Only what the yaml carried moves; nothing new arrives. Rates the live system fetched since - the next day-ahead
+    prices, say - come from the log's rates lines (apply_logged_rates); without them the plan sees the yaml's rates
+    running out a day sooner.
     """
     minutes = days * 24 * 60
     for name in DAY_KEYED_DICTS:
@@ -340,8 +397,9 @@ def apply_run(my_predbat, prev, run):
     gap = run["minutes_now"] - my_predbat.minutes_now
     if gap < 0:
         raise ValueError("Log run at minute {} is before the state at minute {}".format(run["minutes_now"], my_predbat.minutes_now))
-    if run.get("today") and prev.get("today"):
-        for name, now_value, prev_value in zip(COUNTER_ARRAYS, run["today"], prev["today"]):
+    now_today, prev_today = today_values(run), today_values(prev)
+    if now_today and prev_today:
+        for name, now_value, prev_value in zip(COUNTER_ARRAYS, now_today, prev_today):
             setattr(my_predbat, name, shift_counter(getattr(my_predbat, name), gap, counter_gain(now_value, prev_value, crosses_midnight(prev, run))))
     elif gap:
         for name in COUNTER_ARRAYS:
@@ -366,8 +424,10 @@ def apply_run(my_predbat, prev, run):
     # these counters; the live system recomputes both each run, so take them from the log too
     if run.get("cost"):
         my_predbat.cost_today_sofar = float(run["cost"])
-    if run.get("today"):
-        my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in run["today"])
+    if now_today:
+        my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in now_today)
+    if run.get("rates"):
+        apply_logged_rates(my_predbat, run["rates"])
     if run.get("pv_input"):
         apply_logged_pv_forecast(my_predbat, run["pv_input"])
     # Fetch clears these every run, so the plan's stale-p90 guard only ever compares within one cycle. Left set,
@@ -380,6 +440,7 @@ def apply_run(my_predbat, prev, run):
     # Use the logged value instead; it is rounded to 2 dp of the fraction exactly as get_load_divergence returns it.
     if run.get("divergence"):
         my_predbat.replay_load_divergence = round(float(run["divergence"]) / 100.0, 2)
+    apply_logged_state(my_predbat, run.get("state"))
     # The window the inverter is holding is the one the previous run programmed
     set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now, prev.get("next_limit"))
 
@@ -507,8 +568,8 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             if not quiet:
                 print("Replay: rolled over midnight into {}".format(run["time"][:10]))
         if simulate:
-            before = prev.get("today") or yaml_today
-            now_today = run.get("today") or before
+            before = today_values(prev) or yaml_today
+            now_today = today_values(run) or before
             new_day = crosses_midnight(prev, run)
             load_kwh = counter_gain(now_today[0], before[0], new_day)
             pv_kwh = counter_gain(now_today[3], before[3], new_day)
@@ -643,6 +704,47 @@ def apply_logged_pv_forecast(my_predbat, pv_input):
             for offset in range(30):
                 series[start + index * 30 + offset] = kwh / 30.0
         setattr(my_predbat, name, series)
+
+
+def apply_logged_state(my_predbat, state):
+    """Set the plan's starting values from a run's "Replay input: state" line, which the other lines round.
+
+    The day counters are taken through today_values; a value the log gave as None is left alone.
+    """
+    if not state:
+        return
+    if state.get("soc_kw") is not None:
+        my_predbat.soc_kw = state["soc_kw"]
+        for inverter in my_predbat.inverters:
+            inverter.soc_kw = state["soc_kw"]
+    if state.get("soc_max") is not None:
+        my_predbat.soc_max = state["soc_max"]
+    if state.get("inday") is not None:
+        my_predbat.load_inday_adjustment = state["inday"]
+    if state.get("cost_today") is not None:
+        my_predbat.cost_today_sofar = state["cost_today"]
+
+
+def apply_logged_rates(my_predbat, rates_input):
+    """Replace the rates from a logged "Replay input: rates changed" line.
+
+    Each series is rebuilt per minute from its change points over the span the log gave, and ends where the live
+    rates ended. Minutes before the logged start keep their values; only the cost so far reads them, and that comes
+    from the log. A line carried over from a run before midnight is in that day's minutes, so moves back a day.
+    """
+    start, series = rates_input
+    if start > my_predbat.minutes_now:
+        start -= 24 * 60
+    for name, (points, end) in series.items():
+        attribute = RATES_ATTRIBUTES.get(name)
+        if attribute is None:
+            continue
+        rates = {minute: value for minute, value in (getattr(my_predbat, attribute, None) or {}).items() if minute < start}
+        for index, (offset, rate) in enumerate(points):
+            until = points[index + 1][0] if index + 1 < len(points) else end
+            for minute in range(start + offset, start + until):
+                rates[minute] = rate
+        setattr(my_predbat, attribute, rates)
 
 
 def capture_candidate(my_predbat):
