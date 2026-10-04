@@ -58,6 +58,7 @@ CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
+IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -3769,12 +3770,12 @@ class Octopus:
                             # Mark the minutes this dispatch made cheaper in io_adjusted, as the Octopus Energy
                             # integration's feed does with is_intelligent_adjusted, so the plan treats them as a
                             # dispatch that may still move or vanish. A minute already off-peak by tariff is
-                            # certain and stays unmarked. Compare to the penny: rate_min_base is rounded by
-                            # dp2 but the tariff feed is not, so an off-peak 5.2314p would otherwise read as
+                            # certain, so it keeps its own rate and stays unmarked. rate_min_base is rounded by
+                            # dp2 but the tariff feed is not, so allow for that: an off-peak 5.2314p is not
                             # lowered by the 5.23p dispatch (#5392).
-                            if dp2(assumed_price) < dp2(rates.get(minute, assumed_price)):
+                            if assumed_price < rates.get(minute, assumed_price) - IO_RATE_TOLERANCE:
                                 self.io_adjusted[minute] = True
-                            rates[minute] = assumed_price
+                                rates[minute] = assumed_price
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
