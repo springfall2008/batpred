@@ -17,7 +17,7 @@ import time
 import uuid
 import traceback
 from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of
-from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT
 import pytz as _pytz
 
 from component_base import ComponentBase
@@ -290,6 +290,11 @@ class GatewayMQTT(ComponentBase):
         # would keep the original timestamp and the device would think the plan is stale)
         self._last_plan_entries = None
         self._last_plan_timezone = None
+        # Charge / discharge rate caps (W per inverter) sent with the plan so the hub's
+        # autonomous mode never writes a rate above them (predbat-gateway#424).
+        # _plan_caps is what the next plan will carry, _last_plan_caps what the last one did.
+        self._plan_caps = (0, 0)
+        self._last_plan_caps = None
         self._plan_version = 0
         self._refresh_in_progress = False
         self._error_count = 0
@@ -463,9 +468,37 @@ class GatewayMQTT(ComponentBase):
 
         self.log(f"Info: GatewayMQTT: Plan entries ({len(plan_entries)}): " + ", ".join(f"mode={e['mode']} {e['start_hour']:02d}:{e['start_minute']:02d}-{e['end_hour']:02d}:{e['end_minute']:02d}" for e in plan_entries))
 
+        # Caps go with every plan, including an empty one: they are what the hub falls back
+        # to outside any window, so a change in them alone is a change in the plan.
+        self._plan_caps = self._plan_rate_caps(charge_rate_w, discharge_rate_w)
+
         # Queue plan for async publishing (picked up by run() cycle)
         if self._plan_changed(plan_entries):
             self._pending_plan = (plan_entries, timezone)
+
+    def _plan_rate_caps(self, charge_rate_w, discharge_rate_w):
+        """Return the (charge, discharge) rate caps in W to send with the plan.
+
+        The plan carries one cap pair and the hub applies it to every inverter it drives,
+        while the rates the plan hook is given are summed across the site's inverters. So
+        use the smallest per-inverter rate (already limited by inverter_limit_charge /
+        inverter_limit_discharge and battery_rate_max): whichever inverter the hub writes
+        it to, it is never above that inverter's own limit.
+
+        Only inverters this gateway drives count - the ones auto-config registered with
+        inverter_type GWMQTT. Any other inverter in the same PredBat is not written by the
+        hub and must not lower the cap. With no such inverter (plan executed before
+        auto-config), fall back to the hook's rates.
+        """
+        inverters = getattr(self.base, "inverters", None)
+        if not isinstance(inverters, (list, tuple)):
+            inverters = []
+        inverters = [inverter for inverter in inverters if getattr(inverter, "inverter_type", None) == "GWMQTT"]
+        charge_rates = [inverter.battery_rate_max_charge * MINUTE_WATT for inverter in inverters if inverter.battery_rate_max_charge]
+        discharge_rates = [inverter.battery_rate_max_discharge * MINUTE_WATT for inverter in inverters if inverter.battery_rate_max_discharge]
+        charge_cap_w = min(charge_rates) if charge_rates else charge_rate_w
+        discharge_cap_w = min(discharge_rates) if discharge_rates else discharge_rate_w
+        return (max(int(round(charge_cap_w)), 0), max(int(round(discharge_cap_w)), 0))
 
     def _refresh_ev_windows(self):
         """Re-read the PredBat car-charging-slot planned windows from HA and cache them.
@@ -1737,10 +1770,10 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Info: GatewayMQTT: inverter_reset sent for inverter {serial}")
 
     def _plan_changed(self, plan_entries):
-        """Check if the plan differs from the last published plan."""
+        """Check if the plan (its entries or its rate caps) differs from the last published plan."""
         if self._last_published_plan is None:
             return True
-        return plan_entries != self._last_published_plan
+        return plan_entries != self._last_published_plan or self._plan_caps != self._last_plan_caps
 
     async def publish_plan(self, plan_entries, timezone_str):
         """Build and publish an ExecutionPlan protobuf to the gateway.
@@ -1761,16 +1794,18 @@ class GatewayMQTT(ComponentBase):
             return
 
         self._plan_version += 1
-        data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str)
+        charge_cap_w, discharge_cap_w = self._plan_caps
+        data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str, charge_cap_w=charge_cap_w, discharge_cap_w=discharge_cap_w)
         self._last_plan_data = data
         self._last_plan_entries = plan_entries
+        self._last_plan_caps = (charge_cap_w, discharge_cap_w)
         self._last_plan_timezone = timezone_str
         self._last_plan_publish_time = time.time()
 
         self._debug_dump(f"TX execution plan v{self._plan_version}", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_published_plan = plan_entries
-        self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
+        self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries, rate caps charge {charge_cap_w}W discharge {discharge_cap_w}W)")
 
     async def _republish_plan_if_stale(self):
         """Re-publish the last plan periodically so its embedded timestamp stays fresh.
@@ -1786,7 +1821,8 @@ class GatewayMQTT(ComponentBase):
             return
         if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
             return
-        data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone)
+        charge_cap_w, discharge_cap_w = self._last_plan_caps or (0, 0)
+        data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone, charge_cap_w=charge_cap_w, discharge_cap_w=discharge_cap_w)
         self._debug_dump("TX execution plan (re-publish)", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_plan_data = data
@@ -2409,13 +2445,15 @@ class GatewayMQTT(ComponentBase):
             return "UTC0"
 
     @staticmethod
-    def build_execution_plan(entries, plan_version, timezone):
+    def build_execution_plan(entries, plan_version, timezone, charge_cap_w=0, discharge_cap_w=0):
         """Build protobuf ExecutionPlan from a list of plan entry dicts.
 
         Args:
             entries: List of dicts with keys matching PlanEntry fields.
             plan_version: Monotonic version number.
             timezone: IANA timezone string (e.g. "Europe/London") — converted to POSIX format internally.
+            charge_cap_w: Highest charge rate in W the hub may write per inverter; 0 = not sent.
+            discharge_cap_w: Highest discharge rate in W the hub may write per inverter; 0 = not sent.
 
         Returns:
             Serialized protobuf bytes.
@@ -2424,6 +2462,8 @@ class GatewayMQTT(ComponentBase):
         plan.timestamp = int(time.time())
         plan.plan_version = plan_version
         plan.timezone = GatewayMQTT.iana_to_posix_tz(timezone)
+        plan.charge_cap_w = int(charge_cap_w)
+        plan.discharge_cap_w = int(discharge_cap_w)
 
         for entry_dict in entries:
             pe = plan.entries.add()

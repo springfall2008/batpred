@@ -138,6 +138,26 @@ class TestPlanSerialization:
         assert plan.entries[1].mode == 2
         assert plan.entries[1].use_native is False
 
+    def test_plan_carries_rate_caps(self):
+        """The site's charge/discharge rate caps are sent at plan level (predbat-gateway#424)."""
+        from gateway import GatewayMQTT
+
+        data = GatewayMQTT.build_execution_plan([], plan_version=1, timezone="UTC", charge_cap_w=3000, discharge_cap_w=3600)
+        plan = pb.ExecutionPlan()
+        plan.ParseFromString(data)
+        assert plan.charge_cap_w == 3000
+        assert plan.discharge_cap_w == 3600
+
+    def test_plan_without_rate_caps_sends_zero(self):
+        """Caps default to 0, which the hub reads as 'not sent'."""
+        from gateway import GatewayMQTT
+
+        data = GatewayMQTT.build_execution_plan([], plan_version=1, timezone="UTC")
+        plan = pb.ExecutionPlan()
+        plan.ParseFromString(data)
+        assert plan.charge_cap_w == 0
+        assert plan.discharge_cap_w == 0
+
     def test_empty_plan(self):
         from gateway import GatewayMQTT
 
@@ -1065,7 +1085,59 @@ class TestPlanHookConversion:
         gw._mqtt_connected = False
         gw._last_plan_data = None
         gw._last_plan_publish_time = 0
+        gw._plan_caps = (0, 0)
+        gw._last_plan_caps = None
         return gw
+
+    def _inverter(self, charge_w, discharge_w, inverter_type="GWMQTT"):
+        """A PredBat inverter stand-in with its rate limits in kW per minute, as inverter.py holds them."""
+        from unittest.mock import MagicMock
+
+        inverter = MagicMock()
+        inverter.inverter_type = inverter_type
+        inverter.battery_rate_max_charge = charge_w / 60000.0
+        inverter.battery_rate_max_discharge = discharge_w / 60000.0
+        return inverter
+
+    def test_rate_caps_taken_from_hook_rates(self):
+        """With no per-inverter data the caps are the rates the hook was given."""
+        gw = self._make_gateway()
+        gw.base.inverters = []
+
+        gw._on_plan_executed(charge_windows=[], charge_limits=[], export_windows=[], export_limits=[], charge_rate_w=3000, discharge_rate_w=3600)
+
+        assert gw._plan_caps == (3000, 3600)
+
+    def test_rate_caps_use_smallest_inverter_not_site_total(self):
+        """The hub applies the cap to each inverter, so send the smallest per-inverter cap, not the summed site rate."""
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(3000, 3600), self._inverter(2600, 5000)]
+
+        gw._on_plan_executed(charge_windows=[], charge_limits=[], export_windows=[], export_limits=[], charge_rate_w=5600, discharge_rate_w=8600)
+
+        assert gw._plan_caps == (2600, 3600)
+
+    def test_rate_caps_ignore_inverters_the_gateway_does_not_drive(self):
+        """An inverter of another type in the same PredBat is not written by the hub and must not lower the cap."""
+        gw = self._make_gateway()
+        gw.base.inverters = [self._inverter(3000, 3600), self._inverter(1000, 1000, inverter_type="GE")]
+
+        gw._on_plan_executed(charge_windows=[], charge_limits=[], export_windows=[], export_limits=[], charge_rate_w=4000, discharge_rate_w=4600)
+
+        assert gw._plan_caps == (3000, 3600)
+
+    def test_rate_cap_change_alone_queues_a_plan(self):
+        """A changed cap must reach the hub even when the windows are unchanged."""
+        gw = self._make_gateway()
+        gw.base.inverters = []
+        gw._last_published_plan = []
+        gw._last_plan_caps = (3000, 3600)
+
+        gw._on_plan_executed(charge_windows=[], charge_limits=[], export_windows=[], export_limits=[], charge_rate_w=3000, discharge_rate_w=3600)
+        assert gw._pending_plan is None  # nothing changed
+
+        gw._on_plan_executed(charge_windows=[], charge_limits=[], export_windows=[], export_limits=[], charge_rate_w=3000, discharge_rate_w=2000)
+        assert gw._pending_plan is not None
 
     def test_charge_window_conversion(self):
         """Charge windows are converted to mode=1 plan entries."""
@@ -1469,6 +1541,8 @@ class TestPlanRepublish:
         gw._plan_version = 0
         gw._last_published_plan = None
         gw._pending_plan = None
+        gw._plan_caps = (0, 0)
+        gw._last_plan_caps = None
         gw.topic_schedule = "predbat/schedule"
         gw._published = []
 
@@ -1516,6 +1590,37 @@ class TestPlanRepublish:
         assert second_plan.plan_version == first_plan.plan_version  # content unchanged → same version
         # The cached bytes are refreshed so subsequent reads reflect the new timestamp.
         assert gw._last_plan_data == second_payload
+
+    def test_publish_and_republish_carry_rate_caps(self):
+        """The caps go out with the plan and survive the timestamp-refresh rebuild."""
+        gw = self._make_gateway()
+        gw._plan_caps = (3000, 3600)
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+
+        from gateway import _PLAN_REPUBLISH_INTERVAL
+
+        gw._last_plan_publish_time -= _PLAN_REPUBLISH_INTERVAL + 60
+        self._run(gw._republish_plan_if_stale())
+
+        assert len(gw._published) == 2
+        for _, payload, _ in gw._published:
+            plan = pb.ExecutionPlan()
+            plan.ParseFromString(payload)
+            assert plan.charge_cap_w == 3000
+            assert plan.discharge_cap_w == 3600
+
+    def test_rate_cap_change_publishes_new_version(self):
+        """Same windows, different caps: published again with a higher version."""
+        gw = self._make_gateway()
+        gw._plan_caps = (3000, 3600)
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+        assert len(gw._published) == 1  # unchanged, skipped
+
+        gw._plan_caps = (3000, 2000)
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+        assert len(gw._published) == 2
+        assert gw._plan_version == 2
 
     def test_no_republish_before_interval(self):
         """A plan younger than the re-publish interval is not re-sent."""

@@ -207,4 +207,11 @@ message ExecutionPlan {
   uint32 plan_version     = 2;  // monotonic, gateway skips stale plans
   string timezone         = 3;  // POSIX TZ rule (e.g. "GMT0BST,M3.5.0/1,M10.5.0") — set by cloud, applied via setenv("TZ")
   repeated PlanEntry entries = 4;
+  // Site caps on the charge / discharge rate, in W per inverter (same unit as
+  // PlanEntry.power_w): PredBat's effective maximum after inverter_limit_* and
+  // battery_rate_max. In autonomous mode the hub never writes a rate above them
+  // (gw#424). 0 = not sent (PredBat predating these fields): the hub falls back
+  // to the inverter's rated power.
+  uint32 charge_cap_w     = 5;
+  uint32 discharge_cap_w  = 6;
 }
