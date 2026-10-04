@@ -622,7 +622,7 @@ class SolaxAPI(ComponentBase):
         """
         return self.device_info.get(device_sn, {}).get("onlineStatus", 1) != 0
 
-    def get_inverter_last_yield(self, plant_id, device_sn):
+    def get_inverter_last_yield(self, entity_plant_id, device_sn):
         """
         Last known lifetime yield of an inverter in kWh, or None if it has never given one
 
@@ -634,7 +634,7 @@ class SolaxAPI(ComponentBase):
         if device_sn not in self.realtime_device_failed:
             device_yield = self.realtime_device_data.get(device_sn, {}).get("totalYield")
         elif device_sn not in self.inverter_last_yield:
-            device_yield = self.get_state_wrapper(f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_total_yield", default=None)
+            device_yield = self.get_state_wrapper(f"sensor.{self.prefix}_solax_{entity_plant_id}_{device_sn}_total_yield", default=None)
         try:
             self.inverter_last_yield[device_sn] = float(device_yield)
         except (ValueError, TypeError):
@@ -650,10 +650,14 @@ class SolaxAPI(ComponentBase):
         counter does not go backwards so a failed read cannot make the sum dip. An inverter with no yield of
         its own counts as 0. Returns None when the value should be held, which is only when an inverter that
         should be answering failed its read and has never given a yield
+
+        plant_id is the ID as SolaX gives it, which is what the inverters are stored under. The entity names
+        use a tidied form of it
         """
+        entity_plant_id = plant_id.lower().replace(" ", "_")
         pv_yield = 0.0
         for device_sn in self.plant_inverters.get(plant_id, []):
-            device_yield = self.get_inverter_last_yield(plant_id, device_sn)
+            device_yield = self.get_inverter_last_yield(entity_plant_id, device_sn)
             if device_yield is None:
                 read_ok = device_sn in self.realtime_device_data and device_sn not in self.realtime_device_failed
                 if not read_ok and self.inverter_expected(device_sn):
@@ -2350,8 +2354,8 @@ class SolaxAPI(ComponentBase):
                 # The entity SN is pinned to plant_inverters[plant_id][0] for stability; it is
                 # only set once (first inverter processed) so it never gets overwritten.
                 if plant_id not in plant_save:
-                    stable_sn = self.plant_inverters.get(plant_id, [device_sn])[0]
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+                    stable_sn = self.plant_inverters.get(device.get("plantId"), [device_sn])[0]
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0, "raw_plant_id": device.get("plantId")}
                 plant_save[plant_id]["pv"] = (plant_save[plant_id]["pv"] or 0) + (pvPower or 0)
                 plant_save[plant_id]["grid"] = (plant_save[plant_id]["grid"] or 0) + (gridPower or 0)
 
@@ -2447,7 +2451,7 @@ class SolaxAPI(ComponentBase):
 
                 # Store per-plant battery value for load-power calculation (second pass)
                 if plant_id not in plant_save:
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0, "raw_plant_id": device.get("plantId")}
 
                 plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
@@ -2555,7 +2559,7 @@ class SolaxAPI(ComponentBase):
 
             # Plant PV and grid power, held when an inverter that should be answering was not read on this
             # cycle as a sum with it missing would under-read. An offline inverter counts as 0W
-            if not any((inverter_sn in self.realtime_device_failed or inverter_sn not in self.realtime_device_data) and self.inverter_expected(inverter_sn) for inverter_sn in self.plant_inverters.get(plant_id, [])):
+            if not any((inverter_sn in self.realtime_device_failed or inverter_sn not in self.realtime_device_data) and self.inverter_expected(inverter_sn) for inverter_sn in self.plant_inverters.get(saved.get("raw_plant_id"), [])):
                 plant_name = next((plant.get("plantName", plant_id) for plant in self.plant_info if plant.get("plantId", "unknown").lower().replace(" ", "_") == plant_id), plant_id)
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_pv_power",
@@ -2790,7 +2794,7 @@ class SolaxAPI(ComponentBase):
                 )
                 # PV energy is built from the inverters, as the plant total yield above counts the output of an
                 # AC-coupled battery inverter as generation. The load is derived from it so both are held together
-                pv_yield = self.get_plant_pv_yield(plant_id, realtime.get("totalYield", 0.0))
+                pv_yield = self.get_plant_pv_yield(realtime_plant_id, realtime.get("totalYield", 0.0))
                 if pv_yield is None:
                     self.log(f"Warn: SolaX API: No inverter yield read for plant {realtime_plant_id}, keeping the previous PV yield and load values")
                 else:
