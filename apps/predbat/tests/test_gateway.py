@@ -1838,6 +1838,33 @@ class TestAutomaticConfig:
         self._make_inverter(status, serial="CE2225G400", primary=True)
         return status
 
+    def test_multi_inverter_energy_counters_bind_every_inverter_by_default(self):
+        """Without gateway_shared_ct each inverter has its own meter, so every energy counter is bound per inverter and summed."""
+        gw = self._make_gateway()
+        gw._last_status = self._two_inverter_status()
+        gw.automatic_config()
+
+        base0 = f"{gw.prefix}_gateway_23g800"
+        base1 = f"{gw.prefix}_gateway_25g400"
+        for counter in ("pv_today", "import_today", "export_today", "load_today"):
+            assert gw._args[counter] == [f"sensor.{base0}_{counter}", f"sensor.{base1}_{counter}"], counter
+
+    def test_shared_ct_binds_grid_and_load_counters_to_the_first_inverter_only(self):
+        """gateway_shared_ct: import, export and load today describe the one shared clamp, so only the first inverter's are used.
+
+        pv_today is measured by each inverter itself, so it stays bound to every inverter.
+        """
+        gw = self._make_gateway()
+        gw.gateway_shared_ct = True
+        gw._last_status = self._two_inverter_status()
+        gw.automatic_config()
+
+        base0 = f"{gw.prefix}_gateway_23g800"
+        base1 = f"{gw.prefix}_gateway_25g400"
+        for counter in ("import_today", "export_today", "load_today"):
+            assert gw._args[counter] == [f"sensor.{base0}_{counter}"], counter
+        assert gw._args["pv_today"] == [f"sensor.{base0}_pv_today", f"sensor.{base1}_pv_today"]
+
     def test_multi_inverter_grid_and_load_power_are_summed_by_default(self):
         """Without gateway_shared_ct each inverter's grid and load power is bound, as each has its own CT clamp."""
         gw = self._make_gateway()
@@ -6098,6 +6125,20 @@ class TestSharedCtEnergy:
 
         assert self._today(gw, "import_today") == 0.6
         assert self._today(gw, "import_today", suffix="25g400") == 4726.4
+
+    def test_pv_from_every_inverter_feeds_the_load(self):
+        """Each inverter measures its own PV, so the load takes the rise in every inverter's pv_today counter."""
+        gw = self._make_gateway()
+        first = self._status(self.BASE_TIME, grid_w=0)
+        first.inverters[0].energy.pv_today_wh = 1000
+        first.inverters[1].energy.pv_today_wh = 5000
+        second = self._status(self.BASE_TIME + 360, grid_w=0)
+        second.inverters[0].energy.pv_today_wh = 1300
+        second.inverters[1].energy.pv_today_wh = 5200
+        self._feed(gw, first)
+        self._feed(gw, second)
+
+        assert self._today(gw, "load_today") == 0.5
 
     def test_pv_today_is_left_alone(self):
         """pv_today is still the hub's counter."""

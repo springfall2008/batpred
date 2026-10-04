@@ -982,7 +982,7 @@ class GatewayMQTT(ComponentBase):
           to export and negative to import, and each side is integrated;
         - each inverter's battery power is split into charge and discharge the same way and summed, so
           one battery charging from the other counts on both sides;
-        - PV is the rise in the first inverter's pv_today counter, which is sound;
+        - PV is the rise in each inverter's pv_today counter, which is sound, summed;
         - load = pv + import - export + battery discharge - battery charge.
 
         Each interval uses the mean of the readings at its two ends. The figures return to zero at
@@ -1011,7 +1011,7 @@ class GatewayMQTT(ComponentBase):
             "charge": sum(max(inv.battery.power_w, 0) for inv in inverters),
             "discharge": sum(max(-inv.battery.power_w, 0) for inv in inverters),
         }
-        pv_wh = inverters[0].energy.pv_today_wh
+        pv_wh = [inv.energy.pv_today_wh for inv in inverters]
 
         state = self._shared_ct_energy
         if state is None:
@@ -1027,9 +1027,9 @@ class GatewayMQTT(ComponentBase):
             if elapsed <= GATEWAY_SHARED_CT_MAX_GAP_SECONDS:
                 hours = elapsed / 3600.0
                 energy = {name: (state["power"][name] + power[name]) / 2.0 * hours for name in power}
-                pv_rise_wh = pv_wh - state["pv_wh"]
-                if pv_rise_wh < 0 or pv_rise_wh > GATEWAY_SHARED_CT_MAX_PV_W * hours + GATEWAY_SHARED_CT_PV_STEP_WH:
-                    pv_rise_wh = 0
+                # Per inverter, so one counter dropping a sample does not hide the others' generation
+                pv_rise_limit_wh = GATEWAY_SHARED_CT_MAX_PV_W * hours + GATEWAY_SHARED_CT_PV_STEP_WH
+                pv_rise_wh = sum(rise for rise in (now_wh - was_wh for now_wh, was_wh in zip(pv_wh, state["pv_wh"])) if 0 <= rise <= pv_rise_limit_wh)
                 for name in energy:
                     state[name + "_wh"] += energy[name]
                 state["load_wh"] += pv_rise_wh + energy["import"] - energy["export"] + energy["discharge"] - energy["charge"]
@@ -1501,13 +1501,18 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("export_limit", export_limit_entities)
         self.set_arg("inverter_limit", inverter_limit_entities)
 
-        # Energy counters (first inverter)
+        # Energy counters. PV is measured by each inverter itself, so every inverter's counter is
+        # bound and Predbat sums them. Import, export and load are the same when each inverter has its
+        # own clamp; on one shared clamp (gateway_shared_ct) they describe the whole site once, so only
+        # the first inverter's are bound - and those are the ones _update_shared_ct_energy() fills in.
         suffix0 = inverters[0].serial[-6:].lower()
         base0 = f"{self.prefix}_gateway_{suffix0}"
-        self.set_arg("pv_today", [f"sensor.{base0}_pv_today"])
-        self.set_arg("import_today", [f"sensor.{base0}_import_today"])
-        self.set_arg("export_today", [f"sensor.{base0}_export_today"])
-        self.set_arg("load_today", [f"sensor.{base0}_load_today"])
+        bases = [f"{self.prefix}_gateway_{inv.serial[-6:].lower()}" for inv in inverters]
+        site_bases = bases[:1] if self.gateway_shared_ct else bases
+        self.set_arg("pv_today", [f"sensor.{base}_pv_today" for base in bases])
+        self.set_arg("import_today", [f"sensor.{base}_import_today" for base in site_bases])
+        self.set_arg("export_today", [f"sensor.{base}_export_today" for base in site_bases])
+        self.set_arg("load_today", [f"sensor.{base}_load_today" for base in site_bases])
 
         # Battery health (first inverter)
         self.set_arg("battery_temperature_history", f"sensor.{base0}_battery_temperature")
