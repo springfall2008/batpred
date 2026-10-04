@@ -17,7 +17,7 @@ import time
 import uuid
 import traceback
 from utils import calc_percent_limit, export_mode_of, export_target_of, export_power_of
-from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, MINUTE_WATT
 import pytz as _pytz
 
 from component_base import ComponentBase
@@ -57,8 +57,9 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 _TELEMETRY_STALE_THRESHOLD = 120
 
 # How long an identical control command waits for the hub's ack (or, after an ack,
-# for telemetry to catch up) before it may be published again (seconds). Longer than
-# the generic write_and_poll loop (10 x 2 s), so one write sends the command once.
+# for telemetry to catch up) before it may be published again (seconds). Covers the
+# GWMQTT write_and_poll loop (3 attempts of up to 10 s each, see INVERTER_DEF), so one
+# write sends the command once.
 _COMMAND_ACK_WINDOW = 30
 
 # Ids kept per tracked command, so an ack for an earlier send of the same value still
@@ -98,6 +99,11 @@ def _serial_suffix(serial):
 PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
+
+# GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
+# rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
+GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY = 1
+GIVENERGY_INVERTER_TYPES = (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
 
 # Entity attribute table — keyed by the semantic suffix used in dashboard_item calls
 GATEWAY_ATTRIBUTE_TABLE = {
@@ -295,6 +301,7 @@ class GatewayMQTT(ComponentBase):
         self._last_status = None
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
+        self._inverter_slot_serials = []  # serial bound to each PredBat inverter slot at the last auto-config
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
         self._last_published_plan = None
         self._pending_plan = None
@@ -320,6 +327,8 @@ class GatewayMQTT(ComponentBase):
 
         # Track which inverter serials have received an inverter_reset command
         self._inverter_reset_done = set()
+        # Rate caps last sent to the hub with set_rate_cap: serial -> (charge_w, discharge_w)
+        self._rate_caps_sent = {}
 
         # Last read-only state sent to the gateway (None until the first send,
         # so the current state is always pushed once on startup)
@@ -629,6 +638,9 @@ class GatewayMQTT(ComponentBase):
             # Send inverter_reset for any inverter not yet reset when not in read-only mode
             await self._check_inverter_resets()
 
+            # Tell the gateway each inverter's charge/discharge rate cap (once, then on change)
+            await self._check_rate_caps()
+
             # Publish predbat data (price, timeline) to device display
             if self._mqtt_connected and self._auto_configured:
                 await self._publish_predbat_data()
@@ -761,6 +773,10 @@ class GatewayMQTT(ComponentBase):
                 self._gateway_online = payload == "1"
                 if self._gateway_online != was_online:
                     self.log(f"Info: GatewayMQTT: Gateway is {'online' if self._gateway_online else 'offline'}")
+                    # A hub that has been away may be on new firmware or have lost its stored
+                    # rate caps, so send them again. Done here, not only in _check_rate_caps():
+                    # a reboot is quicker than the gap between two run() cycles.
+                    self._rate_caps_sent.clear()
                     self.dashboard_item(
                         f"binary_sensor.{self.prefix}_gateway_online",
                         self._gateway_online,
@@ -978,8 +994,15 @@ class GatewayMQTT(ComponentBase):
         _raw_export_limit = control.export_limit_w
         export_limit_publish = 99999 if _raw_export_limit == 0 else (0 if _raw_export_limit == 1 else _raw_export_limit)
         self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
+        # The hub reports the rate the inverter holds, so a GivEnergy one reads back short of the rate written
+        # (#5324). Marked per inverter, on a copy of the table entry: GWMQTT is one type for every brand
+        charge_rate_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}))
+        discharge_rate_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}))
+        if inv.type in GIVENERGY_INVERTER_TYPES:
+            charge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+            discharge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=charge_rate_attributes, app="gateway")
+        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=discharge_rate_attributes, app="gateway")
         # The reserve ceiling is per-inverter, so it overrides the table's 100: GivEnergy
         # firmware refuses a reserve of 100 and the gateway reports 98 for it (gateway
         # issue #346). adjust_reserve() honours this entity's "max" through
@@ -1238,10 +1261,19 @@ class GatewayMQTT(ComponentBase):
             # NOTE: control commands are addressed to the Gateway/EMS serial — the firmware
             # must fan these out to the AIOs (tracked separately in command_handler.cpp).
             inverters = gateway_units[:1]
-        else:
+        elif aios:
             inverters = aios
-        if not inverters:
-            inverters = candidate_aios or list(all_inverters)  # last resort
+        else:
+            # A retained startup frame can contain the discovered inverter list before
+            # battery telemetry has been populated.  Treating every discovered unit as
+            # a last-resort control target makes a PV-only inverter writable and the
+            # decision then stays sticky because its serial is not new on later frames.
+            # Keep auto-config incomplete so _needs_reconfigure() retries when the next
+            # status supplies enough capability data to identify a battery inverter.
+            available = [inv.serial for inv in candidate_aios]
+            self.log(f"Warn: GatewayMQTT: no battery-capable inverter telemetry yet (discovered serials: {available}); auto-config deferred")
+            self._auto_configured = False
+            return
 
         # Apply serial filter if configured. A no-match is an error — configuring the
         # wrong inverter set is worse than not configuring at all. Leave _auto_configured
@@ -1264,6 +1296,7 @@ class GatewayMQTT(ComponentBase):
         inverters = sorted(inverters, key=lambda inv: inv.serial)
 
         num_inverters = len(inverters)
+        self._inverter_slot_serials = [inv.serial for inv in inverters]
         self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
 
         # Set inverter type
@@ -1290,6 +1323,9 @@ class GatewayMQTT(ComponentBase):
         discharge_enable_entities = []
         export_limit_entities = []
         inverter_limit_entities = []
+        battery_scaling_entities = []
+        battery_rate_max_entities = []
+        inverter_time_entities = []
 
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
@@ -1322,6 +1358,10 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
             inverter_limit_entities.append(f"sensor.{base}_inverter_rate_max")
+            battery_scaling_entities.append(f"sensor.{base}_battery_dod")
+            battery_rate_max_entities.append(f"sensor.{base}_battery_rate_max")
+            # Clock drift detection — uses GatewayStatus.timestamp
+            inverter_time_entities.append(f"sensor.{base}_inverter_time")
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
@@ -1354,13 +1394,11 @@ class GatewayMQTT(ComponentBase):
 
         # Battery health (first inverter)
         self.set_arg("battery_temperature_history", f"sensor.{base0}_battery_temperature")
-        self.set_arg("battery_scaling", [f"sensor.{base0}_battery_dod"])
 
-        # Battery rate max
-        self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
-
-        # Inverter time (clock drift detection — uses GatewayStatus.timestamp)
-        self.set_arg("inverter_time", [f"sensor.{base0}_inverter_time"])
+        # Per-inverter: inverter.py reads these at index=self.id, so each needs one entry per inverter
+        self.set_arg("battery_scaling", battery_scaling_entities)
+        self.set_arg("battery_rate_max", battery_rate_max_entities)
+        self.set_arg("inverter_time", inverter_time_entities)
 
         # EMS aggregate entities (GivEnergy EMS only)
         inv0 = inverters[0]
@@ -1718,6 +1756,63 @@ class GatewayMQTT(ComponentBase):
                 self._inverter_reset_done.add(serial)
                 self.log(f"Info: GatewayMQTT: inverter_reset sent for inverter {serial}")
 
+    def _inverter_rate_caps(self):
+        """Return {serial: (charge_w, discharge_w)} - the rate cap of each inverter the hub drives.
+
+        The cap is the inverter's own battery_rate_max_charge / discharge, which is already
+        limited by inverter_limit_charge / inverter_limit_discharge and battery_rate_max.
+
+        Which serial an inverter is comes from auto-config, which binds PredBat inverter slot N
+        to a hub inverter (_inverter_slot_serials). An inverter of another type has no hub slot
+        and is left out, as is one whose limits PredBat has not read yet - a cap of 0 would
+        tell the hub there is no cap.
+        """
+        inverters = getattr(self.base, "inverters", None)
+        if not isinstance(inverters, (list, tuple)):
+            return {}
+        caps = {}
+        for inverter in inverters:
+            slot = getattr(inverter, "id", None)
+            if getattr(inverter, "inverter_type", None) != "GWMQTT" or not isinstance(slot, int) or not 0 <= slot < len(self._inverter_slot_serials):
+                continue
+            charge_cap_w = int(round((inverter.battery_rate_max_charge or 0) * MINUTE_WATT))
+            discharge_cap_w = int(round((inverter.battery_rate_max_discharge or 0) * MINUTE_WATT))
+            if charge_cap_w <= 0 or discharge_cap_w <= 0:
+                continue
+            caps[self._inverter_slot_serials[slot]] = (charge_cap_w, discharge_cap_w)
+        return caps
+
+    async def _check_rate_caps(self):
+        """Send set_rate_cap for each inverter whose charge/discharge rate cap the hub does not have yet.
+
+        When the hub loses the cloud it runs the cached plan itself, and outside a charge or
+        export window it has to choose a rate. Without this it only knows the inverter's rated
+        power, which can be above the limit PredBat works to (predbat-gateway#424).
+
+        Called on every run() cycle and gated like _check_inverter_resets(): nothing is sent in
+        read-only mode, while the gateway is not alive, or before auto-config. Each inverter's
+        cap is sent once, and again only if it changes, read-only mode is switched off, or the
+        hub comes back online. The hub stores it, so it is not repeated with every plan.
+        """
+        if self.get_arg("set_read_only", False):
+            self._rate_caps_sent.clear()  # re-send once read-only is later disabled
+            return
+        if not self._gateway_online:
+            # The command is not retained, so one sent now would be lost. Forget what was
+            # sent so a hub that comes back - possibly on new firmware, or with its stored
+            # caps wiped - is told again.
+            self._rate_caps_sent.clear()
+            return
+        if not self.is_alive() or not self._auto_configured:
+            return
+        for serial, caps in self._inverter_rate_caps().items():
+            if self._rate_caps_sent.get(serial) == caps:
+                continue
+            charge_cap_w, discharge_cap_w = caps
+            await self.publish_command("set_rate_cap", serial=serial, charge_cap_w=charge_cap_w, discharge_cap_w=discharge_cap_w)
+            self._rate_caps_sent[serial] = caps
+            self.log(f"Info: GatewayMQTT: set_rate_cap sent for inverter {serial}: charge {charge_cap_w}W discharge {discharge_cap_w}W")
+
     def _plan_changed(self, plan_entries):
         """Check if the plan differs from the last published plan."""
         if self._last_published_plan is None:
@@ -1989,8 +2084,8 @@ class GatewayMQTT(ComponentBase):
     async def _send_control(self, entity_id, command, **kwargs):
         """Publish a control write once and let the hub's ack confirm it.
 
-        The generic write_and_poll loop calls the event handlers again every couple of
-        seconds until the read-back matches. Publishing on every call queued a fresh
+        The generic write_and_poll loop calls the event handlers again on every retry
+        until the read-back matches. Publishing on every call queued a fresh
         Modbus write on the hub each time, so a slow dongle write turned into a storm.
         Once the hub has shown it acks commands on this connection, an identical command
         (same entity, command and payload) is published only once per _COMMAND_ACK_WINDOW:
@@ -2479,6 +2574,10 @@ class GatewayMQTT(ComponentBase):
             cmd["power_w"] = kwargs["power_w"]
         if "target_soc" in kwargs:
             cmd["target_soc"] = kwargs["target_soc"]
+        if "charge_cap_w" in kwargs:
+            cmd["charge_cap_w"] = kwargs["charge_cap_w"]
+        if "discharge_cap_w" in kwargs:
+            cmd["discharge_cap_w"] = kwargs["discharge_cap_w"]
         if "schedule_json" in kwargs:
             cmd["schedule_json"] = kwargs["schedule_json"]
         if "enable" in kwargs:

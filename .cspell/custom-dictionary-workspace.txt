@@ -65,6 +65,7 @@ BLAS
 boostable
 Bottlecap
 brickatius
+britkat1980
 bwignore
 byok
 cadata
@@ -506,6 +507,7 @@ preclip
 pred
 predai
 predbat
+predbatsolcast
 predbatt
 predheat
 preseed

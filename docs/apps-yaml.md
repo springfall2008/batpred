@@ -716,7 +716,10 @@ When SolaX Cloud is configured, Predbat creates the following entities for each 
 - `sensor.predbat_solax_{plant_id}_battery_max_power` - Battery maximum power (W)
 - `sensor.predbat_solax_{plant_id}_inverter_max_power` - Inverter maximum power (W)
 - `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
-- `sensor.predbat_solax_{plant_id}_total_yield` - Total PV generation (kWh)
+- `sensor.predbat_solax_{plant_id}_pv_power` - Current PV power (W), summed over the plant's inverters and used for **pv_power**
+- `sensor.predbat_solax_{plant_id}_grid_power` - Current grid power (W), summed over the plant's inverters and used for **grid_power**
+- `sensor.predbat_solax_{plant_id}_pv_yield` - Total PV generation (kWh), summed from the plant's inverters and used for **pv_today**. It reads 0 on a plant whose inverters have no PV inputs, such as a lone AC-coupled battery inverter; PV on a separate inverter that SolaX does not measure is not seen, so set **pv_today** from another source if you have one
+- `sensor.predbat_solax_{plant_id}_total_yield` - Total yield as reported by SolaX for the plant (kWh); on a plant with an AC-coupled battery inverter this includes battery discharge
 - `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
 - `sensor.predbat_solax_{plant_id}_total_imported` - Total grid import (kWh)
@@ -853,6 +856,8 @@ When `automatic: true` (recommended), Predbat will automatically create and conf
 - Battery protection settings
 
 No manual entity configuration is required when using automatic mode.
+
+Automatic mode plans each direction at the most a charge or discharge slot can actually be set to. Some inverters refuse slot currents well below the maximum current they report, with no way to read the real limit. For example, a 3.6kW inverter reports 100A but only accepts 60A. So when Predbat first sees an inverter, it measures the ceiling itself. It writes test currents to one of slots 2-6 that is not in use: first the inverter's reported maximum charge or discharge current, then lower values until one is accepted. It then puts back the value that slot held. It saves the result, and checks it again at most once a day, starting from the saved value. Until an inverter has been measured, the current it can deliver at its rated power is used as an estimate. Once measured, the measured ceiling replaces that estimate, so a hybrid that can charge from PV above its AC rating is not held back. Predbat only uses slot 1 itself, so the test does not touch the schedule. The results are published as `sensor.predbat_solis_<serial>_slot_charge_power_max` and `..._slot_discharge_power_max`, and used for `inverter_limit_charge` and `inverter_limit_discharge`. `battery_rate_max` is set to the larger of the two, so a battery allowed to discharge faster than it charges is planned at both rates. An `inverter_limit_charge` or `inverter_limit_discharge` you set in `apps.yaml` takes precedence - use it to state a lower limit such as your inverter's AC rating.
 
 #### Manual configuration (solis_automatic: false)
 
@@ -1964,7 +1969,11 @@ source changes. Do not judge the accuracy of the new source until the settling p
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a PV10 pessimistic estimate alongside the central PV50.
+Ensemble members are used to derive the PV10 pessimistic and PV90 optimistic estimates alongside the central PV50.
+For each hour Predbat takes the ensemble's 10th and 90th percentiles as a ratio of the ensemble's own median, and applies those ratios to the PV50,
+so the gap either side of PV50 is wider when the weather models disagree and narrower when they agree.
+When PV calibration is on, PV10 and PV90 are scaled by the same calibration as the PV50.
+If the ensemble data cannot be downloaded, PV10 and PV90 are created from the worst and best of your recent days instead.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
@@ -2087,7 +2096,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
 - **car_charging_planned_response** - Values for the car_charging_planned sensor that indicate that the car is plugged in and will charge in the next low rate slot.
 - **car_charging_now** - Sensor to indicate when the EV is charging, used to hold the house battery for the car. Either an on/off sensor or a charging power sensor (W or kW, 200W or more counts as charging)
-- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging
+- **car_charging_now_response** - Responses for car_charging_now to indicate that the car is charging (default `yes`, `on`, `enable`, `true` and `charging`). The sensor state must match one of them, ignoring case
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
@@ -2290,11 +2299,12 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{octopus_saving_session}'
     - '+[car_charging_planned]'
     - '+[car_charging_soc]'
-    - '{car_charging_now}'
 ```
 
 Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
 but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+
+**car_charging_now** does not need to be in the watch list: Predbat already checks it every 15 seconds and re-plans as soon as the car starts or stops charging.
 
 ## Load Forecast
 
