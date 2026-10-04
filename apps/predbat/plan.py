@@ -5874,6 +5874,15 @@ class Plan:
             price = window["average"]
             export_price = window["export"]
 
+            # Cells a cheaper overlapping window already booked are skipped below, so a partly
+            # booked window is judged and priced on the cells it can still book
+            free_cells = [cell for cell in range(window["start"], window["end"], self.plan_interval_minutes) if cell not in used_slots]
+            if not free_cells:
+                continue
+            if len(free_cells) * self.plan_interval_minutes < window["end"] - window["start"]:
+                price = sum(self.rate_import.get(cell, self.rate_min) for cell in free_cells) / len(free_cells)
+                export_price = sum(self.rate_export.get(cell, 0) for cell in free_cells) / len(free_cells)
+
             length = 0
             kwh = 0
 
@@ -5897,9 +5906,10 @@ class Plan:
                         if start >= end:
                             continue
 
-                        # Avoid duplicate slots
+                        # Avoid duplicate slots, skipping only the cell already booked by a
+                        # cheaper overlapping window so the rest of this window can still book
                         if start_grid in used_slots:
-                            rate_okay = False
+                            continue
 
                         # Boost on import/export rate thresholds and the gas comparisons
                         if not self.iboost_rate_okay(price, export_price, start):
@@ -5926,7 +5936,7 @@ class Plan:
                             new_slot["start"] = start
                             new_slot["end"] = start + length
                             new_slot["kwh"] = dp3(kwh)
-                            new_slot["average"] = window["average"]
+                            new_slot["average"] = price
                             new_slot["cost"] = dp2(new_slot["average"] * kwh)
                             plan.append(new_slot)
                             used_slots[start_grid] = True

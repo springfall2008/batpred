@@ -120,15 +120,18 @@ def check_slot_invariants(test_name, slots):
     return failed
 
 
-def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0, minutes_now=None):
+def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0, minutes_now=None, rate_threshold=None):
     """
     Run a single iBoost smart planner test case and check the resulting plan totals
     """
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
+    orig_rate_threshold = my_predbat.iboost_rate_threshold
     if minutes_now is not None:
         my_predbat.minutes_now = minutes_now
+    if rate_threshold is not None:
+        my_predbat.iboost_rate_threshold = rate_threshold
     my_predbat.iboost_smart = True
     my_predbat.iboost_slots = []
     my_predbat.iboost_today = today
@@ -163,6 +166,7 @@ def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_powe
     my_predbat.iboost_today = 0
     if minutes_now is not None:
         my_predbat.minutes_now = 12 * 60
+    my_predbat.iboost_rate_threshold = orig_rate_threshold
 
     return failed
 
@@ -274,6 +278,20 @@ def run_iboost_smart_test_cases(my_predbat):
     # cannot emit a slot overlapping it (the invariant check verifies no overlaps)
     set_rate_profile(my_predbat, [(720, 750, 4.0), (750, 780, 8.0)], default_rate=20.0)
     failed |= run_iboost_smart_test("iboost_off_grid_overlap", my_predbat, today=0, max_energy=1, max_power=1, min_length=60, minutes_now=735, expect_cost=1.5 + 3.0 + 5.0 + 10.0 + 10.0, expect_kwh=2.0, expect_time=125)
+
+    # A cell already booked by a cheaper overlapping window must not stop the rest of the window
+    # booking: window 840-900 (4p) books 14:00 and 14:30, window 870-930 finds 14:30 taken but
+    # its free 15:00 cell (8p, under the 10p threshold) must still book, priced at its own 8p.
+    # Without the duplicate guard the plan double-books 14:30; with a guard that ends the window
+    # it loses the 15:00 slot (1.0 kWh planned instead of 1.5).
+    set_rate_profile(my_predbat, [(840, 870, 4.0), (870, 900, 4.0), (900, 930, 8.0)], default_rate=30.0)
+    failed |= run_iboost_smart_test("iboost_overlap_free_cell", my_predbat, today=0, max_energy=100, max_power=1, min_length=60, rate_threshold=10, expect_cost=2.0 + 2.0 + 4.0, expect_kwh=1.5, expect_time=90)
+
+    # A partly booked window is judged on the cells it can still book: window 810-870 averages
+    # 7.5p (under the 9p threshold) only because of the -10p 14:00 cell window 840-900 already
+    # took, so its free 13:30 cell (25p) must not be booked at that stale average.
+    set_rate_profile(my_predbat, [(810, 840, 25.0), (840, 900, -10.0)], default_rate=30.0)
+    failed |= run_iboost_smart_test("iboost_overlap_leftover_priced", my_predbat, today=0, max_energy=100, max_power=1, min_length=60, rate_threshold=9, expect_cost=-5.0 + -5.0, expect_kwh=1.0, expect_time=60)
 
     return failed
 
