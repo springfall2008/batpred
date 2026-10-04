@@ -32,6 +32,14 @@ Two lines in that output are normal and are not the reporter's bug:
 - `Prediction kernel stale binary ... - using Python engine` — the local C++ kernel is older than the Python side expects, so the pure-Python engine runs instead. The plan is still correct, just slower.
 - `Config item ... is below the minimum ... - clamping to ...` — routine clamping of an out-of-range setting.
 
+### Replaying a log forwards from a debug yaml
+
+`./run_all --debug_file X.yaml --replay_log predbat.log` restores the yaml, then steps through the log's later runs and re-plans wherever the live system did, comparing each plan with the logged one (`tests/replay_forward.py`, PR #5363). Traps found replaying a live Sigenergy system on 4 Oct 2026:
+
+- **It replays one calendar day.** Only runs dated the same day as the yaml are used, so a 23:00 yaml stops at 23:50. For a whole solar day, start from the first rolling snapshot after midnight. Snapshots are taken every 3 hours, so that is the 02:00 one (`debug/predbat_debug_YYYYMMDD-020000.yaml.txt`). The logs rotate at about 10 MB a day and only nine are kept (`predbat.01.log`–`predbat.09.log`), so copy a day you want before it falls off. If the day spans a rotation, concatenate the logs in order.
+- **Without the `Replay input:` log lines the replay drifts by mid-morning.** Two inputs cannot be rebuilt from yaml + log alone. `fill_load_from_power` re-cuts the load history into half hours counted back from *now*, so the load forecast wobbles by about ±0.13 kWh with the minute of the run. A Solcast refresh only reaches the log as a changed total. Either can flip a near-tied plan on a metric difference of 0.1–0.3p (GH#4865 log, 3 Oct). The lines are added by branch `feat/log-replay-inputs`, which is not on main yet.
+- **Every 8 hours the config refresh forces an extra run.** `check_entity_refresh()` logs `Refresh config entities due to their age of 480.0 minutes`. The next run then reports `Will recompute the plan as it is invalid`, under a second `PredBat - update` with the same `minutes now`. The replay does not reproduce that re-plan. The parser also reads that run's first `Best export window` line, a list printed before the plan is recomputed, as the plan in force, so that row shows a spurious DIFF. Seen at 04:00, and the replay was an hour behind the live plan afterwards.
+
 ## Debug yaml can contain real secrets
 
 A `predbat_debug.yaml` or debug-history snapshot attached to a bug report can carry live, unredacted credentials. Read it locally; never quote a raw block from one in a public comment without checking it first.
