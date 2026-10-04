@@ -878,7 +878,7 @@ class TestBoundEntitiesAreWritten:
         gw.gateway_inverter_serial = []
         gw.gateway_evc_automatic = False
         gw.gateway_evc_control = False
-        gw.gateway_shared_ct = False
+        gw.gateway_shared_ct = True
         gw.gateway_integrate_power = False
         gw._dashboard_calls = {}
 
@@ -1608,7 +1608,7 @@ class TestAutomaticConfig:
         gw.gateway_inverter_serial = []  # default: no serial filter
         gw.gateway_evc_automatic = False
         gw.gateway_evc_control = False
-        gw.gateway_shared_ct = False
+        gw.gateway_shared_ct = True
         gw.gateway_integrate_power = False
 
         def capture_set_arg(key, value):
@@ -1840,9 +1840,10 @@ class TestAutomaticConfig:
         self._make_inverter(status, serial="CE2225G400", primary=True)
         return status
 
-    def test_multi_inverter_energy_counters_bind_every_inverter_by_default(self):
-        """Without gateway_shared_ct each inverter has its own meter, so every energy counter is bound per inverter and summed."""
+    def test_separate_clamps_bind_every_inverters_energy_counters(self):
+        """With gateway_shared_ct off each inverter has its own meter, so every energy counter is bound per inverter and summed."""
         gw = self._make_gateway()
+        gw.gateway_shared_ct = False
         gw._last_status = self._two_inverter_status()
         gw.automatic_config()
 
@@ -1852,12 +1853,11 @@ class TestAutomaticConfig:
             assert gw._args[counter] == [f"sensor.{base0}_{counter}", f"sensor.{base1}_{counter}"], counter
 
     def test_shared_ct_binds_grid_and_load_counters_to_the_first_inverter_only(self):
-        """gateway_shared_ct: import, export and load today describe the one shared clamp, so only the first inverter's are used.
+        """gateway_shared_ct (the default): import, export and load today describe the one shared clamp, so only the first inverter's are used.
 
         pv_today is measured by each inverter itself, so it stays bound to every inverter.
         """
         gw = self._make_gateway()
-        gw.gateway_shared_ct = True
         gw._last_status = self._two_inverter_status()
         gw.automatic_config()
 
@@ -1867,9 +1867,10 @@ class TestAutomaticConfig:
             assert gw._args[counter] == [f"sensor.{base0}_{counter}"], counter
         assert gw._args["pv_today"] == [f"sensor.{base0}_pv_today", f"sensor.{base1}_pv_today"]
 
-    def test_multi_inverter_grid_and_load_power_are_summed_by_default(self):
-        """Without gateway_shared_ct each inverter's grid and load power is bound, as each has its own CT clamp."""
+    def test_separate_clamps_bind_every_inverters_grid_and_load_power(self):
+        """With gateway_shared_ct off each inverter's grid and load power is bound, as each has its own CT clamp."""
         gw = self._make_gateway()
+        gw.gateway_shared_ct = False
         gw._last_status = self._two_inverter_status()
         gw.automatic_config()
 
@@ -1885,7 +1886,6 @@ class TestAutomaticConfig:
         The battery and PV args stay per inverter - those are measured by each inverter itself.
         """
         gw = self._make_gateway()
-        gw.gateway_shared_ct = True
         gw._last_status = self._two_inverter_status()
         gw.automatic_config()
 
@@ -1902,7 +1902,6 @@ class TestAutomaticConfig:
     def test_shared_ct_has_no_effect_on_a_single_inverter(self):
         """With one inverter there is nothing to double, so gateway_shared_ct changes nothing."""
         gw = self._make_gateway()
-        gw.gateway_shared_ct = True
         gw._last_status = self._basic_status()
         gw.automatic_config()
 
@@ -1911,7 +1910,7 @@ class TestAutomaticConfig:
         assert gw._args["load_power"] == [f"sensor.{base}_load_power"]
 
     def test_shared_ct_is_read_from_the_component_argument(self):
-        """initialize() takes gateway_shared_ct from apps.yaml and defaults it to off."""
+        """initialize() takes gateway_shared_ct from apps.yaml and defaults it to on."""
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
 
@@ -1919,13 +1918,20 @@ class TestAutomaticConfig:
         gw.base = MagicMock()
         gw.args = {}
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example", mqtt_token="token")
-        assert gw.gateway_shared_ct is False
+        assert gw.gateway_shared_ct is True
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
         gw.args = {}
-        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example", mqtt_token="token", gateway_shared_ct=True)
-        assert gw.gateway_shared_ct is True
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example", mqtt_token="token", gateway_shared_ct=False)
+        assert gw.gateway_shared_ct is False
+
+    def test_shared_ct_default_matches_the_component_registry(self):
+        """The apps.yaml default in the component registry is the same as initialize()'s."""
+        from components import COMPONENT_LIST
+
+        assert COMPONENT_LIST["gateway"]["args"]["gateway_shared_ct"]["default"] is True
+        assert COMPONENT_LIST["gateway"]["args"]["gateway_integrate_power"]["default"] is False
 
     # ------------------------------------------------------------------
     # Secondary (cloud) and unsupported feature args
@@ -3309,7 +3315,7 @@ class TestGatewayUnitControlBinding:
         gw.gateway_inverter_serial = []
         gw.gateway_evc_automatic = False
         gw.gateway_evc_control = False
-        gw.gateway_shared_ct = False
+        gw.gateway_shared_ct = True
         gw.gateway_integrate_power = False
         gw._configured_ev_chargers = frozenset()
 

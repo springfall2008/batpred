@@ -613,13 +613,14 @@ See also **ge_cloud_automatic_split_ct** which takes priority over this setting 
 Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
 This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
 
-- **gateway_shared_ct** - Optional, defaults to false. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
-When set to `true`, Predbat will treat multiple inverters as sharing a single physical CT clamp for grid and load measurement,
+- **gateway_shared_ct** - Optional, defaults to true. The equivalent of **ge_cloud_automatic_shared_ct** for inverters controlled through the Predbat Gateway.
+When `true`, Predbat treats multiple inverters as sharing a single physical CT clamp for grid and load measurement,
 so only the first inverter's grid and load power readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
-Use this if you have two or more inverters connected to a single CT clamp with no EMS or Gateway coordinating them. The Predbat Gateway does not detect a shared CT automatically.
-Battery and solar readings are unaffected and are still taken from each inverter.
-The import, export and load energy for the day are likewise taken from the first inverter only. Solar energy is still added up across every inverter.
-Without this setting, Predbat adds up the import, export, load and solar energy of every inverter on the Gateway, as each is taken to have its own CT clamp.
+The import, export and load energy for the day are likewise taken from the first inverter only.
+Battery and solar readings are unaffected and are still taken from, and added up across, each inverter.
+This is the usual arrangement for two or more inverters with no EMS or Gateway coordinating them. The Predbat Gateway cannot detect how the CT clamps are fitted, so
+set this to `false` if each of your inverters has its own CT clamp measuring a separate supply; Predbat then adds up the grid and load power, and the import, export and load energy, of every inverter.
+It has no effect with a single inverter.
 
 - **gateway_integrate_power** - Optional, defaults to false. When set to `true`, Predbat works out today's import, export and house load itself from the power readings, rather than using the Predbat Gateway's energy counters.
 Use this where the Gateway's daily import, export or load figures are wrong for your inverters. GivEnergy AC-coupled inverters sharing a single CT clamp are one known case, and there you would set this together with **gateway_shared_ct**.

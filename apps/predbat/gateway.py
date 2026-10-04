@@ -221,12 +221,12 @@ class GatewayMQTT(ComponentBase):
     # control writes (engine thread) and by acks arriving on the MQTT listener's loop.
     _command_lock = threading.Lock()
 
-    # Defaults for an instance built without initialize(), where these options are off
-    gateway_shared_ct = False
+    # Defaults for an instance built without initialize()
+    gateway_shared_ct = True
     gateway_integrate_power = False
     _integrated_energy = None
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=False, gateway_integrate_power=False, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=True, gateway_integrate_power=False, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -242,10 +242,10 @@ class GatewayMQTT(ComponentBase):
             gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
                 the current time falls inside a planned car-charging window and send RemoteStartTransaction
                 plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit.
-            gateway_shared_ct: When True, several inverters share one grid CT clamp, so each reports the
-                same grid and load power. Only the first inverter's readings are then used, so the
-                house's grid and load are not counted once per inverter. Off by default, where each
-                inverter is taken to have its own clamp and the readings are summed.
+            gateway_shared_ct: When True (the default), several inverters are taken to share one grid CT
+                clamp, so each reports the same grid and load. Only the first inverter's grid and load
+                readings are then used, so the house's grid and load are not counted once per inverter.
+                Set to False where each inverter has its own clamp, and the readings are summed.
             gateway_integrate_power: When True, today's import, export and load are integrated from grid
                 and battery power instead of taken from the hub's energy counters, for inverters whose
                 counters cannot be trusted (see _update_integrated_energy()). Off by default.
