@@ -7,7 +7,7 @@ import tempfile
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -331,6 +331,63 @@ def test_apply_overrides(my_predbat):
         my_predbat.pv_metric90_weight = saved
 
 
+RATE_STATS_KEYS = (
+    "minutes_now",
+    "forecast_minutes",
+    "rate_import",
+    "rate_import_base",
+    "rate_export",
+    "rate_export_base",
+    "rate_min",
+    "rate_max",
+    "rate_average",
+    "rate_min_minute",
+    "rate_max_minute",
+    "rate_min_forward",
+    "rate_min_base",
+    "rate_max_base",
+    "rate_export_min",
+    "rate_export_max",
+    "rate_export_average",
+    "rate_export_min_minute",
+    "rate_export_max_minute",
+    "rate_export_max_forward",
+)
+
+
+def test_rescan_rate_stats(my_predbat):
+    """The rate stats are taken from now, so a passed import peak and export high drop out of them as the clock moves."""
+    missing = object()
+    saved = {key: getattr(my_predbat, key, missing) for key in RATE_STATS_KEYS}
+    try:
+        my_predbat.forecast_minutes = 24 * 60
+        # Import 10p with a 30p peak 04:00-05:00; export 5p with a 20p high at the same time
+        import_rates = {minute: 30.0 if 240 <= minute < 300 else 10.0 for minute in range(3 * 24 * 60)}
+        export_rates = {minute: 20.0 if 240 <= minute < 300 else 5.0 for minute in range(3 * 24 * 60)}
+        my_predbat.rate_import, my_predbat.rate_import_base = import_rates, dict(import_rates)
+        my_predbat.rate_export, my_predbat.rate_export_base = export_rates, dict(export_rates)
+        my_predbat.minutes_now = 0
+        rescan_rate_stats(my_predbat)
+        before = (my_predbat.rate_max, my_predbat.rate_max_base, my_predbat.rate_export_max, my_predbat.rate_export_max_forward[0])
+        my_predbat.minutes_now = 360
+        rescan_rate_stats(my_predbat)
+        after = (my_predbat.rate_max, my_predbat.rate_max_base, my_predbat.rate_export_max, my_predbat.rate_export_max_forward[360])
+        forward_min = my_predbat.rate_min_forward[360]
+    finally:
+        for key, value in saved.items():
+            if value is missing:
+                delattr(my_predbat, key)
+            else:
+                setattr(my_predbat, key, value)
+    if before != (30.0, 30.0, 20.0, 20.0):
+        print("ERROR: before the peak the stats should include it: {}".format(before))
+        return 1
+    if after != (10.0, 10.0, 5.0, 5.0) or forward_min != 10.0:
+        print("ERROR: after the peak the stats should not include it: {} forward min {}".format(after, forward_min))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -348,4 +405,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_replay_inputs()
     failed += test_parse_override()
     failed += test_apply_overrides(my_predbat)
+    failed += test_rescan_rate_stats(my_predbat)
     return failed

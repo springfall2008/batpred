@@ -389,6 +389,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
         }
         if row["replanned"]:
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
+            rescan_rate_stats(my_predbat)
             rescan_rate_windows(my_predbat)
             rebuild_load_forecast(my_predbat)
             if run.get("load_input"):
@@ -410,6 +411,23 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
         if not quiet and row["replanned"]:
             print(format_row(row))
     return rows
+
+
+def rescan_rate_stats(my_predbat):
+    """Recompute the rate min/max/average and the forward-looking rate curves for the current time, as fetch does every run.
+
+    They are taken over the horizon from now, so they move as the clock does: a peak that has passed drops out
+    of rate_max, which changes the charge/export thresholds and the battery value. The rates themselves are
+    the final ones the yaml holds, which is what fetch's last scan reads too.
+    """
+    if my_predbat.rate_import:
+        my_predbat.rate_scan(my_predbat.rate_import, print=True)
+    if my_predbat.rate_import_base:
+        my_predbat.rate_min_base, my_predbat.rate_max_base, _, _, _ = my_predbat.rate_minmax(my_predbat.rate_import_base)
+    if my_predbat.rate_export:
+        my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
+    if my_predbat.rate_export_base:
+        my_predbat.rate_export_max_forward = my_predbat.rate_export_max_forward_calc(my_predbat.rate_export_base)
 
 
 def rebuild_load_forecast(my_predbat):
