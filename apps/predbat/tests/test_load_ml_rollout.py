@@ -208,6 +208,143 @@ def _test_stats_sensor_exposes_the_holdout_scores():
     assert stats.get("pattern_mae_kwh") == 0.0117, "Stats should report the daily-pattern MAE, got {}".format(stats.get("pattern_mae_kwh"))
 
 
+def _test_configurable_forecast_preserves_shared_predictions():
+    """Changing the horizon must preserve shared predictions and the original blend."""
+    now = datetime(2026, 12, 30, 23, 55, tzinfo=timezone.utc)
+    midnight = now.replace(hour=0, minute=0)
+    history = _spike_history(now)
+    predictor = _collapsed_predictor(0.05)
+    baseline = predictor.predict(history, now, midnight)
+    assert len(baseline) == 576, "Omitting forecast_hours must retain the 48-hour default"
+    patterns = predictor._compute_daily_pattern(history, now)
+    for requested, minutes in ((12, 1440), (24, 1440), (31, 1860), (31.47, 1860), (48, 2880), (48.01, 2880), (72, 4320), (96, 5760), (120, 7200), (48, 2880)):
+        result = predictor.predict(history, now, midnight, forecast_hours=requested)
+        assert list(result) == list(range(0, minutes, STEP_MINUTES)), "Wrong forecast coverage"
+        shared = min(minutes, 2880)
+        assert all(result[minute] == baseline[minute] for minute in range(0, shared, STEP_MINUTES)), "Shared forecasts changed with the horizon"
+        increments = np.diff([0.0] + list(result.values()))
+        assert np.all(np.isfinite(increments)) and np.all(increments >= 0), "Forecast must remain finite and cumulative"
+        assert np.all(increments <= predictor.max_load_kw * STEP_MINUTES / 60.0 + 0.0001), "Forecast exceeds the physical load cap"
+        for minute in range(48 * 60, minutes, STEP_MINUTES):
+            target = now + timedelta(minutes=minute)
+            slot = target.hour * 60 + target.minute
+            expected = 0.5 * 0.05 + 0.5 * patterns[target.weekday()][slot]
+            assert abs(increments[minute // STEP_MINUTES] - expected) < 0.00011, "Blend must remain 50/50 beyond 48 hours"
+
+
+def _test_configurable_forecast_saved_model_and_input_fallback():
+    """An existing model must support 96 hours without losing the input fallback."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+    midnight = now.replace(hour=0, minute=0)
+    history = _spike_history(now)
+    predictor = _collapsed_predictor(0.05)
+    with tempfile.TemporaryDirectory() as directory:
+        checkpoint = str(Path(directory) / "model.npz")
+        assert predictor.save(checkpoint)
+        restored = LoadPredictor(log_func=lambda message: None)
+        assert restored.load(checkpoint), "Default-horizon model should remain usable"
+        messages = []
+        restored.log = messages.append
+        seen = []
+        original_forward = restored._forward
+
+        def capture(features, training=False):
+            """Capture the newest exogenous features during the real rollout."""
+            seen.append(features[0, [NUM_LOAD_FEATURES + NUM_PV_FEATURES, NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES, NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES]].copy())
+            return original_forward(features, training=training)
+
+        restored._forward = capture
+        temperature = {minute: 18.0 for minute in range(-48 * 60, 24 * 60, STEP_MINUTES)}
+        imports = {minute: 25.0 for minute in temperature}
+        exports = {minute: 10.0 for minute in temperature}
+        result = restored.predict(history, now, midnight, temp_minutes=temperature, import_rates=imports, export_rates=exports, forecast_hours=96)
+        assert len(result) == 1152
+        assert np.allclose(seen[-1], [18.0, 25.0, 10.0]), "Input forecasts must carry their last known values"
+        assert any("1152 steps (96.0 hours)" in message for message in messages), "Rollout log must show the actual horizon"
+        assert any("last known values carried forward" in message for message in messages), "Missing input coverage must still be logged"
+        assert restored.save(checkpoint)
+        with np.load(checkpoint) as saved:
+            metadata = json.loads(str(saved["metadata_json"]))
+        assert metadata["predict_horizon"] == 1152, "Saved metadata must reflect the last rollout"
+        default_model = LoadPredictor(log_func=lambda message: None)
+        assert default_model.load(checkpoint)
+        assert len(default_model.predict(history, now, midnight)) == 576, "Saved horizon must not override the caller's default"
+
+
+def _test_component_reads_current_forecast_hours():
+    """The real component must read forecast_hours on every prediction request."""
+    from load_ml_component import LoadMLComponent
+    from types import SimpleNamespace
+
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+    settings = {"load_today": ["sensor.load_today"]}
+    messages = []
+    base = SimpleNamespace(prefix="predbat", config_root=None, now_utc=now, midnight_utc=now.replace(hour=0, minute=0), local_tz=timezone.utc, args=settings, log=messages.append)
+    base.get_arg = lambda key, default=None, **kwargs: settings.get(key, default)
+    component = LoadMLComponent(base, load_ml_enable=True)
+    component.predictor = _collapsed_predictor(0.05)
+    component.load_data = _spike_history(now)
+    component.load_data_age_days = 21
+    component.data_ready = True
+    component.model_valid = True
+    for requested, minutes in ((None, 2880), (96, 5760), (31, 1860), (31.47, 1860), (48.01, 2880), (72, 4320), (48, 2880), (12, 1440)):
+        if requested is None:
+            settings.pop("forecast_hours", None)
+        else:
+            settings["forecast_hours"] = requested
+        hours = minutes / 60.0
+        result = component._get_predictions(now, base.midnight_utc)
+        assert len(result) == minutes // STEP_MINUTES, "Component did not follow the current setting"
+        assert "over {:g}h".format(hours) in messages[-1], "Component log must show the actual duration"
+
+
+def _test_load_ml_temperature_chart_uses_forecast_hours():
+    """The real LoadMLPower chart must retain temperatures through its horizon."""
+    from web import WebInterface
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    now = datetime(2026, 12, 30, 23, 55, tzinfo=timezone.utc)
+    settings = {}
+    base = SimpleNamespace(now_utc=now, midnight_utc=now.replace(hour=0, minute=0), minutes_now=1435, plan_interval_minutes=30, soc_kwh_history={}, soc_kw=5.0)
+    base.get_arg = lambda key, default=None, **kwargs: settings.get(key, default)
+    view = WebInterface.__new__(WebInterface)
+    view.base = base
+    view.prefix = "predbat"
+    temperatures = {(now + timedelta(minutes=minute)).isoformat(): 18.0 for minute in range(-1440, 10085, STEP_MINUTES)}
+
+    def entity_results(entity):
+        """Provide chart temperatures and a populated plan to pass the loading gate."""
+        if entity == "sensor.predbat_temperature":
+            return temperatures
+        if entity == "predbat.soc_kw_best":
+            return {now.isoformat(): 5.0}
+        return {}
+
+    view.get_entity_results = entity_results
+    view.get_history_wrapper = lambda *args, **kwargs: []
+    view.get_history_with_now_attrs = lambda *args, **kwargs: []
+    view.render_chart = Mock(return_value="chart")
+    for requested, minutes in ((None, 2880), (24, 1440), (31, 1860), (31.47, 1860), (48.01, 2880), (48, 2880), (72, 4320), (96, 5760), (120, 7200), (12, 1440)):
+        if requested is None:
+            settings.pop("forecast_hours", None)
+        else:
+            settings["forecast_hours"] = requested
+        view.render_chart.reset_mock()
+        view.get_chart("LoadMLPower")
+        series = view.render_chart.call_args.args[0]
+        data = next(item["data"] for item in series if item["name"] == "Temperature")
+        assert (now - timedelta(hours=24)).isoformat() in data, "Temperature history should remain visible"
+        # The chart groups points into 15-minute intervals; check the last visible bucket.
+        last_bucket = minutes // 15 * 15
+        assert (now + timedelta(minutes=last_bucket)).isoformat() in data, "Chart clipped temperatures before the configured horizon"
+        assert (now + timedelta(minutes=last_bucket + 15)).isoformat() not in data, "Chart extended beyond the configured horizon"
+
+
 def run_load_ml_rollout_tests(my_predbat=None):
     """Run the autoregressive rollout regression tests, returning a failure count."""
     failed = 0
@@ -216,6 +353,10 @@ def run_load_ml_rollout_tests(my_predbat=None):
         _test_rate_forecast_running_out_does_not_zero_the_model_inputs,
         _test_holdout_scores_survive_a_save_load_roundtrip,
         _test_stats_sensor_exposes_the_holdout_scores,
+        _test_configurable_forecast_preserves_shared_predictions,
+        _test_configurable_forecast_saved_model_and_input_fallback,
+        _test_component_reads_current_forecast_hours,
+        _test_load_ml_temperature_chart_uses_forecast_hours,
     ):
         print("  Running {}...".format(test.__name__), end=" ")
         try:

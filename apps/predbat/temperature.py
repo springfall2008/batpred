@@ -17,7 +17,8 @@ and adjustment curve calculations.
 
 import aiohttp
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from utils import dp1
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
@@ -39,6 +40,8 @@ class TemperatureAPI(ComponentBase):
         self.temperature_data = None
         self.last_updated_timestamp = None
         self.failures_total = 0
+        self.temperature_forecast_minutes = None
+        self.temperature_horizon_warned = None
 
     async def select_event(self, entity_id, value):
         pass
@@ -74,24 +77,30 @@ class TemperatureAPI(ComponentBase):
                 self.update_success_timestamp()
                 return True
 
-            fetch_due = first or (seconds % (60 * 60) == 0)
+            forecast_minutes = max(int(self.get_arg("forecast_hours", 48)), 24) * 60
+            horizon_changed = self.temperature_forecast_minutes is not None and forecast_minutes != self.temperature_forecast_minutes
+            fetch_due = first or horizon_changed or (seconds % (60 * 60) == 0)
 
             if first:
                 # Restore cached data; skip API fetch if it is less than an hour old
                 await self.load_temperature_cache()
                 if self.last_updated_timestamp is not None:
                     age_minutes = (datetime.now() - self.last_updated_timestamp).total_seconds() / 60
-                    if age_minutes < 60:
+                    if age_minutes < 60 and not horizon_changed and self.cached_forecast_covers(forecast_minutes):
                         fetch_due = False
 
             if fetch_due:
+                # Remember the attempt so failures retain the normal hourly retry cadence.
+                self.temperature_forecast_minutes = forecast_minutes
                 temperature_data = await self.fetch_temperature_data()
                 if temperature_data is not None:
                     self.temperature_data = temperature_data
+                    self.temperature_forecast_minutes = forecast_minutes
                     self.last_updated_timestamp = datetime.now()
                     self.publish_temperature_sensor()
                     await self.save_temperature_cache()
             elif self.temperature_data is not None:
+                self.temperature_forecast_minutes = forecast_minutes
                 self.update_success_timestamp()
                 self.publish_temperature_sensor()
         except Exception as e:
@@ -136,7 +145,55 @@ class TemperatureAPI(ComponentBase):
         Build the API URL with latitude and longitude placeholders replaced
         """
         url = self.temperature_url.replace("LATITUDE", str(latitude)).replace("LONGITUDE", str(longitude))
-        return url
+        parts = urlsplit(url)
+        hostname = parts.hostname or ""
+        if not (hostname == "open-meteo.com" or hostname.endswith(".open-meteo.com")) or parts.path != "/v1/forecast":
+            return url
+
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        keys = {key for key, _value in query}
+        if keys & {"start_date", "end_date", "start_hour", "end_hour"}:
+            # Explicit date ranges are deliberate overrides of the standard forecast window.
+            return url
+
+        forecast_minutes = max(int(self.get_arg("forecast_hours", 48)), 24) * 60
+        # Open-Meteo starts at midnight, so include an extra calendar day.
+        requested_days = max(7, (forecast_minutes + 1439) // 1440 + 1)
+        forecast_days = min(requested_days, 16)
+        if requested_days > 16:
+            if self.temperature_horizon_warned != forecast_minutes:
+                self.log("Warn: TemperatureAPI: Requested {}h rolling forecast may exceed Open-Meteo's 16 calendar days; missing temperature steps will use the predictor's last-known-value fallback".format(forecast_minutes / 60.0))
+                self.temperature_horizon_warned = forecast_minutes
+        else:
+            self.temperature_horizon_warned = None
+
+        if requested_days <= 7 and not (keys & {"forecast_days", "forecast_hours"}):
+            return url
+        query = [(key, value) for key, value in query if key not in {"forecast_days", "forecast_hours"}]
+        query.append(("forecast_days", str(forecast_days)))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+    def cached_forecast_covers(self, forecast_minutes):
+        """Check available cached temperature coverage before skipping the first fetch."""
+        times = (self.temperature_data or {}).get("hourly", {}).get("time", [])
+        if not times:
+            # Retain the existing cache policy for payloads without hourly timestamps.
+            return True
+        try:
+            latest = datetime.fromisoformat(times[-1])
+            if latest.tzinfo is None:
+                offset = self.temperature_data.get("utc_offset_seconds", 0)
+                latest = latest.replace(tzinfo=timezone(timedelta(seconds=offset)))
+            now = getattr(self, "now_utc", datetime.now(timezone.utc))
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            now = now.astimezone(timezone.utc)
+            # Do not demand coverage that the provider's calendar-day limit cannot supply.
+            provider_end = now.astimezone(latest.tzinfo).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=16, hours=-1)
+            required_end = min(now + timedelta(minutes=forecast_minutes), provider_end)
+            return latest >= required_end
+        except (ValueError, TypeError, OverflowError):
+            return False
 
     def convert_timezone_offset(self, utc_offset_seconds):
         """

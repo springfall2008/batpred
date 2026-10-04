@@ -15,7 +15,7 @@
 
 Implements a 3-hidden-layer feed-forward network ([512, 256, 64]) trained via
 AdamW optimiser with cosine LR decay and Huber loss. Uses autoregressive
-prediction for 48-hour load forecasts at CHUNK_MINUTES (5-min) resolution.
+prediction for configurable load forecasts at CHUNK_MINUTES (5-min) resolution.
 Inputs: historical load, PV generation, temperature, import/export rates,
 and cyclical time features (minute-of-day, day-of-week, day-of-year).
 """
@@ -32,7 +32,7 @@ CHUNK_MINUTES = 5  # Prediction resolution: must be a multiple of STEP_MINUTES
 CHUNK_STEPS = CHUNK_MINUTES // STEP_MINUTES  # 5-min steps aggregated per chunk (3)
 LOOKBACK_STEPS = 24 * (60 // CHUNK_MINUTES)  # 24 hours at CHUNK_MINUTES resolution
 OUTPUT_STEPS = 1  # Single step output (autoregressive)
-PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
+PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # Default prediction horizon and fixed 48-hour blend reference
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
@@ -177,7 +177,7 @@ class LoadPredictor:
     """
     Lightweight MLP-based load predictor using NumPy only.
 
-    Predicts household electrical load for the next 48 hours using:
+    Predicts household electrical load for the configured forecast horizon using:
     - Historical load data (lookback window)
     - Cyclical time encodings (hour-of-day, day-of-week)
     - Placeholder for future exogenous features (temperature, solar)
@@ -200,6 +200,7 @@ class LoadPredictor:
         self.max_load_kw = max_load_kw
         self.weight_decay = weight_decay
         self.dropout_rate = dropout_rate
+        self.predict_horizon = PREDICT_HORIZON
 
         # Model weights (initialized on first train)
         self.weights = None
@@ -1651,9 +1652,9 @@ class LoadPredictor:
         self.log("ML Predictor: Curriculum training complete, final val_mae={}".format("{:.4f} kWh".format(val_mae) if val_mae is not None else "None (all passes failed)"))
         return val_mae
 
-    def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, exog_features=None):
+    def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, exog_features=None, forecast_hours=48):
         """
-        Generate predictions for the next 48 hours using autoregressive approach.
+        Generate predictions for the requested forecast hours using autoregressive approach.
 
         Raw 5-min data is aggregated into CHUNK_MINUTES aligned chunks. Each
         prediction step predicts one CHUNK_MINUTES chunk, then feeds that back
@@ -1671,6 +1672,7 @@ class LoadPredictor:
             import_rates: Dict of {minute: rate_per_kwh}
             export_rates: Dict of {minute: rate_per_kwh}
             exog_features: Optional dict with future exogenous data
+            forecast_hours: Forecast duration in hours (default 48, minimum 24, matching the planner)
 
         Returns:
             Dict of {minute: cumulative_kwh} keyed at STEP_MINUTES (5-min) intervals.
@@ -1692,6 +1694,10 @@ class LoadPredictor:
         if not energy_per_step:
             self.log("Warn: ML Predictor: No load data available for prediction")
             return {}
+
+        # Match the planner's existing whole-hour conversion and 24-hour minimum.
+        predict_horizon = max(int(forecast_hours), 24) * (60 // CHUNK_MINUTES)
+        self.predict_horizon = predict_horizon
 
         # Compute historical daily patterns at CHUNK_MINUTES resolution for blending
         # Returns 7 DOW-specific patterns (falling back to global when data is sparse)
@@ -1738,7 +1744,7 @@ class LoadPredictor:
             pattern = daily_patterns.get(dow, {})
             max_energy_by_dow[dow] = max(pattern.values()) if pattern else max_kwh_per_chunk
 
-        # Blending: model weight decreases linearly from 1.0 to blend_floor
+        # Preserve the original blend through 48 hours, then keep blend_floor.
         blend_floor = 0.5
 
         # Seed previous value from the most recent historical chunk for the step-to-step cap
@@ -1761,9 +1767,9 @@ class LoadPredictor:
         last_export_rate = export_rate_buffer[0] if export_rate_buffer else 0.0
         exog_carried_steps = 0
 
-        self.log("ML Predictor: Starting autoregressive prediction loop for {} steps ({} hours), prev_energy value {} max_dow {}".format(PREDICT_HORIZON, PREDICT_HORIZON * CHUNK_MINUTES / 60, prev_energy_value, max_energy_by_dow))
+        self.log("ML Predictor: Starting autoregressive prediction loop for {} steps ({} hours), prev_energy value {} max_dow {}".format(predict_horizon, predict_horizon * CHUNK_MINUTES / 60, prev_energy_value, max_energy_by_dow))
 
-        for step_idx in range(PREDICT_HORIZON):
+        for step_idx in range(predict_horizon):
             # Target time: start of the step_idx-th future chunk (newer/recent edge).
             # Uses step_idx (not step_idx+1) to match training, where time features
             # represent the chunk's newer boundary (now_utc - alignment_offset -
@@ -1820,8 +1826,8 @@ class LoadPredictor:
             slot = (minute_of_day // CHUNK_MINUTES) * CHUNK_MINUTES
             hist_value = daily_patterns[day_of_week].get(slot, model_pred)
 
-            # Linear blend: 100% model at step 0, blend_floor% model at horizon
-            progress = step_idx / PREDICT_HORIZON
+            # Keep the blend independent of the configured forecast length.
+            progress = min(step_idx / PREDICT_HORIZON, 1.0)
             model_weight = 1.0 - progress * (1.0 - blend_floor)
             energy_value = model_weight * model_pred + (1.0 - model_weight) * hist_value
 
@@ -1852,7 +1858,7 @@ class LoadPredictor:
         # Only worth reporting when there was exogenous data to carry; a setup with no
         # temperature or rate sensors legitimately runs the whole rollout without any
         if exog_carried_steps and (temp_values or import_rate_values or export_rate_values):
-            self.log("ML Predictor: Forward temperature/rate forecast ran out for {} of {} rollout steps, last known values carried forward".format(exog_carried_steps, PREDICT_HORIZON * CHUNK_STEPS))
+            self.log("ML Predictor: Forward temperature/rate forecast ran out for {} of {} rollout steps, last known values carried forward".format(exog_carried_steps, predict_horizon * CHUNK_STEPS))
 
         # Convert to cumulative kWh format at STEP_MINUTES resolution.
         # Each CHUNK_MINUTES prediction is split into CHUNK_STEPS equal 5-min sub-steps
@@ -1861,7 +1867,7 @@ class LoadPredictor:
         result = {}
         cumulative = 0
 
-        for step_idx in range(PREDICT_HORIZON):
+        for step_idx in range(predict_horizon):
             energy = predictions_energy[step_idx]
             energy_per_substep = energy / CHUNK_STEPS
             for j in range(CHUNK_STEPS):
@@ -1888,7 +1894,7 @@ class LoadPredictor:
                 "model_version": MODEL_VERSION,
                 "lookback_steps": LOOKBACK_STEPS,
                 "output_steps": OUTPUT_STEPS,
-                "predict_horizon": PREDICT_HORIZON,
+                "predict_horizon": self.predict_horizon,
                 "hidden_sizes": HIDDEN_SIZES,
                 "training_timestamp": self.training_timestamp.isoformat() if self.training_timestamp else None,
                 "validation_mae": float(self.validation_mae) if self.validation_mae else None,

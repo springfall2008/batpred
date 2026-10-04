@@ -40,7 +40,7 @@ DATABASE_VERSION = 1
 
 class LoadMLComponent(ComponentBase):
     """
-    ML Load Forecaster component that predicts household load for the next 48 hours.
+    ML Load Forecaster component that predicts household load for the configured forecast hours.
 
     This component:
     - Fetches load history from configured sensor
@@ -688,11 +688,13 @@ class LoadMLComponent(ComponentBase):
                 import_rates=self.import_rates_data,
                 export_rates=self.export_rates_data,
                 exog_features=exog_features,
+                forecast_hours=self.get_arg("forecast_hours", 48),
             )
 
             if predictions:
                 self.current_predictions = predictions
-                self.log("ML Component: Generated {} predictions (total {:.2f} kWh over 48h)".format(len(predictions), max(predictions.values()) if predictions else 0))
+                prediction_hours = len(predictions) * PREDICT_STEP / 60.0
+                self.log("ML Component: Generated {} predictions (total {:.2f} kWh over {:g}h)".format(len(predictions), max(predictions.values()), prediction_hours))
             else:
                 self.log("ML Component: Predictor returned no predictions, returning previous dict")
 

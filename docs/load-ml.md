@@ -1,6 +1,6 @@
 # ML Load Prediction
 
-Predbat includes a neural network-based machine learning component that can predict your household energy consumption for the next 48 hours.
+Predbat includes a neural network-based machine learning component that can predict your household energy consumption for the duration set by `forecast_hours` in `apps.yaml` (48 hours by default, with the same 24-hour minimum as the planner).
 This prediction is based on historical load patterns, time-of-day patterns, day-of-week patterns, and optionally PV generation history and temperature forecasts.
 
 ## Table of Contents
@@ -22,7 +22,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 
 **Key Features:**
 
-- Predicts 48 hours of load data in 5-minute intervals
+- Predicts load data in 5-minute intervals for the configured `forecast_hours`
 - Learns daily and weekly patterns automatically
 - Supports historical PV generation data as an input feature
 - Supports temperature forecast data for improved accuracy
@@ -187,6 +187,17 @@ This allows the model to adapt quickly to recent changes (via time weighting) wi
 - Model is considered stale after 48 hours and requires retraining
 
 ## Configuration
+
+LoadML uses the existing `forecast_hours` setting; no separate ML horizon setting is required.
+For example, `forecast_hours: 96` generates 96 hours of load predictions and displays the temperature forecast over the same period in the LoadMLPower chart.
+The existing whole-hour configuration behaviour is retained; decimal YAML values remain invalid. Arbitrary whole-hour durations are supported: `forecast_hours: 31` generates 372 five-minute predictions.
+This is separate from the Plan forecast hours setting, which controls the optimisation horizon.
+
+For Open-Meteo temperature URLs on `/v1/forecast`, Predbat automatically extends the request beyond the default seven days when needed, allowing an extra calendar day because forecasts begin at midnight. Requests are capped at Open-Meteo's maximum of 16 calendar days. Forecasts longer than the available temperature data use the last-known-value fallback; this is not additional weather forecast data. URLs for other providers or with explicit date ranges are left unchanged.
+
+The original blend is retained through the first 48 hours, after which predictions remain 50% model and 50% historical daily pattern.
+Longer forecasts require longer temperature and rate input coverage; if either forecast runs out, the predictor carries forward its last known value and logs the missing coverage.
+Changing the horizon does not require model retraining.
 
 ### Basic Setup
 

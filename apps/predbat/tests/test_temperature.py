@@ -1169,6 +1169,60 @@ def _test_run_exception_no_data(my_predbat=None):
     return run_test()
 
 
+def _test_temperature_forecast_horizon(my_predbat=None):
+    """Long forecasts extend Open-Meteo safely and refresh insufficient cached data."""
+    from urllib.parse import parse_qs, urlsplit
+
+    settings = {"forecast_hours": 48}
+    component = MockTemperatureAPI(51.5, -0.1, "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&past_days=28")
+    component.get_arg = lambda key, default=None, **kwargs: settings.get(key, default)
+    original_url = component.temperature_url
+    for hours, expected_days in ((31, 7), (31.47, 7), (96, 7), (144, 7), (168, 8), (168.1, 8), (169, 9), (216, 10), (360, 16), (384, 16), (480, 16)):
+        settings["forecast_hours"] = hours
+        url = component.build_api_url(51.5, -0.1)
+        query = parse_qs(urlsplit(url).query)
+        assert int(query.get("forecast_days", [7])[0]) == expected_days
+        assert query["past_days"] == ["28"], "Temperature training history must be retained"
+        assert query["latitude"] == ["51.5"] and query["longitude"] == ["-0.1"]
+        assert component.temperature_url == original_url, "Building the URL must not mutate the configured template"
+    assert any("16 calendar days" in message for message in component.log_messages), "Provider cap must be visible"
+    previous_count = len(component.log_messages)
+    component.build_api_url(51.5, -0.1)
+    assert len(component.log_messages) == previous_count, "Unchanged provider-cap warning should not repeat"
+
+    settings["forecast_hours"] = 216
+    component.temperature_url = original_url + "&forecast_days=7&forecast_hours=48"
+    query = parse_qs(urlsplit(component.build_api_url(51.5, -0.1)).query)
+    assert query["forecast_days"] == ["10"] and "forecast_hours" not in query, "A fixed hourly range must not override the extended request"
+    for override in ("https://weather.example/forecast?latitude=LATITUDE", original_url + "&start_date=2026-08-24&end_date=2026-08-25"):
+        component.temperature_url = override
+        assert component.build_api_url(51.5, -0.1) == override.replace("LATITUDE", "51.5").replace("LONGITUDE", "-0.1"), "Explicit ranges and other providers must remain unchanged"
+
+    async def check_refresh():
+        """A longer horizon must refresh a fresh short cache and an active component."""
+        now = datetime.now(timezone.utc)
+        short_data = {"utc_offset_seconds": 0, "hourly": {"time": [(now + timedelta(hours=96)).isoformat()]}}
+        long_data = {"utc_offset_seconds": 0, "hourly": {"time": [(now + timedelta(hours=264)).isoformat()]}}
+        component.temperature_url = original_url
+        component.temperature_data = short_data
+        component.last_updated_timestamp = datetime.now()
+        component.publish_temperature_sensor = MagicMock()
+        assert not component.cached_forecast_covers(216 * 60)
+
+        with patch.object(component, "load_temperature_cache", new_callable=AsyncMock), patch.object(component, "save_temperature_cache", new_callable=AsyncMock), patch.object(component, "fetch_temperature_data", new_callable=AsyncMock, return_value=long_data) as fetch:
+            await component.run(seconds=0, first=True)
+            assert fetch.call_count == 1, "Fresh cached data must not conceal insufficient coverage"
+            await component.run(seconds=15, first=False)
+            assert fetch.call_count == 1, "Unchanged horizon must retain hourly polling"
+            settings["forecast_hours"] = 240
+            await component.run(seconds=30, first=False)
+            assert fetch.call_count == 2, "Changing the horizon must refresh without waiting an hour"
+        assert component.cached_forecast_covers(240 * 60)
+
+    asyncio.run(check_refresh())
+    return 0
+
+
 def test_temperature(my_predbat=None):
     """
     Comprehensive test suite for External Temperature API.
@@ -1210,6 +1264,7 @@ def test_temperature(my_predbat=None):
         ("run_stale_cache", _test_run_first_stale_cache, "first run with stale cache triggers API fetch"),
         ("run_saves_cache", _test_run_saves_to_cache, "successful fetch saves to storage cache"),
         ("run_no_save_failed", _test_run_no_save_on_failed_fetch, "failed fetch does not save to cache"),
+        ("forecast_horizon", _test_temperature_forecast_horizon, "Forecast length, provider limit and cache refresh"),
     ]
 
     print("\n" + "=" * 70)
