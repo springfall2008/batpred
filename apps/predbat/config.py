@@ -3010,6 +3010,8 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     "clipping_buffer_enable": {"type": "boolean"},
     "clipping_use_clearsky_peaks": {"type": "boolean"},
     "clipping_cost_weight": {"type": "float"},
