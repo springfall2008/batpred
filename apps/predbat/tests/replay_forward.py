@@ -21,6 +21,8 @@ changes; where it does not, the first run that diverges says what the log carrie
 Inputs taken from the log rather than recomputed: SoC, the cumulative load/PV/import/export counters, the
 in-day load adjustment, the load divergence, the cost so far today and the inverter's programmed export window. The PV forecast is
 the one in the yaml - the log records only its total.
+
+The replay carries on across midnight (roll_over_midnight), so a late-evening yaml replays the whole next day.
 """
 import array
 import math
@@ -53,6 +55,44 @@ COUNTER_ARRAYS = ("load_minutes", "import_today", "export_today", "pv_today")
 # iBoost energy from it). The log has no per-run figure for these, so they age with nothing added - right
 # while the car is not charging and iBoost is idle, which is the case the replay supports so far.
 AGED_ARRAYS = ("car_charging_energy", "iboost_energy_today")
+# The midnight run goes on to plan every tariff in the comparison list, logging a full plan for each; none of
+# that is the live plan, so a run stops collecting once it starts
+COMPARE_RE = re.compile(r"Starting comparison of tariffs")
+# State held as minutes from today's midnight. Fetch rebuilds it every run against the current midnight, so when
+# the replay crosses midnight it moves back a day. plan_last_updated_minutes is deliberately left alone: once it
+# is later than minutes_now, calculate_plan forces the start-of-day re-plan exactly as the live system does.
+DAY_KEYED_DICTS = (
+    "rate_import",
+    "rate_export",
+    "rate_gas",
+    "rate_import_base",
+    "rate_export_base",
+    "rate_import_no_io",
+    "rate_import_replicated",
+    "rate_export_replicated",
+    "rate_gas_replicated",
+    "rate_min_forward",
+    "rate_export_max_forward",
+    "future_energy_rates_import",
+    "future_energy_rates_export",
+    "manual_import_rates",
+    "manual_export_rates",
+    "pv_forecast_minute",
+    "pv_forecast_minute10",
+    "pv_forecast_minute90",
+    "pv_light_dark",
+    "load_scaling_dynamic",
+    "dynamic_load_baseline",
+    "carbon_intensity",
+    "alert_active_keep",
+    "manual_soc_keep",
+    "manual_soc_max_keep",
+    "all_active_keep",
+    "all_active_keep_max",
+)
+DAY_WINDOW_LISTS = ("charge_window", "export_window", "charge_window_best", "export_window_best", "low_rates", "high_export_rates", "iboost_plan")
+DAY_MINUTE_LISTS = ("manual_charge_times", "manual_export_times", "manual_freeze_charge_times", "manual_freeze_export_times", "manual_demand_times", "manual_all_times")
+WINDOW_MINUTE_KEYS = ("start", "end", "start_orig", "end_orig")
 
 
 def day_offset(date_text, day):
@@ -101,7 +141,10 @@ def parse_log(path):
                 run = {"time": marker.group(1), "minutes_now": int(marker.group(2)), "filtered": None, "force": None, "in_force": None}
                 runs.append(run)
                 continue
-            if run is None:
+            if run is None or run.get("comparing"):
+                continue
+            if COMPARE_RE.search(line):
+                run["comparing"] = True
                 continue
             # The first "Best export window" of a run is the plan in force when it starts - the one the previous
             # run adopted. Later ones in the same run are the re-plan's working lists.
@@ -168,9 +211,12 @@ def set_export_window(my_predbat, force, now_minutes, limit=None):
     if force and force[0] == "True":
         start = int(force[1]) * 60 + int(force[2])
         end = int(force[3]) * 60 + int(force[4])
-        # A window ending before it starts runs over midnight
+        # A window ending before it starts runs over midnight; seen from the small hours, it started yesterday
         if end <= start:
             end += 24 * 60
+            if now_minutes < start - 12 * 60:
+                start -= 24 * 60
+                end -= 24 * 60
         average = my_predbat.rate_export.get(start, 0) if my_predbat.rate_export else 0
         my_predbat.export_window = [{"start": start, "end": end, "average": average}]
         if limit:
@@ -212,6 +258,77 @@ def simulate_soc(my_predbat, soc_kw, minutes, pv_kwh, load_kwh):
     return prediction.predict_soc.get(steps * PREDICT_STEP, soc_kw)
 
 
+def counter_gain(now_value, prev_value, new_day=False):
+    """Return the kWh a day counter gained between two runs.
+
+    The counters restart at midnight, so across one the reading itself is the gain since midnight; what came in
+    between the last run before midnight and midnight itself is lost - at most one run's worth. Within a day a
+    reading below the previous one is sensor noise, and counts as no gain.
+    """
+    now_value, prev_value = float(now_value), float(prev_value)
+    if new_day:
+        return now_value
+    return max(now_value - prev_value, 0.0)
+
+
+def crosses_midnight(prev, run):
+    """Return True if run is on a later day than prev, the run (or the yaml's moment) before it."""
+    return run["time"][:10] != prev["time"][:10]
+
+
+def shift_cumulative(data, minutes):
+    """Move a cumulative-from-midnight series back by minutes, so it counts from the later midnight instead."""
+    base = 0.0
+    for minute in sorted(data):
+        if minute > minutes:
+            break
+        base = data[minute]
+    return {minute - minutes: value - base for minute, value in data.items()}
+
+
+def shift_windows(windows, minutes):
+    """Move each window's minutes back by minutes, returning new windows and leaving the originals alone."""
+    shifted = []
+    for window in windows:
+        window = dict(window)
+        for key in WINDOW_MINUTE_KEYS:
+            if isinstance(window.get(key), int):
+                window[key] -= minutes
+        shifted.append(window)
+    return shifted
+
+
+def roll_over_midnight(my_predbat, days=1):
+    """Move the instance into a later day: everything held as minutes from midnight moves back a day per day.
+
+    The clock (now_utc) is left where it is and minutes_now goes negative, so apply_run then advances it across
+    midnight in the new day's minutes. Predbat counts wall-clock minutes from midnight, so a day is always 1440
+    minutes, even when the clocks change.
+
+    Only what the yaml carried moves; nothing new arrives. Rates the live system would have fetched since - the
+    next day-ahead prices, say - are missing, and the plan sees the yaml's rates running out a day sooner.
+    """
+    minutes = days * 24 * 60
+    for name in DAY_KEYED_DICTS:
+        data = getattr(my_predbat, name, None)
+        if data:
+            setattr(my_predbat, name, {key - minutes: value for key, value in data.items()})
+    if my_predbat.load_forecast:
+        my_predbat.load_forecast = shift_cumulative(my_predbat.load_forecast, minutes)
+    my_predbat.load_forecast_array = [shift_cumulative(forecast, minutes) for forecast in (my_predbat.load_forecast_array or [])]
+    for name in DAY_WINDOW_LISTS:
+        windows = getattr(my_predbat, name, None)
+        if windows:
+            setattr(my_predbat, name, shift_windows(windows, minutes))
+    my_predbat.car_charging_slots = [shift_windows(slots, minutes) for slots in (my_predbat.car_charging_slots or [])]
+    for name in DAY_MINUTE_LISTS:
+        values = getattr(my_predbat, name, None)
+        if values:
+            setattr(my_predbat, name, [value - minutes for value in values])
+    my_predbat.midnight_utc = my_predbat.midnight_utc + timedelta(days=days)
+    my_predbat.minutes_now -= minutes
+
+
 def apply_run(my_predbat, prev, run):
     """Move the restored instance forwards from the previous run's moment to this run's."""
     gap = run["minutes_now"] - my_predbat.minutes_now
@@ -219,7 +336,7 @@ def apply_run(my_predbat, prev, run):
         raise ValueError("Log run at minute {} is before the state at minute {}".format(run["minutes_now"], my_predbat.minutes_now))
     if run.get("today") and prev.get("today"):
         for name, now_value, prev_value in zip(COUNTER_ARRAYS, run["today"], prev["today"]):
-            setattr(my_predbat, name, shift_counter(getattr(my_predbat, name), gap, max(float(now_value) - float(prev_value), 0.0)))
+            setattr(my_predbat, name, shift_counter(getattr(my_predbat, name), gap, counter_gain(now_value, prev_value, crosses_midnight(prev, run))))
     elif gap:
         for name in COUNTER_ARRAYS:
             setattr(my_predbat, name, shift_counter(getattr(my_predbat, name), gap, 0.0))
@@ -276,15 +393,22 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     apply_overrides(my_predbat, overrides)
     my_predbat.plan_valid = True
     rebuild_load_pv_models(my_predbat)
+
+    # Every run is placed in minutes from the yaml day's midnight, so runs on later days follow on from it
+    start_date = my_predbat.now_utc.date()
+    plan_day = my_predbat.now_utc.strftime("%d-%m")
+    start = my_predbat.minutes_now
+    runs = []
+    for run in parse_log(log_file):
+        run["minute"] = (date.fromisoformat(run["time"][:10]) - start_date).days * 24 * 60 + run["minutes_now"]
+        if run["minute"] > start:
+            runs.append(run)
     until_minutes = None
     if until:
         until_minutes = int(until.split(":")[0]) * 60 + int(until.split(":")[1])
-
-    # Only the yaml's own day, from the first run after the yaml was written
-    day = my_predbat.now_utc.strftime("%Y-%m-%d")
-    plan_day = my_predbat.now_utc.strftime("%d-%m")
-    start = my_predbat.now_utc.strftime("%H:%M")
-    runs = [run for run in parse_log(log_file) if run["time"][:10] == day and run["time"][11:16] > start]
+        # A time no later than the yaml's means that time the next day
+        if until_minutes <= start:
+            until_minutes += 24 * 60
     # The yaml's own day counters stand in for the run before the first one
     yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
     install_logged_load_divergence(my_predbat)
@@ -351,7 +475,8 @@ def version_change(runs):
 def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet):
     """Step through the runs, re-planning where the log did, and return the comparison rows."""
     sim_soc = my_predbat.soc_kw
-    prev = {"today": None, "force": None}
+    # The yaml's own moment stands in for the run before the first one
+    prev = {"today": None, "force": None, "time": my_predbat.now_utc.isoformat(sep=" ")}
     rows = []
     # A faithful replay needs the code that wrote the log, so past a version change it can only be expected to
     # match loosely. Carry on, but mark every row from the change onwards so results can be judged separately.
@@ -360,15 +485,24 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
     if change is not None:
         change_index, before, after = change
         print("Replay note: the log changes from Predbat {} to {} at {}; plans after that are not expected to match as closely".format(before, after, runs[change_index]["time"][11:16]))
+    # Minutes from the yaml day's midnight to the instance's own midnight
+    day_start = 0
     for index, run in enumerate(runs):
-        if until_minutes is not None and run["minutes_now"] > until_minutes:
+        if until_minutes is not None and run["minute"] > until_minutes:
             break
         next_run = runs[index + 1] if index + 1 < len(runs) else None
+        if run["minute"] - day_start >= 24 * 60:
+            days = (run["minute"] - day_start) // (24 * 60)
+            roll_over_midnight(my_predbat, days)
+            day_start += days * 24 * 60
+            if not quiet:
+                print("Replay: rolled over midnight into {}".format(run["time"][:10]))
         if simulate:
             before = prev.get("today") or yaml_today
             now_today = run.get("today") or before
-            load_kwh = max(float(now_today[0]) - float(before[0]), 0.0)
-            pv_kwh = max(float(now_today[3]) - float(before[3]), 0.0)
+            new_day = crosses_midnight(prev, run)
+            load_kwh = counter_gain(now_today[0], before[0], new_day)
+            pv_kwh = counter_gain(now_today[3], before[3], new_day)
             rebuild_load_pv_models(my_predbat)
             sim_soc = simulate_soc(my_predbat, sim_soc, run["minutes_now"] - my_predbat.minutes_now, pv_kwh, load_kwh)
         apply_run(my_predbat, prev, run)
@@ -380,7 +514,8 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
                 inverter.soc_percent = my_predbat.soc_percent
         row = {
             "time": run["time"][11:16],
-            "minutes_now": run["minutes_now"],
+            # From the yaml day's midnight, like the windows below, so rows after midnight carry on from it
+            "minutes_now": run["minute"],
             "soc_percent": int(run["soc"][1]),
             "soc_sim_percent": my_predbat.soc_percent if simulate else None,
             "replanned": run["filtered"] is not None,
@@ -408,7 +543,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             # The log shows the adopted plan at the start of the next run, with windows that ended by then dropped
             if next_run and next_run["in_force"] is not None:
                 row["logged"] = parse_windows(next_run["in_force"], plan_day)
-                row["replayed"] = [window for window in adopted if window[1] > next_run["minutes_now"]]
+                row["replayed"] = [window for window in adopted if window[1] > next_run["minute"]]
         rows.append(row)
         prev = run
         if not quiet and row["replanned"]:
@@ -595,6 +730,8 @@ def chart_replay(rows, filename, title="Replay"):
     ax_mode.set_ylim(0, 2)
     ax_mode.set_ylabel("Plan says\nexport now", color=muted)
     ax_mode.set_xlabel("Time of day (hour)", color=muted)
+    # Hours count on from the yaml day's midnight, so a replay that crosses midnight wraps back to 0
+    ax_mode.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda hour, _position: "{:g}".format(hour % 24)))
     ax_mode.text(1.0, 1.02, "solid = forced export, hatched = freeze", transform=ax_mode.transAxes, ha="right", va="bottom", color=muted, fontsize=8)
 
     changes = [hour for row, hour in zip(rows, times) if row.get("after_version_change")]

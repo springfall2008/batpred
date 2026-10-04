@@ -4,10 +4,12 @@
 
 import os
 import tempfile
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -389,6 +391,108 @@ def test_rescan_rate_stats(my_predbat):
     return 0
 
 
+MIDNIGHT_LOG = """2026-10-03 23:55:00.000000: --------------- PredBat - update at 2026-10-03 23:55:00+01:00 with clock skew 0 minutes, minutes now 1435
+2026-10-03 23:55:01.000000: Current data so far today: load 6.64kWh, import 17.07kWh, export 14.88kWh, PV 3.99kWh
+2026-10-03 23:55:01.100000: Inverter 0 SoC: 4.05kWh 22%, current charge rate 5500W, current discharge rate 5500W, current battery power 5506W
+2026-10-04 00:00:00.000000: --------------- PredBat - update at 2026-10-04 00:00:00+01:00 with clock skew 0 minutes, minutes now 0
+2026-10-04 00:00:01.000000: Current data so far today: load 0.0kWh, import 0.0kWh, export 0.0kWh, PV 0.0kWh
+2026-10-04 00:00:01.100000: Inverter 0 SoC: 3.56kWh 20%, current charge rate 5500W, current discharge rate 5500W, current battery power 5505W
+2026-10-04 00:00:02.000000: Export windows filtered [ 04-10 00:25:00 - 04-10 00:30:00 @ 16.16p 24.0% ]
+2026-10-04 00:00:03.000000: Inverter 0 SoC: 3.53kWh 20%, current charge rate 5500W, current discharge rate 5500W, current battery power 5505W
+2026-10-04 00:00:04.000000: Starting comparison of tariffs
+2026-10-04 00:01:00.000000: Current data so far today: load 9.9kWh, import 9.9kWh, export 9.9kWh, PV 9.9kWh
+2026-10-04 00:01:01.000000: Export windows filtered [ 04-10 17:00:00 - 04-10 19:00:00 @ 29.0p 21.0% ]
+"""
+
+
+def test_parse_log_midnight():
+    """A run keeps the SoC it planned from, and nothing logged by the midnight tariff comparison."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(MIDNIGHT_LOG)
+        runs = parse_log(path)
+    midnight = runs[1]
+    failed = 0
+    if midnight["soc"][0] != "3.56":
+        print("ERROR: the SoC logged before the plan should be kept, got {}".format(midnight["soc"]))
+        failed = 1
+    if midnight["today"] != ("0.0", "0.0", "0.0", "0.0") or parse_windows(midnight["filtered"], "04-10") != [(25, 30, 16.16, 24.0)]:
+        print("ERROR: the tariff comparison overwrote the run's own plan: {} {}".format(midnight["today"], midnight["filtered"]))
+        failed = 1
+    return failed
+
+
+def test_counter_gain():
+    """A day counter's gain is the difference, the reading itself across midnight, and nothing for a dip within a day."""
+    if counter_gain("6.64", "6.61") != 6.64 - 6.61 or counter_gain("0.47", "6.64", new_day=True) != 0.47 or counter_gain(1.0, 1.0) != 0.0:
+        print("ERROR: counter_gain gave {} {}".format(counter_gain("6.64", "6.61"), counter_gain("0.47", "6.64", new_day=True)))
+        return 1
+    if counter_gain("6.60", "6.64") != 0.0:
+        print("ERROR: a dip within a day should count as no gain, got {}".format(counter_gain("6.60", "6.64")))
+        return 1
+    if not crosses_midnight({"time": "2026-10-03 23:55:00+01:00"}, {"time": "2026-10-04 00:00:00+01:00"}) or crosses_midnight({"time": "2026-10-04 00:00:00+01:00"}, {"time": "2026-10-04 00:05:00+01:00"}):
+        print("ERROR: crosses_midnight should compare the runs' dates")
+        return 1
+    return 0
+
+
+def test_shift_day_series():
+    """Cumulative series restart from the new midnight; windows move back a day without touching the originals."""
+    failed = 0
+    shifted = shift_cumulative({0: 0.0, 1430: 9.5, 1440: 10.0, 1445: 10.25}, 1440)
+    if shifted != {-1440: -10.0, -10: -0.5, 0: 0.0, 5: 0.25}:
+        print("ERROR: shift_cumulative gave {}".format(shifted))
+        failed = 1
+    windows = [{"start": 1410, "end": 1440, "start_orig": 1380, "average": 7.62}]
+    moved = shift_windows(windows, 1440)
+    if moved != [{"start": -30, "end": 0, "start_orig": -60, "average": 7.62}] or windows[0]["start"] != 1410:
+        print("ERROR: shift_windows gave {} and left {}".format(moved, windows))
+        failed = 1
+    return failed
+
+
+def test_roll_over_midnight():
+    """Rolling over moves the minute-keyed state back a day, advances midnight and leaves the plan's own timestamp alone."""
+    bat = SimpleNamespace(
+        rate_import={1435: 7.62, 1440: 7.62, 2880: 30.0},
+        pv_forecast_minute={1500: 0.01},
+        manual_charge_times=[1470],
+        load_forecast={0: 0.0, 1440: 10.0, 1445: 10.25},
+        load_forecast_array=[{1440: 10.0, 1450: 10.5}],
+        charge_window_best=[{"start": 1470, "end": 1770, "average": 7.62}],
+        car_charging_slots=[[{"start": 1500, "end": 1530, "kwh": 2.0}]],
+        midnight_utc=datetime(2026, 10, 3, tzinfo=timezone.utc),
+        minutes_now=1435,
+        plan_last_updated_minutes=1430,
+    )
+    roll_over_midnight(bat)
+    failed = 0
+    if bat.rate_import != {-5: 7.62, 0: 7.62, 1440: 30.0} or bat.pv_forecast_minute != {60: 0.01} or bat.manual_charge_times != [30]:
+        print("ERROR: minute-keyed state not moved back a day: {} {} {}".format(bat.rate_import, bat.pv_forecast_minute, bat.manual_charge_times))
+        failed = 1
+    if bat.load_forecast[5] != 0.25 or bat.load_forecast_array != [{0: 0.0, 10: 0.5}]:
+        print("ERROR: the load forecast should count from the new midnight: {} {}".format(bat.load_forecast, bat.load_forecast_array))
+        failed = 1
+    if bat.charge_window_best[0]["start"] != 30 or bat.car_charging_slots[0][0]["end"] != 90:
+        print("ERROR: windows not moved back a day: {} {}".format(bat.charge_window_best, bat.car_charging_slots))
+        failed = 1
+    if bat.midnight_utc != datetime(2026, 10, 4, tzinfo=timezone.utc) or bat.minutes_now != -5 or bat.plan_last_updated_minutes != 1430:
+        print("ERROR: clock state wrong after the roll over: {} {} {}".format(bat.midnight_utc, bat.minutes_now, bat.plan_last_updated_minutes))
+        failed = 1
+    return failed
+
+
+def test_set_export_window_after_midnight():
+    """A window over midnight seen just after midnight started yesterday, so it is running now."""
+    bat = FakeBat(rate_export={-15: 16.68})
+    set_export_window(bat, ("True", "23", "45", "00", "01"), 0)
+    if bat.export_window != [{"start": -15, "end": 1, "average": 16.68}] or not bat.isExporting:
+        print("ERROR: a window over midnight seen after midnight should have started yesterday: {} {}".format(bat.export_window, bat.isExporting))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -407,4 +511,9 @@ def run_replay_forward_tests(my_predbat):
     failed += test_parse_override()
     failed += test_apply_overrides(my_predbat)
     failed += test_rescan_rate_stats(my_predbat)
+    failed += test_parse_log_midnight()
+    failed += test_counter_gain()
+    failed += test_shift_day_series()
+    failed += test_roll_over_midnight()
+    failed += test_set_export_window_after_midnight()
     return failed

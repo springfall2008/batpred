@@ -58,7 +58,9 @@ There are two modes:
 
 In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
 
-Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log must be from the same day as the yaml and run on a similar Predbat version.
+The replay carries on across midnight, so a yaml from late evening can be replayed through the whole of the next day. At midnight it moves everything held as minutes from midnight (rates, forecasts, plan windows) back a day, and the start-of-day re-plan happens as it does live. Rates the live system fetched after the yaml was written, such as the next day-ahead prices, are not in the yaml, so a replay past them plans on rates that run out early. `--replay_until HH:MM` stops at the first such time after the yaml.
+
+Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log should come from a similar Predbat version; a version change part way through is marked, and the plans after it are counted separately.
 
 ### The dummy inverter
 
