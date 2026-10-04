@@ -100,6 +100,11 @@ PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
 
+# GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
+# rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
+GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY = 1
+GIVENERGY_INVERTER_TYPES = (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+
 # Entity attribute table — keyed by the semantic suffix used in dashboard_item calls
 GATEWAY_ATTRIBUTE_TABLE = {
     # Binary sensors
@@ -979,8 +984,15 @@ class GatewayMQTT(ComponentBase):
         _raw_export_limit = control.export_limit_w
         export_limit_publish = 99999 if _raw_export_limit == 0 else (0 if _raw_export_limit == 1 else _raw_export_limit)
         self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
-        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
+        # The hub reports the rate the inverter holds, so a GivEnergy one reads back short of the rate written
+        # (#5324). Marked per inverter, on a copy of the table entry: GWMQTT is one type for every brand
+        charge_rate_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}))
+        discharge_rate_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}))
+        if inv.type in GIVENERGY_INVERTER_TYPES:
+            charge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+            discharge_rate_attributes["step_percent_of_capacity"] = GIVENERGY_RATE_STEP_PERCENT_OF_CAPACITY
+        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=charge_rate_attributes, app="gateway")
+        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=discharge_rate_attributes, app="gateway")
         # The reserve ceiling is per-inverter, so it overrides the table's 100: GivEnergy
         # firmware refuses a reserve of 100 and the gateway reports 98 for it (gateway
         # issue #346). adjust_reserve() honours this entity's "max" through
@@ -1291,6 +1303,9 @@ class GatewayMQTT(ComponentBase):
         discharge_enable_entities = []
         export_limit_entities = []
         inverter_limit_entities = []
+        battery_scaling_entities = []
+        battery_rate_max_entities = []
+        inverter_time_entities = []
 
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
@@ -1323,6 +1338,10 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
             inverter_limit_entities.append(f"sensor.{base}_inverter_rate_max")
+            battery_scaling_entities.append(f"sensor.{base}_battery_dod")
+            battery_rate_max_entities.append(f"sensor.{base}_battery_rate_max")
+            # Clock drift detection — uses GatewayStatus.timestamp
+            inverter_time_entities.append(f"sensor.{base}_inverter_time")
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
@@ -1355,13 +1374,11 @@ class GatewayMQTT(ComponentBase):
 
         # Battery health (first inverter)
         self.set_arg("battery_temperature_history", f"sensor.{base0}_battery_temperature")
-        self.set_arg("battery_scaling", [f"sensor.{base0}_battery_dod"])
 
-        # Battery rate max
-        self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
-
-        # Inverter time (clock drift detection — uses GatewayStatus.timestamp)
-        self.set_arg("inverter_time", [f"sensor.{base0}_inverter_time"])
+        # Per-inverter: inverter.py reads these at index=self.id, so each needs one entry per inverter
+        self.set_arg("battery_scaling", battery_scaling_entities)
+        self.set_arg("battery_rate_max", battery_rate_max_entities)
+        self.set_arg("inverter_time", inverter_time_entities)
 
         # EMS aggregate entities (GivEnergy EMS only)
         inv0 = inverters[0]

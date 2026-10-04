@@ -35,6 +35,7 @@ _DEFAULT_WIND_MS = 1.0
 
 # Applied when no ensemble P10 data is available
 _DEFAULT_P10_FALLBACK = 0.7
+_DEFAULT_P90_FALLBACK = 1.3
 
 
 def pvwatts_cell_temperature(poa_global, temp_air, wind_speed):
@@ -68,7 +69,7 @@ def _temperature_efficiency(gti, temp, wind):
     return max(0.5, min(1.1, 1.0 - _TEMP_COEFF * (t_cell - _STC_TEMP_C)))
 
 
-def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, system_loss, shading_factors=None, p10_instant=None, p10_fallback=_DEFAULT_P10_FALLBACK):
+def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, system_loss, shading_factors=None, band_ratio=None, p10_fallback=_DEFAULT_P10_FALLBACK, p90_fallback=_DEFAULT_P90_FALLBACK):
     """Convert hourly GTI samples into per-hour PV energy for a single array.
 
     Open-Meteo returns point-in-time irradiance (W/m2) at the start of each hour, so the
@@ -83,11 +84,13 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
         kwp: array peak power in kW
         system_loss: fractional system loss, e.g. 0.05 for 95% efficiency
         shading_factors: optional list of 12 per-month multipliers
-        p10_instant: optional dict of timestamp string to raw P10 kW, before temperature derate
-        p10_fallback: multiplier applied to P50 when p10_instant has no entry
+        band_ratio: optional dict of timestamp string to (p10_ratio, p90_ratio), each relative to P50
+        p10_fallback: multiplier applied to P50 when band_ratio has no entry
+        p90_fallback: multiplier applied to P50 when band_ratio is given but has no entry
 
     Returns:
-        dict of tz-aware UTC hour-start datetime to {"pv_estimate": kWh, "pv_estimate10": kWh}
+        dict of tz-aware UTC hour-start datetime to {"pv_estimate": kWh, "pv_estimate10": kWh},
+        plus "pv_estimate90": kWh when band_ratio is given
     """
     instant_kw = {}
     instant_stamps = []
@@ -102,15 +105,16 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
         wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else _DEFAULT_WIND_MS
         eta_temp = _temperature_efficiency(gti, temp, wind)
         pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
-        raw_p10 = p10_instant.get(ts) if p10_instant else None
-        # p10_instant was computed without temperature derating; apply eta_temp now
-        pv10_inst = dp4(min(raw_p10 * eta_temp, pv50_inst) if raw_p10 is not None else pv50_inst * p10_fallback)
+        # The ratios scale the already derated P50, held to the side of it they belong on
+        p10_ratio, p90_ratio = band_ratio.get(ts, (p10_fallback, p90_fallback)) if band_ratio else (p10_fallback, p90_fallback)
+        pv10_inst = dp4(pv50_inst * min(max(p10_ratio, 0.0), 1.0))
+        pv90_inst = dp4(pv50_inst * max(p90_ratio, 1.0))
         try:
             stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
             stamp = stamp.replace(tzinfo=pytz.utc)
         except (ValueError, TypeError):
             continue
-        instant_kw[stamp] = (pv50_inst, pv10_inst)
+        instant_kw[stamp] = (pv50_inst, pv10_inst, pv90_inst)
         instant_stamps.append(stamp)
 
     period_data = {}
@@ -119,16 +123,20 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
         next_stamp = instant_stamps[i + 1]
         if (next_stamp - stamp) != timedelta(hours=1):
             continue
-        pv50_start, pv10_start = instant_kw[stamp]
-        pv50_end, pv10_end = instant_kw[next_stamp]
+        pv50_start, pv10_start, pv90_start = instant_kw[stamp]
+        pv50_end, pv10_end, pv90_end = instant_kw[next_stamp]
         pv50 = dp4(0.5 * (pv50_start + pv50_end))
         pv10 = dp4(0.5 * (pv10_start + pv10_end))
+        pv90 = dp4(0.5 * (pv90_start + pv90_end))
 
         if shading_factors and len(shading_factors) == 12:
             shading_month = shading_factors[stamp.month - 1]
             pv50 = dp4(pv50 * shading_month)
             pv10 = dp4(pv10 * shading_month)
+            pv90 = dp4(pv90 * shading_month)
 
         period_data[stamp] = {"pv_estimate": pv50, "pv_estimate10": pv10}
+        if band_ratio is not None:
+            period_data[stamp]["pv_estimate90"] = pv90
 
     return period_data

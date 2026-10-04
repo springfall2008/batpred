@@ -1480,9 +1480,98 @@ def test_guard_key_does_not_log_the_raw_value():
     messages = []
     redactor = Redactor("test-salt-0001", log=messages.append)
     redactor._guard_key("hardware_ids", "1234567890123")
+    redactor._flush_warnings()
     assert any("hardware_ids" in message for message in messages), "expected a warning naming the container: {}".format(messages)
     assert not any("1234567890123" in message for message in messages), "the raw identifier must never reach the log: {}".format(messages)
     print("PASS: _guard_key logs only the container, never the raw key text it is hiding")
+    return 0
+
+
+def test_identity_derived_values_do_not_warn():
+    """Octopus reports each meter as "octopus:{mpan}" with the MPAN in account_ids, and a programme
+    cross-links to it. That is the redaction working as designed - every one of those is still
+    pseudonymised - so it must not log a warning on every debug dump, whichever record is walked first."""
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+    coordinator.report(
+        "octopus",
+        {
+            "programmes": [{"device_id": "axle:site1", "kind": "vpp", "meter": "octopus:1234567890123"}],
+            "meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123", "station": 61234567890}}],
+        },
+    )
+    coordinator.report("solis", {"inverters": [{"device_id": "solis:x1", "ratings": {"echo": 61234567890}}]})
+    catalogue = coordinator.catalogue()
+    text = str(catalogue)
+    assert "1234567890123" not in text and "61234567890" not in text, text
+    assert not [message for message in messages if "identifier" in message], messages
+    print("PASS: an identifier redacted where it belongs, and its echoes, are not warned about")
+    return 0
+
+
+def test_misfiled_identifier_warns_once_per_process():
+    """A genuine misfiling warns, but once - not again on every later debug dump or publish - and an
+    account identifier alongside it does not hide an unrelated identifier sharing the same value."""
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+    coordinator.report(
+        "octopus",
+        {"meters": [{"device_id": "octopus:1234567890123", "direction": "import", "account_ids": {"mpan": "1234567890123"}, "info": {"note": "1234567890123 and 9876543210987"}}]},
+    )
+    for _ in range(3):
+        catalogue = coordinator.catalogue()
+        assert "9876543210987" not in str(catalogue)
+    warnings = [message for message in messages if "identifier" in message]
+    assert warnings == ["Warn: Coordinator: info.note looks like an identifier in a clear container - pseudonymised"], warnings
+    print("PASS: a genuine misfiling warns exactly once across repeated redactions")
+    return 0
+
+
+def test_short_or_unrelated_identities_do_not_hide_misfiled_values():
+    """Suppression is for a value wholly explained by an account identifier: a short identifier
+    must not split a longer number's digit run, a device_id that embeds no account identifier is
+    not identity-derived, and a numeric identifier is judged by its integer part."""
+    messages = []
+    redactor = Redactor("test-salt-0001", log=messages.append)
+    redactor.redact(
+        {
+            "meters": [
+                {"device_id": "octopus:9876543210987", "direction": "import", "account_ids": {"site": "1"}, "info": {"long": "1213141516171"}},
+                {"device_id": "octopus:5", "direction": "import", "account_ids": {"site": "1"}, "info": {"big": 1213141516171}},
+            ]
+        }
+    )
+    warnings = sorted(message for message in messages if "identifier" in message)
+    assert any("info.long" in message for message in warnings), warnings
+    assert any("info.big" in message for message in warnings), warnings
+    assert any("device_id" in message for message in warnings), warnings
+    print("PASS: short or unrelated identities do not hide genuinely misfiled values")
+    return 0
+
+
+def test_warning_is_once_per_record_and_ignores_joined_digit_runs():
+    """A second record misfiling the same field is a new leak and warns too (once per record, not
+    once per field); and removing an explained identifier must not join the digit runs either side
+    of it into one that looks like an identifier."""
+    base, coordinator = _redacting_coordinator()
+    messages = []
+    coordinator.log = messages.append
+
+    def meter(device_id, mpan, note):
+        """One Octopus-shaped meter record with a note in its clear info container."""
+        return {"device_id": device_id, "direction": "import", "account_ids": {"mpan": mpan}, "info": {"note": note}}
+
+    coordinator.report(
+        "octopus",
+        {"meters": [meter("octopus:1111111111111", "1111111111111", "9876543210987"), meter("octopus:2222222222222", "2222222222222", "9876543210988"), meter("octopus:3333333333333", "3333333333333", "ref 12345 3333333333333 67890")]},
+    )
+    for _ in range(2):
+        coordinator.catalogue()
+    warnings = [message for message in messages if "info.note" in message]
+    assert len(warnings) == 2, warnings
+    print("PASS: a warning is once per record, and an explained identifier does not join digit runs")
     return 0
 
 
@@ -1788,6 +1877,21 @@ def test_descriptor_invert_must_be_bool():
     return 0
 
 
+def test_descriptor_step_percent_of_capacity_must_be_a_percentage():
+    """step_percent_of_capacity is kept when it is a percentage above 0 and up to 100, dropped otherwise (#5324)."""
+    record, _ = _one_inverter(entities={
+        "charge_rate": {"entity_id": "number.c", "access": "rw", "step_percent_of_capacity": 1},
+        "discharge_rate": {"entity_id": "number.d", "access": "rw", "step_percent_of_capacity": True},
+        "charge_limit": {"entity_id": "number.l", "access": "rw", "step_percent_of_capacity": 0},
+        "reserve": {"entity_id": "number.r", "access": "rw", "step_percent_of_capacity": 150},
+    })
+    assert record["entities"]["charge_rate"]["step_percent_of_capacity"] == 1, record
+    for setting in ("discharge_rate", "charge_limit", "reserve"):
+        assert "step_percent_of_capacity" not in record["entities"][setting], record
+    print("PASS: step_percent_of_capacity must be a percentage")
+    return 0
+
+
 def test_new_containers_survive_redaction_unchanged():
     """Bool capabilities, a strftime format and a string value stand-in pass the redactor untouched."""
     base, coordinator = _coordinator()
@@ -1855,6 +1959,23 @@ def test_inverter_definition_presence_needs_a_real_rw_entity():
     assert definition["has_reserve_soc"] is False and definition["has_target_soc"] is False
     assert definition["has_timed_pause"] is True
     print("PASS: presence needs rw entity")
+    return 0
+
+
+def test_inverter_definition_rate_step_from_charge_rate():
+    """rate_step_percent_of_capacity comes from charge_rate's step_percent_of_capacity; absent, base's value stands, else 0 (#5324)."""
+    record = _full_record()
+    definition, gaps, _ = inverter_definition(record, 2)
+    assert definition["rate_step_percent_of_capacity"] == 0 and "rate_step_percent_of_capacity" not in gaps, definition
+    definition, _, _ = inverter_definition(record, 2, base={"rate_step_percent_of_capacity": 1})
+    assert definition["rate_step_percent_of_capacity"] == 1, definition
+    record["entities"]["charge_rate"]["step_percent_of_capacity"] = 1
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["rate_step_percent_of_capacity"] == 1, definition
+    del record["entities"]["charge_rate"]
+    definition, _, _ = inverter_definition(record, 2)
+    assert definition["rate_step_percent_of_capacity"] == 0, definition
+    print("PASS: rate step from charge_rate")
     return 0
 
 
@@ -2011,6 +2132,10 @@ def test_coordinator_all(my_predbat=None):
     failures += test_shorter_original_does_not_fragment_a_longer_one()
     failures += test_misfiled_identifier_used_as_a_container_key_caught()
     failures += test_guard_key_does_not_log_the_raw_value()
+    failures += test_identity_derived_values_do_not_warn()
+    failures += test_misfiled_identifier_warns_once_per_process()
+    failures += test_short_or_unrelated_identities_do_not_hide_misfiled_values()
+    failures += test_warning_is_once_per_record_and_ignores_joined_digit_runs()
     failures += test_identifier_variants_registered_for_case_and_separator_transforms()
     failures += test_identifier_variants_fold_up_as_well_as_down()
     failures += test_pseudonymised_value_hidden_when_case_folded_and_separator_swapped_in_entity_id()
@@ -2026,10 +2151,12 @@ def test_coordinator_all(my_predbat=None):
     failures += test_descriptor_needs_exactly_one_of_entity_id_and_value()
     failures += test_descriptor_value_rejects_free_text()
     failures += test_descriptor_invert_must_be_bool()
+    failures += test_descriptor_step_percent_of_capacity_must_be_a_percentage()
     failures += test_new_containers_survive_redaction_unchanged()
     failures += test_inverter_definition_builds_every_field_without_a_base()
     failures += test_inverter_definition_presence_needs_a_real_rw_entity()
     failures += test_inverter_definition_ge_mode_flags_follow_inverter_mode_domain()
+    failures += test_inverter_definition_rate_step_from_charge_rate()
     failures += test_inverter_definition_charge_rate_units()
     failures += test_inverter_definition_gaps_and_not_applicable()
     failures += test_inverter_definition_counts_load_entities()

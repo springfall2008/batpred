@@ -1562,7 +1562,41 @@ def test_sigenergy_send_battery_command_mqtt(my_predbat):
     assert cmd["systemId"] == "SIG001", "systemId in commands[0]"
     assert cmd["activeMode"] == "charge", "activeMode in commands[0]"
     assert cmd["duration"] == 60, "duration in commands[0]"
-    assert abs(payload["chargingPower"] - 3.5) < 0.01, "chargingPower in payload"
+    assert abs(cmd["chargingPower"] - 3.5) < 0.01, "chargingPower in commands[0]"
+    assert set(payload.keys()) == {"accessToken", "commands"}, "nothing but accessToken and commands at the top level, got {}".format(sorted(payload.keys()))
+    assert set(cmd.keys()) == {"systemId", "activeMode", "startTime", "duration", "chargingPower"}, "optional fields that were not passed are omitted, got {}".format(sorted(cmd.keys()))
+
+    # Every optional field belongs inside the command object - the API ignores them at the top level (GH#5376)
+    published.clear()
+    ok = run_async(
+        api.send_battery_command(
+            "SIG002",
+            "discharge",
+            30,
+            charging_power_kw=1.234,
+            pv_power_kw=1.8,
+            max_sell_power_kw=4.0,
+            max_purchase_power_kw=6.5,
+            charge_priority_type="GRID",
+            discharge_priority_type="PV",
+        )
+    )
+    assert ok is True, "send_battery_command with every optional field should return True"
+    assert len(published) == 1, "One MQTT publish expected for the second command"
+    topic, payload = published[0]
+    assert set(payload.keys()) == {"accessToken", "commands"}, "nothing but accessToken and commands at the top level, got {}".format(sorted(payload.keys()))
+    assert len(payload["commands"]) == 1, "One command expected"
+    cmd = payload["commands"][0]
+    expected = {"chargingPower": 1.23, "pvPower": 1.8, "maxSellPower": 4.0, "maxPurchasePower": 6.5, "chargePriorityType": "GRID", "dischargePriorityType": "PV"}
+    for key, value in expected.items():
+        assert cmd.get(key) == value, "{} in commands[0] should be {}, got {}".format(key, value, cmd.get(key))
+
+    # A zero power limit is a real instruction (hold the battery), so it must be sent rather than dropped
+    published.clear()
+    ok = run_async(api.send_battery_command("SIG003", "selfConsumption", 30, charging_power_kw=0.0))
+    assert ok is True, "send_battery_command with a zero power limit should return True"
+    cmd = published[0][1]["commands"][0]
+    assert cmd.get("chargingPower") == 0.0, "chargingPower 0 in commands[0], got {}".format(cmd.get("chargingPower"))
 
     return failed
 

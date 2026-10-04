@@ -152,6 +152,7 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
     """
     entity_records = []
     all_timestamps_30min = set()
+    following_timestamps_30min = set()
 
     for selection in entity_selections:
         entity_id = selection["entity_id"]
@@ -184,12 +185,25 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
                     # A record makes the window it landed in a row, so activity is always on screen
                     minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
                     rounded_minutes_30 = (minutes // 30) * 30
-                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
+                    window_start = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
+                    all_timestamps_30min.add(window_start)
+
+                    # A row reports the state at its own start, so a change part way through a window
+                    # first shows in the NEXT row. An entity that only records on a change leaves that
+                    # window empty, and without a row there the change was hidden as "unchanged" until
+                    # the next record - which was then flagged as the change, hours late.
+                    following_timestamps_30min.add(window_start + timedelta(minutes=30))
 
         # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
         # the local-time "now" record get_history_with_now() appends
         records.sort(key=lambda record: record[0])
         entity_records.append(records)
+
+    # Never add a row beyond the newest record, that would be a row in the future
+    newest_record = max((records[-1][0] for records in entity_records if records), default=None)
+    for following in following_timestamps_30min:
+        if following <= newest_record:
+            all_timestamps_30min.add(following)
 
     # Sort timestamps in reverse chronological order
     sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)

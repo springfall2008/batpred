@@ -18,11 +18,12 @@ launch_run_prediction_* and the first handle read flushes them all through one
 call to the C++ prediction kernel, which is where the threading now lives.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from multiprocessing import cpu_count
 from const import (
     CLOUD_FACTOR_PV10,
     CLOUD_WINDOW_MINUTES,
+    DYNAMIC_LOAD_CAR_CONFIRM_MINUTES,
     DYNAMIC_LOAD_CAR_LOAD_MINUTES,
     DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
     DYNAMIC_LOAD_CAR_START_MINUTES,
@@ -57,6 +58,7 @@ from utils import (
     export_limit_exports_no_battery,
     export_limit_is_full_discharge,
     is_entity_id,
+    round_out_to_period,
 )
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
@@ -234,7 +236,7 @@ class Plan:
         self.car_charging_now_slots = [[] for car_n in range(self.num_cars)]
 
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
-        threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
+        threshold_car = self.car_charging_threshold_kw()
 
         # Last period load analysis
         self.load_last_status = self.dynamic_load_classify()
@@ -356,6 +358,12 @@ class Plan:
         # Always a fresh list per car, so a caller that edits the model can never edit the published plan
         return [(now_slots[car_n] if car_n < len(now_slots) else []) + list(slots) for car_n, slots in enumerate(self.car_charging_slots)]
 
+    def car_charging_threshold_kw(self):
+        """
+        car_charging_threshold in kW, the unit of load_last_period - it is held in kWh per minute.
+        """
+        return self.car_charging_threshold * MINUTE_WATT / 1000
+
     def dynamic_load_classify(self):
         """
         Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
@@ -366,7 +374,7 @@ class Plan:
         between cycles, and the car grace period spans several of them.
         """
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
-        threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
+        threshold_car = self.car_charging_threshold_kw()
         if self.load_last_period >= threshold_battery:
             return "high"
         if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
@@ -484,6 +492,29 @@ class Plan:
         """
         return self.octopus_intelligent_dynamic and self.dynamic_load_car_is_octopus(car_n)
 
+    def dynamic_load_car_strip_from(self, car_n):
+        """
+        The first minute (since midnight_utc) from which car_n's dispatches lose their cheap rate, or None
+        when the car is not cancelled this cycle and they keep it. The one place that decides it, for
+        everything that removes the rate (rate_add_io_slots() and dynamic_load_car_strip_feed_rates()).
+
+        Normally now, but not before the end of the half hour the car was last seen charging in: once a
+        dispatch has started, Octopus bills that whole half hour off-peak, so a car that reaches its
+        planned kWh and stops part-way through it leaves the rest still cheap for the house (GH#5316).
+        The car's own slots are cancelled as usual - it is no longer charging.
+
+        The confirmation is never cleared, only outlived: it is a time, so once that half hour is over this
+        is simply now again. It has to outlast the dispatch, which can end (or be cut short by Octopus as
+        the car finishes) part-way through the half hour, leaving the car outside any dispatch and, with
+        octopus_intelligent_trust_slots Off, not trusted for the rest of it.
+        """
+        if not self.dynamic_load_car_effective.get(car_n, False):
+            return None
+        confirmed = self.dynamic_load_car_confirmed.get(car_n)
+        if confirmed is None or self.midnight_utc is None:
+            return self.minutes_now
+        return max(self.minutes_now, int((confirmed - self.midnight_utc).total_seconds() // 60))
+
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
         Whether car_n's slots should be cancelled at minute and now (both on the exact clock).
@@ -521,6 +552,23 @@ class Plan:
         if not_charging is False:
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
+                # The dispatch has started, so Octopus bills the whole of this half hour off-peak even if the car
+                # finishes early in it (GH#5316) - keep the house's cheap rate to the end of it whatever follows.
+                # The half hour is the one the evidence covers: the load test averages the PREDICT_STEP minutes
+                # before minutes_now, so a cycle just past a boundary saw the previous one. A sensor reads now, but
+                # can still show charging for a car that stopped just before the boundary, so it only confirms
+                # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
+                # either way. The load test only needs load that is not low to trust the slot, which a cooker or
+                # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate
+                if car_n in self.dynamic_load_car_sensors:
+                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES else None
+                elif self.load_last_period >= self.car_charging_threshold_kw():
+                    seen_minute = self.minutes_now - 1
+                else:
+                    seen_minute = None
+                if seen_minute is not None:
+                    period_end = self.midnight_utc + timedelta(minutes=round_out_to_period(int(seen_minute), int(seen_minute) + 1)[1])
+                    self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
             return False
         if not_charging:
             since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)
@@ -531,6 +579,112 @@ class Plan:
             # it starts a fresh grace period rather than counting the unknown stretch towards the old one
             self.dynamic_load_car_since.pop(car_n, None)
         return cancelled
+
+    def dynamic_load_car_state(self):
+        """
+        The dispatch-check state worth keeping across a restart, in a form storage can hold, keyed by car:
+        - confirmed: the end of the half hour the car was last seen charging in (dynamic_load_car_strip_from()),
+          while that half hour is still to come;
+        - run: the dispatch the car is in, with the earliest start seen for it - the start band is timed from it;
+        - cancelled: the decision so far, which stands while there is no evidence either way.
+
+        All times are absolute, as minutes since midnight_utc mean something else after midnight. The "not
+        charging since" clock is deliberately not kept: a restart is a stretch with no evidence, after which
+        the running check starts the grace period afresh too (see dynamic_load_car_target()) - the car may
+        have charged in it - and the clock changes with every flap of an unreliable sensor, which would
+        rewrite the store every 15 seconds. The rest (which cars have a sensor, what has been warned about,
+        this cycle's decision) is rebuilt every cycle.
+        """
+        now_minute = self.dynamic_load_car_minute(self.now_utc_real)
+        confirmed_cars = {car_n: confirmed for car_n, confirmed in self.dynamic_load_car_confirmed.items() if self.dynamic_load_car_minutes_of(confirmed) > now_minute}
+        cars = {}
+        for car_n in sorted(set(confirmed_cars) | set(self.dynamic_load_car_run)):
+            confirmed = confirmed_cars.get(car_n)
+            run = self.dynamic_load_car_run.get(car_n)
+            cars[str(car_n)] = {
+                "confirmed": confirmed.isoformat() if confirmed else None,
+                "run": {key: (self.midnight_utc + timedelta(minutes=run[key])).isoformat() for key in ("start", "end")} if run else None,
+                "cancelled": bool(self.dynamic_load_car_cancelled.get(car_n, False)),
+            }
+        return cars
+
+    def dynamic_load_car_minutes_of(self, when):
+        """
+        A time saved by the dispatch check as minutes since midnight_utc, the axis of dynamic_load_car_minute():
+        the times are built from that axis, so it includes clock_skew and must be compared on it, not with
+        now_utc_real.
+        """
+        return (when - self.midnight_utc).total_seconds() / 60
+
+    def dynamic_load_car_save(self):
+        """
+        Save the dispatch-check state (see dynamic_load_car_state()) to storage when it has changed since
+        the last save, so a restart part-way through a dispatch carries on from it. Called every cycle and
+        from the 15 second poll, so it must cost nothing when nothing has changed - and an install with no
+        Octopus Intelligent car has no state, so never writes.
+        """
+        state = self.dynamic_load_car_state()
+        if state == self.dynamic_load_car_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        from ha import run_async
+
+        # Recorded whether or not the write works: a store that is failing is not retried every 15 seconds
+        self.dynamic_load_car_saved = state
+        try:
+            # Expiry is on the real clock, as storage.load() checks it (see save_plan()). It only tidies up:
+            # dynamic_load_car_load() decides what is still current
+            expiry = datetime.now(timezone.utc) + timedelta(days=2)
+            if not run_async(storage.save("predbat", "dynamic_load_car", {"cars": state}, format="json", expiry=expiry)):
+                self.log("Warn: Octopus Intelligent: failed to save the car dispatch state")
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to save the car dispatch state: {}".format(e))
+
+    def dynamic_load_car_load(self):
+        """
+        Restore the dispatch-check state saved by dynamic_load_car_save(), at start up.
+
+        Only what is still current is taken: a confirmed half hour that has not ended yet, and the run and
+        decision of a dispatch that has not ended yet. Anything older belongs to a dispatch the car has since
+        left, where the running check would have dropped it too.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage or self.midnight_utc is None:
+            return
+        from ha import run_async
+
+        try:
+            data = run_async(storage.load("predbat", "dynamic_load_car"))
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to load the car dispatch state: {}".format(e))
+            return
+        cars = data.get("cars") if isinstance(data, dict) else None
+        if not isinstance(cars, dict):
+            return
+
+        now_minute = self.dynamic_load_car_minute(self.now_utc_real)
+        restored = []
+        for key, car in cars.items():
+            try:
+                car_n = int(key)
+                confirmed = datetime.fromisoformat(car["confirmed"]) if car.get("confirmed") else None
+                run = {name: self.dynamic_load_car_minutes_of(datetime.fromisoformat(car["run"][name])) for name in ("start", "end")} if car.get("run") else None
+                confirmed_current = confirmed is not None and self.dynamic_load_car_minutes_of(confirmed) > now_minute
+                run_current = run is not None and run["end"] > now_minute
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+            if confirmed_current:
+                self.dynamic_load_car_confirmed[car_n] = confirmed
+            if run_current:
+                # Whole minutes stay ints, as the slots they are compared with are
+                self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run.items()}
+                self.dynamic_load_car_cancelled[car_n] = bool(car.get("cancelled", False))
+            if confirmed_current or run_current:
+                restored.append(car_n)
+        if restored:
+            self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage".format(restored))
 
     def dynamic_load_car_refresh_sensors(self):
         """
@@ -612,6 +766,7 @@ class Plan:
         minute = self.dynamic_load_car_minute(self.now_utc_real)
         for car_n in range(self.num_cars):
             cancelled = self.dynamic_load_car_target(car_n, minute, self.now_utc_real, record=save)
+            self.dynamic_load_car_effective[car_n] = cancelled
             if save:
                 was_cancelled = self.dynamic_load_car_cancelled.get(car_n, False)
                 if cancelled != was_cancelled:
@@ -622,9 +777,11 @@ class Plan:
                         reason = "has not been seen charging in its dispatches yet, not trusting them"
                     else:
                         reason = "slots resumed"
+                    strip_from = self.dynamic_load_car_strip_from(car_n)
+                    if strip_from is not None and strip_from > self.minutes_now:
+                        reason += " - keeping the dispatch rate until {} as it charged in this half hour".format(self.time_abs_str(strip_from))
                     self.log("Octopus Intelligent: car {} {}".format(car_n, reason))
                 self.dynamic_load_car_cancelled[car_n] = cancelled
-            self.dynamic_load_car_effective[car_n] = cancelled
 
             if cancelled and car_n < len(self.car_charging_slots):
                 for slot in self.car_charging_slots[car_n]:
@@ -636,6 +793,8 @@ class Plan:
                         # self-consistent
                         if "cost" in slot:
                             slot["cost"] = 0
+        if save:
+            self.dynamic_load_car_save()
         return changed
 
     def dynamic_load_car_poll(self, now=None):
@@ -662,6 +821,8 @@ class Plan:
                 continue
             if self.dynamic_load_car_target(car_n, minute, now) != self.dynamic_load_car_cancelled.get(car_n, False):
                 due = True
+        # The poll starts the grace clock and confirms half hours too
+        self.dynamic_load_car_save()
 
         if due:
             self.log("Octopus Intelligent: car charging state changed, will re-plan")

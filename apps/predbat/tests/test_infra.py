@@ -50,6 +50,32 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
+class MockStorageComponents:
+    """
+    Minimal components mock returning a pre-configured storage component, for tests of code that saves
+    and loads through Storage.
+    """
+
+    def __init__(self, storage):
+        """Initialise with a storage instance (may be None to simulate unavailable)."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the mocked storage for 'storage', None for everything else."""
+        if name == "storage":
+            return self._storage
+        return None
+
+
+def make_test_storage(predbat, tmpdir):
+    """Create a StorageComponent backed by a real local-file backend in tmpdir."""
+    from storage import StorageComponent, StorageLocalFiles
+
+    storage = StorageComponent(predbat)
+    storage.backend = StorageLocalFiles(tmpdir, predbat.log)
+    return storage
+
+
 def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None):
     """Create a mock aiohttp response object"""
     mock_response = MagicMock()
@@ -479,7 +505,7 @@ class MockConfigProvider:
             "car_charging_exclusive": False,
             "car_charging_from_battery": False,
             "car_charging_planned_response": ["yes", "on", "enable", "true"],
-            "car_charging_now_response": ["yes", "on", "enable", "true"],
+            "car_charging_now_response": ["yes", "on", "enable", "true", "charging"],
             "combine_rate_threshold": 1.0,
             "combine_export_slots": True,
             "combine_charge_slots": True,

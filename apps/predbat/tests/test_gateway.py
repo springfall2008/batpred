@@ -666,6 +666,42 @@ class TestInjectEntities:
 
         assert GATEWAY_ATTRIBUTE_TABLE["reserve_soc"]["max"] == 100
 
+    def test_rate_step_marked_on_givenergy_rates(self):
+        """A GivEnergy inverter's rate entities carry the 1% of capacity step its read-back is rounded down to (#5324)."""
+        status = self._make_status()
+        for inverter_type in (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY):
+            status.inverters[0].type = inverter_type
+            gw = self._make_gateway()
+            gw._inject_entities(status)
+
+            for rate in ("charge_rate", "discharge_rate"):
+                state, attrs = gw._dashboard_calls["number.predbat_gateway_456789_" + rate]
+                assert state == 3000
+                assert attrs["step_percent_of_capacity"] == 1, (inverter_type, rate, attrs)
+                # The rest of the table entry survives
+                assert attrs["unit_of_measurement"] == "W"
+                assert attrs["step"] == 10
+
+    def test_rate_step_not_marked_on_other_brands(self):
+        """GWMQTT is one inverter type for every brand the hub drives, so the GivEnergy step must not reach the others."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        status = self._make_status()
+        for inverter_type in (pb.INVERTER_TYPE_SOLIS_HYBRID, pb.INVERTER_TYPE_DEYE_SUNSYNK, pb.INVERTER_TYPE_UNKNOWN):
+            status.inverters[0].type = inverter_type
+            gw = self._make_gateway()
+            gw._inject_entities(status)
+
+            for rate in ("charge_rate", "discharge_rate"):
+                _, attrs = gw._dashboard_calls["number.predbat_gateway_456789_" + rate]
+                assert "step_percent_of_capacity" not in attrs, (inverter_type, rate, attrs)
+
+        # Marked on a copy: a GivEnergy inverter must not leave the step in the shared table
+        status.inverters[0].type = pb.INVERTER_TYPE_GIVENERGY
+        self._make_gateway()._inject_entities(status)
+        for rate in ("charge_rate", "discharge_rate"):
+            assert "step_percent_of_capacity" not in GATEWAY_ATTRIBUTE_TABLE[rate]
+
     def test_ems_aggregate_entities(self):
         """EMS aggregate and sub-inverter entities are published with table attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
@@ -1745,6 +1781,28 @@ class TestAutomaticConfig:
         assert len(gw._args["battery_power"]) == 2
         assert "000aa1" in gw._args["soc_percent"][0]
         assert "000bb2" in gw._args["soc_percent"][1]
+
+    def test_multi_inverter_battery_args_have_one_entry_per_inverter(self):
+        """battery_scaling, battery_rate_max and inverter_time are per-inverter args, so each gets one entry per primary inverter.
+
+        A single entry leaves inverter 1 reading index 1 out of range: PredBat falls back to a 2600 W battery_rate_max
+        and 1.0 battery_scaling, and never checks that inverter's clock.
+        """
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_multi"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE2223G800", primary=True)
+        self._make_inverter(status, serial="CE2225G400", primary=True)
+        gw._last_status = status
+        gw.automatic_config()
+
+        base0 = f"{gw.prefix}_gateway_23g800"
+        base1 = f"{gw.prefix}_gateway_25g400"
+        assert gw._args["battery_scaling"] == [f"sensor.{base0}_battery_dod", f"sensor.{base1}_battery_dod"]
+        assert gw._args["battery_rate_max"] == [f"sensor.{base0}_battery_rate_max", f"sensor.{base1}_battery_rate_max"]
+        assert gw._args["inverter_time"] == [f"sensor.{base0}_inverter_time", f"sensor.{base1}_inverter_time"]
 
     # ------------------------------------------------------------------
     # Secondary (cloud) and unsupported feature args
