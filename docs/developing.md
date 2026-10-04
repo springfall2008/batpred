@@ -47,6 +47,8 @@ cd coverage
 
 For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
 
+Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far and the day counters) at full precision, and the rates whenever they change. Without them, the replay drifts from the live plans as the day goes on.
+
 There are two modes:
 
 - **Exact replay** (the default) takes the battery SoC from the log at every run, so each re-plan starts from exactly what the live system saw. Use it to check the replay reproduces the live plans before changing anything.
@@ -58,7 +60,7 @@ There are two modes:
 
 In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
 
-The replay carries on across midnight, so a yaml from late evening can be replayed through the whole of the next day. At midnight it moves everything held as minutes from midnight (rates, forecasts, plan windows) back a day, and the start-of-day re-plan happens as it does live. Rates the live system fetched after the yaml was written, such as the next day-ahead prices, are not in the yaml, so a replay past them plans on rates that run out early. `--replay_until HH:MM` stops at the first such time after the yaml.
+The replay carries on across midnight, so a yaml from late evening can be replayed through the whole of the next day. At midnight it moves everything held as minutes from midnight (rates, forecasts, plan windows) back a day, and the start-of-day re-plan happens as it does live. Rates the live system fetched after the yaml was written, such as the next day-ahead prices, are not in the yaml. The replay takes them from the log's `Replay input: rates changed` lines; a log without those lines plans on rates that run out early. `--replay_until HH:MM` stops at the first such time after the yaml.
 
 Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log should come from a similar Predbat version; a version change part way through is marked, and the plans after it are counted separately.
 
