@@ -6207,6 +6207,37 @@ async def test_publish_device_realtime_data_main():
     else:
         print(f"✓ Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
 
+    # The plant PV and grid power cover every inverter, not just the first one in the plant
+    plant_pv_sensor10 = "sensor.predbat_solax_multi_inv_plant_pv_power"
+    plant_grid_sensor10 = "sensor.predbat_solax_multi_inv_plant_grid_power"
+    if api10.dashboard_items.get(plant_pv_sensor10, {}).get("state") != 2000:
+        print(f"**** ERROR: Expected plant pv_power 2000W summed over both inverters, got {api10.dashboard_items.get(plant_pv_sensor10)} ****")
+        failed = True
+    elif api10.dashboard_items.get(plant_grid_sensor10, {}).get("state") != -300:
+        print(f"**** ERROR: Expected plant grid_power -300W summed over both inverters, got {api10.dashboard_items.get(plant_grid_sensor10)} ****")
+        failed = True
+    else:
+        print("✓ Multi-inverter plant pv_power and grid_power summed over both inverters")
+
+    # A failed inverter read holds the plant powers, a sum with one inverter missing would under-read
+    api10.realtime_device_failed.add("INV_B")
+    api10.realtime_device_data["INV_A"]["pvMap"] = {"pv1Power": 900}
+    await api10.publish_device_realtime_data()
+    if api10.dashboard_items[plant_pv_sensor10]["state"] != 2000 or api10.dashboard_items[plant_grid_sensor10]["state"] != -300:
+        print(f"**** ERROR: Plant pv_power/grid_power should be held when an inverter failed its read, got {api10.dashboard_items[plant_pv_sensor10]['state']}/{api10.dashboard_items[plant_grid_sensor10]['state']} ****")
+        failed = True
+    else:
+        print("✓ Plant pv_power and grid_power held when an inverter failed its read")
+
+    # Republished on the next good read
+    api10.realtime_device_failed.discard("INV_B")
+    await api10.publish_device_realtime_data()
+    if api10.dashboard_items[plant_pv_sensor10]["state"] != 1400:
+        print(f"**** ERROR: Expected plant pv_power 1400W after the inverter recovered, got {api10.dashboard_items[plant_pv_sensor10]['state']} ****")
+        failed = True
+    else:
+        print("✓ Plant pv_power republished once every inverter is read again")
+
     # Test 11: Battery SOH sensor published correctly, including zero-SOH guard and aggregate
     print("Test 11: Battery SOH sensor published correctly")
     api11 = MockSolaxAPI()
@@ -6546,6 +6577,12 @@ async def test_automatic_config_main():
         failed = True
     elif api.get_arg("pv_today") != ["sensor.predbat_solax_plant1_pv_yield"]:
         print(f"**** ERROR: pv_today should use the PV yield built from the inverters, got {api.get_arg('pv_today')} ****")
+        failed = True
+    elif api.get_arg("pv_power") != ["sensor.predbat_solax_plant1_pv_power"]:
+        print(f"**** ERROR: pv_power should use the plant PV power summed over the inverters, got {api.get_arg('pv_power')} ****")
+        failed = True
+    elif api.get_arg("grid_power") != ["sensor.predbat_solax_plant1_grid_power"]:
+        print(f"**** ERROR: grid_power should use the plant grid power summed over the inverters, got {api.get_arg('grid_power')} ****")
         failed = True
     elif api.get_arg("battery_scaling") != ["sensor.predbat_solax_plant1_INV001_battery_soh"]:
         print(f"**** ERROR: battery_scaling not set to SOH sensor, got {api.get_arg('battery_scaling')} ****")
