@@ -1258,6 +1258,8 @@ class Fetch:
             self.record_status(message="Error: No import rate data provided", had_errors=True)
         # Atomic publish: readers (e.g. async components) never see a half-built or transiently-empty rate_import during rebuild.
         self.rate_import = import_rates
+        # A charger's own schedule is costed at the tariff, which the car slots were built too early to know
+        self.reprice_charger_schedule_slots()
 
         # Replicate and scan export rates
         if export_rates:
