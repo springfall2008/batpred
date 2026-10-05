@@ -105,7 +105,7 @@ Like car_charging_energy it can be a list of sensors, one per line per car charg
 If you have multiple cars sharing one charger, then only include a single entry for the charger.
 
 If your car charger has no live power sensor, leave **car_charging_power** commented out in `apps.yaml`; the power flow diagram then shows the same four items it always has, and no **predbat.car_charging_power** sensor is published.<BR>
-If you use one of the supported charger integrations (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
+If you use one of the supported charger integrations (Ohme, myenergi Zappi, Wallbox, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
 
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the **car_charging_energy** line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold**
 
@@ -208,7 +208,7 @@ So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an autom
 With Octopus Intelligent charging a charge outside a dispatch does not get the cheap rate either.<BR>
 A car charging outside any charging slot is also modelled in the plan at **input_number.predbat_car_charging_rate** until the end of the current plan slot (**plan_interval_minutes**, 30 minutes by default), so no export is planned over it. With **switch.predbat_metric_dynamic_load_adjust** On its load is also taken out of the recent-load estimate, so it is not counted twice - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
 Leave it commented out if you have no sensor that reports the car actually drawing power.
-The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`) and Predbat gateway integrations set it for you, unless you have set it yourself in `apps.yaml`.
+The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`), Wallbox (`wallbox_automatic`) and Predbat gateway integrations set it for you, unless you have set it yourself in `apps.yaml`.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
 The sensor's state must match one of these exactly (ignoring case). If unset it defaults to `yes`, `on`, `enable`, `true` and `charging`, which covers on/off sensors and chargers whose status reads `Charging`, such as a myenergi Zappi's plug status.
@@ -460,6 +460,23 @@ When **ohme_automatic** is set to `true`, Predbat points [car_charging_energy](a
 [car charging hold](#filtering-car-charging-energy-from-house-load) can subtract your car charging precisely rather than falling back to the `car_charging_threshold` heuristic. If you already have
 another charger's energy sensor configured - a Zappi or Wallbox, say - Predbat leaves your setting alone and logs that it has done so.
 
+## Wallbox car charger direct integration
+
+Predbat can talk directly to your Wallbox charger by configuring your Wallbox account details in `apps.yaml`:
+
+```yaml
+  wallbox_username: !secret wallbox_username
+  wallbox_password: !secret wallbox_password
+  # Let Predbat pause and resume the charger from its own car charging plan
+  #wallbox_control: True
+```
+
+Predbat then registers each charger on the account as a car and sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** for you. A Wallbox charger cannot report the car's state of charge, so set **car_charging_soc** from your car's own integration if you want Predbat to plan to a target.
+
+See [Wallbox Charger](components.md#wallbox-charger-wallbox) for the entities it publishes and how Predbat-led charging behaves.
+
+If you would rather use the Home Assistant Wallbox integration, see [Wallbox Pulsar](devices.md#wallbox-pulsar).
+
 ## GivEnergy Gateway OCPP EV charger
 
 When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger attached, the charger's live state is reported to Predbat over the gateway's MQTT telemetry and exposed as Home Assistant entities.
@@ -558,7 +575,7 @@ It only applies to Octopus Intelligent charging (**switch.predbat_octopus_intell
 **Setting it up**
 
 Point **car_charging_now** in `apps.yaml` at a sensor that shows the car charging.
-If you use `ohme_automatic`, `myenergi_automatic` or the Predbat gateway this is already done for you.
+If you use `ohme_automatic`, `myenergi_automatic`, `wallbox_automatic` or the Predbat gateway this is already done for you.
 It can be an on/off sensor (matched against **car_charging_now_response**), or a charging power sensor in W or kW, where 200W or more counts as charging - useful for chargers such as Wallbox that have no "charging" sensor:
 
 ```yaml

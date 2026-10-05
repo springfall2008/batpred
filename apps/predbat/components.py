@@ -289,6 +289,20 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "wallbox": {
+        "class": "wallbox.WallboxAPI",
+        "name": "Wallbox Charger",
+        "event_filter": "predbat_wallbox_",
+        "args": {
+            "username": {"required": True, "secret": True, "config": "wallbox_username"},
+            "password": {"required": True, "secret": True, "config": "wallbox_password"},
+            "automatic": {"required": False, "config": "wallbox_automatic", "default": True},
+            "wallbox_control": {"required": False, "config": "wallbox_control", "default": False},
+            "poll_seconds": {"required": False, "config": "wallbox_poll_seconds", "default": 120},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "fox": {
         "class": "fox.FoxAPI",
         "name": "Fox API",
