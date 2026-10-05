@@ -21,17 +21,14 @@ from tests.test_infra import run_async
 from mock_base import MockBase
 
 from wallbox import (
-    CHARGING_STATUS_IDS,
     MAX_POLL_SECONDS,
     MIN_POLL_SECONDS,
-    PAUSED_STATUS_IDS,
     WALLBOX_API_URL,
     WALLBOX_AUTH_URL,
     WALLBOX_STATUS,
     WallboxAPI,
     WallboxApiError,
     WallboxAuthError,
-    WallboxCharger,
     WallboxPermissionError,
     WallboxRateLimitError,
     WallboxTransport,
@@ -115,9 +112,9 @@ MOCK_STATUS_PAUSED = dict(MOCK_STATUS_CHARGING, charging_power=0, status_id=178,
 
 def test_basic_auth_header():
     """The Basic header is UTF-8, so a colon or accented character in the password survives."""
-    assert basic_auth_header("user@example.com", "secret") == "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ="
+    assert basic_auth_header("user@example.com", "secret") == "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ="  # cspell:disable-line
     # base64 of "a:pä:ss" encoded as UTF-8
-    assert basic_auth_header("a", "pä:ss") == "Basic YTpww6Q6c3M="
+    assert basic_auth_header("a", "pä:ss") == "Basic YTpww6Q6c3M="  # cspell:disable-line
     print("  ✓ Basic auth header is built as UTF-8")
 
 

@@ -673,7 +673,6 @@ class WallboxAPI(ComponentBase):
         self.log("Info: wallbox: setting {} Eco-Smart to {}".format(charger.name, value))
         await self.transport.set_eco_smart(self.api_id(charger), value)
 
-
     def enable_control(self):
         """Decide whether Predbat-led charging can run, and say why when it cannot.
 
@@ -817,7 +816,6 @@ class WallboxAPI(ComponentBase):
         finally:
             if self.paused_by_predbat != before:
                 await self.save_control_state()
-
 
 
 async def run_wallbox_cli(args):  # pragma: no cover

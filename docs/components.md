@@ -18,6 +18,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [myenergi (myenergi)](#myenergi-myenergi)
+    - [Wallbox Charger (wallbox)](#wallbox-charger-wallbox)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Enphase API (enphase)](#enphase-api-enphase)
@@ -274,7 +275,7 @@ with `xxx`, so your API keys are not sent to your AI provider; pass `masked: fal
 deliberately want the raw values. A value counts as a credential if its name contains `_key`,
 `password`, `secret` or `token`, **or** if the component registry flags it explicitly - which
 covers the credentials a name alone cannot reveal, such as your Octopus account number, a Kraken
-MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email` and
+MPAN, a site or plant id, and login identifiers like `deye_username`, `kraken_email`, `wallbox_username` and
 `myenergi_hub_serial` (the myenergi API's digest-auth username). Inverter serial numbers are
 deliberately *not* redacted: they identify hardware rather than authenticate it, and they are
 what makes an integration bug report diagnosable. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
@@ -1044,6 +1045,63 @@ Add `--boost zappi` or `--boost eddi` (with `--amount`) to send a test boost, or
 To try the charge control commands against a real Zappi without enabling the feature, `--start-charge` puts it in Fast exactly as a planned window does, `--stop-charge` puts it in Stopped as being outside one does, and `--release` puts it back in Eco+ as handing it back does. Run the command again with no action to see the mode that took effect.
 
 Note `--stop-charge` leaves the Zappi stopped, so remember to `--release` it afterwards or set the mode you want in the myenergi app.
+
+---
+
+### Wallbox Charger (wallbox)
+
+Talks directly to the Wallbox cloud, so it works with or without Home Assistant. It monitors every charger on your Wallbox account, can register them with Predbat as cars, and can pause and resume them from Predbat's car charging plan.
+
+#### What it publishes (wallbox)
+
+For each charger, with `<id>` being the Wallbox charger id:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready` |
+| `sensor.predbat_wallbox_<id>_power` | Charging power in W |
+| `sensor.predbat_wallbox_<id>_session_energy` | Energy added in the current session in kWh; resets with each session |
+| `binary_sensor.predbat_wallbox_<id>_connected` | On while a car is plugged in |
+| `binary_sensor.predbat_wallbox_<id>_charging` | On while the car is charging |
+| `switch.predbat_wallbox_<id>_charging` | Turn off to pause charging, on to resume a paused session |
+| `switch.predbat_wallbox_<id>_locked` | Lock or unlock the charger |
+| `number.predbat_wallbox_<id>_max_charging_current` | Maximum charging current in A |
+| `select.predbat_wallbox_<id>_eco_smart` | Eco-Smart mode: `off`, `eco_mode` or `full_solar`. Only on chargers with Eco-Smart |
+
+Wallbox chargers cannot report the car's state of charge, so there is no battery sensor.
+
+The controls need a Wallbox account with admin rights over the charger. Without them monitoring still works and Predbat logs a warning the first time a control is refused.
+
+#### Automatic configuration (wallbox)
+
+With `wallbox_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** to the Wallbox entities, and raises **num_cars** to the number of chargers. Chargers are taken in order of their id, so the first charger is car 0. A **car_charging_now** you have set yourself is kept.
+
+Predbat does not set **car_charging_soc**. If you want Predbat to plan to a target charge level, set it from your car's own integration.
+
+#### Predbat-led charging (wallbox)
+
+Set `wallbox_control: True` to let Predbat pause and resume each charger from its own car charging plan. It needs `wallbox_automatic`. While it is active Predbat publishes `switch.predbat_wallbox_control`, which you can turn off to hand the chargers back at any time; read only mode does the same.
+
+- Inside a planned car charging slot a paused charger is resumed.
+- Outside a slot a charging charger is paused.
+- When control is released, any charger Predbat paused is resumed and returned to its own Wallbox schedule.
+
+Things to know:
+
+- Wallbox can only pause a charger once it is charging, so a car plugged in outside a slot draws power until Predbat's next poll (two minutes by default).
+- Clear any schedule set in the Wallbox app. A charger that Wallbox is holding in `Scheduled` will not charge in a Predbat slot.
+- Predbat never unlocks a locked charger. It logs a warning if a locked charger misses its slot.
+- Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
+
+#### Configuration Options (wallbox)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | Yes | - | `wallbox_username` | Your Wallbox account email address |
+| `password` | String | Yes | - | `wallbox_password` | Your Wallbox account password |
+| `automatic` | Boolean | No | `True` | `wallbox_automatic` | Register the chargers with Predbat as cars |
+| `wallbox_control` | Boolean | No | `False` | `wallbox_control` | Let Predbat pause and resume the chargers from its own plan. Requires `wallbox_automatic`; released by read only mode |
+| `poll_seconds` | Integer | No | `120` | `wallbox_poll_seconds` | How often to poll Wallbox, 60 to 1800, in steps of 60 |
 
 ---
 
