@@ -1052,6 +1052,44 @@ Note `--stop-charge` leaves the Zappi stopped, so remember to `--release` it aft
 
 Talks directly to the Wallbox cloud, so it works with or without Home Assistant. It monitors every charger on your Wallbox account, can register them with Predbat as cars, and can pause and resume them from Predbat's car charging plan.
 
+#### Setting it up (wallbox)
+
+1. You need the email address and password of your Wallbox account, the ones you use in the Wallbox app or at <https://my.wallbox.com>. Predbat signs in with a password, so an account that only signs in through Google or Apple needs a password set first.
+2. Put the two values in `secrets.yaml`:
+
+    ```yaml
+    wallbox_username: "you@example.com"
+    wallbox_password: "your-wallbox-password"
+    ```
+
+3. Add the component to `apps.yaml`:
+
+    ```yaml
+      wallbox_username: !secret wallbox_username
+      wallbox_password: !secret wallbox_password
+    ```
+
+4. Restart Predbat. Within a minute the entities below appear for every charger on the account, and the log shows the **car_charging_** settings Predbat has made for you. If sign in fails, the log says `wallbox: sign in failed` and the component shows as failed.
+5. Decide who controls charging:
+
+    - **Monitoring only** (the default). Predbat sees the charger and removes car charging from its house load, but something else decides when the car charges: the Wallbox app's schedule, your car, or your energy supplier.
+    - **Predbat-led charging.** Add `wallbox_control: True` and Predbat pauses and resumes the charger from its own car charging plan. See [Predbat-led charging](#predbat-led-charging-wallbox) below.
+    - **Octopus Intelligent Go, or any other OCPP backend.** Leave `wallbox_control` off. The backend controls the charger, and Predbat takes the car's charging slots from the Octopus integration as usual.
+
+If you previously pointed **car_charging_energy**, **car_charging_planned** or **car_charging_now** at the Home Assistant Wallbox integration's sensors, you can remove those lines: with `wallbox_automatic` on, Predbat uses its own Wallbox entities and logs a note when it replaces a setting of yours.
+
+#### Trying it from the command line (wallbox)
+
+You can check your credentials and see exactly what Predbat would publish without changing your configuration. From the `apps/predbat` directory:
+
+```bash
+python3 wallbox.py --username you@example.com --password your-wallbox-password
+```
+
+This signs in, runs one cycle and prints every entity, the **car_charging_** settings it would make, and a summary line per charger. Add `--raw` to print each charger's full status as Wallbox sends it, which is the most useful thing to attach to a bug report; remove serial numbers and names first.
+
+To try a control by hand, add one of `--pause`, `--resume`, `--resume-schedule`, `--lock`, `--unlock`, `--max-current <amps>` or `--eco-smart <off|eco_mode|full_solar>`, with `--charger <id>` to choose a charger other than the first. The charger's state is printed again a few seconds later so you can see whether it took effect.
+
 #### What it publishes (wallbox)
 
 For each charger, with `<id>` being the Wallbox charger id:
