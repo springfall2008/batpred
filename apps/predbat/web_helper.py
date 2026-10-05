@@ -7779,14 +7779,8 @@ def get_plan_renderer_js():
 
     // Update timestamp display
     function updateTimestampDisplay() {
-        let timestamp = null;
-        if (currentView === 'plan' && window.planData) {
-            timestamp = window.planData.timestamp;
-        } else if (currentView === 'yesterday' && window.yesterdayData) {
-            timestamp = window.yesterdayData.timestamp;
-        } else if (currentView === 'baseline' && window.baselineData) {
-            timestamp = window.baselineData.timestamp;
-        }
+        const data = currentViewData();
+        const timestamp = data ? data.timestamp : null;
 
         const timestampElement = document.getElementById('planTimestamp');
         if (timestampElement) {
@@ -7854,20 +7848,8 @@ def get_plan_renderer_js():
         // Only allow debug mode for the plan view
         const showDebug = (currentView === 'plan' && debugToggle) ? debugToggle.checked : false;
 
-        let data, timestamp, overrides;
-        if (currentView === 'plan') {
-            data = window.planData;
-            timestamp = data ? data.timestamp : null;
-            overrides = window.overridesData || {};
-        } else if (currentView === 'yesterday') {
-            data = window.yesterdayData;
-            timestamp = data ? data.timestamp : null;
-            overrides = {};
-        } else {
-            data = window.baselineData;
-            timestamp = data ? data.timestamp : null;
-            overrides = {};
-        }
+        const data = currentViewData();
+        const overrides = currentView === 'plan' ? (window.overridesData || {}) : {};
 
         if (!data) {
             if (currentView === 'plan') {
@@ -7877,17 +7859,19 @@ def get_plan_renderer_js():
                 // which it can't do without the recorded history of predbat.cost_today - say so rather
                 // than sitting on a loading message that will never go away
                 container.innerHTML = '<h2>No data for this view yet</h2>' +
-                    '<p>This view is computed about once an hour from what actually happened yesterday, ' +
-                    'so it stays empty for the first hour after Predbat starts.</p>' +
+                    '<p>This view is computed from what actually happened, on the first plan update after Predbat starts ' +
+                    'and again as each plan slot ends, so it should fill in within a few minutes.</p>' +
                     '<p>If it never fills in, Predbat could not read the history of <b>predbat.cost_today</b> ' +
                     'from Home Assistant. Check that the Home Assistant recorder is storing the Predbat entities ' +
                     '(see the recorder notes in the FAQ) and look for <i>Calculate yesterday</i> warnings in the Predbat log.</p>';
             }
+            // A warning raised for another view does not apply to this one
+            checkStaleness(null);
             return;
         }
 
         // Check for stale data
-        checkStaleness(timestamp);
+        checkStaleness(data);
 
         // Render table
         const editable = (currentView === 'plan');
@@ -7904,17 +7888,31 @@ def get_plan_renderer_js():
         adjustResponsiveSizes();
     }
 
-    // Check if data is stale (>15 minutes old)
-    function checkStaleness(timestamp) {
+    // How old a view's data may get before it is reported stale, when the data does not say. Each dataset
+    // carries refresh_minutes, the longest Predbat should take to republish it (the plan once per re-plan,
+    // the history views once per completed plan slot), and is stale a run (5 minutes) after that.
+    const STALE_MINUTES_DEFAULT = {plan: 15, yesterday: 60, baseline: 60};
+
+    // The data the current view shows
+    function currentViewData() {
+        return currentView === 'plan' ? window.planData : (currentView === 'yesterday' ? window.yesterdayData : window.baselineData);
+    }
+
+    // Show the stale warning when the view's data is older than it should be; with no data, hide it
+    function checkStaleness(data) {
         const staleWarning = document.getElementById('staleWarning');
-        if (!timestamp || !staleWarning) return;
+        if (!staleWarning) return;
+        if (!data || !data.timestamp) {
+            staleWarning.style.display = 'none';
+            return;
+        }
 
-        const dataTime = new Date(timestamp);
-        const now = new Date();
-        const ageMs = now - dataTime;
-        const isStale = ageMs > 900000; // 15 minutes in milliseconds
-
-        if (isStale) {
+        // Never under 15 minutes, the limit before views had their own: a slow run or plan_random_delay can push a
+        // 5-minute re-plan past 10 minutes without anything being wrong
+        const limitMinutes = data.refresh_minutes ? Math.max(data.refresh_minutes + 5, 15) : (STALE_MINUTES_DEFAULT[currentView] || 15);
+        const ageMs = new Date() - new Date(data.timestamp);
+        if (ageMs > limitMinutes * 60000) {
+            staleWarning.textContent = '\u26A0\uFE0F Plan data is stale (last updated over ' + limitMinutes + ' minutes ago)';
             staleWarning.style.display = 'block';
         } else {
             staleWarning.style.display = 'none';
@@ -7944,10 +7942,8 @@ def get_plan_renderer_js():
             // Check if server says data is unchanged
             if (data.unchanged === true) {
                 // Data hasn't changed, no need to update
-                // Still check staleness based on plan data timestamp
-                if (window.planData && window.planData.timestamp) {
-                    checkStaleness(window.planData.timestamp);
-                }
+                // Still check staleness, against the data the current view shows
+                checkStaleness(currentViewData());
 
                 // Hide error message
                 const errorDiv = document.getElementById('planError');
