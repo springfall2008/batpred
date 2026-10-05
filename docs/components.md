@@ -1679,7 +1679,7 @@ Predbat is automatically configured to use these energy rates once Kraken is ena
 
 #### What it does (load_ml)
 
-Uses a neural network to predict your household energy consumption for the next 48 hours based on historical patterns, time-of-day, day-of-week, and optionally temperature and PV generation data.
+Uses a neural network to predict your household energy consumption for the duration configured by `forecast_hours` in `apps.yaml` (48 hours by default), based on historical patterns, time-of-day, day-of-week, and optionally temperature and PV generation data.
 This provides more accurate load predictions than simple averaging, especially for households with variable usage patterns.
 
 #### When to enable (load_ml)
@@ -1694,7 +1694,7 @@ This provides more accurate load predictions than simple averaging, especially f
 - Fetches historical load data from your configured `load_today` sensor
 - Optionally incorporates PV generation and temperature forecast data
 - Trains a multi-layer neural network on your historical patterns
-- Makes autoregressive predictions for 48 hours ahead in 5-minute intervals
+- Makes autoregressive predictions for the configured `forecast_hours` duration in 5-minute intervals
 - Fine-tunes periodically (every 2 hours) to adapt to changing patterns
 - Validates predictions and falls back gracefully if accuracy is poor
 - Publishes predictions to `sensor.predbat_load_ml_forecast`
@@ -1755,7 +1755,7 @@ ML Component: Model status: active
 
 ML load predictions are published to:
 
-- `sensor.predbat_load_ml_forecast` - Contains 48-hour prediction in `results` attribute
+- `sensor.predbat_load_ml_forecast` - Contains predictions for the configured `forecast_hours` duration in the `results` attribute (48 hours by default)
 
 Predbat automatically uses these predictions when making battery charge/discharge decisions.
 

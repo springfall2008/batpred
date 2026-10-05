@@ -302,6 +302,58 @@ def _test_component_reads_current_forecast_hours():
         assert "over {:g}h".format(hours) in messages[-1], "Component log must show the actual duration"
 
 
+def _test_component_future_inputs_outlast_short_history():
+    """Available future temperatures and rates must not be clipped to load or PV history."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from const import TIME_FORMAT
+    from load_ml_component import LoadMLComponent
+
+    now = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+
+    async def check_coverage(forecast_hours, load_days, pv_days):
+        """Exercise real input conversion with deliberately shorter sensor history."""
+        settings = {"load_today": ["sensor.load_today"], "load_power": None, "pv_today": ["sensor.pv_today"] if pv_days else None, "car_charging_energy": None, "car_charging_hold": False, "forecast_hours": forecast_hours}
+        base = SimpleNamespace(prefix="predbat", config_root=None, now_utc=now, midnight_utc=now.replace(hour=0), local_tz=timezone.utc, args=settings, log=lambda message: None)
+        base.get_arg = lambda key, default=None, **kwargs: settings.get(key, default)
+        source = {(now + timedelta(hours=hour)).strftime(TIME_FORMAT): 20.0 + hour / 100.0 for hour in range(-load_days * 24, forecast_hours + 25)}
+        base.get_state_wrapper = lambda entity, default=None, attribute=None, **kwargs: source if attribute == "results" else default
+        history_calls = []
+
+        def load_history(reference_time, key, days, **kwargs):
+            """Return cumulative sensor history with a known retention limit."""
+            history_calls.append((key, days))
+            age = pv_days if key == "pv_today" else load_days
+            return {minute: (age * 1440 - minute) * 0.001 for minute in range(age * 1440, -1, -1)}, age
+
+        rate_history_days = []
+
+        def rate_history(days, reference_time, entity, **kwargs):
+            """Record the historical rate request independently of future coverage."""
+            rate_history_days.append(days)
+            return {}
+
+        base.minute_data_load = load_history
+        base.minute_data_import_export = rate_history
+        base.fetch_pv_forecast = lambda: ({}, {}, {})
+        component = LoadMLComponent(base, load_ml_enable=True)
+        result = await component._fetch_load_data()
+        assert result[0] is not None, "Fetching load data failed"
+        history_days = min(load_days, pv_days) if pv_days else load_days
+        assert result[1] == history_days, "Future coverage must not change the reported history age"
+        assert history_calls[0] == ("load_today", 28), "Load history request must retain its configured limit"
+        if pv_days:
+            assert history_calls[1] == ("pv_today", load_days), "PV history request must remain unchanged"
+        assert rate_history_days == [history_days, history_days], "Historical rate requests must not grow with the forecast"
+        for channel in result[4:]:
+            assert all(-minute in channel for minute in range(STEP_MINUTES, forecast_hours * 60 + 1, STEP_MINUTES)), "Available future inputs were clipped to the history window"
+            assert abs(channel[-forecast_hours * 60] - (20.0 + forecast_hours / 100.0)) < 0.0001, "The last input must be the supplied forecast value"
+
+    for hours, load_days, pv_days in ((24, 2, None), (31, 1, None), (96, 2, None), (96, 7, 1), (168, 2, None), (412, 2, None), (48, 7, None)):
+        asyncio.run(check_coverage(hours, load_days, pv_days))
+
+
 def _test_load_ml_temperature_chart_uses_forecast_hours():
     """The real LoadMLPower chart must retain temperatures through its horizon."""
     from web import WebInterface
@@ -356,6 +408,7 @@ def run_load_ml_rollout_tests(my_predbat=None):
         _test_configurable_forecast_preserves_shared_predictions,
         _test_configurable_forecast_saved_model_and_input_fallback,
         _test_component_reads_current_forecast_hours,
+        _test_component_future_inputs_outlast_short_history,
         _test_load_ml_temperature_chart_uses_forecast_hours,
     ):
         print("  Running {}...".format(test.__name__), end=" ")

@@ -418,6 +418,12 @@ class LoadMLComponent(ComponentBase):
                     step_energy = pv_forecast_minute.get(minute, 0.0)
                     pv_data[-(minute - self.minutes_now)] = dp4(step_energy)
 
+            # Future input coverage is independent of the available training history.
+            # minute_data bounds both directions, so retain the whole forecast even
+            # when the load or PV sensor only has a few days of history.
+            forecast_hours = max(int(self.get_arg("forecast_hours", 48)), 24)
+            future_input_days = max(days_to_fetch, (forecast_hours + 23) // 24)
+
             # Temperature predictions
             temp_entity = "sensor." + self.prefix + "_temperature"
             temperature_info = self.get_state_wrapper(temp_entity, attribute="results")
@@ -431,7 +437,7 @@ class LoadMLComponent(ComponentBase):
                 # We also get the last N days in the past to help the model learn the daily pattern
                 temperature_data, _ = minute_data(
                     data_array,
-                    days_to_fetch,
+                    future_input_days,
                     self.now_utc,
                     "state",
                     "last_updated",
@@ -454,7 +460,7 @@ class LoadMLComponent(ComponentBase):
                     data_array.append({"state": value, "last_updated": key})
                 import_rates_data, _ = minute_data(
                     data_array,
-                    days_to_fetch,
+                    future_input_days,
                     self.now_utc,
                     "state",
                     "last_updated",
@@ -472,7 +478,7 @@ class LoadMLComponent(ComponentBase):
                     data_array.append({"state": value, "last_updated": key})
                 export_rates_data, _ = minute_data(
                     data_array,
-                    days_to_fetch,
+                    future_input_days,
                     self.now_utc,
                     "state",
                     "last_updated",
