@@ -821,6 +821,261 @@ def test_automatic_config_runs_once():
     print("  ✓ Automatic configuration runs once")
 
 
+CONTROL_TZ = pytz.timezone("Europe/London")
+CONTROL_NOW = CONTROL_TZ.localize(datetime.datetime(2026, 10, 5, 23, 30))
+
+
+def _plan_window(start, end):
+    """Build one planned-window dict in the shape output.py publishes."""
+    return {"start": start.strftime("%m-%d %H:%M:%S"), "end": end.strftime("%m-%d %H:%M:%S")}
+
+
+# CONTROL_NOW is inside this window...
+PLAN_INSIDE = [_plan_window(datetime.datetime(2026, 10, 5, 23, 0), datetime.datetime(2026, 10, 6, 1, 0))]
+# ...and before this one
+PLAN_OUTSIDE = [_plan_window(datetime.datetime(2026, 10, 6, 2, 0), datetime.datetime(2026, 10, 6, 4, 0))]
+
+
+class _Storage:
+    """Minimal in-memory stand-in for the Storage component."""
+
+    def __init__(self):
+        """Start empty."""
+        self.data = {}
+
+    async def save(self, module, filename, data, **kwargs):
+        """Store a document."""
+        self.data[(module, filename)] = data
+
+    async def load(self, module, filename):
+        """Return a stored document, or None."""
+        return self.data.get((module, filename))
+
+
+class _Components:
+    """Stand-in for the component registry, serving only the storage component."""
+
+    def __init__(self, storage):
+        """Hold the storage stand-in to serve."""
+        self.storage = storage
+
+    def get_component(self, name):
+        """Return the storage stand-in, and nothing else."""
+        return self.storage if name == "storage" else None
+
+
+def _control_component(plans, statuses=None, storage=None, **overrides):
+    """A component with control on, chargers loaded and car plans published.
+
+    plans maps car number to a list of _plan_window() dicts. The chargers are loaded
+    directly rather than through run(), so each test calls control_tick() with a fixed clock.
+    """
+    overrides.setdefault("wallbox_control", True)
+    component = _make_component(statuses, **overrides)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    if storage is not None:
+        component.base.components = _Components(storage)
+    for car_n, windows in plans.items():
+        postfix = "" if car_n == 0 else "_{}".format(car_n)
+        component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot" + postfix, "off", {"planned": windows})
+    run_async(component.load_control_state())
+    component.enable_control()
+    _load_chargers(component)
+    return component
+
+
+def _load_chargers(component):
+    """Load the stub transport's current statuses into the component, as a poll would."""
+    component.charger_ids = sorted(component.transport.statuses, key=str)
+    component.chargers = {str(charger_id): normalise_charger(charger_id, payload) for charger_id, payload in component.transport.statuses.items()}
+    component.stale_ids = set()
+    component.transport.calls = []
+
+
+def test_control_needs_automatic():
+    """Control stays off, with a warning, unless automatic configuration is on."""
+    assert _control_component({}).control_active is True
+    without_auto = _control_component({}, automatic=False)
+    assert without_auto.control_active is False and _logged(without_auto, "needs wallbox_automatic")
+    assert _control_component({}, wallbox_control=False).control_active is False
+    print("  ✓ Control needs wallbox_control and wallbox_automatic")
+
+
+def test_control_resumes_inside_a_window():
+    """A Paused charger inside its car's window is resumed."""
+    component = _control_component({0: PLAN_INSIDE}, {101: _status(status_id=178, power=0)})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101)]
+    print("  ✓ A paused charger inside a window is resumed")
+
+
+def test_control_pauses_outside_a_window():
+    """A Charging charger outside its car's window is paused, and Predbat remembers it did so."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("pause", 101)]
+    assert component.paused_by_predbat == {"101"}
+    print("  ✓ A charging charger outside a window is paused")
+
+
+def test_control_leaves_other_states_alone():
+    """Scheduled, Waiting, Ready, Locked and already-correct chargers are sent nothing."""
+    for plan, status_id in [(PLAN_INSIDE, 177), (PLAN_INSIDE, 179), (PLAN_INSIDE, 180), (PLAN_INSIDE, 164), (PLAN_INSIDE, 161), (PLAN_INSIDE, 193), (PLAN_INSIDE, 210), (PLAN_OUTSIDE, 178), (PLAN_OUTSIDE, 177), (PLAN_OUTSIDE, 161), (PLAN_OUTSIDE, 210)]:
+        component = _control_component({0: plan}, {101: _status(status_id=status_id, power=0)})
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [], (status_id, component.transport.calls)
+    print("  ✓ Scheduled, Waiting, Ready and Locked chargers are left alone")
+
+
+def test_control_warns_once_about_a_locked_charger():
+    """A locked charger with a car connected inside a window is warned about once, never unlocked."""
+    component = _control_component({0: PLAN_INSIDE}, {101: _status(status_id=210, power=0, locked=True)})
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert len([message for message in component.log_messages if "is locked" in message]) == 1
+    assert component.transport.count("set_locked") == 0
+    print("  ✓ A locked charger is warned about once and never unlocked")
+
+
+def test_control_is_per_car():
+    """Charger N follows car N's plan: the second charger reads the _1 slot sensor."""
+    statuses = {101: _status(status_id=178, power=0), 202: _status(status_id=193)}
+    component = _control_component({0: PLAN_INSIDE, 1: PLAN_OUTSIDE}, statuses)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("pause", 202)]
+    print("  ✓ Each charger follows its own car's plan")
+
+
+def test_control_skips_a_charger_with_no_plan():
+    """A charger whose car has no slot sensor is left alone, not paused as if outside a window."""
+    statuses = {101: _status(status_id=193), 202: _status(status_id=193)}
+    component = _control_component({0: PLAN_INSIDE}, statuses)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [], "Charger 202 has no car 1 plan, so it must not be paused"
+
+    nothing_planned = _control_component({})
+    run_async(nothing_planned.control_tick(CONTROL_NOW))
+    assert nothing_planned.transport.calls == [], "Before Predbat has planned anything, no charger is touched"
+    print("  ✓ A charger with no car plan is left alone")
+
+
+def test_control_skips_a_stale_charger():
+    """A charger whose last status read failed is not controlled on old state."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    component.stale_ids = {"101"}
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == []
+    print("  ✓ A stale charger is not controlled")
+
+
+def test_control_forgets_an_unplugged_charger():
+    """Once the car is unplugged, Predbat no longer counts the charger as one it paused."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.paused_by_predbat == {"101"}
+    component.transport.statuses[101] = _status(status_id=161, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.paused_by_predbat == set() and component.transport.calls == []
+    print("  ✓ An unplugged charger is forgotten")
+
+
+def test_control_releases_on_read_only_and_switch_off():
+    """Read only mode and the control switch both resume what Predbat paused and hand back the schedule."""
+    for release in ("read_only", "switch"):
+        component = _control_component({0: PLAN_OUTSIDE})
+        run_async(component.control_tick(CONTROL_NOW))
+        component.transport.statuses[101] = _status(status_id=178, power=0)
+        _load_chargers(component)
+
+        if release == "read_only":
+            component.base.args["set_read_only"] = True
+        else:
+            run_async(component.switch_event_handler("switch.predbat_wallbox_control", "turn_off"))
+            assert component.control_enabled is False
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], (release, component.transport.calls)
+        assert component.paused_by_predbat == set()
+
+        component.transport.calls = []
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [], "Release happens once, and control stays quiet while released"
+    print("  ✓ Read only mode and the control switch release the chargers")
+
+
+def test_control_does_not_release_a_charger_it_did_not_pause():
+    """A charger the user paused by hand is not resumed when Predbat releases."""
+    component = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)})
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == []
+    print("  ✓ A charger Predbat did not pause is not resumed on release")
+
+
+def test_control_state_survives_a_restart():
+    """After a restart with control turned off, the charger Predbat paused is still released."""
+    storage = _Storage()
+    component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "paused": ["101"]}
+
+    restarted = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
+    assert restarted.control_active is False and restarted.paused_by_predbat == {"101"}
+    run_async(restarted.control_tick(CONTROL_NOW))
+    assert restarted.transport.calls == [("resume", 101), ("resume_schedule", 101)]
+    assert storage.data[("wallbox", "control_state")]["paused"] == []
+    print("  ✓ A restart with control off still releases the charger")
+
+
+def test_control_switch_state_survives_a_restart():
+    """The control switch stays off across a restart and is published in that state from the start."""
+    storage = _Storage()
+    component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
+    run_async(component.switch_event_handler("switch.predbat_wallbox_control", "turn_off"))
+
+    restarted = _make_component(wallbox_control=True)
+    restarted.base.components = _Components(storage)
+    run_async(restarted.run(0, True))
+    assert restarted.control_enabled is False
+    assert restarted.base.entities["switch.predbat_wallbox_control"]["state"] == "off"
+    print("  ✓ The control switch state survives a restart")
+
+
+def test_control_switch_is_published_only_when_available():
+    """The control switch appears only when control can actually run."""
+    on = _make_component(wallbox_control=True)
+    run_async(on.run(0, True))
+    assert on.base.entities["switch.predbat_wallbox_control"]["state"] == "on"
+    off = _make_component(wallbox_control=False)
+    run_async(off.run(0, True))
+    assert "switch.predbat_wallbox_control" not in off.base.entities
+    print("  ✓ The control switch is published only when control is available")
+
+
+def test_control_without_storage_still_works():
+    """With no Storage component, control runs and nothing is raised."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    assert component.storage is None
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("pause", 101)]
+    print("  ✓ Control works without the Storage component")
+
+
+def test_control_failure_does_not_fail_the_cycle():
+    """A refused pause during a poll is a warning; monitoring still succeeds and it is retried next poll."""
+    component = _make_component(wallbox_control=True)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot", "off", {"planned": []})
+    component.transport.errors[("pause", 101)] = WallboxApiError("HTTP 500")
+    assert run_async(component.run(0, True)) is True
+    assert _logged(component, "charge control failed") and component.paused_by_predbat == set()
+    run_async(component.run(120, False))
+    assert component.paused_by_predbat == {"101"}
+    print("  ✓ A refused control is a warning and is retried")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -868,5 +1123,21 @@ def test_wallbox(my_predbat=None):
     test_automatic_config_keeps_user_values()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
+    test_control_needs_automatic()
+    test_control_resumes_inside_a_window()
+    test_control_pauses_outside_a_window()
+    test_control_leaves_other_states_alone()
+    test_control_warns_once_about_a_locked_charger()
+    test_control_is_per_car()
+    test_control_skips_a_charger_with_no_plan()
+    test_control_skips_a_stale_charger()
+    test_control_forgets_an_unplugged_charger()
+    test_control_releases_on_read_only_and_switch_off()
+    test_control_does_not_release_a_charger_it_did_not_pause()
+    test_control_state_survives_a_restart()
+    test_control_switch_state_survives_a_restart()
+    test_control_switch_is_published_only_when_available()
+    test_control_without_storage_still_works()
+    test_control_failure_does_not_fail_the_cycle()
     print("=" * 70)
     return False

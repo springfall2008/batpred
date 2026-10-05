@@ -32,6 +32,7 @@ import aiohttp
 
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
+from utils import parse_car_plan_windows, in_car_plan_window
 
 WALLBOX_AUTH_URL = "https://user-api.wall-box.com/"
 WALLBOX_API_URL = "https://api.wall-box.com/"
@@ -67,6 +68,9 @@ RATE_LIMIT_MAX_CYCLES = 15
 MIN_CHARGING_CURRENT = 6
 # Used as the upper bound only when the charger does not report one
 DEFAULT_MAX_CHARGING_CURRENT = 32
+
+WALLBOX_STORAGE_MODULE = "wallbox"
+WALLBOX_CONTROL_STATE = "control_state"
 
 # Status id to (text, car connected). The text is the Home Assistant wallbox integration's
 # wording, so states match what existing users already see. A None status id means the
@@ -422,6 +426,10 @@ class WallboxAPI(ComponentBase):
         self.permission_warned = False
         self._auto_configured = False
         self.control_active = False
+        self.paused_by_predbat = set()
+        self.control_windows = {}
+        self.lock_warned = set()
+        self.control_state_loaded = False
         self.control_enabled = True
         self.transport = None
 
@@ -443,12 +451,6 @@ class WallboxAPI(ComponentBase):
         if not self.permission_warned:
             self.log("Warn: wallbox: Wallbox refused a control - the account needs admin rights over the charger. Monitoring continues")
             self.permission_warned = True
-
-    async def load_control_state(self):
-        """Restore saved control state. Filled in with plan-led control."""
-
-    def enable_control(self):
-        """Decide whether plan-led control can run. Filled in with plan-led control."""
 
     def automatic_config(self):
         """Wire the charger entities into Predbat's car charging inputs.
@@ -477,9 +479,6 @@ class WallboxAPI(ComponentBase):
         if _to_int(self.get_arg("num_cars", 0), 0) < len(chargers):
             self.log("Info: wallbox: setting num_cars to {}".format(len(chargers)))
             self.set_arg("num_cars", len(chargers))
-
-    async def control_tick(self, now):
-        """Run one cycle of plan-led control. Filled in with plan-led control."""
 
     async def run(self, seconds, first):
         """Process queued control events, then poll and publish."""
@@ -628,6 +627,11 @@ class WallboxAPI(ComponentBase):
         """Pause/resume or lock/unlock in response to a charger switch."""
         if service not in ("turn_on", "turn_off"):
             return
+        if entity_id.endswith("_wallbox_control"):
+            self.control_enabled = service == "turn_on"
+            self.log("Info: wallbox: charge control switched {}".format("on" if self.control_enabled else "off"))
+            await self.save_control_state()
+            return
         charger = self.charger_for_entity(entity_id)
         if not charger:
             return
@@ -668,6 +672,151 @@ class WallboxAPI(ComponentBase):
             return
         self.log("Info: wallbox: setting {} Eco-Smart to {}".format(charger.name, value))
         await self.transport.set_eco_smart(self.api_id(charger), value)
+
+
+    def enable_control(self):
+        """Decide whether Predbat-led charging can run, and say why when it cannot.
+
+        Control needs automatic configuration because a charger is driven from its own
+        car's plan, and it is automatic configuration that makes charger N car N.
+        """
+        self.control_active = False
+        if not self.wallbox_control:
+            return
+        if not self.automatic:
+            self.log("Warn: wallbox: wallbox_control needs wallbox_automatic to map each charger to a car, charge control is disabled")
+            return
+        self.control_active = True
+        self.log("Info: wallbox: Predbat-led charge control enabled")
+
+    async def load_control_state(self):
+        """Restore the control switch and the list of chargers Predbat paused.
+
+        The paused list is what lets a restart with control turned off still release a
+        charger an earlier session left paused. Fails soft with no Storage component.
+        """
+        if self.control_state_loaded or self.storage is None:
+            return
+        try:
+            saved = await self.storage.load(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE)
+        except Exception as exc:
+            self.log("Warn: wallbox: could not read the saved charge control state: {}".format(exc))
+            return
+        self.control_state_loaded = True
+        if not isinstance(saved, dict):
+            return
+        if "control_enabled" in saved:
+            self.control_enabled = bool(saved["control_enabled"])
+        paused = saved.get("paused")
+        if isinstance(paused, list):
+            self.paused_by_predbat = {str(charger_id) for charger_id in paused}
+
+    async def save_control_state(self):
+        """Persist the control switch and the list of chargers Predbat paused."""
+        if self.storage is None:
+            return
+        try:
+            await self.storage.save(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE, {"control_enabled": self.control_enabled, "paused": sorted(self.paused_by_predbat)})
+        except Exception as exc:
+            self.log("Warn: wallbox: could not save the charge control state: {}".format(exc))
+
+    def control_read_only_now(self):
+        """Is Predbat in read only mode - the live attribute first, then the config argument."""
+        read_only = getattr(self.base, "set_read_only", None)
+        if read_only is None:
+            read_only = self.get_arg("set_read_only", False)
+        return bool(read_only)
+
+    def refresh_car_windows(self, now):
+        """Read each car's planned charging windows into control_windows.
+
+        A car with no slot sensor yet is simply absent, so its charger is left alone.
+        Returns True once at least one car's plan has been read.
+        """
+        windows = {}
+        for car_n in range(len(self.chargers)):
+            postfix = "" if car_n == 0 else "_{}".format(car_n)
+            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
+            if planned is None:
+                continue
+            windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)
+        self.control_windows = windows
+        return bool(windows)
+
+    async def control_tick(self, now):
+        """Run one cycle of charge control, releasing rather than just going quiet.
+
+        Called on every poll whether or not control is available, because a charger a
+        previous session paused must be released even when control has since been turned off.
+        """
+        reason = None
+        if not self.control_active:
+            reason = "charge control is not enabled"
+        elif self.control_read_only_now():
+            reason = "Predbat is in read only mode"
+        elif not self.control_enabled:
+            reason = "the charge control switch is off"
+        if reason:
+            if self.paused_by_predbat:
+                self.log("Info: wallbox: releasing the chargers because {}".format(reason))
+                await self.release_chargers()
+            return
+        await self.control_charge(now)
+
+    async def release_chargers(self):
+        """Resume every charger Predbat paused and hand each back to its own schedule.
+
+        A charger that is no longer paused - resumed by hand, or unplugged - is only
+        forgotten. The record is saved even if a call fails part way, so what was
+        released stays released and the rest is retried on the next poll.
+        """
+        try:
+            for charger_id in sorted(self.paused_by_predbat):
+                charger = self.chargers.get(charger_id)
+                if charger and charger_id in self.stale_ids:
+                    continue
+                if charger and charger.paused:
+                    self.log("Info: wallbox: releasing {}".format(charger.name))
+                    await self.transport.resume(self.api_id(charger))
+                    await self.transport.resume_schedule(self.api_id(charger))
+                self.paused_by_predbat.discard(charger_id)
+        finally:
+            await self.save_control_state()
+
+    async def control_charge(self, now):
+        """Drive each charger from its car's plan: resume a paused one inside a window, pause a charging one outside.
+
+        Nothing else is sent. A Scheduled charger is following its own schedule and a
+        Waiting one is waiting on the car, and resume does nothing for either.
+        """
+        if not self.refresh_car_windows(now):
+            return
+        before = set(self.paused_by_predbat)
+        try:
+            for car_n, charger in enumerate(self.ordered_chargers()):
+                if car_n not in self.control_windows or charger.charger_id in self.stale_ids:
+                    continue
+                wanted = in_car_plan_window(self.control_windows[car_n], now)
+                if not charger.connected:
+                    self.paused_by_predbat.discard(charger.charger_id)
+                    continue
+                if wanted and charger.locked:
+                    if charger.charger_id not in self.lock_warned:
+                        self.log("Warn: wallbox: {} is locked, so it will not charge in its planned window. Predbat does not unlock chargers".format(charger.name))
+                        self.lock_warned.add(charger.charger_id)
+                    continue
+                self.lock_warned.discard(charger.charger_id)
+                if wanted and charger.paused:
+                    self.log("Info: wallbox: resuming {} for car {}".format(charger.name, car_n))
+                    await self.transport.resume(self.api_id(charger))
+                    self.paused_by_predbat.discard(charger.charger_id)
+                elif not wanted and charger.charging:
+                    self.log("Info: wallbox: pausing {} for car {}".format(charger.name, car_n))
+                    await self.transport.pause(self.api_id(charger))
+                    self.paused_by_predbat.add(charger.charger_id)
+        finally:
+            if self.paused_by_predbat != before:
+                await self.save_control_state()
 
 
 
