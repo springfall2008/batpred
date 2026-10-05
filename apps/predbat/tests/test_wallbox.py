@@ -29,6 +29,7 @@ from wallbox import (
     WallboxApiError,
     WallboxAuthError,
     WallboxCharger,
+    WallboxPermissionError,
     WallboxRateLimitError,
     WallboxTransport,
     basic_auth_header,
@@ -324,6 +325,72 @@ def test_normalise_captured_payloads():
     print("  ✓ Captured payloads normalise to their real states")
 
 
+def _signed_in_transport():
+    """A transport that already holds a valid token, so each test sees only the call it makes."""
+    transport = WallboxTransport(print, "user@example.com", "secret")
+    transport.token = "jwt-1"
+    transport.token_expiry = time.time() + 3600
+    return transport
+
+
+def test_transport_control_requests():
+    """Each control sends exactly the method, URL and body the Wallbox API expects."""
+    eco_body = lambda enabled, mode: {"data": {"attributes": {"enabled": enabled, "mode": mode}, "type": "eco_smart"}}
+    cases = [
+        (lambda t: t.pause(101), "POST", "v3/chargers/101/remote-action", {"action": 2}),
+        (lambda t: t.resume(101), "POST", "v3/chargers/101/remote-action", {"action": 1}),
+        (lambda t: t.resume_schedule(101), "POST", "v3/chargers/101/remote-action", {"action": 9}),
+        (lambda t: t.set_locked(101, True), "PUT", "v2/charger/101", {"locked": 1}),
+        (lambda t: t.set_locked(101, False), "PUT", "v2/charger/101", {"locked": 0}),
+        (lambda t: t.set_max_charging_current(101, 16), "PUT", "v2/charger/101", {"maxChargingCurrent": 16}),
+        (lambda t: t.set_eco_smart(101, "off"), "PUT", "v4/chargers/101/eco-smart", eco_body(0, 0)),
+        (lambda t: t.set_eco_smart(101, "eco_mode"), "PUT", "v4/chargers/101/eco-smart", eco_body(1, 0)),
+        (lambda t: t.set_eco_smart(101, "full_solar"), "PUT", "v4/chargers/101/eco-smart", eco_body(1, 1)),
+    ]
+    for action, method, path, body in cases:
+        session, calls = _session([_response({})])
+        with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+            run_async(action(_signed_in_transport()))
+        assert len(calls) == 1, calls
+        assert (calls[0]["method"], calls[0]["url"], calls[0]["json"]) == (method, WALLBOX_API_URL + path, body), calls[0]
+        assert calls[0]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
+    print("  ✓ Control calls send the right method, URL and body")
+
+
+def test_transport_control_refused_for_rights():
+    """A 403 on a write is a rights problem, not bad credentials, and is not retried behind a sign in."""
+    session, calls = _session([_response({}, status=403)])
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+        try:
+            run_async(_signed_in_transport().set_locked(101, True))
+            raise AssertionError("Expected WallboxPermissionError")
+        except WallboxPermissionError:
+            pass
+    assert len(calls) == 1, "A rights refusal must not trigger a sign in and retry"
+    print("  ✓ A 403 on a write raises WallboxPermissionError")
+
+
+def test_transport_control_accepts_an_empty_body():
+    """Eco-Smart answers with no JSON body; that is a success, not a decode error."""
+    session, _ = _session([_response(json_error=ValueError("empty"))])
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+        assert run_async(_signed_in_transport().set_eco_smart(101, "off")) == {}
+    print("  ✓ A control call with an empty body succeeds")
+
+
+def test_transport_rejects_an_unknown_eco_smart_mode():
+    """An Eco-Smart mode that is not one of the three options never reaches the API."""
+    session, calls = _session([])
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+        try:
+            run_async(_signed_in_transport().set_eco_smart(101, "turbo"))
+            raise AssertionError("Expected WallboxApiError")
+        except WallboxApiError:
+            pass
+    assert calls == []
+    print("  ✓ An unknown Eco-Smart mode is rejected locally")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -342,5 +409,9 @@ def test_wallbox(my_predbat=None):
     test_normalise_eco_smart()
     test_normalise_handles_bad_values()
     test_normalise_captured_payloads()
+    test_transport_control_requests()
+    test_transport_control_refused_for_rights()
+    test_transport_control_accepts_an_empty_body()
+    test_transport_rejects_an_unknown_eco_smart_mode()
     print("=" * 70)
     return False

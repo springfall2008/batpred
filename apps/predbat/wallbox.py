@@ -43,6 +43,14 @@ USER_AGENT = "Predbat"
 TOKEN_MARGIN_SECONDS = 120
 
 
+# remote-action codes, from the Wallbox portal
+REMOTE_ACTION_RESUME = 1
+REMOTE_ACTION_PAUSE = 2
+REMOTE_ACTION_RESUME_SCHEDULE = 9
+
+# How long the command line mode waits before reading a charger back after a control
+COMMAND_SETTLE_SECONDS = 8
+
 # Status id to (text, car connected). The text is the Home Assistant wallbox integration's
 # wording, so states match what existing users already see. A None status id means the
 # charger reported nothing, which Wallbox treats as disconnected.
@@ -332,9 +340,40 @@ class WallboxTransport:
         """Return the raw status payload of one charger."""
         return await self._api("GET", "chargers/status/{}".format(charger_id))
 
+    async def _remote_action(self, charger_id, action):
+        """Send one remote-action code to a charger."""
+        return await self._api("POST", "v3/chargers/{}/remote-action".format(charger_id), body={"action": action}, write=True)
+
+    async def pause(self, charger_id):
+        """Pause the charging session. Only has an effect while the charger is charging."""
+        return await self._remote_action(charger_id, REMOTE_ACTION_PAUSE)
+
+    async def resume(self, charger_id):
+        """Resume a paused charging session. Has no effect on a Scheduled or Waiting charger."""
+        return await self._remote_action(charger_id, REMOTE_ACTION_RESUME)
+
+    async def resume_schedule(self, charger_id):
+        """Hand the charger back to its own schedule and Eco-Smart mode after a manual stop."""
+        return await self._remote_action(charger_id, REMOTE_ACTION_RESUME_SCHEDULE)
+
+    async def set_locked(self, charger_id, locked):
+        """Lock or unlock the charger."""
+        return await self._api("PUT", "v2/charger/{}".format(charger_id), body={"locked": 1 if locked else 0}, write=True)
+
+    async def set_max_charging_current(self, charger_id, amps):
+        """Set the maximum charging current in amps."""
+        return await self._api("PUT", "v2/charger/{}".format(charger_id), body={"maxChargingCurrent": int(amps)}, write=True)
+
+    async def set_eco_smart(self, charger_id, mode):
+        """Set the Eco-Smart solar charging mode to one of ECO_SMART_OPTIONS."""
+        if mode not in ECO_SMART_OPTIONS:
+            raise WallboxApiError("unknown Eco-Smart mode '{}'".format(mode))
+        attributes = {"enabled": 0 if mode == ECO_SMART_OFF else 1, "mode": 1 if mode == ECO_SMART_FULL_SOLAR else 0}
+        return await self._api("PUT", "v4/chargers/{}/eco-smart".format(charger_id), body={"data": {"attributes": attributes, "type": "eco_smart"}}, write=True)
+
 
 async def run_wallbox_cli(args):  # pragma: no cover
-    """Sign in, list the chargers and print each one's status against the live API."""
+    """Sign in, list the chargers, print each one's status and optionally send one control."""
     transport = WallboxTransport(print, args.username, args.password)
     charger_ids = await transport.list_chargers()
     if not charger_ids:
@@ -346,7 +385,31 @@ async def run_wallbox_cli(args):  # pragma: no cover
         if args.raw:
             print(json.dumps(payload, indent=2, sort_keys=True, default=str))
         else:
-            print("{}: status_id={} power={}kW added_energy={}kWh".format(charger_id, payload.get("status_id"), payload.get("charging_power"), payload.get("added_energy")))
+            print(normalise_charger(charger_id, payload))
+
+    target = args.charger if args.charger is not None else charger_ids[0]
+    action = None
+    if args.pause:
+        action = ("pause", transport.pause(target))
+    elif args.resume:
+        action = ("resume", transport.resume(target))
+    elif args.resume_schedule:
+        action = ("resume schedule", transport.resume_schedule(target))
+    elif args.lock:
+        action = ("lock", transport.set_locked(target, True))
+    elif args.unlock:
+        action = ("unlock", transport.set_locked(target, False))
+    elif args.max_current is not None:
+        action = ("set max current {}A".format(args.max_current), transport.set_max_charging_current(target, args.max_current))
+    elif args.eco_smart:
+        action = ("set Eco-Smart {}".format(args.eco_smart), transport.set_eco_smart(target, args.eco_smart))
+    if not action:
+        return
+    print("\nSending {} to {}...".format(action[0], target))
+    await action[1]
+    print("Waiting {}s for the charger to report the change...".format(COMMAND_SETTLE_SECONDS))
+    await asyncio.sleep(COMMAND_SETTLE_SECONDS)
+    print(normalise_charger(target, await transport.get_status(target)))
 
 
 def main():  # pragma: no cover
@@ -355,6 +418,15 @@ def main():  # pragma: no cover
     parser.add_argument("--username", required=True, help="Wallbox account email address")
     parser.add_argument("--password", required=True, help="Wallbox account password")
     parser.add_argument("--raw", action="store_true", help="Print each charger's full status payload as JSON")
+    parser.add_argument("--charger", default=None, help="Charger id to control; defaults to the first one")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--pause", action="store_true", help="Pause the charging session")
+    group.add_argument("--resume", action="store_true", help="Resume a paused charging session")
+    group.add_argument("--resume-schedule", action="store_true", help="Hand the charger back to its own schedule")
+    group.add_argument("--lock", action="store_true", help="Lock the charger")
+    group.add_argument("--unlock", action="store_true", help="Unlock the charger")
+    group.add_argument("--max-current", type=int, default=None, help="Set the maximum charging current in amps")
+    group.add_argument("--eco-smart", choices=ECO_SMART_OPTIONS, default=None, help="Set the Eco-Smart mode")
     args = parser.parse_args()
     asyncio.run(run_wallbox_cli(args))
 
