@@ -171,6 +171,9 @@ class WallboxCharger:
     timezone: str = ""
     country: str = ""
     zipcode: str = ""
+    # The newest firmware Wallbox offers this charger, and whether it is newer than the one installed
+    software_latest_version: str = ""
+    software_update_available: bool = False
 
     @property
     def ocpp(self):
@@ -230,6 +233,8 @@ def normalise_charger(charger_id, payload):
         timezone=str(config.get("timezone") or ""),
         country=str(country.get("iso2") or country.get("code") or ""),
         zipcode=str(config.get("zipcode") or ""),
+        software_latest_version=str(software.get("latestVersion") or ""),
+        software_update_available=bool(software.get("updateAvailable")),
     )
 
 
@@ -669,6 +674,8 @@ class WallboxAPI(ComponentBase):
                     "serial_number": charger.serial,
                     "part_number": charger.part_number,
                     "software_version": charger.software_version,
+                    "software_latest_version": charger.software_latest_version,
+                    "software_update_available": charger.software_update_available,
                     "operation_mode": charger.operation_mode,
                     "timezone": charger.timezone,
                     "country": charger.country,

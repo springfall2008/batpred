@@ -1519,6 +1519,27 @@ def test_location_and_timezone_are_read_and_published():
     print("  ✓ Timezone, country and postcode are read and published")
 
 
+def test_software_versions_are_read_and_published():
+    """The installed and latest firmware versions, and whether an update is waiting, are on the status sensor."""
+    charger = normalise_charger(101, MOCK_STATUS_LOCKED_CAPTURED)
+    assert charger.software_version == "6.7.43" and charger.software_latest_version == "6.7.43"
+    assert charger.software_update_available is False
+
+    behind = _status()
+    behind["config_data"]["software"] = {"currentVersion": "6.7.43", "latestVersion": "6.8.1", "updateAvailable": True}
+    charger = normalise_charger(101, behind)
+    assert (charger.software_version, charger.software_latest_version, charger.software_update_available) == ("6.7.43", "6.8.1", True)
+
+    bare = normalise_charger(101, {"config_data": {"software": None}})
+    assert (bare.software_version, bare.software_latest_version, bare.software_update_available) == ("", "", False)
+
+    component = _make_component({101: behind})
+    run_async(component.run(0, True))
+    attributes = component.base.entities["sensor.predbat_wallbox_101_status"]["attributes"]
+    assert attributes["software_version"] == "6.7.43" and attributes["software_latest_version"] == "6.8.1" and attributes["software_update_available"] is True
+    print("  ✓ Firmware versions and update availability are read and published")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1604,5 +1625,6 @@ def test_wallbox(my_predbat=None):
     test_control_resumes_once_ocpp_is_turned_off()
     test_lock_warning_names_ocpp_when_it_holds_the_lock()
     test_location_and_timezone_are_read_and_published()
+    test_software_versions_are_read_and_published()
     print("=" * 70)
     return False

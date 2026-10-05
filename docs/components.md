@@ -1058,7 +1058,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 
 | Entity | Description |
 | ------ | ----------- |
-| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready`. Its `operation_mode` attribute reads `ocpp` when an OCPP backend, such as Octopus for Intelligent Octopus Go, is running the charger. The `timezone`, `country` and `zipcode` attributes give the charger's location as set in the Wallbox app |
+| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready`. Its `operation_mode` attribute reads `ocpp` when an OCPP backend, such as Octopus for Intelligent Octopus Go, is running the charger. The `timezone`, `country` and `zipcode` attributes give the charger's location as set in the Wallbox app. `software_version`, `software_latest_version` and `software_update_available` show the installed firmware and whether Wallbox has a newer one |
 | `sensor.predbat_wallbox_<id>_power` | Charging power in W |
 | `sensor.predbat_wallbox_<id>_session_energy` | Energy added in the current session in kWh; resets with each session |
 | `binary_sensor.predbat_wallbox_<id>_connected` | On while a car is plugged in |
