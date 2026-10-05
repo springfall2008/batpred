@@ -283,6 +283,9 @@ def test_ohme(my_predbat=None):
         ("iog_autodetect", _test_ohme_iog_autodetected_from_octopus, "Intelligent auto-detected from Octopus"),
         ("iog_autodetect_gated", _test_ohme_iog_autodetect_needs_ohme_automatic, "auto-detect needs ohme_automatic"),
         ("iog_claims_slots", _test_ohme_iog_claims_car_slots, "Intelligent wiring claims the car slots"),
+        ("iog_device_decides", _test_ohme_iog_device_decides, "the Intelligent device decides whose slots are used"),
+        ("run_iog_device_car", _test_ohme_run_iog_device_is_car, "OhmeAPI run leaves the slots to Octopus when the car is the device"),
+        ("run_iog_device_changes", _test_ohme_run_iog_device_changes, "OhmeAPI run follows a change of Intelligent device"),
         ("charger_slots_rules", _test_ohme_charger_slots_wanted_rules, "when Ohme's own schedule is the car plan"),
         ("charger_slots_wiring", _test_ohme_charger_slots_wiring, "charger schedule wiring leaves the car slots unclaimed"),
         ("charger_slots_published", _test_ohme_charger_slots_published_source, "charger schedule slots carry their source"),
@@ -1575,9 +1578,14 @@ def _test_ohme_client_async_update_schedule_no_rule(my_predbat=None):
 class MockOctopusComponent:
     """Stand-in for the OctopusAPI component, reporting a tariff code"""
 
-    def __init__(self, tariff_code=None):
-        """Initialize with the import tariff code to report"""
+    def __init__(self, tariff_code=None, devices=None):
+        """Initialize with the import tariff code to report, and the Intelligent devices keyed by device id"""
         self.tariffs = {"import": {"tariffCode": tariff_code}} if tariff_code else {}
+        self.intelligent_devices = devices or {}
+
+    def get_intelligent_devices(self):
+        """Mirror of OctopusAPI.get_intelligent_devices"""
+        return self.intelligent_devices
 
     @staticmethod
     def is_intelligent_go_tariff(tariff_code):
@@ -1629,6 +1637,7 @@ class MockOhmeAPI(OhmeAPI):
         self.ohme_control = False
         self.control_active = False
         self.octopus_intelligent = None
+        self.octopus_other_device = False
         self.slot_mode = None
         self.slot_mode_applied = None
         self.charger_slots = False
@@ -2158,12 +2167,142 @@ def _test_ohme_energy_today_published(my_predbat=None):
     return 0
 
 
-def _ohme_api_with_octopus(tariff_code=None):
-    """Build a MockOhmeAPI with an Octopus component reporting the given tariff code"""
+def _ohme_api_with_octopus(tariff_code=None, devices=None):
+    """Build a MockOhmeAPI with an Octopus component reporting the given tariff code and Intelligent devices"""
     api = MockOhmeAPI()
     if tariff_code is not None:
-        api.base.components.components["octopus"] = MockOctopusComponent(tariff_code)
+        api.base.components.components["octopus"] = MockOctopusComponent(tariff_code, devices)
     return api
+
+
+IOG_TARIFF = "E-1R-INTELLI-VAR-22-10-14-A"
+# Octopus Intelligent devices as OctopusAPI.async_get_intelligent_devices() records them
+IOG_DEVICE_OHME = {"deviceType": "CHARGE_POINTS", "status": "LIVE", "provider": "Ohme", "model": "Home Pro", "is_charger": True, "suspended": False}
+IOG_DEVICE_CAR = {"deviceType": "ELECTRIC_VEHICLES", "status": "LIVE", "provider": "BMW", "model": "i4", "is_charger": False, "suspended": False}
+IOG_DEVICE_OTHER_CHARGER = {"deviceType": "CHARGE_POINTS", "status": "LIVE", "provider": "myenergi", "model": "Zappi", "is_charger": True, "suspended": False}
+OCTOPUS_DISPATCH_ENTITY = "binary_sensor.predbat_octopus_test_intelligent_dispatch"
+
+
+def _test_ohme_iog_device_decides(my_predbat=None):
+    """Test auto-detection goes by the device Octopus Intelligent drives, not the tariff alone (#5402)"""
+    print("**** Running test_ohme_iog_device_decides ****")
+
+    def detect(devices, flag=None, tariff=IOG_TARIFF):
+        """Auto-detect against the given Octopus devices, returning (wanted, octopus_other_device)"""
+        api = _ohme_api_with_octopus(tariff, devices)
+        api.ohme_automatic = True
+        api.ohme_automatic_octopus_intelligent = flag
+        return api.octopus_intelligent_wanted(), api.octopus_other_device
+
+    # Octopus drives the Ohme: its slots are the dispatches
+    assert detect({"dev1": IOG_DEVICE_OHME}) == (True, False), "Expected the Ohme slots when the Intelligent device is the Ohme"
+    assert detect({"dev1": dict(IOG_DEVICE_OHME, provider="OHME ")}) == (True, False), "Expected the provider match to ignore case and padding"
+
+    # Octopus drives the car: the Ohme is only the socket, and the slots stay with Octopus
+    assert detect({"dev1": IOG_DEVICE_CAR}) == (False, True), "Expected the slots left to Octopus when the Intelligent device is the car"
+    # Likewise a charger of another make
+    assert detect({"dev1": IOG_DEVICE_OTHER_CHARGER}) == (False, True), "Expected the slots left to Octopus for another make of charger"
+    # Both registered: the Ohme is being driven, so its slots are still dispatches
+    assert detect({"dev1": IOG_DEVICE_CAR, "dev2": IOG_DEVICE_OHME}) == (True, False), "Expected the Ohme slots when the Ohme is among the live devices"
+
+    # A suspended device is not being scheduled by Octopus. A suspended car beside a live Ohme changes nothing...
+    assert detect({"dev1": dict(IOG_DEVICE_CAR, suspended=True), "dev2": IOG_DEVICE_OHME}) == (True, False), "Expected a suspended car to be ignored"
+    # ...a suspended Ohme beside a live car leaves the car as the device
+    assert detect({"dev1": IOG_DEVICE_CAR, "dev2": dict(IOG_DEVICE_OHME, suspended=True)}) == (False, True), "Expected a suspended Ohme not to claim the slots"
+    # ...and with everything suspended there are no dispatches at all: not Intelligent slots, and not Octopus's to supply either
+    assert detect({"dev1": dict(IOG_DEVICE_OHME, suspended=True)}) == (False, False), "Expected no Intelligent slots while the Ohme is suspended"
+    assert detect({"dev1": dict(IOG_DEVICE_CAR, suspended=True)}) == (False, False), "Expected no Intelligent slots while the car is suspended"
+
+    # An Intelligent tariff with no device at all: the deliberate fallback, Ohme keeps the slots as before
+    assert detect({}) == (True, False), "Expected the Ohme slots when Octopus has no Intelligent device to wire"
+
+    # The explicit flag still wins either way, whatever the device
+    assert detect({"dev1": IOG_DEVICE_CAR}, flag=True) == (True, False), "Expected an explicit true to beat the device check"
+    assert detect({"dev1": IOG_DEVICE_OHME}, flag=False) == (False, False), "Expected an explicit false to beat the device check"
+
+    # And off an Intelligent tariff the devices are not consulted
+    assert detect({"dev1": IOG_DEVICE_CAR}, tariff="E-1R-COSY-22-12-08-A") == (False, False), "Expected no Intelligent slots off an Intelligent tariff"
+
+    print("PASS: the Intelligent device decided whose slots are used")
+    return 0
+
+
+def _test_ohme_run_iog_device_is_car(my_predbat=None):
+    """Test nothing of Ohme's is the car plan while Octopus Intelligent drives the car (#5402)"""
+    print("**** Running test_ohme_run_iog_device_is_car ****")
+
+    # The usual order: the Octopus component runs first and has wired the car's own dispatch entity
+    api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
+    api.ohme_automatic = True
+    api.args["octopus_intelligent_slot"] = [OCTOPUS_DISPATCH_ENTITY]
+    assert _ohme_run_poll(api, first=True) == [False], "Expected the Ohme slots not labelled as the plan"
+    assert api.slot_mode is None and api.base.car_slot_owner is None, f"Expected no Ohme slot wiring and no claim, got {api.slot_mode} owner {api.base.car_slot_owner}"
+    assert api.args["octopus_intelligent_slot"] == [OCTOPUS_DISPATCH_ENTITY], f"Expected Octopus's wiring untouched, got {api.args}"
+    # The Ohme is still registered as the charger: it is where the power is measured
+    assert api.args.get("car_charging_planned") == ["binary_sensor.predbat_ohme_connected"], f"Expected the charger registered, got {api.args}"
+    assert api.args.get("car_charging_energy") == ENERGY_TODAY_ENTITY, f"Expected the charge energy wired, got {api.args}"
+    assert any("driving another device" in msg for msg in api.log_messages), f"Expected the reason logged, got {api.log_messages}"
+    assert _ohme_run_poll(api, seconds=120) == [False] and api.log_messages == [], f"Expected a quiet poll, got {api.log_messages}"
+
+    # Even with the car slots not wired by anyone, Ohme's own schedule does not stand in: Octopus
+    # schedules this charge through the car, so Ohme's session says nothing about it
+    api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
+    api.ohme_automatic = True
+    assert _ohme_run_poll(api, first=True) == [False], "Expected the Ohme slots not labelled as the plan"
+    assert api.slot_mode is None and "octopus_intelligent_slot" not in api.args, f"Expected the car slots left for Octopus, got {api.slot_mode} {api.args}"
+
+    # ohme_control stays off: Octopus is scheduling the charge, through the car
+    api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
+    api.ohme_automatic = True
+    api.ohme_control = True
+    _ohme_run_poll(api, first=True)
+    assert api.control_active is False, "Expected control to stand down while Octopus drives the car"
+    assert any("Octopus already schedules" in msg for msg in api.log_messages), f"Expected a warning, got {api.log_messages}"
+
+    print("PASS: the car slots were left to Octopus")
+    return 0
+
+
+def _test_ohme_run_iog_device_changes(my_predbat=None):
+    """Test the Intelligent device being found, swapped or suspended under a running Predbat is followed"""
+    print("**** Running test_ohme_run_iog_device_changes ****")
+
+    # Started before Octopus had any device: the fallback, Ohme claims the slots
+    api = _ohme_api_with_octopus(IOG_TARIFF, {})
+    api.ohme_automatic = True
+    octopus = api.base.components.components["octopus"]
+    assert _ohme_run_poll(api, first=True) == [False], "Expected plain dispatches on Intelligent"
+    assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Ohme to claim the slots, got {api.slot_mode} owner {api.base.car_slot_owner}"
+
+    # The device turns out to be the car: the claim is given up and Ohme's wiring cleared, so the
+    # Octopus component can wire the car's dispatches (it re-wires when the owner changes)
+    octopus.intelligent_devices = {"dev1": IOG_DEVICE_CAR}
+    assert _ohme_run_poll(api, seconds=120) == [False], "Expected the Ohme slots not labelled as the plan"
+    assert api.slot_mode is None and api.base.car_slot_owner is None, f"Expected the claim released, got {api.slot_mode} owner {api.base.car_slot_owner}"
+    assert api.args.get("octopus_intelligent_slot") == [], f"Expected Ohme's wiring cleared, got {api.args}"
+
+    # Octopus wires its own entity; a gap in its data then changes nothing
+    api.args["octopus_intelligent_slot"] = [OCTOPUS_DISPATCH_ENTITY]
+    saved_tariffs = octopus.tariffs
+    octopus.tariffs = {}
+    assert _ohme_run_poll(api, seconds=240) == [False], "Expected nothing to move over a gap"
+    assert api.slot_mode is None and api.octopus_other_device is True, f"Expected the car still known as the device, got {api.slot_mode} {api.octopus_other_device}"
+    assert api.args["octopus_intelligent_slot"] == [OCTOPUS_DISPATCH_ENTITY], f"Expected Octopus's wiring untouched, got {api.args}"
+    octopus.tariffs = saved_tariffs
+
+    # The customer links the Ohme to Octopus instead of the car: Ohme takes the slots back
+    octopus.intelligent_devices = {"dev2": IOG_DEVICE_OHME}
+    assert _ohme_run_poll(api, seconds=360) == [False], "Expected plain dispatches from the Ohme"
+    assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Ohme to claim the slots, got {api.slot_mode} owner {api.base.car_slot_owner}"
+    assert api.args["octopus_intelligent_slot"] == "binary_sensor.predbat_ohme_slot_active", f"Expected the Ohme wiring, got {api.args}"
+
+    # Smart charging suspended on it: no dispatches from anyone, so the Ohme schedule is the plan at the tariff rate
+    octopus.intelligent_devices = {"dev2": dict(IOG_DEVICE_OHME, suspended=True)}
+    assert _ohme_run_poll(api, seconds=480) == [True], "Expected the charger schedule while smart charging is suspended"
+    assert api.slot_mode == "charger_schedule" and api.base.car_slot_owner is None, f"Expected charger schedule mode unclaimed, got {api.slot_mode} owner {api.base.car_slot_owner}"
+
+    print("PASS: a change of Intelligent device was followed")
+    return 0
 
 
 def _test_ohme_iog_flag_forces_on(my_predbat=None):

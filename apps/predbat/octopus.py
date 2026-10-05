@@ -633,6 +633,11 @@ class OctopusAPI(ComponentBase):
         # run() compares this against the live set so a device appearing, disappearing or being
         # suspended re-wires the slots without waiting for a restart (issue #4648).
         self.intelligent_config_devices = None
+        # Who held the car slots when automatic_config() last ran, so run() re-wires them when that changes
+        self.intelligent_config_owner = None
+        # The slot entities automatic_config() last wired the car slots to, so it only ever clears wiring
+        # that is still its own - None until it has wired any
+        self.intelligent_config_slots = None
         self.tariff_fetched_at = None
         self.device_fetched_at = None
         self.sensor_updated_at = None
@@ -766,6 +771,19 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: Live intelligent devices changed from {} to {}, reconfiguring car slots".format(self.intelligent_config_devices, active_devices))
                 self.automatic_config(self.tariffs)
                 self.refresh_discovery()
+            elif sensor_due and getattr(self.base, "car_slot_owner", None) != self.intelligent_config_owner:
+                slot_owner = getattr(self.base, "car_slot_owner", None)
+                if self.car_slots_released_to_us(slot_owner, active_devices):
+                    # Another component has given the car slots up - the Ohme component does once it
+                    # finds Octopus Intelligent is driving the car and not the charger (#5402). The
+                    # device set has not moved, so nothing else would wire them
+                    self.log("OctopusAPI: Car slots released by the {} component, reconfiguring car slots".format(self.intelligent_config_owner))
+                    self.automatic_config(self.tariffs)
+                    self.refresh_discovery()
+                else:
+                    # Taken by another component, or given up with nothing here to wire them to: note
+                    # the owner and leave the wiring to whoever has it
+                    self.intelligent_config_owner = slot_owner
 
         # Unconditional and outside the "if self.automatic:" block above (unlike the two calls
         # inside it, which exist only to refresh the report in the SAME cycle a wiring change
@@ -1156,6 +1174,22 @@ class OctopusAPI(ComponentBase):
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
+    def car_slots_released_to_us(self, slot_owner, active_devices):
+        """
+        Has another component given up the car slots for this one to wire to its own dispatches.
+
+        Only when there is something to wire them to: a live, non-suspended Intelligent device on a
+        tariff that is still Intelligent. A component also lets go when there are no dispatches to
+        be had from anyone - every device suspended, or the tariff no longer Intelligent, where
+        self.intelligent_devices is not refreshed and still holds the old device - and has then
+        wired the slots to something of its own, which must not be overwritten or cleared (#5405 review).
+        """
+        if slot_owner and slot_owner != "octopus":
+            return False
+        if not active_devices:
+            return False
+        return self.is_intelligent_go_tariff(self.tariffs.get("import", {}).get("tariffCode"))
+
     def get_active_intelligent_device_ids(self):
         """
         Return the sorted list of live intelligent device IDs that are not suspended.
@@ -1446,20 +1480,31 @@ class OctopusAPI(ComponentBase):
                 slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
                 ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
                 limit_list.append(self.get_entity_name("number", "intelligent_target_soc", index=index_suffix))
-            self.set_arg("octopus_intelligent_slot", slot_list)
-            self.set_arg("octopus_ready_time", ready_list)
-            self.set_arg("octopus_charge_limit", limit_list)
-            # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
-            num_cars = self.get_arg("num_cars", 0)
-            if num_cars < len(active_devices):
-                self.set_arg("num_cars", len(active_devices))
-            if active_devices:
-                self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
+            # With no active device left the wiring is cleared - but only wiring that is still what
+            # was put there from here. The slots are not claimed while nothing owns them, so another
+            # component may have wired them to something of its own since: the Ohme component does,
+            # to the charger's own schedule, when the device it was following is suspended
+            current_slots = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+            if not active_devices and (not self.intelligent_config_slots or current_slots != self.intelligent_config_slots):
+                self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
-                self.log("OctopusAPI: No active intelligent devices remain, cleared the car slot wiring")
+                self.set_arg("octopus_intelligent_slot", slot_list)
+                self.set_arg("octopus_ready_time", ready_list)
+                self.set_arg("octopus_charge_limit", limit_list)
+                self.intelligent_config_slots = slot_list
+                # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
+                num_cars = self.get_arg("num_cars", 0)
+                if num_cars < len(active_devices):
+                    self.set_arg("num_cars", len(active_devices))
+                if active_devices:
+                    self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
+                else:
+                    self.log("OctopusAPI: No active intelligent devices remain, cleared the car slot wiring")
 
         # Record the device set this wiring was built for so run() can spot it changing later
         self.intelligent_config_devices = self.get_active_intelligent_device_ids()
+        # And who held the car slots, so run() can wire them once another component lets go of them
+        self.intelligent_config_owner = slot_owner
 
     def _current_standing_charge_p(self, direction):
         """
