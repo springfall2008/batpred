@@ -1271,6 +1271,7 @@ class Fetch:
             import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
                 import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated
             )
+            self.rate_import_pre_saving = self.pre_saving_for_session_minutes(self.rate_import_pre_saving, self.rate_import_saving_minutes)
             self.rate_scan(import_rates, print=True)
         else:
             self.rate_import_no_io = {}
@@ -1300,6 +1301,7 @@ class Fetch:
             export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(
                 export_rates, self.rate_export_pre_saving, self.rate_export_saving_minutes, self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.manual_export_rates, False, self.rate_export_replicated
             )
+            self.rate_export_pre_saving = self.pre_saving_for_session_minutes(self.rate_export_pre_saving, self.rate_export_saving_minutes)
             self.rate_scan_export(export_rates, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -2134,6 +2136,15 @@ class Fetch:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
+    def pre_saving_for_session_minutes(self, pre_saving, saving_minutes):
+        """
+        Keep only the session minutes of a pre-saving snapshot, the only ones rate_minmax_excluding_saving() reads
+
+        The full table is needed while the overrides are applied to it, but kept whole it would put two
+        extra per-minute rate tables in every debug dump, on days without a session too.
+        """
+        return {minute: pre_saving[minute] for minute in saving_minutes if minute in pre_saving}
+
     def apply_rate_overrides(self, rates, pre_saving, saving_minutes, override_items, rtype, manual_items, is_import, rate_replicate):
         """
         Apply the configured rate overrides and then the manual rates on top of rates, tagging each
@@ -2143,13 +2154,12 @@ class Fetch:
         any saving/free/Axle session - so it stays "these rates without the session". Otherwise
         rate_minmax_excluding_saving() would cap an overridden session minute (a fixed 50p to
         discourage charging in the session, say) back to the bare tariff and the override would
-        drop out of the threshold stats. With no saving minutes nothing reads
-        pre_saving, so it is left alone rather than logging every override twice each cycle.
+        drop out of the threshold stats. With no saving minutes nothing reads pre_saving, and with no
+        overrides there is nothing to apply, so either way it is left alone.
         """
         rates = self.basic_rates(override_items, rtype, rates, rate_replicate)
         rates = self.apply_manual_rates(rates, manual_items, is_import=is_import, rate_replicate=rate_replicate)
-        if saving_minutes and pre_saving:
-            self.log("Applying {} to the rates without the saving session too, for the rate thresholds".format(rtype))
+        if saving_minutes and pre_saving and (override_items or manual_items):
             pre_saving = self.basic_rates(override_items, rtype, pre_saving, {})
             pre_saving = self.apply_manual_rates(pre_saving, manual_items, is_import=is_import, rate_replicate={})
         return rates, pre_saving
@@ -2450,7 +2460,7 @@ class Fetch:
         a free or discounted session still counts as cheap. A session minute the tariff has no rate for
         is skipped. With no rate_base this is the plain min/max/average.
         """
-        if not rate_base:
+        if not saving_minutes or not rate_base:
             return self.rate_minmax(rates)[:3]
 
         rate_min = 99999
@@ -2541,9 +2551,10 @@ class Fetch:
         Both start from rate_import_cost_threshold, which is worked out on the tariff's own prices so
         a saving session or Axle reward does not make the whole day read as cheap (GH#5050). In
         automatic mode, ahead of a saving session or Axle event priced above the tariff's highest import
-        rate (see find_event_pre_charge()), the plan also gets every import window up to the event's price
-        before it starts, cut at the start, so it can charge the battery to export into the event or to
-        cover the house through it (#249). The sensors, the car
+        rate (see find_event_pre_charge()), the plan also gets every tariff import window before it starts,
+        cut at the start, so it can charge the battery to export into the event or to cover the house
+        through it (#249). Event minutes priced above the tariff stay out, so an earlier event is never
+        offered as a charge window. The sensors, the car
         plan and the automatic threshold tightening keep the tariff's own cheap windows.
         """
         curr = self.currency_symbols[1]
@@ -2570,7 +2581,7 @@ class Fetch:
             if pre_event:
                 after_event, _, _ = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark, start_minute=pre_event[-1]["end"])
                 self.low_rates = pre_event + after_event
-                self.log("Low Import rate windows ahead of the event at {}: {}".format(self.time_abs_str(event_start), len(pre_event)))
+                self.log("Low Import rate: {} windows offered for charging ahead of the event at {}".format(len(pre_event), self.time_abs_str(event_start)))
 
         # Update threshold automatically, from the tariff's own windows so the published threshold does not
         # take in the pre-event day rate (GH#5050)
@@ -2579,28 +2590,23 @@ class Fetch:
 
     def find_event_pre_charge(self, tariff_import_max):
         """
-        Find the last saving session or Axle event worth charging ahead of, returning (event start, import threshold) or (None, None)
+        Find the start of the last saving session or Axle event worth charging ahead of, or None
 
-        An event minute qualifies when its export price or its import price beats the tariff's own highest
-        import price: charging at any tariff rate beforehand can then pay, either to export into the event
-        or to avoid importing during it (a session on a 0p export tariff only raises the import side).
-        The threshold is the best such price, so only import slots at or below it are offered. A manual
-        threshold (rate_low_threshold) is the user's cap on what Predbat charges at, so this only applies
-        in automatic mode.
+        A session minute qualifies when its export price or its import price beats the tariff's own
+        highest import price, so charging at any tariff rate beforehand can pay: to export into the
+        event, or to avoid importing during it (a session on a 0p export tariff only raises the import
+        side). Only an event still to start counts - one already running has nothing before it left to
+        charge in. A manual threshold (rate_low_threshold) is the user's cap on what Predbat charges at,
+        so this only applies in automatic mode.
         """
         if self.rate_low_threshold > 0:
-            return None, None
+            return None
         end_minute = self.minutes_now + self.forecast_minutes
-        event_prices = {}
+        event_minutes = set()
         for rates, saving_minutes in ((self.rate_export, self.rate_export_saving_minutes), (self.rate_import, self.rate_import_saving_minutes)):
-            for minute in saving_minutes:
-                price = rates.get(minute, 0)
-                if self.minutes_now <= minute < end_minute and price > tariff_import_max:
-                    event_prices[minute] = max(event_prices.get(minute, price), price)
-        if not event_prices:
-            return None, None
-        event_start = max(minute for minute in event_prices if (minute - 1) not in event_prices)
-        return event_start, max(event_prices.values())
+            event_minutes.update(minute for minute in saving_minutes if minute < end_minute and rates.get(minute, 0) > tariff_import_max)
+        starts = [minute for minute in event_minutes if (minute - 1) not in event_minutes and minute > self.minutes_now]
+        return max(starts) if starts else None
 
     def set_rate_thresholds(self):
         """
@@ -2647,7 +2653,9 @@ class Fetch:
         if car_planning_on_rates:
             self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1)
 
-        self.rate_import_pre_event_end, self.rate_import_pre_event_threshold = self.find_event_pre_charge(rate_max)
+        # Ahead of an event worth charging for, every tariff slot is a candidate, as when export beats import above
+        self.rate_import_pre_event_end = self.find_event_pre_charge(rate_max)
+        self.rate_import_pre_event_threshold = rate_max + 0.1
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
@@ -2664,8 +2672,6 @@ class Fetch:
                 dp2(self.rate_import_cost_threshold), curr, dp2(self.rate_low_threshold), curr, dp2(self.rate_export_cost_threshold), curr, dp2(self.rate_high_threshold), curr
             )
         )
-        if self.rate_import_pre_event_end is not None:
-            self.log("Event at {} is priced up to {}{}, so import windows before it up to that price are offered for charging".format(self.time_abs_str(self.rate_import_pre_event_end), dp2(self.rate_import_pre_event_threshold), curr))
 
     def rate_scan(self, rates, print=True):
         """

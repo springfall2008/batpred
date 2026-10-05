@@ -426,7 +426,7 @@ and a rate override you put on an event slot (rates_import_override, rates_expor
 The event rates themselves are still used when planning.
 
 In automatic mode (rate_low_threshold 0), when a saving session or Axle event pays more for export, or charges more for
-import, than the tariff's most expensive import rate, the plan is also offered every import slot up to that event price
+import, than the tariff's most expensive import rate, the plan is also offered every import slot at the tariff's own rates
 before the last such event starts. The battery can then be charged ahead of the event to export into it or to cover the
 house through it. The low rate sensors (`binary_sensor.predbat_low_rate_slot` and the `predbat.low_rate_*` sensors) and
 car charging plans still use only the tariff's own cheap slots.
