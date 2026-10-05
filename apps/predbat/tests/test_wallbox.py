@@ -109,6 +109,115 @@ MOCK_STATUS_CHARGING = {
 MOCK_STATUS_READY = dict(MOCK_STATUS_CHARGING, charging_power=0, status_id=161, charging_speed=0, added_range=0, added_energy=0)
 MOCK_STATUS_PAUSED = dict(MOCK_STATUS_CHARGING, charging_power=0, status_id=178, charging_speed=0)
 
+# A real status payload, captured on 5 Oct 2026 from a Pulsar Plus (firmware 6.7.43) that was
+# locked with no car connected. Account identifiers and names are replaced; every field and its
+# type is as Wallbox sent it.
+# cspell:disable
+MOCK_STATUS_LOCKED_CAPTURED = {'added_discharged_energy': 0,
+ 'added_energy': 0,
+ 'added_green_energy': 0,
+ 'added_grid_energy': 0,
+ 'added_range': 477,
+ 'car_id': 1,
+ 'car_plate': '',
+ 'charging_power': 0,
+ 'charging_speed': 0,
+ 'charging_time': 19717,
+ 'config_data': {'auto_lock': 0,
+                 'auto_lock_time': 60,
+                 'available': 1,
+                 'charger_has_image': 0,
+                 'charger_id': 101,
+                 'charger_load_type': 'Private',
+                 'connection_type': 1,
+                 'contract_charging_available': False,
+                 'country': {'code': 'GBR', 'id': 180, 'iso2': 'GB', 'name': 'REINO UNIDO', 'phone_code': '44'},
+                 'currency': {'code': 'GBP', 'id': 48, 'name': 'United Kingdom Pound', 'symbol': '£'},
+                 'dca_status': 0,
+                 'ecosmart': {'enabled': False, 'mode': 0, 'percentage': 100},
+                 'energyCost': {'inheritedGroupId': None, 'value': 0.075},
+                 'energy_price': 0.075,
+                 'gesture_status': 7,
+                 'grid_type': 0,
+                 'group_id': 1,
+                 'home_power_export_setpoint': None,
+                 'home_sharing': 0,
+                 'icp_max_current': 0,
+                 'language': 'EN',
+                 'live_refresh_time': 30,
+                 'locked': 1,
+                 'max_available_current': 32,
+                 'max_charging_current': 32,
+                 'max_charging_unit': 'amp',
+                 'max_charging_value': 32,
+                 'mid_enabled': 0,
+                 'mid_margin': 1,
+                 'mid_margin_unit': 1,
+                 'mid_serial_number': '',
+                 'mid_status': 1,
+                 'multiuser': 1,
+                 'name': 'Garage',
+                 'ocpp_ready': 'ocpp_1.6j',
+                 'operation_mode': 'ocpp',
+                 'owner_id': 1,
+                 'part_number': 'PLP1-0-2-2-E-002-C',
+                 'phase_switch': {'enabled': False},
+                 'plan': {'features': ['DEFAULT_FEATURE',
+                                       'POWER_BOOST',
+                                       'MOBILE_CONNECTIVITY',
+                                       'CHARGER_SUBGROUPS',
+                                       'USER_SUBGROUPS',
+                                       'DYNAMIC_POWER_SHARING',
+                                       'PAYMENTS',
+                                       'SET_UP_INCLUDED',
+                                       'BULK_ACTIONS',
+                                       'AUTOMATIC_REPORTING',
+                                       'BILLING',
+                                       'STATISTICS'],
+                          'plan_name': 'Business'},
+                 'power_sharing_config': 256,
+                 'purchased_power': 0,
+                 'remote_action': 0,
+                 'rfid_type': None,
+                 'serial_number': '900001',
+                 'session_segment_length': 300,
+                 'sha256_charger_image': None,
+                 'show_default_user': 1,
+                 'show_email': 1,
+                 'show_lastname': 1,
+                 'show_name': 1,
+                 'show_profile': 1,
+                 'sim_iccid': None,
+                 'software': {'currentVersion': '6.7.43', 'fileName': 'plp1.tar', 'latestVersion': '6.7.43', 'updateAvailable': False},
+                 'state': None,
+                 'sync_timestamp': 1791199799,
+                 'tariffs': [],
+                 'timezone': 'Europe/London',
+                 'uid': '00000000000000000000000000',
+                 'unlock_user_id': 1,
+                 'update_refresh_time': 300,
+                 'user_socket_locking': 0,
+                 'zipcode': None},
+ 'cost': 0,
+ 'current_mode': 1,
+ 'depot_name': 'Home',
+ 'depot_price': 0.05,
+ 'finished': True,
+ 'grid': {'status': 0},
+ 'last_sync': '2026-10-05 17:00:05',
+ 'max_available_power': 32,
+ 'mid_status': 1,
+ 'name': 'Garage',
+ 'ocpp_status': 4,
+ 'power_sharing_status': 0,
+ 'preventive_discharge': False,
+ 'pru': {'status': 0},
+ 'state_of_charge': None,
+ 'status_id': 209,
+ 'user_id': 1,
+ 'user_name': 'default'}
+# cspell:enable
+
 
 def test_basic_auth_header():
     """The Basic header is UTF-8, so a colon or accented character in the password survives."""
@@ -1185,6 +1294,20 @@ def test_control_state_load_is_retried():
     print("  ✓ A failed control state read is retried")
 
 
+def test_normalise_real_locked_capture():
+    """A payload captured from a real locked, unplugged Pulsar Plus normalises to what the charger showed."""
+    charger = normalise_charger(101, MOCK_STATUS_LOCKED_CAPTURED)
+    assert (charger.status_id, charger.status) == (209, "Locked")
+    assert charger.connected is False and charger.charging is False and charger.paused is False
+    assert charger.locked is True, "Wallbox sends locked as 1, not true"
+    assert charger.power_w == 0.0 and charger.session_energy_kwh == 0.0
+    assert charger.max_charging_current == 32 and charger.max_available_current == 32
+    assert charger.eco_smart == "off"
+    assert charger.name == "Garage" and charger.serial == "900001"
+    assert charger.part_number == "PLP1-0-2-2-E-002-C" and charger.software_version == "6.7.43"
+    print("  ✓ A real locked-charger capture is normalised")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1255,5 +1378,6 @@ def test_wallbox(my_predbat=None):
     test_control_records_a_pause_whose_response_was_lost()
     test_control_keeps_its_record_through_a_transient_status()
     test_control_state_load_is_retried()
+    test_normalise_real_locked_capture()
     print("=" * 70)
     return False
