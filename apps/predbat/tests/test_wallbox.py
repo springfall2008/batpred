@@ -766,6 +766,61 @@ def test_charger_for_entity_requires_a_whole_id():
     print("  ✓ Entities resolve to a whole charger id")
 
 
+def test_automatic_config_two_chargers():
+    """Each argument is a per-car list in charger id order, and num_cars is raised to match."""
+    component = _make_component({202: _status(), 101: _status()})
+    run_async(component.run(0, True))
+    args = component.base.args
+    assert args["car_charging_energy"] == ["sensor.predbat_wallbox_101_session_energy", "sensor.predbat_wallbox_202_session_energy"]
+    assert args["car_charging_planned"] == ["binary_sensor.predbat_wallbox_101_connected", "binary_sensor.predbat_wallbox_202_connected"]
+    assert args["car_charging_power"] == ["sensor.predbat_wallbox_101_power", "sensor.predbat_wallbox_202_power"]
+    assert args["car_charging_now"] == ["sensor.predbat_wallbox_101_power", "sensor.predbat_wallbox_202_power"]
+    assert args["num_cars"] == 2
+    assert "car_charging_soc" not in args, "A Type 2 charger cannot report state of charge"
+    print("  ✓ Automatic configuration wires per-car lists in charger order")
+
+
+def test_automatic_config_single_charger_is_still_a_list():
+    """One charger still produces lists, which is what the per-car arguments expect."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    assert component.base.args["car_charging_energy"] == ["sensor.predbat_wallbox_101_session_energy"]
+    assert component.base.args["num_cars"] == 1
+    print("  ✓ A single charger is still wired as a list")
+
+
+def test_automatic_config_keeps_user_values():
+    """A user's car_charging_now is kept, and a larger num_cars is not reduced."""
+    component = _make_component()
+    # set_arg_auto() decides what the user configured from the raw apps.yaml arguments
+    component.base.args_from_apps_yaml = {"car_charging_now": ["binary_sensor.my_car_charging"]}
+    component.base.apps_yaml_override_warned = set()
+    component.base.args["car_charging_now"] = ["binary_sensor.my_car_charging"]
+    component.base.args["num_cars"] = 3
+    run_async(component.run(0, True))
+    assert component.base.args["car_charging_now"] == ["binary_sensor.my_car_charging"]
+    assert component.base.args["num_cars"] == 3
+    print("  ✓ User car_charging_now and a larger num_cars are kept")
+
+
+def test_automatic_config_disabled():
+    """With wallbox_automatic off nothing is wired."""
+    component = _make_component(automatic=False)
+    run_async(component.run(0, True))
+    assert "car_charging_energy" not in component.base.args and "num_cars" not in component.base.args
+    print("  ✓ Automatic configuration off wires nothing")
+
+
+def test_automatic_config_runs_once():
+    """A value the user changes after start-up is not put back by the next poll."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.base.args["car_charging_energy"] = ["sensor.something_else"]
+    run_async(component.run(120, False))
+    assert component.base.args["car_charging_energy"] == ["sensor.something_else"]
+    print("  ✓ Automatic configuration runs once")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -808,5 +863,10 @@ def test_wallbox(my_predbat=None):
     test_control_failure_is_logged_and_not_retried()
     test_control_survives_a_rate_limit()
     test_charger_for_entity_requires_a_whole_id()
+    test_automatic_config_two_chargers()
+    test_automatic_config_single_charger_is_still_a_list()
+    test_automatic_config_keeps_user_values()
+    test_automatic_config_disabled()
+    test_automatic_config_runs_once()
     print("=" * 70)
     return False

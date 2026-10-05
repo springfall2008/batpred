@@ -451,7 +451,32 @@ class WallboxAPI(ComponentBase):
         """Decide whether plan-led control can run. Filled in with plan-led control."""
 
     def automatic_config(self):
-        """Wire the charger entities into Predbat's car inputs. Filled in with automatic configuration."""
+        """Wire the charger entities into Predbat's car charging inputs.
+
+        Each argument is a per-car list in charger id order, so charger N is car N.
+        car_charging_now takes the power sensors, which count as charging from
+        CAR_CHARGING_NOW_POWER_W; a value the user set in apps.yaml is kept. Session
+        energy resets with each session, which the shared incrementing-sensor handling
+        already copes with. car_charging_soc is not set: a Type 2 connector cannot
+        report the car's state of charge.
+        """
+        chargers = self.ordered_chargers()
+        if not chargers:
+            return
+        energy_entities = ["sensor.{}_session_energy".format(self.entity_prefix(charger)) for charger in chargers]
+        planned_entities = ["binary_sensor.{}_connected".format(self.entity_prefix(charger)) for charger in chargers]
+        power_entities = ["sensor.{}_power".format(self.entity_prefix(charger)) for charger in chargers]
+
+        self.log("Info: wallbox: setting car_charging_energy to {}".format(energy_entities))
+        self.set_arg_auto("car_charging_energy", energy_entities)
+        self.log("Info: wallbox: setting car_charging_planned to {}".format(planned_entities))
+        self.set_arg_auto("car_charging_planned", planned_entities)
+        self.log("Info: wallbox: setting car_charging_power and car_charging_now to {}".format(power_entities))
+        self.set_arg_auto("car_charging_power", power_entities)
+        self.set_arg_auto("car_charging_now", power_entities, overwrite=False)
+        if _to_int(self.get_arg("num_cars", 0), 0) < len(chargers):
+            self.log("Info: wallbox: setting num_cars to {}".format(len(chargers)))
+            self.set_arg("num_cars", len(chargers))
 
     async def control_tick(self, now):
         """Run one cycle of plan-led control. Filled in with plan-led control."""
