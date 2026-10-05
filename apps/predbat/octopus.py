@@ -59,7 +59,7 @@ CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
-SMART_CONTROL_PENDING_SECONDS = 120  # How long a Smart Control change we sent stays on show if Octopus has not yet reported it
+SMART_CONTROL_PENDING_SECONDS = 300  # How long a Smart Control change we sent stays on show if Octopus has not yet reported it - over two 2-minute device polls, not just the one straight after it
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -1242,6 +1242,7 @@ class OctopusAPI(ComponentBase):
         device = self.intelligent_devices.get(device_id)
         if not device:
             self.log("Warn: OctopusAPI: Try to set Smart Control, but no intelligent device ID {} found".format(device_id))
+            self.smart_control_confirmed.pop(device_id, None)
             return False
         action = "UNSUSPEND" if enabled else "SUSPEND"
         self.log("OctopusAPI: Setting Smart Control {} for intelligent device {}".format(action, device_id))

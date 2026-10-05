@@ -223,6 +223,26 @@ async def _run(my_predbat):
     failed |= _check("t5h fails back to the polled state", api.intelligent_devices[ACTIVE_ID]["suspended"] is True and ACTIVE_ID not in api.smart_control_confirmed, "device {}".format(api.intelligent_devices[ACTIVE_ID]))
     api.intelligent_devices[ACTIVE_ID]["suspended"] = False
 
+    print("Test 5i: a change for a device that has gone since does not leave its confirmed state behind")
+    api.commands = []
+    api.smart_control_confirmed = {}
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+    await api.switch_event(active_switch, "turn_off")
+    gone = api.intelligent_devices.pop(ACTIVE_ID)
+    await api.process_commands("acc-1")
+    failed |= _check("t5i baseline dropped", ACTIVE_ID not in api.smart_control_confirmed, "confirmed {}".format(api.smart_control_confirmed))
+    api.intelligent_devices[ACTIVE_ID] = dict(gone, suspended=False)
+
+    print("Test 5j: a successful change is held for longer than the poll straight after it")
+    api.commands = []
+    await api.switch_event(active_switch, "turn_off")
+    api.async_graphql_query = AsyncMock(return_value={"updateDeviceSmartControl": {"id": ACTIVE_ID}})
+    await api.process_commands("acc-1")
+    expiry = api.smart_control_pending[ACTIVE_ID][1]
+    failed |= _check("t5j held past the next 2-minute poll", expiry - datetime.now() > timedelta(minutes=4), "expiry {}".format(expiry))
+    api.smart_control_pending = {}
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+
     print("Test 6: events for other entities, other services and unknown devices are ignored")
     api.commands = []
     api.smart_control_confirmed = {}
