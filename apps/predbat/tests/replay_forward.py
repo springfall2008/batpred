@@ -591,6 +591,8 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             rebuild_load_pv_models(my_predbat)
             sim_soc = simulate_soc(my_predbat, sim_soc, run["minutes_now"] - my_predbat.minutes_now, pv_kwh, load_kwh)
         apply_run(my_predbat, prev, run)
+        # Live rebuilds the load forecast every run, re-plan or not, so the instance holds what live held at each run
+        refresh_load_forecast(my_predbat, run)
         if simulate:
             my_predbat.soc_kw = sim_soc
             my_predbat.soc_percent = int(round(sim_soc / my_predbat.soc_max * 100)) if my_predbat.soc_max else 0
@@ -616,13 +618,6 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             # Candidate windows start at the current slot, so they move with the clock as fetch moves them
             rescan_rate_stats(my_predbat)
             rescan_rate_windows(my_predbat)
-            rebuild_load_forecast(my_predbat)
-            if run.get("load_exact"):
-                # A log that records the load forecast exactly as the plan reads it makes the rebuild unnecessary
-                apply_logged_load_exact(my_predbat, run["load_exact"])
-            elif run.get("load_input"):
-                # Older logs give it per 5-minute slot, rounded
-                apply_logged_load_forecast(my_predbat, run["load_input"])
             rebuild_load_pv_models(my_predbat)
             pv_step = my_predbat.pv_forecast_minute_step
             load_step = my_predbat.load_minutes_step
@@ -659,6 +654,17 @@ def rescan_rate_stats(my_predbat):
         my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
     if my_predbat.rate_export_base:
         my_predbat.rate_export_max_forward = my_predbat.rate_export_max_forward_calc(my_predbat.rate_export_base)
+
+
+def refresh_load_forecast(my_predbat, run):
+    """Bring the load forecast up to this run: from the log's load line where it has one, else rebuilt from history."""
+    rebuild_load_forecast(my_predbat)
+    if run.get("load_exact"):
+        # A log that records the load forecast exactly as the plan reads it makes the rebuild unnecessary
+        apply_logged_load_exact(my_predbat, run["load_exact"])
+    elif run.get("load_input"):
+        # Older logs give it per 5-minute slot, rounded
+        apply_logged_load_forecast(my_predbat, run["load_input"])
 
 
 def rebuild_load_forecast(my_predbat):
