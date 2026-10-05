@@ -21,13 +21,18 @@ from tests.test_infra import run_async
 from mock_base import MockBase
 
 from wallbox import (
+    CHARGING_STATUS_IDS,
+    PAUSED_STATUS_IDS,
     WALLBOX_API_URL,
     WALLBOX_AUTH_URL,
+    WALLBOX_STATUS,
     WallboxApiError,
     WallboxAuthError,
+    WallboxCharger,
     WallboxRateLimitError,
     WallboxTransport,
     basic_auth_header,
+    normalise_charger,
 )
 
 
@@ -230,6 +235,95 @@ def test_transport_rate_limit_and_failures():
     print("  ✓ Rate limit and failures map to the right errors and metric reasons")
 
 
+def _status(status_id=193, power=7.2, energy=4.5, locked=False, max_current=32, eco=None, name="Garage"):
+    """Build a status payload in the shape Wallbox returns, for the fields Predbat reads."""
+    config = {"max_charging_current": max_current, "locked": locked, "serial_number": "900001", "part_number": "PLP1-0-2-4-9-002-E", "software": {"currentVersion": "5.5.10"}}
+    if eco is not None:
+        config["ecosmart"] = eco
+    return {"status_id": status_id, "charging_power": power, "added_energy": energy, "max_available_power": 32, "name": name, "config_data": config}
+
+
+def test_normalise_charging():
+    """A charging payload gives watts, session energy and the identity fields."""
+    charger = normalise_charger(101, _status())
+    assert charger.charger_id == "101"
+    assert charger.name == "Garage" and charger.serial == "900001"
+    assert charger.part_number == "PLP1-0-2-4-9-002-E" and charger.software_version == "5.5.10"
+    assert charger.status == "Charging" and charger.status_id == 193
+    assert charger.connected is True and charger.charging is True and charger.paused is False
+    assert charger.power_w == 7200.0, charger.power_w
+    assert charger.session_energy_kwh == 4.5
+    assert charger.max_charging_current == 32 and charger.max_available_current == 32
+    assert charger.locked is False and charger.eco_smart is None
+    print("  ✓ A charging payload is normalised")
+
+
+def test_normalise_status_table():
+    """Every status code maps to the documented text, connected, charging and paused flags."""
+    expected = {
+        193: ("Charging", True, True, False), 194: ("Charging", True, True, False), 195: ("Charging", True, True, False),
+        196: ("Discharging", True, False, False),
+        178: ("Paused", True, False, True), 182: ("Paused", True, False, True),
+        177: ("Scheduled", True, False, False), 179: ("Scheduled", True, False, False),
+        164: ("Waiting", True, False, False),
+        180: ("Waiting for car demand", True, False, False), 181: ("Waiting for car demand", True, False, False),
+        183: ("Waiting in queue by Power Sharing", True, False, False), 184: ("Waiting in queue by Power Sharing", True, False, False),
+        185: ("Waiting in queue by Power Boost", True, False, False), 186: ("Waiting in queue by Power Boost", True, False, False),
+        187: ("Waiting MID failed", True, False, False), 188: ("Waiting MID safety margin exceeded", True, False, False),
+        189: ("Waiting in queue by Eco-Smart", True, False, False),
+        210: ("Locked, car connected", True, False, False),
+        165: ("Locked", False, False, False), 209: ("Locked", False, False, False),
+        161: ("Ready", False, False, False), 162: ("Ready", False, False, False),
+        0: ("Disconnected", False, False, False), 163: ("Disconnected", False, False, False),
+        166: ("Updating", False, False, False),
+        14: ("Error", False, False, False), 15: ("Error", False, False, False),
+    }
+    assert set(expected) == set(WALLBOX_STATUS), set(expected) ^ set(WALLBOX_STATUS)
+    for status_id, (text, connected, charging, paused) in expected.items():
+        charger = normalise_charger(101, _status(status_id=status_id))
+        assert (charger.status, charger.connected, charger.charging, charger.paused) == (text, connected, charging, paused), status_id
+    unknown = normalise_charger(101, _status(status_id=999))
+    assert (unknown.status, unknown.connected, unknown.charging, unknown.paused) == ("Unknown", False, False, False)
+    print("  ✓ Every status code maps to the right state")
+
+
+def test_normalise_eco_smart():
+    """Eco-Smart is None when unsupported, off when disabled, otherwise the mode."""
+    assert normalise_charger(101, _status()).eco_smart is None
+    assert normalise_charger(101, _status(eco={"enabled": False, "mode": 0})).eco_smart == "off"
+    assert normalise_charger(101, _status(eco={"enabled": True, "mode": 0})).eco_smart == "eco_mode"
+    assert normalise_charger(101, _status(eco={"enabled": True, "mode": 1})).eco_smart == "full_solar"
+    assert normalise_charger(101, _status(eco={"enabled": True})).eco_smart is None
+    print("  ✓ Eco-Smart mode is normalised")
+
+
+def test_normalise_handles_bad_values():
+    """Null numbers, a missing config block and a non-dict payload give safe defaults, never an exception."""
+    charger = normalise_charger(101, {"status_id": None, "charging_power": None, "added_energy": "junk", "config_data": None})
+    assert charger.status == "Disconnected" and charger.connected is False
+    assert charger.power_w == 0.0 and charger.session_energy_kwh == 0.0
+    assert charger.max_charging_current == 0 and charger.max_available_current == 0
+    assert charger.name == "Wallbox 101" and charger.serial == "" and charger.locked is False
+
+    empty = normalise_charger(101, "not a dict")
+    assert empty.status == "Disconnected" and empty.power_w == 0.0
+
+    truthy_lock = normalise_charger(101, _status(locked=1))
+    assert truthy_lock.locked is True
+    print("  ✓ Bad values normalise to safe defaults")
+
+
+def test_normalise_captured_payloads():
+    """The payloads captured from a real charger normalise to the states they were captured in."""
+    charging = normalise_charger(101, MOCK_STATUS_CHARGING)
+    assert charging.charging is True and charging.power_w > 0
+    ready = normalise_charger(101, MOCK_STATUS_READY)
+    assert ready.connected is False and ready.power_w == 0.0
+    paused = normalise_charger(101, MOCK_STATUS_PAUSED)
+    assert paused.paused is True and paused.connected is True
+    print("  ✓ Captured payloads normalise to their real states")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -243,5 +337,10 @@ def test_wallbox(my_predbat=None):
     test_transport_bad_credentials()
     test_transport_retries_once_after_a_revoked_token()
     test_transport_rate_limit_and_failures()
+    test_normalise_charging()
+    test_normalise_status_table()
+    test_normalise_eco_smart()
+    test_normalise_handles_bad_values()
+    test_normalise_captured_payloads()
     print("=" * 70)
     return False

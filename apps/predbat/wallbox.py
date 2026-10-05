@@ -25,6 +25,8 @@ import asyncio
 import base64
 import json
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 import aiohttp
 
@@ -39,6 +41,133 @@ USER_AGENT = "Predbat"
 # A token is treated as expired this long before Wallbox says it is, so a call never
 # leaves with a token that dies in flight
 TOKEN_MARGIN_SECONDS = 120
+
+
+# Status id to (text, car connected). The text is the Home Assistant wallbox integration's
+# wording, so states match what existing users already see. A None status id means the
+# charger reported nothing, which Wallbox treats as disconnected.
+WALLBOX_STATUS = {
+    0: ("Disconnected", False),
+    14: ("Error", False),
+    15: ("Error", False),
+    161: ("Ready", False),
+    162: ("Ready", False),
+    163: ("Disconnected", False),
+    164: ("Waiting", True),
+    165: ("Locked", False),
+    166: ("Updating", False),
+    177: ("Scheduled", True),
+    178: ("Paused", True),
+    179: ("Scheduled", True),
+    180: ("Waiting for car demand", True),
+    181: ("Waiting for car demand", True),
+    182: ("Paused", True),
+    183: ("Waiting in queue by Power Sharing", True),
+    184: ("Waiting in queue by Power Sharing", True),
+    185: ("Waiting in queue by Power Boost", True),
+    186: ("Waiting in queue by Power Boost", True),
+    187: ("Waiting MID failed", True),
+    188: ("Waiting MID safety margin exceeded", True),
+    189: ("Waiting in queue by Eco-Smart", True),
+    193: ("Charging", True),
+    194: ("Charging", True),
+    195: ("Charging", True),
+    196: ("Discharging", True),
+    209: ("Locked", False),
+    210: ("Locked, car connected", True),
+}
+CHARGING_STATUS_IDS = (193, 194, 195)
+PAUSED_STATUS_IDS = (178, 182)
+
+ECO_SMART_OFF = "off"
+ECO_SMART_ECO = "eco_mode"
+ECO_SMART_FULL_SOLAR = "full_solar"
+ECO_SMART_OPTIONS = [ECO_SMART_OFF, ECO_SMART_ECO, ECO_SMART_FULL_SOLAR]
+
+
+def _to_float(value, default=0.0):
+    """Convert a value to float, returning the default when it is missing or not a number."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value, default=0):
+    """Convert a value to int, returning the default when it is missing or not a number."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass
+class WallboxCharger:
+    """One charger's state, normalised from a Wallbox status payload."""
+
+    charger_id: str
+    name: str
+    serial: str
+    part_number: str
+    software_version: str
+    status_id: int
+    status: str
+    connected: bool
+    charging: bool
+    paused: bool
+    locked: bool
+    power_w: float
+    session_energy_kwh: float
+    max_charging_current: int
+    max_available_current: int
+    eco_smart: Optional[str]
+
+
+def normalise_charger(charger_id, payload):
+    """Turn one status payload into a WallboxCharger, with safe defaults for anything missing."""
+    if not isinstance(payload, dict):
+        payload = {}
+    config = payload.get("config_data")
+    if not isinstance(config, dict):
+        config = {}
+    software = config.get("software")
+    if not isinstance(software, dict):
+        software = {}
+
+    status_id = payload.get("status_id")
+    if status_id is None:
+        status_id = 0
+    status_id = _to_int(status_id, -1)
+    status, connected = WALLBOX_STATUS.get(status_id, ("Unknown", False))
+
+    eco_smart = None
+    eco_block = config.get("ecosmart")
+    if isinstance(eco_block, dict) and eco_block.get("mode") is not None:
+        if not eco_block.get("enabled"):
+            eco_smart = ECO_SMART_OFF
+        elif _to_int(eco_block.get("mode"), 0) == 1:
+            eco_smart = ECO_SMART_FULL_SOLAR
+        else:
+            eco_smart = ECO_SMART_ECO
+
+    return WallboxCharger(
+        charger_id=str(charger_id),
+        name=str(payload.get("name") or "Wallbox {}".format(charger_id)),
+        serial=str(config.get("serial_number") or ""),
+        part_number=str(config.get("part_number") or ""),
+        software_version=str(software.get("currentVersion") or ""),
+        status_id=status_id,
+        status=status,
+        connected=connected,
+        charging=status_id in CHARGING_STATUS_IDS,
+        paused=status_id in PAUSED_STATUS_IDS,
+        locked=bool(config.get("locked")),
+        power_w=round(_to_float(payload.get("charging_power")) * 1000.0, 1),
+        session_energy_kwh=_to_float(payload.get("added_energy")),
+        max_charging_current=_to_int(config.get("max_charging_current")),
+        max_available_current=_to_int(payload.get("max_available_power")),
+        eco_smart=eco_smart,
+    )
 
 
 class WallboxError(Exception):
