@@ -241,6 +241,9 @@ class OhmeAPI(ComponentBase):
         self.octopus_intelligent = None
         # How the car slot args are wired to the session slots, None when they are not - see update_slot_mode()
         self.slot_mode = None
+        # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
+        # lost to a failed poll is still owed, and made on the next one
+        self.slot_mode_applied = None
         # Ohme's own schedule is Predbat's car charging plan, as load only - see charger_slots_wanted()
         self.charger_slots = False
         # The reason charger_slots_wanted() last stood down, so it is only logged when it changes
@@ -295,9 +298,8 @@ class OhmeAPI(ComponentBase):
         # Who schedules the charge is decided ahead of the publish, as it sets how the session slots
         # are published. Re-decided on every poll rather than once, so a move on or off an Octopus
         # Intelligent tariff is picked up without a restart - see update_slot_mode()
-        slot_mode_changed = False
         if poll and self.client.serial:
-            slot_mode_changed = await self.update_slot_mode()
+            await self.update_slot_mode()
 
         if poll:
             await self.client.async_get_charge_session()
@@ -305,8 +307,12 @@ class OhmeAPI(ComponentBase):
 
         if first and self.client.serial and self.ohme_automatic:
             await self.automatic_config()
-        if slot_mode_changed:
+        # After the publish, so the slots already read the new way when the args move. Compared
+        # against what was last wired rather than done on the change alone: if the session fetch or
+        # the publish above fails, this is skipped, and has to still be owed on the next poll
+        if poll and self.client.serial and self.slot_mode != self.slot_mode_applied:
             await self.apply_slot_mode()
+            self.slot_mode_applied = self.slot_mode
 
         # Unconditional and outside the "if first and self.client.serial:" block above, so a
         # transient failure on that one-shot cycle is retried rather than lost - see
@@ -516,8 +522,8 @@ class OhmeAPI(ComponentBase):
         Predbat: left as first decided, a car moved onto Intelligent would never earn its cheap rate
         and one moved off it would go on being given one, until the next restart.
 
-        Returns True when the wiring has to change, for apply_slot_mode() to do once the slots
-        have been published the new way.
+        Only decides: run() wires the args to match with apply_slot_mode(), once the slots have
+        been published the new way.
         """
         octopus_intelligent = self.octopus_intelligent_wanted()
         if octopus_intelligent != self.octopus_intelligent:
@@ -527,10 +533,13 @@ class OhmeAPI(ComponentBase):
                 self.log("Info: Ohme API: Octopus Intelligent is no longer in use, the Ohme slots no longer carry the Intelligent rate")
             self.octopus_intelligent = octopus_intelligent
             # Predbat-led control is ruled out by Intelligent, so it follows the same change
-            was_active = self.control_active
             self.enable_control(octopus_intelligent)
-            if was_active and not self.control_active:
-                await self.release_charger(reason="Octopus Intelligent now schedules the charge")
+
+        # Predbat has stood down but is still holding the charger: hand it back. Checked on every
+        # poll rather than only on the change, as release_charger() clears control_charging last -
+        # a hand-back that failed part way is tried again until the charger really is released
+        if not self.control_active and self.control_charging is not None:
+            await self.release_charger(reason="Octopus Intelligent now schedules the charge")
 
         if octopus_intelligent:
             slot_mode = SLOT_MODE_INTELLIGENT
@@ -539,10 +548,7 @@ class OhmeAPI(ComponentBase):
         else:
             slot_mode = None
         self.charger_slots = slot_mode == SLOT_MODE_CHARGER
-        if slot_mode == self.slot_mode:
-            return False
         self.slot_mode = slot_mode
-        return True
 
     async def apply_slot_mode(self):
         """

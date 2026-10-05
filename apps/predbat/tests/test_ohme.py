@@ -26,6 +26,7 @@ from ohme import (
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
     POWER_WATTS_ENTITY,
+    ApiException,
     OhmeAPI,
     OhmeApiClient,
     ChargerStatus,
@@ -290,6 +291,8 @@ def test_ohme(my_predbat=None):
         ("run_tariff_from_iog", _test_ohme_run_tariff_change_from_intelligent, "OhmeAPI run follows a move off Intelligent"),
         ("run_tariff_gap", _test_ohme_run_tariff_gap_keeps_mode, "OhmeAPI run keeps its mode over a gap in the tariff"),
         ("run_tariff_control", _test_ohme_run_tariff_change_with_control, "OhmeAPI run moves ohme_control with the tariff"),
+        ("run_wiring_retry", _test_ohme_run_wiring_retried_after_failed_poll, "OhmeAPI run still wires the slots after a failed poll"),
+        ("run_release_retry", _test_ohme_run_release_retried_after_failure, "OhmeAPI run retries a failed charger hand-back"),
         ("connected_sensor", _test_ohme_connected_sensor, "connected binary sensor tracks plug state"),
         ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
         ("control_windows", _test_ohme_control_window_parsing, "control window parsing"),
@@ -1627,6 +1630,7 @@ class MockOhmeAPI(OhmeAPI):
         self.control_active = False
         self.octopus_intelligent = None
         self.slot_mode = None
+        self.slot_mode_applied = None
         self.charger_slots = False
         self.charger_slots_blocked = None
         self.control_windows = []
@@ -3223,6 +3227,103 @@ def _test_ohme_run_tariff_change_with_control(my_predbat=None):
     assert api.args["octopus_intelligent_slot"] == ["binary_sensor.predbat_octopus_intelligent_dispatch"], f"Expected another owner's wiring kept, got {api.args}"
 
     print("PASS: ohme_control moved with the tariff")
+    return 0
+
+
+def _test_ohme_run_wiring_retried_after_failed_poll(my_predbat=None):
+    """Test a slot wiring change is still made when the poll that decided it fails before wiring"""
+    print("**** Running test_ohme_run_wiring_retried_after_failed_poll ****")
+
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.client.serial = "TEST-SERIAL-123"
+    fail = [True]
+
+    async def mock_async_noop():
+        pass
+
+    async def mock_get_session():
+        if fail[0]:
+            raise ApiException("session fetch failed")
+
+    api.client.async_update_device_info = mock_async_noop
+    api.client.async_get_charge_session = mock_get_session
+    api.publish_data = mock_async_noop
+    api.update_success_timestamp = lambda: None
+
+    # The very first poll decides on the charger schedule, then fails before anything is wired
+    try:
+        run_async(api.run(seconds=0, first=True))
+        assert False, "Expected the failed session fetch to raise"
+    except ApiException:
+        pass
+    assert api.slot_mode == "charger_schedule", f"Expected the mode decided, got {api.slot_mode}"
+    assert "octopus_intelligent_slot" not in api.args, f"Expected nothing wired by the failed poll, got {api.args}"
+
+    # The next poll decides the same thing - and must still do the wiring it owes
+    fail[0] = False
+    run_async(api.run(seconds=120, first=False))
+    assert api.args.get("octopus_intelligent_slot") == "binary_sensor.predbat_ohme_slot_active", f"Expected the wiring made on the retry, got {api.args}"
+    assert api.slot_mode_applied == "charger_schedule", f"Expected the wiring recorded, got {api.slot_mode_applied}"
+
+    # And once made it is not repeated
+    del api.log_messages[:]
+    run_async(api.run(seconds=240, first=False))
+    assert api.log_messages == [], f"Expected a quiet poll, got {api.log_messages}"
+
+    print("PASS: the wiring was made after a failed poll")
+    return 0
+
+
+def _test_ohme_run_release_retried_after_failure(my_predbat=None):
+    """Test a charger hand-back that fails part way is tried again until the charger is released"""
+    print("**** Running test_ohme_run_release_retried_after_failure ****")
+
+    api = _ohme_api_with_octopus("E-1R-COSY-22-12-08-A")
+    api.ohme_automatic = True
+    api.ohme_control = True
+    assert _ohme_run_poll(api, first=True) == [False], "Expected no charger schedule under ohme_control"
+    assert api.control_active is True, "Expected control to enable"
+
+    calls = []
+    fail = [True]
+
+    async def mock_resume():
+        calls.append("resume")
+
+    async def mock_max_charge(state=True):
+        calls.append(("max_charge", state))
+        if fail[0]:
+            raise ApiException("max charge failed")
+
+    api.client.async_resume_charge = mock_resume
+    api.client.async_max_charge = mock_max_charge
+    api.control_charging = False  # Predbat is holding the charger paused
+
+    # Onto Intelligent, and the hand-back fails half way: control has stood down, the charger is not released
+    _ohme_set_tariff(api, "E-1R-INTELLI-VAR-22-10-14-A")
+    try:
+        _ohme_run_poll(api, seconds=120)
+        assert False, "Expected the failed hand-back to raise"
+    except ApiException:
+        pass
+    assert api.control_active is False, "Expected control to have stood down"
+    assert api.control_charging is False, "Expected the charger still recorded as held"
+
+    # The next poll sees no change of tariff, and must hand the charger back all the same
+    fail[0] = False
+    del calls[:]
+    assert _ohme_run_poll(api, seconds=240) == [False], "Expected plain dispatches on Intelligent"
+    assert calls == ["resume", ("max_charge", False)], f"Expected the hand-back retried, got {calls}"
+    assert api.control_charging is None, "Expected the charger released"
+    assert api.slot_mode_applied == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected the Intelligent wiring made, got {api.slot_mode_applied}"
+
+    # Released once, not on every poll after
+    del calls[:]
+    _ohme_run_poll(api, seconds=360)
+    assert calls == [], f"Expected no further hand-back, got {calls}"
+
+    print("PASS: a failed charger hand-back was retried")
     return 0
 
 

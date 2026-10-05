@@ -386,7 +386,7 @@ With `ohme_automatic` on, the car charging plan in Predbat comes from whoever is
 
 | Setup | Who schedules the car | The car plan in Predbat |
 | ----- | --------------------- | ----------------------- |
-| Octopus Intelligent tariff (or `ohme_automatic_octopus_intelligent: true`) | Octopus, through Ohme | Ohme's slots, priced at the Intelligent off-peak rate |
+| Octopus Intelligent tariff, unless you have set `ohme_automatic_octopus_intelligent: false` - or any tariff with it set to `true` | Octopus, through Ohme | Ohme's slots, priced at the Intelligent off-peak rate |
 | `ohme_control: true` | Predbat | Predbat's own plan, which it carries out on the charger |
 | Neither of the above | Ohme | Ohme's own schedule, priced at your normal tariff rates |
 
@@ -405,6 +405,7 @@ A few things to know about this mode:
   (**switch.predbat_octopus_intelligent_dynamic**, see [Checking Intelligent dispatches against the car](#checking-intelligent-dispatches-against-the-car)).
 - It relies on **switch.predbat_octopus_intelligent_charging** being on (the default), as the slots reach the plan the same way Octopus Intelligent slots do.
 - If `octopus_intelligent_slot` is already set to another sensor, in `apps.yaml` or by the Octopus component, Predbat leaves it alone and the Ohme schedule is not used.
+  That is what happens on an Intelligent tariff with `ohme_automatic_octopus_intelligent: false`: the Octopus component supplies the slots and their off-peak rate, not Ohme.
 
 ### Predbat-led Ohme charging
 
