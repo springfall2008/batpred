@@ -461,7 +461,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_import_cost_threshold = 99
         self.rate_import_pre_event_end = None
         self.rate_import_pre_event_threshold = None
-        self.rate_import_pre_event_minutes = set()
         self.rate_best_cost_threshold_charge = None
         self.rate_best_cost_threshold_export = None
         self.rate_average = 0
