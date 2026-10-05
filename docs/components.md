@@ -1068,6 +1068,8 @@ For each charger, with `<id>` being the Wallbox charger id:
 | `number.predbat_wallbox_<id>_max_charging_current` | Maximum charging current in A |
 | `select.predbat_wallbox_<id>_eco_smart` | Eco-Smart mode: `off`, `eco_mode` or `full_solar`. Only on chargers with Eco-Smart |
 
+Each entity's friendly name includes the name you gave the charger in the Wallbox app, for example `Wallbox Garage Power`, so two chargers are easy to tell apart. The entity ids use the charger id, which does not change if you rename the charger.
+
 Wallbox chargers cannot report the car's state of charge, so there is no battery sensor.
 
 A locked charger cannot be paused or resumed: Wallbox refuses both. Predbat therefore does not send them while the charger is locked, and logs a warning asking you to unlock it with `switch.predbat_wallbox_<id>_locked` or in the Wallbox app. Wallbox can also refuse a control for other reasons, such as a resume with nothing paused, or an account without admin rights over the charger. When that happens Predbat logs a warning with the reason Wallbox gave, and monitoring carries on.

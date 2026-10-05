@@ -1414,6 +1414,38 @@ def test_transport_get_reads_any_path():
     print("  ✓ The read-only probe sends an authenticated GET")
 
 
+def test_friendly_names_carry_the_charger_name():
+    """Every charger entity is named after its charger, so two chargers can be told apart."""
+    component = _make_component({101: _status(name="Garage"), 202: _status(name="Drive", eco={"enabled": False, "mode": 0})}, wallbox_control=True)
+    run_async(component.run(0, True))
+    entities = component.base.entities
+
+    assert entities["sensor.predbat_wallbox_101_power"]["attributes"]["friendly_name"] == "Wallbox Garage Power"
+    assert entities["sensor.predbat_wallbox_202_power"]["attributes"]["friendly_name"] == "Wallbox Drive Power"
+    assert entities["sensor.predbat_wallbox_101_status"]["attributes"]["friendly_name"] == "Wallbox Garage Status"
+    assert entities["select.predbat_wallbox_202_eco_smart"]["attributes"]["friendly_name"] == "Wallbox Drive Eco-Smart"
+    for entity_id, entity in entities.items():
+        if "_wallbox_101_" in entity_id:
+            assert entity["attributes"]["friendly_name"].startswith("Wallbox Garage "), entity_id
+        if "_wallbox_202_" in entity_id:
+            assert entity["attributes"]["friendly_name"].startswith("Wallbox Drive "), entity_id
+    # The one switch that belongs to no charger keeps its plain name
+    assert entities["switch.predbat_wallbox_control"]["attributes"]["friendly_name"] == "Wallbox Charge Control"
+    print("  ✓ Friendly names carry the charger name")
+
+
+def test_friendly_names_without_a_usable_charger_name():
+    """A charger with no name is labelled by its id, and a name that already says Wallbox is not doubled."""
+    unnamed = _make_component({101: _status(name=None)})
+    run_async(unnamed.run(0, True))
+    assert unnamed.base.entities["sensor.predbat_wallbox_101_power"]["attributes"]["friendly_name"] == "Wallbox 101 Power"
+
+    branded = _make_component({101: _status(name="My Wallbox")})
+    run_async(branded.run(0, True))
+    assert branded.base.entities["sensor.predbat_wallbox_101_power"]["attributes"]["friendly_name"] == "My Wallbox Power"
+    print("  ✓ Friendly names cope with a missing or already-branded charger name")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1492,5 +1524,7 @@ def test_wallbox(my_predbat=None):
     test_control_leaves_a_locked_charger_alone_and_warns_once()
     test_release_waits_for_a_locked_charger()
     test_transport_get_reads_any_path()
+    test_friendly_names_carry_the_charger_name()
+    test_friendly_names_without_a_usable_charger_name()
     print("=" * 70)
     return False

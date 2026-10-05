@@ -619,6 +619,18 @@ class WallboxAPI(ComponentBase):
         self.update_success_timestamp()
         return True
 
+    def charger_attributes(self, charger, key):
+        """A copy of one entity's attributes with the charger's name in the friendly name.
+
+        Entity ids carry the charger id, which never changes; the friendly name carries the
+        name the user gave the charger, so two chargers can be told apart at a glance. A
+        name that already says Wallbox is used as it stands rather than doubled up.
+        """
+        attributes = dict(wallbox_attribute_table[key])
+        label = charger.name if "wallbox" in charger.name.lower() else "Wallbox {}".format(charger.name)
+        attributes["friendly_name"] = attributes["friendly_name"].replace("Wallbox", label, 1)
+        return attributes
+
     async def publish_data(self):
         """Publish every known charger as Predbat entities."""
         if self.control_active:
@@ -626,21 +638,21 @@ class WallboxAPI(ComponentBase):
             self.dashboard_item("switch.{}_wallbox_control".format(self.prefix), state="on" if self.control_enabled else "off", attributes=wallbox_attribute_table["control"], app="wallbox")
         for charger in self.ordered_chargers():
             prefix = self.entity_prefix(charger)
-            status_attributes = dict(wallbox_attribute_table["status"])
+            status_attributes = self.charger_attributes(charger, "status")
             status_attributes.update({"status_id": charger.status_id, "name": charger.name, "serial_number": charger.serial, "part_number": charger.part_number, "software_version": charger.software_version})
-            current_attributes = dict(wallbox_attribute_table["max_charging_current"])
+            current_attributes = self.charger_attributes(charger, "max_charging_current")
             current_attributes["max"] = charger.max_available_current if charger.max_available_current >= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
 
             self.dashboard_item("sensor.{}_status".format(prefix), state=charger.status, attributes=status_attributes, app="wallbox")
-            self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=wallbox_attribute_table["power"], app="wallbox")
-            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=wallbox_attribute_table["session_energy"], app="wallbox")
-            self.dashboard_item("binary_sensor.{}_connected".format(prefix), state="on" if charger.connected else "off", attributes=wallbox_attribute_table["connected"], app="wallbox")
-            self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=wallbox_attribute_table["charging"], app="wallbox")
-            self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=wallbox_attribute_table["charging_switch"], app="wallbox")
-            self.dashboard_item("switch.{}_locked".format(prefix), state="on" if charger.locked else "off", attributes=wallbox_attribute_table["locked"], app="wallbox")
+            self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=self.charger_attributes(charger, "power"), app="wallbox")
+            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=self.charger_attributes(charger, "session_energy"), app="wallbox")
+            self.dashboard_item("binary_sensor.{}_connected".format(prefix), state="on" if charger.connected else "off", attributes=self.charger_attributes(charger, "connected"), app="wallbox")
+            self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging"), app="wallbox")
+            self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=self.charger_attributes(charger, "charging_switch"), app="wallbox")
+            self.dashboard_item("switch.{}_locked".format(prefix), state="on" if charger.locked else "off", attributes=self.charger_attributes(charger, "locked"), app="wallbox")
             self.dashboard_item("number.{}_max_charging_current".format(prefix), state=charger.max_charging_current, attributes=current_attributes, app="wallbox")
             if charger.eco_smart is not None:
-                self.dashboard_item("select.{}_eco_smart".format(prefix), state=charger.eco_smart, attributes=wallbox_attribute_table["eco_smart"], app="wallbox")
+                self.dashboard_item("select.{}_eco_smart".format(prefix), state=charger.eco_smart, attributes=self.charger_attributes(charger, "eco_smart"), app="wallbox")
 
     def held_by_lock(self, charger, once=False):
         """Is the charger locked, which makes Wallbox refuse to pause or resume it. Says why when it is.
