@@ -204,6 +204,25 @@ async def _run(my_predbat):
     api.smart_control_pending = {}
     api.intelligent_devices[ACTIVE_ID]["suspended"] = False
 
+    print("Test 5h: a poll before a change is sent keeps the change on show, and becomes the state a failure goes back to")
+    api.commands = []
+    api.smart_control_confirmed = {}
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+    await api.switch_event(active_switch, "turn_off")
+    polled = {"suspended": False}
+    api.apply_smart_control_pending(ACTIVE_ID, polled)
+    failed |= _check("t5h change kept", polled["suspended"] is True and api.smart_control_confirmed.get(ACTIVE_ID) is False, "polled {} confirmed {}".format(polled, api.smart_control_confirmed))
+    api.intelligent_devices[ACTIVE_ID] = dict(api.intelligent_devices[ACTIVE_ID], **polled)
+    await api.switch_event(active_switch, "toggle")
+    failed |= _check("t5h toggle reads the shown state", [c["value"] for c in api.commands] == [True], "commands {}".format(api.commands))
+    await api.switch_event(active_switch, "turn_off")
+    api.apply_smart_control_pending(ACTIVE_ID, {"suspended": True})
+    failed |= _check("t5h poll updates confirmed", api.smart_control_confirmed.get(ACTIVE_ID) is True, "confirmed {}".format(api.smart_control_confirmed))
+    api.async_graphql_query = AsyncMock(return_value=None)
+    await api.process_commands("acc-1")
+    failed |= _check("t5h fails back to the polled state", api.intelligent_devices[ACTIVE_ID]["suspended"] is True and ACTIVE_ID not in api.smart_control_confirmed, "device {}".format(api.intelligent_devices[ACTIVE_ID]))
+    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+
     print("Test 6: events for other entities, other services and unknown devices are ignored")
     api.commands = []
     api.smart_control_confirmed = {}

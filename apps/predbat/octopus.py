@@ -741,15 +741,20 @@ class OctopusAPI(ComponentBase):
         """
         Keep a Smart Control change we have just sent to Octopus on show until Octopus reports it (or
         SMART_CONTROL_PENDING_SECONDS pass), so a poll made straight afterwards does not flip the switch back.
+
+        A change from the switch that is not yet sent stays on show too. What the poll reports becomes the
+        state a failed send goes back to.
         """
         pending = self.smart_control_pending.get(device_id)
-        if not pending:
-            return
-        suspended, expiry = pending
-        if device.get("suspended") == suspended or datetime.now() >= expiry:
-            self.smart_control_pending.pop(device_id, None)
-        else:
-            device["suspended"] = suspended
+        if pending:
+            suspended, expiry = pending
+            if device.get("suspended") == suspended or datetime.now() >= expiry:
+                self.smart_control_pending.pop(device_id, None)
+            else:
+                device["suspended"] = suspended
+        if device_id in self.smart_control_confirmed and device_id in self.intelligent_devices:
+            self.smart_control_confirmed[device_id] = bool(device.get("suspended"))
+            device["suspended"] = self.intelligent_devices[device_id].get("suspended")
 
     def publish_smart_control_switch(self, device_id, device):
         """
