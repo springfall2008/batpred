@@ -24,7 +24,6 @@ import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 
 import GridIcon from '../components/GridIcon'
 
-import batLogoLight from '../assets/bat_logo_light.png'
 import dayHouse from '../assets/house/day-house.webp'
 import dayCar from '../assets/house/day-car.webp'
 import dayHeatPump from '../assets/house/day-heat-pump.webp'
@@ -304,6 +303,13 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
   const carbon = getOverviewCarbonValues(Boolean(plan.carbon_enable), currentRow)
   const nextStartTime = formatActionTime(actions.next.startsAt)
   const nextEndTime = formatActionTime(actions.next.endsAt)
+  const currentActionDetail = actions.current.limit !== null && ['Charge', 'Hold Charge', 'Freeze Charge'].includes(actions.current.label)
+    ? `Target ${actions.current.limit}%`
+    : null
+  const nextActionDetail = [
+    nextStartTime ? `${nextStartTime}${nextEndTime ? ` → ${nextEndTime}` : ''}` : null,
+    actions.next.limit !== null ? `Limit ${actions.next.limit}%` : null
+  ].filter(Boolean).join(' · ') || null
   const weather = powerFlow.weather
   const [weatherEffectsPreference, setWeatherEffectsPreference] = useStoredState(
     'predbat-overview-weather-effects',
@@ -427,26 +433,22 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
         </svg>
 
         <div className="overview-column overview-column-left">
-          <OverviewCard
-            className="overview-card-predbat"
-            icon={<img src={batLogoLight} alt="" />}
-            title="Predbat"
-            main={actions.current.label}
-            mainTone={actionTone(actions.current.label)}
-            mainSubvalue={actions.current.limit !== null && ['Charge', 'Hold Charge', 'Freeze Charge'].includes(actions.current.label) ? `Charge target ${actions.current.limit}%` : null}
-          >
-            <div className="overview-predbat-next">
-              <div className="overview-predbat-next-row">
-                <span>Next Action</span>
-                <strong className={actionTone(actions.next.label)}>{actions.next.label}</strong>
+          <OverviewCard className="overview-card-solar" connector="solar" icon={faSolarPanel} title="Solar" main={formatPower(powerFlow.pv_power)} mainTone={getOverviewPowerTone(powerFlow.pv_power, powerFlow.pv_generating ? 'is-solar' : '')}>
+            {weather && (
+              <div className="overview-weather">
+                <FontAwesomeIcon icon={weatherIcon(weather.state)} />
+                <span>{formatWeatherStatus(weather.state)}</span>
+                {weather.temperature !== null && <strong><FontAwesomeIcon icon={faTemperatureHalf} /> {formatTemperature(weather.temperature, weather.temperature_unit)}</strong>}
               </div>
-              {nextStartTime && <span>{nextStartTime}{nextEndTime && ` → ${nextEndTime}`}</span>}
-              {actions.next.limit !== null && <span>Limit {actions.next.limit}%</span>}
-            </div>
+            )}
+            <Detail label="Generated today" value={formatEnergy(powerFlow.totals.pv_today)} />
+            <Detail label="Forecast today" value={formatEnergy(powerFlow.pv_forecast_today)} />
           </OverviewCard>
 
           <OverviewCard className="overview-card-home" connector="home" icon={faHouse} title="Home" main={formatPower(powerFlow.house_power)} mainTone={getOverviewPowerTone(powerFlow.house_power, 'is-home')}>
             <Detail label="Used today" value={formatEnergy(powerFlow.totals.load_today)} />
+            <Detail label="Predbat Status" value={actions.current.label} tone={actionTone(actions.current.label)} subvalue={currentActionDetail} />
+            <Detail label="Next Action" value={actions.next.label} tone={actionTone(actions.next.label)} subvalue={nextActionDetail} />
           </OverviewCard>
 
           {hasCar && (
@@ -493,17 +495,6 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
         </figure>
 
         <div className="overview-column overview-column-right">
-          <OverviewCard className="overview-card-solar" connector="solar" icon={faSolarPanel} title="Solar" main={formatPower(powerFlow.pv_power)} mainTone={getOverviewPowerTone(powerFlow.pv_power, powerFlow.pv_generating ? 'is-solar' : '')}>
-            {weather && (
-              <div className="overview-weather">
-                <FontAwesomeIcon icon={weatherIcon(weather.state)} />
-                <span>{formatWeatherStatus(weather.state)}</span>
-                {weather.temperature !== null && <strong><FontAwesomeIcon icon={faTemperatureHalf} /> {formatTemperature(weather.temperature, weather.temperature_unit)}</strong>}
-              </div>
-            )}
-            <Detail label="Generated today" value={formatEnergy(powerFlow.totals.pv_today)} />
-            <Detail label="Forecast today" value={formatEnergy(powerFlow.pv_forecast_today)} />
-          </OverviewCard>
 
           <OverviewCard
             className="overview-card-battery"
@@ -544,7 +535,6 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
             <Detail label="Imported today" value={formatEnergy(powerFlow.totals.import_today)} subvalue={carbon.total} />
             <Detail label="Exported today" value={formatEnergy(powerFlow.totals.export_today)} tone="is-export" />
           </OverviewCard>
-
           {powerFlow.ashp && (
             <OverviewCard
               className={`overview-card-ashp ${heatPumpRunning ? 'is-running' : ''}`}
