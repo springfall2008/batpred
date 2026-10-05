@@ -18,7 +18,17 @@ Predbat uses the legacy interface when `web_ui` is missing. Saving `apps.yaml` r
 
 ### Configure the Overview page
 
+![image](images/web-interface-overview-view.png)
+
 Overview reads the standard grid, solar, home and battery data from your existing Predbat configuration. You don't need to duplicate those entities. The electric vehicle (EV) and air-source heat pump (ASHP) cards accept extra, optional entities.
+
+The solar card can display the current weather, and optional weather effects can be enabled on the house view. To enable, add a weather entity:
+
+```yaml
+pred_bat:
+  # Weather and temperature shown on Overview
+  weather: weather.forecast_home
+```
 
 Add the EV entries only when Predbat's supported charger integrations haven't configured them automatically. Use one list item per car, in the same order for every setting:
 
@@ -44,28 +54,7 @@ pred_bat:
     - sensor.your_ev_charger_energy_today
 ```
 
-PredHeat is optional. If you already use it in `pump` mode, Overview automatically reuses its `weather` entity and its calculated daily value from `heating_energy`. You only need to add the live readings that PredHeat does not provide. The card hides any row whose entity is missing or unavailable:
-
-```yaml
-pred_bat:
-  predheat:
-    mode: pump
-
-    # Reused for the Overview weather reading and optional effects.
-    weather: weather.forecast_home
-
-    # PredHeat calculates today's ASHP energy from this cumulative meter;
-    # Overview displays that calculated daily value.
-    heating_energy: sensor.heat_pump_energy_total
-
-  # Optional: current electrical power draw is not supplied by PredHeat.
-  ashp_power: sensor.heat_pump_power
-
-  # Optional: current mode is not supplied by PredHeat.
-  ashp_status: sensor.heat_pump_status
-```
-
-Without PredHeat, enable the card explicitly and provide a daily energy entity if one is available:
+To add an ASHP to overview, enable the card explicitly and provide a daily energy entity if one is available:
 
 ```yaml
 pred_bat:
@@ -76,11 +65,26 @@ pred_bat:
   ashp_power: sensor.heat_pump_power
   ashp_status: sensor.heat_pump_status
 
-  # Weather and temperature shown on Overview.
-  weather: weather.forecast_home
-
   # Optional daily heat-pump electricity use in kWh.
   heat_energy: sensor.heat_pump_energy_today
+```
+
+ashp_status should point to an entity that returns `off` / `hot_water` / `heating` depending on the status. An example helper for this:
+
+```yaml
+
+{% set output = states('sensor.heat_pump_energy_output') | float(0) %}
+{% set unit = state_attr('sensor.heat_pump_energy_output', 'unit_of_measurement') %}
+{% set watts = output * 1000 if unit == 'kW' else output %}
+
+{% if watts < 100 %}
+  off
+{% elif is_state('sensor.ch_or_dhw', 'HW') %}
+  hot_water
+{% else %}
+  heating
+{% endif %}
+
 ```
 
 Overview uses `predheat.weather` when PredHeat is configured. Otherwise it uses the top-level `weather` setting shown above. For compatibility with earlier test releases it will still try `weather.forecast_home` when neither is set. If the selected entity does not exist, Overview hides the weather reading, weather effects and their toggle.
