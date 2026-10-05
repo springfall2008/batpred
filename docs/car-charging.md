@@ -743,7 +743,12 @@ When cloud arrives mid-charge the sensor falls to the real surplus and your auto
 
 Battery *charging* power is not added back, so a charging battery takes the solar first and the sensor reads what is left.
 On a sunny morning with the battery filling, that is often 0.0.
-To give the car priority instead, add **battery_power** back yourself. It is negative while charging.
+To give the car priority instead, subtract the battery's charging power yourself. **battery_power** is negative while charging, so subtracting it raises the figure:
+
+```text
+{{ states('predbat.solar_surplus_power') | float(0)
+   - ([state_attr('predbat.solar_surplus_power', 'battery_power') | float(0), 0] | min) }}
+```
 
 The result is capped at **pv_power**. Nothing can be spare that was never generated.
 With correct sign conventions the arithmetic already comes to PV minus house load, so the cap never clips a real surplus.
@@ -868,7 +873,7 @@ Four entities look similar and are easy to mix up:
 
 | Entity | What it tells you |
 | --- | --- |
-| **predbat.solar_surplus_power** | Spare solar *right now*, updated about every two minutes (`INVERTER_QUICK_UPDATE_SECONDS`), and longer while a plan is being calculated |
+| **predbat.solar_surplus_power** | Spare solar *right now*, updated about every minute (`INVERTER_QUICK_UPDATE_SECONDS`), and longer while a plan is being calculated |
 | **binary_sensor.predbat_export_trigger_NAME** | Export *predicted* in the plan for a future slot - see [Triggers in apps.yaml](apps-yaml.md#triggers) |
 | **binary_sensor.predbat_force_export_slot** | A force export slot in the plan is running now, including freeze export slots where only the solar is being sold |
 | **binary_sensor.predbat_exporting** | Predbat is *commanding* the inverter to export at this moment. Off in read-only mode and while exporting is being held, so it is not a reliable way to tell that a slot is running |
