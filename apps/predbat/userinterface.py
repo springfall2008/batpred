@@ -1244,6 +1244,9 @@ class UserInterface:
                     if "_import" in item["name"]:
                         # Manual import rate
                         self.manual_rates(name, new_value=ha_value, default_rate=self.get_arg("manual_import_value"))
+                    elif "_car_deadline" in item["name"]:
+                        # A slot picked from the HA dropdown carries no "=level", so it takes the deadline default
+                        self.manual_rates(name, new_value=ha_value, default_rate=self.get_arg("manual_car_deadline_value"))
                     else:
                         self.manual_rates(name, new_value=ha_value, default_rate=self.get_arg("manual_export_value"))
                 elif item.get("api"):
@@ -1509,6 +1512,9 @@ class UserInterface:
             elif "_soc" in item["name"]:
                 # Manual soc rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_soc_value"))
+            elif "_car_deadline" in item["name"]:
+                # Car charge level promised by a one-off deadline
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_car_deadline_value"))
             else:
                 self.log("Warn: Manual rate sensor {} not recognised".format(config_item))
         else:
@@ -1653,6 +1659,9 @@ class UserInterface:
             values = new_value
         else:
             values = item.get("value", "")
+        # A select gated on "enable" (manual_car_deadline on num_cars) reads back None rather than "" until it
+        # is enabled - the same shape that crashed headless startup through manual_times() for manual_car_away
+        values = values or ""
         values = values.replace("+", "")
         values_list = []
         if values:
@@ -1745,6 +1754,11 @@ class UserInterface:
             values = new_value
         else:
             values = item.get("value", "")
+        # An item that is registered but has never been given a value reads back as None rather than
+        # "", which is what a config item gated behind an "enable" looks like before the UI has
+        # published it - and is what the headless annual bootstrap sees. Treat it as no selection
+        # rather than letting .replace() raise out of fetch_config_options().
+        values = values or ""
         values = values.replace("+", "")
         values_list = []
         if values:

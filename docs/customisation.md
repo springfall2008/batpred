@@ -804,6 +804,33 @@ _CAUTION: If you leave Predbat turned off for a long period of time then the ove
 The **select.predbat_manual_export** selector can be used to manually force Predbat to export within a slot. If you set a force export then this takes priority over force charging.
 
 The **select.predbat_manual_demand** selector is used to force Predbat to demand mode for a slot, this implies no forced grid charging or exporting of the battery.
+
+**select.predbat_manual_car_away** marks half-hour slots when the car will not be plugged in - out at work, out for the afternoon, anywhere.
+Predbat cannot know this in advance: **car_charging_planned** reports whether the car is plugged in _now_, so a plan made this morning will happily
+schedule an afternoon charge for a car that will be gone, and only find out when the afternoon arrives.
+
+A slot marked away is skipped entirely rather than shortened or repriced - if the car is not there, nothing can go into it, from cheap import or
+surplus solar alike. The charge moves to slots the car is present for, so telling Predbat the car leaves at noon lets it charge earlier and use the
+afternoon sun for the house battery instead. Like the other manual overrides it clears itself once the slot has passed.
+
+**select.predbat_manual_car_deadline** promises the car a charge level by a time, for the one-off that does not fit your everyday ready time -
+a trip at 15:00 that needs 80%, say. Set it from the plan page: click the slot's time, enter the level under **Car ready by (%)** and press
+**Set Car Ready By**. The slot shows the level with a &#9201; marker. There is only ever one: setting a new one replaces the old, and it clears
+itself once its slot has passed. **input_number.predbat_manual_car_deadline_value** (default 80%) is the level used when a slot is picked
+from the selector without one; in an automation you can set both at once in the format `Fri 15:00=80`.
+
+It is a guarantee in the same way **car_charging_plan_min_soc** by the ready time is, and the two work side by side. Free sun that lands before
+the deadline is counted first, and whatever it leaves is bought before the deadline passes - from any slot before it, cheapest first, and
+regardless of **car_charging_plan_max_price**, because you have said the charge is needed. Sun that arrives after the deadline never counts
+towards it, however much there is. Surplus solar normally goes to the house battery first, but the deadline claims the sun before it for the
+car, so Predbat does not buy for the car while banking free energy in a battery that has the rest of the day to fill.
+
+It works with **select.predbat_manual_car_away**: slots marked away are skipped, so the deadline's charge moves to slots the car is there for.
+The usual trip is exactly that - ready by 15:00, away from 15:00 - and Predbat then plans the whole promise before departure. If away time
+leaves too few slots to deliver it at your charger's rate, Predbat plans what it can and logs a warning saying how far short it will be.
+
+The level applies to the first car, and is capped at its **car_charging_limit**: the car will not charge past its own limit whatever the plan
+says, so to reach a higher level for a trip, raise the car's limit too.
 House load will be supplied from solar, or the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'Eco' Mode for GivEnergy inverters but other inverters use different terminology.
 

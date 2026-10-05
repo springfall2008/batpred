@@ -6940,6 +6940,57 @@ def get_plan_css():
         closeDropdowns();
     }
 
+    // Handle the car ready-by deadline: one level promised by one time, replacing any earlier one
+    function handleCarDeadline(time, dropdownId, isClear) {
+        let value = null;
+        if (!isClear && dropdownId) {
+            const inputElement = document.getElementById('car-deadline-' + dropdownId);
+            if (inputElement) {
+                value = inputElement.value;
+            }
+        }
+
+        const formData = new FormData();
+        formData.append('time', time);
+        formData.append('action', isClear ? 'Clear Car Deadline' : 'Set Car Deadline');
+        formData.append('rate', value || '0');
+
+        fetch('./rate_override', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const messageElement = document.createElement('div');
+                messageElement.textContent = isClear ? `Car ready-by cleared` : `Car ready by ${time} at ${value}%`;
+                messageElement.style.position = 'fixed';
+                messageElement.style.top = '65px';
+                messageElement.style.right = '10px';
+                messageElement.style.padding = '10px';
+                messageElement.style.backgroundColor = '#4CAF50';
+                messageElement.style.color = 'white';
+                messageElement.style.borderRadius = '4px';
+                messageElement.style.zIndex = '1000';
+                document.body.appendChild(messageElement);
+                setTimeout(() => {
+                    messageElement.style.opacity = '0';
+                    messageElement.style.transition = 'opacity 0.5s';
+                    setTimeout(() => messageElement.remove(), 500);
+                }, 3000);
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showErrorMessage(data.message || 'Unknown error');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showErrorMessage(error.message);
+        });
+
+        closeDropdowns();
+    }
+
     // Close dropdowns when clicking outside
     document.addEventListener("click", function(event) {
         if (!event.target.matches('.clickable-time-cell') && !event.target.matches('.clickable-state-cell') && !event.target.closest('.dropdown-content')) {
@@ -7372,8 +7423,12 @@ def get_plan_renderer_js():
             overrides.manual_export_times,
             overrides.manual_freeze_charge_times,
             overrides.manual_freeze_export_times,
-            overrides.manual_demand_times
+            overrides.manual_demand_times,
+            overrides.manual_car_away_times || []
         );
+
+        // The car ready-by deadline carries a level, so it is shown with it rather than as a bare highlight
+        const carDeadline = (overrides.manual_car_deadline || []).find(r => r.minutes === minutesFromMidnight);
 
         // Determine highlight color based on override type
         let bgColor = '#FFFFFF';
@@ -7394,10 +7449,19 @@ def get_plan_renderer_js():
         } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
             bgColor = '#D8D8D8';  // Darker gray hint
             overrideClass = 'override-freeze-export';
+        } else if ((overrides.manual_car_away_times || []).includes(minutesFromMidnight)) {
+            bgColor = '#E0E0FF';  // Light blue hint
+            overrideClass = 'override-car-away';
+        } else if (carDeadline) {
+            bgColor = '#D0E8FF';  // Sky blue hint
+            overrideClass = 'override-car-deadline';
         }
 
         let html = `<td bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell ${overrideClass}">`;
         html += timeDisplay;
+        if (carDeadline) {
+            html += ` &#9201;${carDeadline.target}%`;
+        }
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
 
@@ -7416,6 +7480,16 @@ def get_plan_renderer_js():
         }
         if (!overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
             html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
+        }
+        if (!(overrides.manual_car_away_times || []).includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Car Away')">Car Away</a>`;
+        }
+        // One ready-by deadline at a time: setting it here replaces any other
+        html += '<label>Car ready by (%):</label>';
+        html += `<input type="number" id="car-deadline-${dropdownId}" value="${carDeadline ? carDeadline.target : 80}" step="1" min="0" max="100">`;
+        html += `<button onclick="handleCarDeadline('${timeDisplay}', '${dropdownId}')">Set Car Ready By</button>`;
+        if (carDeadline) {
+            html += `<a onclick="handleCarDeadline('${timeDisplay}', null, true)">Clear Car Ready By</a>`;
         }
         if (!overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
             html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
@@ -7492,6 +7566,9 @@ def get_plan_renderer_js():
         } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
             bgColor = '#AAAAAA';
             overrideClass = 'override-freeze-export';
+        } else if ((overrides.manual_car_away_times || []).includes(minutesFromMidnight)) {
+            bgColor = '#B0B0FF';
+            overrideClass = 'override-car-away';
         }
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
