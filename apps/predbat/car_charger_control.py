@@ -37,6 +37,11 @@ def parse_dispatch_time(value):
 # A guest switch left on turns itself off after this long, for chargers that cannot tell a car was unplugged
 GUEST_CHARGING_MAX_HOURS = 12
 
+# How long chargers are left alone waiting for the Octopus or Kraken component to wire its Intelligent devices.
+# Discovery normally finishes in the first cycle or two; a component that never gets there (a failed login,
+# say) must not leave every charger uncontrolled for good
+OCTOPUS_DISCOVERY_WAIT_MINUTES = 15
+
 # The strings get_arg() reads as true for a boolean setting
 CONTROL_TRUE_STRINGS = ("on", "true", "yes", "enabled", "enable", "connected")
 
@@ -132,6 +137,8 @@ class CarChargerControl:
         # car_n -> why that car's charger is left alone ("octopus", "discovering" or "unknown"), so
         # each reason is logged once rather than every cycle, and again only when it changes
         self.charger_control_octopus_cars = {}
+        # When the wait for Octopus or Kraken discovery began, None while not waiting
+        self.charger_control_discovery_since = None
         self.charger_control_switch_prefix = switch_prefix
         # Guest charging: deliberately not persisted, so a restart puts Predbat back in charge
         self.charger_control_guest = False
@@ -195,18 +202,24 @@ class CarChargerControl:
 
         Only a component running its automatic setup ever wires them, so one with
         octopus_automatic off is never "still discovering" - waiting on it would leave the
-        charger alone for good.
+        charger alone for good. Nor is one that has not finished within OCTOPUS_DISCOVERY_WAIT_MINUTES,
+        for the same reason: a Kraken login that keeps failing never gets there.
         """
         components = getattr(self.base, "components", None)
-        if not components:
+        discovering = False
+        if components:
+            octopus = components.get_component("octopus")
+            # Kraken wires its SmartFlex devices in the same run that first succeeds - from its cache,
+            # or from a fresh discovery - so until then its slots may simply not be there yet
+            kraken = components.get_component("kraken")
+            discovering = (octopus is not None and octopus.automatic and octopus.intelligent_config_devices is None) or (kraken is not None and not kraken.api_started)
+        if not discovering:
+            self.charger_control_discovery_since = None
             return False
-        octopus = components.get_component("octopus")
-        if octopus is not None and octopus.automatic and octopus.intelligent_config_devices is None:
-            return True
-        # Kraken wires its SmartFlex devices in the same run that first succeeds - from its cache,
-        # or from a fresh discovery - so until then its slots may simply not be there yet
-        kraken = components.get_component("kraken")
-        return kraken is not None and not kraken.api_started
+        now = datetime.now()
+        if self.charger_control_discovery_since is None:
+            self.charger_control_discovery_since = now
+        return (now - self.charger_control_discovery_since).total_seconds() < OCTOPUS_DISCOVERY_WAIT_MINUTES * 60
 
     def charger_control_log_left_alone(self, car_n, why):
         """Say why a car's charger is being left alone.
@@ -220,7 +233,7 @@ class CarChargerControl:
         if why == "octopus":
             self.log("Info: {}: Octopus Intelligent drives car {}'s {}, leaving it to Octopus".format(name, car_n, noun))
         elif why == "discovering":
-            self.log("Info: {}: waiting for the Octopus component to find its devices before controlling car {}'s {}".format(name, car_n, noun))
+            self.log("Info: {}: waiting for the Octopus or Kraken component to find its devices before controlling car {}'s {}".format(name, car_n, noun))
         else:
             setting = self.charger_control_setting or "the {} control setting".format(noun)
             self.log(
@@ -415,7 +428,11 @@ class CarChargerControl:
             slots = [slots]
         if not slots or car_n >= len(slots):
             return None
-        return slots[car_n] or None
+        slot = slots[car_n]
+        # An apps.yaml default whose regex matched nothing (yet) is still its literal "re:" string - not an entity
+        if not slot or (isinstance(slot, str) and slot.startswith("re:")):
+            return None
+        return slot
 
     async def charger_control_tick(self, now):
         """Run one cycle of charger control, releasing rather than just going quiet.
@@ -514,9 +531,13 @@ class CarChargerControl:
                 self.charger_control_log_left_alone(car_n, why)
                 self.charger_control_octopus_cars[car_n] = why
             if key in self.charger_control_state:
-                # Handed over before it is forgotten, so a failed command is retried next cycle
-                await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
-                del self.charger_control_state[key]
+                if why == "octopus":
+                    # Handed over before it is forgotten, so a failed command is retried next cycle
+                    await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
+                    del self.charger_control_state[key]
+                else:
+                    # Nobody is known to be taking it over, so a stop is undone rather than left in place
+                    await self.charger_control_release_held(key, handle)
             return
         if car_n in self.charger_control_octopus_cars:
             self.log("Info: {}: car {} is no longer left to Octopus, Predbat drives the {}".format(self.charger_control_log_name, car_n, self.charger_control_noun))

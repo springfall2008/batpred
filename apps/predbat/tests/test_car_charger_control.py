@@ -14,7 +14,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_infra import run_async
-from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, parse_control_setting, parse_dispatch_time
+from car_charger_control import CarChargerControl, GUEST_CHARGING_MAX_HOURS, OCTOPUS_DISCOVERY_WAIT_MINUTES, parse_control_setting, parse_dispatch_time
 
 LONDON = pytz.timezone("Europe/London")
 
@@ -547,7 +547,7 @@ def test_octopus_rule_waits_for_octopus_discovery():
     assert component.charger_control_octopus_drives_charger(0) is None
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [], component.commands
-    assert any("waiting for the Octopus component" in line for line in component.logs), component.logs
+    assert any("waiting for the Octopus or Kraken component" in line for line in component.logs), component.logs
     assert not any(line.startswith("Warn") for line in component.logs), "Waiting for discovery is not worth a warning: {}".format(component.logs)
 
     # Discovery found no Intelligent devices - there is nothing for Octopus to drive
@@ -567,6 +567,46 @@ def test_octopus_rule_waits_for_kraken():
     component.base.components = FakeComponents(None, FakeKraken(started=True))
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], "Kraken started and wired nothing for this car: {}".format(component.commands)
+
+
+def test_octopus_rule_discovery_wait_is_bounded():
+    """A Kraken component whose first run never succeeds (a failed login, say) does not leave the charger alone for good."""
+    component = _octopus_component(None, wired=False)
+    component.base.components = FakeComponents(None, FakeKraken(started=False))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [], component.commands
+    assert any("waiting for the Octopus or Kraken component" in line for line in component.logs), component.logs
+    component.charger_control_discovery_since = datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)
+    assert component.charger_control_octopus_drives_charger(0) is False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "Predbat drives the charger once the wait is over: {}".format(component.commands)
+
+    # Discovery that finishes resets the wait, so a later restart of the component waits afresh
+    component.base.components = FakeComponents(None, FakeKraken(started=True))
+    component.charger_control_octopus_discovering()
+    assert component.charger_control_discovery_since is None
+
+
+def test_octopus_rule_cannot_tell_releases_a_held_charger():
+    """A charger Predbat holds stopped is released, not just let go, when nobody is known to take it over."""
+    component = _octopus_component(wired=False)
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {}
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("a", "release", False)], "A stopped charger is started again, not stranded: {}".format(component.commands)
+    assert component.charger_control_state == {}
+
+
+def test_octopus_rule_unmatched_regex_is_not_a_sensor():
+    """The apps.yaml default's literal "re:" string, before its regex has matched, is not a dispatch sensor to ask."""
+    component = _octopus_component(wired=False)
+    component.args["octopus_intelligent_slot"] = ["re:(binary_sensor.octopus_energy_([0-9a-z_]+|)_intelligent_dispatching)"]
+    assert component.charger_control_octopus_drives_charger(0) is False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    assert not any(line.startswith("Warn") for line in component.logs), component.logs
 
 
 def test_octopus_rule_does_not_wait_without_octopus_automatic():
@@ -714,6 +754,9 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_waits_for_octopus_discovery()
     test_octopus_rule_does_not_wait_without_octopus_automatic()
     test_octopus_rule_waits_for_kraken()
+    test_octopus_rule_discovery_wait_is_bounded()
+    test_octopus_rule_cannot_tell_releases_a_held_charger()
+    test_octopus_rule_unmatched_regex_is_not_a_sensor()
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
     test_guest_charging_releases_and_resumes()
