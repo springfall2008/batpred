@@ -822,6 +822,9 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     Driving the whole of fetch_sensor_data() would need the entire sensor/Octopus/Axle surface stood
     up, so assert on the source order instead. That is weaker than a behavioural test, but it is the
     property that actually matters here and it fails loudly if anyone moves either line.
+
+    It matches exact source strings, so reformatting or renaming any of these lines also fails it with
+    no change in behaviour. Then update the needles below to the new text; the order is what matters.
     """
     print("**** test_fetch_snapshots_are_taken_in_the_right_order ****")
     failed = False

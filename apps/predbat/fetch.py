@@ -2441,45 +2441,13 @@ class Fetch:
 
     def rate_minmax_excluding_saving(self, rates, saving_minutes, rate_base):
         """
-        Work out min/max/average over the forecast window, mapping any saving-session/free-slot/Axle
-        minute back to its own pre-event base rate rather than the boosted or discounted one it
-        currently holds in `rates` (GH#5050).
+        Work out min/max/average over the forecast window at the tariff's own prices
 
-        saving_minutes (rate_import_saving_minutes/rate_export_saving_minutes) is a frozen set of
-        minutes load_saving_slot()/load_free_slot()/load_axle_slot() tagged, captured right after
-        those calls and before basic_rates()/apply_manual_rates() run - NOT the live
-        rate_import_replicated/rate_export_replicated dict, which a later override active during the
-        same session (a documented, supported combination) can overwrite on the very same minute,
-        losing the "this was a saving minute" provenance a live-dict check would need (#5052 review).
-
-        rate_base (rate_import_pre_saving/rate_export_pre_saving) is `rates` as it would be with no
-        saving/free/Axle session: snapshotted just before the session loaders run, then given the same
-        overrides and manual rates as `rates` by apply_rate_overrides() - already computed on every real fetch cycle whenever
-        `rates` is non-empty, so this is a straight lookup rather than a second pass over `rates` to
-        reconstruct it. Carrying the overrides matters: a user who overrides a session minute (a fixed
-        50p to discourage charging, or an increment on top of the event) must see that override in the
-        threshold stats, not have it capped back to the bare tariff (#5163 review). On the import side
-        the snapshot is taken AFTER the IOG dispatch overlay, not from rate_import_base which predates
-        rate_add_io_slots(): capping a saving minute against the pre-IOG curve would discard a
-        legitimate dispatch discount wherever a session and a dispatch slot overlap (#5163 review).
-        Export has no IOG overlay, so its snapshot starts from rate_export_base.
-
-        Only ever caps a tagged minute DOWN to its base rate, never raises it - the "saving" tag
-        covers two economically opposite things: an event REWARD added on top of the tariff rate (a
-        synthetic high above the base that should not raise the threshold above every genuine tariff
-        rate) and a free/discounted session, which SUBTRACTS from the rate (a genuinely cheap slot
-        the automatic threshold should still be free to pick as "low rate" - capping it back up to
-        the base rate would throw the real discount away and could make rate_max == rate_min on an
-        otherwise-flat tariff, pushing the automatic threshold above every rate).
-
-        Falls back to the plain (unfiltered) min/max/average when rate_base is empty/unavailable, so
-        the fallback is exact rather than approximate. annual.py always installs a different tariff, and
-        compare.py does whenever a tariff supplies its own rates for a side; both clear that side's
-        snapshot AND saving_minutes together, since offsets into the live tables would map unrelated
-        minutes of the new tariff. A compare tariff that reuses the live rates keeps the live sets, which
-        still describe them. Either reset alone would be enough today - an empty dict short-circuits here,
-        and an empty set means no minute is ever looked up - but they describe the same tariff and are
-        kept in step so a future caller cannot end up with one without the other.
+        Each minute in saving_minutes (the minutes the saving/free/Axle loaders tagged, frozen before any
+        override can overwrite the tag) is capped down to its rate in rate_base, which is `rates` without
+        the session but with the same overrides. Capping only goes down, so an event reward is removed but
+        a free or discounted session still counts as cheap. A session minute the tariff has no rate for
+        is skipped. With no rate_base this is the plain min/max/average.
         """
         if not rate_base:
             return self.rate_minmax(rates)[:3]
