@@ -1256,7 +1256,7 @@ class Fetch:
             # rate_import_base is built further up
             # (ahead of rate_add_io_slots), so capping a saving minute against that would discard a
             # legitimate IOG discount wherever a session and a dispatch slot overlap, and the automatic
-            # threshold scan could then miss a genuinely cheap slot (#5163 review).
+            # threshold scan could then miss a genuinely cheap slot.
             self.rate_import_pre_saving = import_rates.copy()
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -1266,7 +1266,7 @@ class Fetch:
             # their own "increment"/"user" tag on the same minute - a supported combination (an
             # override active during a saving session). set_rate_thresholds() reads this frozen set,
             # not the live rate_import_replicated dict, so a later overwrite here can't erase the
-            # "this was a saving minute" provenance it depends on (GH#5050, #5052 review).
+            # "this was a saving minute" provenance it depends on (GH#5050).
             self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
             import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
                 import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated
@@ -1289,13 +1289,13 @@ class Fetch:
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
             # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
             # rather than aliased so the two can never be corrupted together by a future in-place
-            # mutation of either (#5163 review).
+            # mutation of either.
             self.rate_export_pre_saving = self.rate_export_base.copy()
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
-            # See the import block's equivalent comment above (GH#5050, #5052 review).
+            # See the import block's equivalent comment above (GH#5050).
             self.rate_export_saving_minutes = {minute for minute, tag in self.rate_export_replicated.items() if tag == "saving"}
             export_rates, self.rate_export_pre_saving = self.apply_rate_overrides(
                 export_rates, self.rate_export_pre_saving, self.rate_export_saving_minutes, self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.manual_export_rates, False, self.rate_export_replicated
@@ -2143,7 +2143,7 @@ class Fetch:
         any saving/free/Axle session - so it stays "these rates without the session". Otherwise
         rate_minmax_excluding_saving() would cap an overridden session minute (a fixed 50p to
         discourage charging in the session, say) back to the bare tariff and the override would
-        drop out of the threshold stats (#5163 review). With no saving minutes nothing reads
+        drop out of the threshold stats. With no saving minutes nothing reads
         pre_saving, so it is left alone rather than logging every override twice each cycle.
         """
         rates = self.basic_rates(override_items, rtype, rates, rate_replicate)

@@ -84,7 +84,7 @@ class Compare:
 
         # The base rates are the live cycle's, so the live saving-minute sets and pre-saving snapshots
         # captured by run_all() still describe them (same cycle, same minute offsets). Start from those;
-        # a side whose rates this tariff replaces has them cleared below (#5163 review).
+        # a side whose rates this tariff replaces has them cleared below.
         live_saving = self.live_saving_state or {}
         pb.rate_import_saving_minutes = set(live_saving.get("import_minutes", set()))
         pb.rate_export_saving_minutes = set(live_saving.get("export_minutes", set()))
