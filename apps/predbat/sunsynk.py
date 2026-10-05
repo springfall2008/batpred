@@ -79,7 +79,9 @@ from sunsynk_const import (
     SUNSYNK_CACHE_CONFIG,
     SUNSYNK_CACHE_RATINGS,
     SUNSYNK_CACHE_CONTROL,
+    SUNSYNK_CACHE_APPLIED_PAYLOAD,
     SUNSYNK_RESTORE_MAX_CONTROL,
+    SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE,
     encode_setting,
     rsa_encrypt_pkcs1v15,
 )
@@ -1387,15 +1389,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
 
     async def save_control(self):
-        """Persist the applied-payload cache used for write change detection, and control_active.
+        """Persist the payload and ownership caches separately.
 
-        Without control_active surviving a restart, _reconcile_control() stays
-        gated off for every inverter until a fresh battery_schedule_charge_write event happens to
-        arrive - silently skipping every write, including one meant to stop an export already in
-        progress - until something unrelated re-arms it. alphaess.py's save_control/restore_state
-        already persists control_active for exactly this reason; this mirrors it.
+        The payload cache is a short-lived write-detection cache; control_active is a separate
+        ownership flag that survives longer so _reconcile_control() can resume automatic
+        re-application after a restart or outage.
         """
-        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload, "control_active": sorted(self.control_active)})
+        await self.save_cache(SUNSYNK_CACHE_APPLIED_PAYLOAD, {"applied_payload": self.applied_payload})
+        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"control_active": sorted(self.control_active)})
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's clock from its file age.
@@ -1442,36 +1443,45 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if ratings:
             self.device_rated_power = ratings.get("device_rated_power", {}) or {}
 
-        # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
-        # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
-        # control_active is restored alongside applied_payload, not just it: control_active is
-        # what actually lets _reconcile_control() write at all, so restoring
-        # applied_payload without it would still leave every inverter silently unmanaged after a
-        # restart. Past the age bound both are dropped together, so a stale cache still forces a
-        # fresh write-button press to recommit, rather than trusting old control state indefinitely.
-        control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
-        if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
-            control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
-            self.applied_payload = control.get("applied_payload", {}) or {}
-            stored_active = control.get("control_active")
-            if isinstance(stored_active, list):
-                self.control_active = set(stored_active)
-            else:
-                # A cache written before this key existed carries applied_payload alone. Restoring
-                # that half on its own would preserve the very bug this fix is for through the one
-                # restart that installs the fix, so infer the missing half from applied_payload.
-                # Its keys are a safe lower bound and cannot arm an inverter Predbat never drove:
-                # apply_settings is only reached through the write button, which adds to
-                # control_active first, or through _reconcile_control(), which is
-                # already gated on it. The reverse is not true - a press whose write returned False
-                # leaves control_active set with no applied_payload entry - so this restores a
-                # subset, never a superset, and control_enable/read-only still gate every write.
-                self.control_active = set(self.applied_payload.keys())
-        elif control_age is not None:
-            self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
+        await self._restore_control_state()
 
         if not self._restore_had_error:
             self._cache_restored = True
+
+    async def _restore_control_state(self):
+        """Restore the short-lived applied payload and longer-lived control ownership."""
+        payload_age = await self.age_cache(SUNSYNK_CACHE_APPLIED_PAYLOAD)
+        payload = await self.load_cache(SUNSYNK_CACHE_APPLIED_PAYLOAD)
+        applied = payload.get("applied_payload", {})
+
+        control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
+        control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
+        stored_active = control.get("control_active")
+
+        # legacy applied_payload was stored in the control cache, so if the payload cache is
+        # missing but the control cache has it, restore it from there.
+        if "applied_payload" not in payload and "applied_payload" in control:
+            legacy_payload = control["applied_payload"]
+            if isinstance(legacy_payload, dict):
+                applied = legacy_payload
+            if payload_age is None:
+                payload_age = control_age
+
+        payload_is_fresh = payload_age is not None and payload_age <= SUNSYNK_RESTORE_MAX_CONTROL
+        self.applied_payload = applied if payload_is_fresh and isinstance(applied, dict) else {}
+        if payload_age is not None and not payload_is_fresh:
+            self.log(f"Info: Sunsynk control payload cache is {payload_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
+
+        ownership_is_fresh = control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE
+        if not ownership_is_fresh:
+            self.control_active = set()
+            if control_age is not None:
+                self.log(f"Info: Sunsynk control ownership cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE}), requiring a fresh write")
+        elif isinstance(stored_active, list):
+            self.control_active = set(stored_active)
+        elif isinstance(applied, dict):
+            # Legacy caches inferred ownership from payload keys before control_active existed.
+            self.control_active = set(applied)
 
     def tier_expired(self, tier, ttl_minutes):
         """Return True if a tier has never run or is older than its TTL."""
