@@ -31,7 +31,7 @@ constant or an hourly profile. Every setting lives in one apps.yaml block:
       soc_initial: 50           # %
       pv_peak: 4.0              # kW, clear-sky curve peak when there is no forecast
       pv_scaling: 1.0           # applied to the forecast or curve
-      load: 0.4                 # kW constant, or a list of 24 hourly kW values
+      load: 0.4                 # kW constant, or a list of kW values spread evenly across the day (e.g. 24 hourly)
 
 The model is deliberately independent of Predbat's prediction engine, so it can catch a prediction that
 disagrees with what an inverter would actually do.
@@ -198,10 +198,10 @@ def clear_sky_pv(params, minute_of_day):
 
 
 def load_at(params, minute_of_day):
-    """The configured load at minute_of_day: a constant kW, or one of 24 hourly kW values."""
+    """The configured load at minute_of_day: a constant kW, or a list of kW values spread evenly across the day (24 hourly, 288 five-minute, ...)."""
     load = params["load"]
     if isinstance(load, (list, tuple)) and load:
-        return float(load[(minute_of_day // 60) % len(load)])
+        return float(load[(minute_of_day % (24 * 60)) * len(load) // (24 * 60)])
     return float(load)
 
 

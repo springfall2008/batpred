@@ -1065,6 +1065,47 @@ def capture_candidate(my_predbat):
     return captured[-1] if captured else None
 
 
+# The plan lines a trace keeps: the optimiser's passes, the candidate it reached and the adoption decision. The PV total
+# is left out because the live log prints it at a different point in the run from the replay.
+TRACE_RE = re.compile(
+    r"Recompute is saving previous plan|Recompute, previous plan is invalid|Region optimisation pass|Plan pass optimisation finished"
+    r"|Export more solar|Swap (export|charge) optimisation finished|Pruned \d+ dead|Export windows filtered|Filtered charge windows"
+    r"|Previous plan best metric|significantly better|less fragmented|Rate thresholds"
+)
+LIVE_RUN_LABEL_RE = re.compile(r"PredBat - update at (\S+ \d\d:\d\d)")
+REPLAY_RUN_LABEL_RE = re.compile(r"Replay of run at (\S+ \d\d:\d\d)")
+LOG_STAMP_RE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+: ")
+
+
+def plan_trace(lines, replay=False):
+    """Cut log lines into runs and keep each run's plan lines, without timestamps, as {run label: [lines]}.
+
+    A live log's runs start at "PredBat - update", a replay's own log's at "Replay of run at". Repeated run times
+    are numbered (#2, #3) so the two line up, and the midnight run stops at the tariff comparison, as none of
+    that is the live plan.
+    """
+    marker = REPLAY_RUN_LABEL_RE if replay else LIVE_RUN_LABEL_RE
+    trace, seen = {}, {}
+    current = None
+    for line in lines:
+        found = marker.search(line)
+        if found:
+            label = found.group(1)
+            seen[label] = seen.get(label, 0) + 1
+            current = label if seen[label] == 1 else "{} #{}".format(label, seen[label])
+            trace[current] = []
+        elif current is not None and COMPARE_RE.search(line):
+            current = None
+        elif current is not None and TRACE_RE.search(line):
+            trace[current].append(LOG_STAMP_RE.sub("", line.rstrip("\n")))
+    return trace
+
+
+def trace_differences(live, replayed):
+    """Return the replayed runs whose plan lines differ from the live log's, as [(label, live lines, replayed lines)]."""
+    return [(label, live.get(label), lines) for label, lines in replayed.items() if lines and live.get(label) != lines]
+
+
 def first_window(windows):
     """Return the first window as a short string, or '-' if there is none."""
     if not windows:
