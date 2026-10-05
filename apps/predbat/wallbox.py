@@ -569,6 +569,82 @@ class WallboxAPI(ComponentBase):
             if charger.eco_smart is not None:
                 self.dashboard_item("select.{}_eco_smart".format(prefix), state=charger.eco_smart, attributes=wallbox_attribute_table["eco_smart"], app="wallbox")
 
+    def charger_for_entity(self, entity_id):
+        """Find the charger an entity belongs to, or None.
+
+        The trailing underscore anchors the match to a whole id, so charger 10 cannot
+        claim charger 101's entities.
+        """
+        for charger in self.chargers.values():
+            if "{}_".format(self.entity_prefix(charger)) in entity_id:
+                return charger
+        return None
+
+    def api_id(self, charger):
+        """The id in the form the API listed it, for a normalised charger."""
+        for charger_id in self.charger_ids:
+            if str(charger_id) == charger.charger_id:
+                return charger_id
+        return charger.charger_id
+
+    async def switch_event(self, entity_id, service):
+        """Queue a switch service call for the run loop."""
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def number_event(self, entity_id, value):
+        """Queue a number change for the run loop."""
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def select_event(self, entity_id, value):
+        """Queue a select change for the run loop."""
+        self.queued_events.append((self.select_event_handler, entity_id, value))
+
+    async def switch_event_handler(self, entity_id, service):
+        """Pause/resume or lock/unlock in response to a charger switch."""
+        if service not in ("turn_on", "turn_off"):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger:
+            return
+        turn_on = service == "turn_on"
+        if entity_id.endswith("_charging"):
+            self.log("Info: wallbox: {} charging on {}".format("resuming" if turn_on else "pausing", charger.name))
+            if turn_on:
+                await self.transport.resume(self.api_id(charger))
+            else:
+                await self.transport.pause(self.api_id(charger))
+        elif entity_id.endswith("_locked"):
+            self.log("Info: wallbox: {} {}".format("locking" if turn_on else "unlocking", charger.name))
+            await self.transport.set_locked(self.api_id(charger), turn_on)
+
+    async def number_event_handler(self, entity_id, value):
+        """Set the maximum charging current, clamped to what the charger allows."""
+        if not entity_id.endswith("_max_charging_current"):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger:
+            return
+        try:
+            amps = int(float(value))
+        except (TypeError, ValueError):
+            self.log("Warn: wallbox: ignoring charging current '{}' for {}".format(value, charger.name))
+            return
+        upper = charger.max_available_current if charger.max_available_current >= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
+        amps = max(MIN_CHARGING_CURRENT, min(upper, amps))
+        self.log("Info: wallbox: setting {} maximum charging current to {}A".format(charger.name, amps))
+        await self.transport.set_max_charging_current(self.api_id(charger), amps)
+
+    async def select_event_handler(self, entity_id, value):
+        """Set the Eco-Smart mode on a charger that supports it."""
+        if not entity_id.endswith("_eco_smart") or value not in ECO_SMART_OPTIONS:
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger or charger.eco_smart is None:
+            return
+        self.log("Info: wallbox: setting {} Eco-Smart to {}".format(charger.name, value))
+        await self.transport.set_eco_smart(self.api_id(charger), value)
+
+
 
 async def run_wallbox_cli(args):  # pragma: no cover
     """Sign in, list the chargers, print each one's status and optionally send one control."""

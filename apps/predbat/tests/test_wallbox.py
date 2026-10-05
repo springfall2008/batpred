@@ -649,6 +649,123 @@ def test_component_rate_limit_on_first_run_fails():
     print("  ✓ A rate limit on the first run fails it and the retry polls")
 
 
+def _started_component(statuses=None, **overrides):
+    """A component that has completed its first poll, with the transport call log cleared."""
+    component = _make_component(statuses, **overrides)
+    run_async(component.run(0, True))
+    component.transport.calls = []
+    return component
+
+
+def test_controls_queue_rather_than_call():
+    """An event only queues; the API call happens in the next run(), followed by a fresh poll."""
+    component = _started_component()
+    run_async(component.switch_event("switch.predbat_wallbox_101_charging", "turn_off"))
+    assert component.transport.calls == [] and len(component.queued_events) == 1
+
+    run_async(component.run(60, False))
+    assert component.transport.calls[0] == ("pause", 101)
+    assert ("get_status", 101) in component.transport.calls, "A control is followed by a re-poll even between polls"
+    assert component.queued_events == []
+    print("  ✓ Controls are queued and followed by a re-poll")
+
+
+def test_switch_controls():
+    """The charging and lock switches map to resume/pause and lock/unlock."""
+    cases = [
+        ("switch.predbat_wallbox_101_charging", "turn_on", ("resume", 101)),
+        ("switch.predbat_wallbox_101_charging", "turn_off", ("pause", 101)),
+        ("switch.predbat_wallbox_101_locked", "turn_on", ("set_locked", 101, True)),
+        ("switch.predbat_wallbox_101_locked", "turn_off", ("set_locked", 101, False)),
+    ]
+    for entity_id, service, expected in cases:
+        component = _started_component()
+        run_async(component.switch_event_handler(entity_id, service))
+        assert component.transport.calls == [expected], (entity_id, service, component.transport.calls)
+
+    component = _started_component()
+    run_async(component.switch_event_handler("switch.predbat_wallbox_101_charging", "toggle"))
+    run_async(component.switch_event_handler("switch.predbat_wallbox_999_charging", "turn_on"))
+    run_async(component.switch_event_handler("switch.predbat_wallbox_101_something", "turn_on"))
+    assert component.transport.calls == [], "Unknown services, chargers and entities send nothing"
+    print("  ✓ Switch controls send the right calls")
+
+
+def test_number_control_clamps_and_ignores_junk():
+    """The charging current is clamped to 6..max available, and a non-number is ignored."""
+    component = _started_component()
+    run_async(component.number_event_handler("number.predbat_wallbox_101_max_charging_current", 16))
+    run_async(component.number_event_handler("number.predbat_wallbox_101_max_charging_current", "20.0"))
+    run_async(component.number_event_handler("number.predbat_wallbox_101_max_charging_current", 2))
+    run_async(component.number_event_handler("number.predbat_wallbox_101_max_charging_current", 500))
+    assert component.transport.calls == [("set_max_charging_current", 101, 16), ("set_max_charging_current", 101, 20), ("set_max_charging_current", 101, 6), ("set_max_charging_current", 101, 32)]
+
+    component.transport.calls = []
+    run_async(component.number_event_handler("number.predbat_wallbox_101_max_charging_current", "junk"))
+    run_async(component.number_event_handler("number.predbat_wallbox_101_max_charging_current", None))
+    run_async(component.number_event_handler("number.predbat_wallbox_101_other", 16))
+    assert component.transport.calls == [], "Junk values and other number entities send nothing"
+    print("  ✓ Charging current is clamped and junk is ignored")
+
+
+def test_select_control():
+    """Eco-Smart accepts only its three options, and only on a charger that supports it."""
+    component = _started_component({101: _status(eco={"enabled": False, "mode": 0})})
+    run_async(component.select_event_handler("select.predbat_wallbox_101_eco_smart", "full_solar"))
+    run_async(component.select_event_handler("select.predbat_wallbox_101_eco_smart", "turbo"))
+    assert component.transport.calls == [("set_eco_smart", 101, "full_solar")]
+
+    unsupported = _started_component()
+    run_async(unsupported.select_event_handler("select.predbat_wallbox_101_eco_smart", "eco_mode"))
+    assert unsupported.transport.calls == []
+    print("  ✓ Eco-Smart select sends only valid modes to chargers that support it")
+
+
+def test_control_refused_for_rights_warns_once():
+    """A rights refusal warns once across repeated attempts and does not fail the cycle."""
+    component = _started_component()
+    for _ in range(2):
+        component.transport.errors[("set_locked", 101, True)] = WallboxPermissionError("403")
+        run_async(component.switch_event("switch.predbat_wallbox_101_locked", "turn_on"))
+        assert run_async(component.run(60, False)) is True
+    assert len([message for message in component.log_messages if "admin rights" in message]) == 1
+    print("  ✓ A rights refusal warns once and monitoring continues")
+
+
+def test_control_failure_is_logged_and_not_retried():
+    """An API failure on a control is logged, dropped from the queue, and the cycle still succeeds."""
+    component = _started_component()
+    component.transport.errors[("pause", 101)] = WallboxApiError("HTTP 500")
+    run_async(component.switch_event("switch.predbat_wallbox_101_charging", "turn_off"))
+    assert run_async(component.run(60, False)) is True
+    assert _logged(component, "control failed") and component.queued_events == []
+    print("  ✓ A failed control is logged and dropped")
+
+
+def test_control_survives_a_rate_limit():
+    """A control that hits the rate limit stays queued and is sent after the back-off."""
+    component = _started_component()
+    component.transport.errors[("pause", 101)] = WallboxRateLimitError("429")
+    run_async(component.switch_event("switch.predbat_wallbox_101_charging", "turn_off"))
+    run_async(component.run(60, False))
+    assert len(component.queued_events) == 1 and component.skip_cycles == 2
+
+    component.skip_cycles = 0
+    component.transport.calls = []
+    run_async(component.run(120, False))
+    assert component.transport.calls[0] == ("pause", 101) and component.queued_events == []
+    print("  ✓ A rate limited control is retried after the back-off")
+
+
+def test_charger_for_entity_requires_a_whole_id():
+    """Charger 10 must not claim charger 101's entities."""
+    component = _started_component({10: _status(), 101: _status()})
+    assert component.charger_for_entity("switch.predbat_wallbox_101_charging").charger_id == "101"
+    assert component.charger_for_entity("switch.predbat_wallbox_10_charging").charger_id == "10"
+    assert component.charger_for_entity("switch.predbat_wallbox_control") is None
+    print("  ✓ Entities resolve to a whole charger id")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -683,5 +800,13 @@ def test_wallbox(my_predbat=None):
     test_component_auth_failure()
     test_component_rate_limit_backoff()
     test_component_rate_limit_on_first_run_fails()
+    test_controls_queue_rather_than_call()
+    test_switch_controls()
+    test_number_control_clamps_and_ignores_junk()
+    test_select_control()
+    test_control_refused_for_rights_warns_once()
+    test_control_failure_is_logged_and_not_retried()
+    test_control_survives_a_rate_limit()
+    test_charger_for_entity_requires_a_whole_id()
     print("=" * 70)
     return False
