@@ -239,6 +239,9 @@ class OhmeAPI(ComponentBase):
         self.control_active = False
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
+        # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so
+        # Octopus schedules the charge and its own dispatches are the plan, see octopus_intelligent_wanted()
+        self.octopus_other_device = False
         # How the car slot args are wired to the session slots, None when they are not - see update_slot_mode()
         self.slot_mode = None
         # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
@@ -338,7 +341,7 @@ class OhmeAPI(ComponentBase):
             self.log("Warn: Ohme API: ohme_control needs ohme_automatic set to register the car, charge control is disabled")
             return
         if octopus_intelligent:
-            self.log("Warn: Ohme API: ohme_control is ignored while the Intelligent slots come from Ohme - Octopus already schedules the charge")
+            self.log("Warn: Ohme API: ohme_control is ignored on Octopus Intelligent - Octopus already schedules the charge")
             return
         self.control_active = True
         self.log("Info: Ohme API: Predbat-led charge control enabled")
@@ -497,10 +500,19 @@ class OhmeAPI(ComponentBase):
         control. Left unset it is auto-detected, but only when ohme_automatic is on - otherwise
         enabling this would start rewiring the config of every existing Ohme user who has asked
         Predbat for nothing.
+
+        Detection needs more than an Intelligent tariff: it is the device Octopus Intelligent drives
+        that says whose slots are the dispatches (#5402). Where that is the car itself - a BMW or a
+        Volkswagen linked to Octopus directly - Octopus schedules the charge through the car and the
+        Ohme is only the socket, so Ohme's session has nothing to do with what Octopus bills as
+        off-peak. The slots are then left to the Octopus component, and octopus_other_device is set
+        so nothing of Ohme's stands in for them - see charger_slots_wanted() and update_slot_mode().
         """
         if self.ohme_automatic_octopus_intelligent is not None:
+            self.octopus_other_device = False
             return bool(self.ohme_automatic_octopus_intelligent)
         if not self.ohme_automatic:
+            self.octopus_other_device = False
             return False
 
         # OctopusAPI has already detected this by the time we first run - it sits earlier in
@@ -512,7 +524,38 @@ class OhmeAPI(ComponentBase):
             # fetches. This is asked again on every poll, so an answer already given is kept rather
             # than dropping an Intelligent car's cheap rate over a gap in the account data
             return bool(self.octopus_intelligent)
-        return bool(octopus.is_intelligent_go_tariff(tariff_code))
+        if not octopus.is_intelligent_go_tariff(tariff_code):
+            self.octopus_other_device = False
+            return False
+
+        # The devices Octopus Intelligent is live on. OctopusAPI keeps the last known set through a
+        # failed poll, and holds only LIVE devices, so this does not flap with the API. A suspended
+        # device is one the customer has turned smart charging off for: Octopus is not scheduling it,
+        # which is also why OctopusAPI.automatic_config() leaves it out of its own car slot wiring
+        devices = list((octopus.get_intelligent_devices() or {}).values())
+        active = [device for device in devices if not device.get("suspended")]
+        self.octopus_other_device = False
+        if any(self.is_ohme_charger(device) for device in active):
+            return True
+        if active:
+            # Octopus is driving something else, and wires the car slots to its dispatches itself
+            self.octopus_other_device = True
+            return False
+        if devices:
+            # Every device is suspended, so Octopus is scheduling nothing and there are no dispatches
+            # to take from anyone. Whatever charging happens is on the charger's own schedule
+            return False
+        # An Intelligent tariff with no Intelligent device at all. Octopus has nothing to wire the car
+        # slots to, so Ohme's slots are the only record of the charge there is: keep taking them, as
+        # was done before the device was looked at
+        return True
+
+    @staticmethod
+    def is_ohme_charger(device):
+        """
+        Is this Octopus Intelligent device an Ohme charger, going by what Octopus says it is.
+        """
+        return bool(device.get("is_charger")) and str(device.get("provider") or "").strip().lower() == "ohme"
 
     async def update_slot_mode(self):
         """
@@ -525,15 +568,19 @@ class OhmeAPI(ComponentBase):
         Only decides: run() wires the args to match with apply_slot_mode(), once the slots have
         been published the new way.
         """
+        was_other_device = self.octopus_other_device
         octopus_intelligent = self.octopus_intelligent_wanted()
-        if octopus_intelligent != self.octopus_intelligent:
+        if octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device:
             if octopus_intelligent:
                 self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
+            elif self.octopus_other_device:
+                self.log("Info: Ohme API: Octopus Intelligent is driving another device, not this charger - leaving the car slots to Octopus")
             elif self.octopus_intelligent is not None:
                 self.log("Info: Ohme API: Octopus Intelligent is no longer in use, the Ohme slots no longer carry the Intelligent rate")
             self.octopus_intelligent = octopus_intelligent
-            # Predbat-led control is ruled out by Intelligent, so it follows the same change
-            self.enable_control(octopus_intelligent)
+            # Predbat-led control is ruled out wherever Octopus schedules the charge, whichever device
+            # it does that through, so it follows the same change
+            self.enable_control(octopus_intelligent or self.octopus_other_device)
 
         # Predbat has stood down but is still holding the charger: hand it back. Checked on every
         # poll rather than only on the change, as release_charger() clears control_charging last -
@@ -576,9 +623,10 @@ class OhmeAPI(ComponentBase):
         used as the plan instead, as car load only - they earn no cheap rate on any other tariff.
 
         Left alone when the car slots are already wired to something else, whether in apps.yaml or
-        by the Octopus component for its own Intelligent devices.
+        by the Octopus component for its own Intelligent devices. Never used while Octopus
+        Intelligent drives another device: Octopus schedules that charge, not Ohme.
         """
-        if not self.ohme_automatic or octopus_intelligent or self.control_active:
+        if not self.ohme_automatic or octopus_intelligent or self.octopus_other_device or self.control_active:
             self.charger_slots_blocked = None
             return False
         existing = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)

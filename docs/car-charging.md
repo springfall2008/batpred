@@ -364,9 +364,21 @@ If you have already set `car_charging_now` in `apps.yaml` - to your car's own ch
 The car's battery size and target charge level are left to your existing `car_charging_battery_size` and `car_charging_limit` settings, as Ohme cannot report them.
 
 **ohme_automatic_octopus_intelligent** takes the Octopus Intelligent car charging slots from Ohme rather than from Octopus Intelligent directly, by pointing `octopus_intelligent_slot`,
-`octopus_ready_time` and `octopus_charge_limit` at the Ohme entities. Left unset it is auto-detected: if `ohme_automatic` is on and the Octopus component reports an Intelligent tariff,
-Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no Octopus component for Predbat to detect from), `false` forces it
-off so the slots come from Octopus directly.
+`octopus_ready_time` and `octopus_charge_limit` at the Ohme entities. Left unset it is auto-detected: if `ohme_automatic` is on, the Octopus component reports an Intelligent tariff and
+the device Octopus Intelligent controls is your Ohme charger, Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no
+Octopus component for Predbat to detect from), `false` forces it off so the slots come from Octopus directly.
+
+Which device Octopus Intelligent controls matters, because that is the device Octopus schedules the charge through:
+
+- **Your Ohme charger** - Ohme's slots are the Octopus dispatches, so Predbat takes them from Ohme.
+- **Your car** (a BMW, Mini or Volkswagen linked to Octopus directly, say) or another make of charger - Octopus schedules the charge through that device and the Ohme is just the socket.
+  Predbat leaves the car slots, ready time and charge limit with the Octopus component, and does not use Ohme's schedule at all. The Ohme is still registered as the charger, so its
+  power and energy readings are used. `ohme_control` is ignored here too, as Octopus is already scheduling the charge.
+- **Smart charging suspended** on every device in the Octopus app - Octopus is not scheduling anything, so there are no dispatches. Predbat uses Ohme's own schedule at your normal
+  tariff rates, as described in [Which car charging plan Predbat shows](#which-car-charging-plan-predbat-shows) below.
+- **No Intelligent device on the account at all** - Predbat takes the slots from Ohme, as Octopus has nothing of its own to offer.
+
+Predbat checks this every two minutes, so linking a different device to Octopus Intelligent is picked up without a restart.
 
 ```yaml
   ohme_login: !secret ohme_login
@@ -386,7 +398,8 @@ With `ohme_automatic` on, the car charging plan in Predbat comes from whoever is
 
 | Setup | Who schedules the car | The car plan in Predbat |
 | ----- | --------------------- | ----------------------- |
-| Octopus Intelligent tariff, unless you have set `ohme_automatic_octopus_intelligent: false` - or any tariff with it set to `true` | Octopus, through Ohme | Ohme's slots, priced at the Intelligent off-peak rate |
+| Octopus Intelligent tariff with the Ohme as the Intelligent device, unless you have set `ohme_automatic_octopus_intelligent: false` - or any setup with it set to `true` | Octopus, through Ohme | Ohme's slots, priced at the Intelligent off-peak rate |
+| Octopus Intelligent tariff with your car (or another charger) as the Intelligent device | Octopus, through that device | Octopus's own dispatches, from the Octopus component |
 | `ohme_control: true` | Predbat | Predbat's own plan, which it carries out on the charger |
 | Neither of the above | Ohme | Ohme's own schedule, priced at your normal tariff rates |
 

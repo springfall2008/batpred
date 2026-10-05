@@ -633,6 +633,8 @@ class OctopusAPI(ComponentBase):
         # run() compares this against the live set so a device appearing, disappearing or being
         # suspended re-wires the slots without waiting for a restart (issue #4648).
         self.intelligent_config_devices = None
+        # Who held the car slots when automatic_config() last ran, so run() re-wires them when that changes
+        self.intelligent_config_owner = None
         self.tariff_fetched_at = None
         self.device_fetched_at = None
         self.sensor_updated_at = None
@@ -756,6 +758,13 @@ class OctopusAPI(ComponentBase):
         if self.automatic:
             active_devices = self.get_active_intelligent_device_ids()
             if first:
+                self.automatic_config(self.tariffs)
+                self.refresh_discovery()
+            elif sensor_due and getattr(self.base, "car_slot_owner", None) != self.intelligent_config_owner:
+                # Another component has taken the car slots or, more to the point, given them up - the
+                # Ohme component does once it finds Octopus Intelligent is driving the car and not the
+                # charger (#5402). The device set has not moved, so nothing else would wire them
+                self.log("OctopusAPI: Car slot owner changed from {} to {}, reconfiguring car slots".format(self.intelligent_config_owner, getattr(self.base, "car_slot_owner", None)))
                 self.automatic_config(self.tariffs)
                 self.refresh_discovery()
             elif sensor_due and active_devices != self.intelligent_config_devices:
@@ -1460,6 +1469,8 @@ class OctopusAPI(ComponentBase):
 
         # Record the device set this wiring was built for so run() can spot it changing later
         self.intelligent_config_devices = self.get_active_intelligent_device_ids()
+        # And who held the car slots, so run() can wire them once another component lets go of them
+        self.intelligent_config_owner = slot_owner
 
     def _current_standing_charge_p(self, direction):
         """

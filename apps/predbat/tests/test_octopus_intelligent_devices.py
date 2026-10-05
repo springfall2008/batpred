@@ -27,6 +27,7 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
     failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
     failed += test_intelligent_dispatch_change_requests_replan(my_predbat)
+    failed += test_car_slots_rewired_when_owner_changes(my_predbat)
     return failed
 
 
@@ -1297,6 +1298,65 @@ def _stub_run_dependencies(api):
     api.async_update_intelligent_devices = _async_none
     api.async_intelligent_update_sensor = _async_none
     api.save_octopus_cache = _async_none
+
+
+def test_car_slots_rewired_when_owner_changes(my_predbat):
+    """
+    Issue #5402: the Ohme component claims the car slots when it takes the Intelligent slots itself,
+    and gives the claim up again once it finds Octopus Intelligent is driving the car and not the
+    charger. The device set has not moved when that happens, so run() has to re-wire the slots on the
+    change of owner alone - otherwise they are left pointing at nothing until the next restart.
+    """
+    print("\n**** Running Octopus car slot owner change test ****")
+    failed = 0
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+
+    api = _make_discovery_api(my_predbat, "owner-change")
+    device_id = "smart-flex-vehicle-7001"
+    api.intelligent_devices = {device_id: {"suspended": False, "is_charger": False, "provider": "BMW"}}
+    api.tariffs = {"import": {"tariffCode": "E-1R-INTELLI-VAR-22-10-14-A", "productCode": "INTELLI-VAR-22-10-14", "deviceID": "meter-1"}}
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    api.report_discovery = lambda report: None
+    own_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix(device_id))
+
+    # Ohme holds the car slots on the first cycle, so Octopus leaves them alone
+    my_predbat.car_slot_owner = "ohme"
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    asyncio.run(api.run(seconds=0, first=True))
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
+        print(f"ERROR: expected the Ohme wiring left alone while claimed, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Ohme lets go and clears its wiring. Nothing about the devices has changed...
+    my_predbat.car_slot_owner = None
+    my_predbat.args["octopus_intelligent_slot"] = []
+    # ...and a cycle that does not refresh the sensors does not wire entities it may not have published
+    asyncio.run(api.run(seconds=60, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != []:
+        print(f"ERROR: expected no re-wire off a sensor refresh, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+    # The next sensor refresh wires the car's own dispatch entity
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=120, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_entity]:
+        print(f"ERROR: expected the car slots wired to {own_entity} once released, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # And with the owner settled it is not done again: the user's later change is left alone
+    my_predbat.args["octopus_intelligent_slot"] = ["binary_sensor.set_by_hand"]
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=240, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != ["binary_sensor.set_by_hand"]:
+        print(f"ERROR: expected no repeat re-wire with the owner unchanged, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+    if failed == 0:
+        print("PASS: the car slots were re-wired when their owner changed")
+    return failed
 
 
 def test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat):
