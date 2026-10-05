@@ -32,6 +32,7 @@ from typing import Optional
 import aiohttp
 
 from component_base import ComponentBase
+from mock_base import MockBase
 from predbat_metrics import record_api_call
 from utils import parse_car_plan_windows, in_car_plan_window
 
@@ -853,22 +854,61 @@ class WallboxAPI(ComponentBase):
                 await self.save_control_state()
 
 
+def print_charger_table(chargers):  # pragma: no cover
+    """Print the charger summary table, for the poll and for a command read-back alike."""
+    print("{:<12} {:<20} {:<34} {:>9} {:>12} {:>6} {:>7}".format("CHARGER", "NAME", "STATUS", "POWER W", "SESSION kWh", "MAX A", "LOCKED"))
+    for charger in chargers:
+        print("{:<12} {:<20} {:<34} {:>9.0f} {:>12.2f} {:>6} {:>7}".format(charger.charger_id, charger.name[:20], charger.status, charger.power_w, charger.session_energy_kwh, charger.max_charging_current, "yes" if charger.locked else "no"))
+
+
 async def run_wallbox_cli(args):  # pragma: no cover
-    """Sign in, list the chargers, print each one's status and optionally send one control."""
-    transport = WallboxTransport(print, args.username, args.password)
-    charger_ids = await transport.list_chargers()
-    if not charger_ids:
+    """Run one Wallbox component cycle, and optionally one control, against the live API."""
+    mock_base = MockBase()
+    arg_dict = {
+        "username": args.username,
+        "password": args.password,
+        # On by default, as it is in apps.yaml, so a run shows the car_charging_energy, car_charging_planned,
+        # car_charging_power and car_charging_now wiring a real run would set up
+        "automatic": not args.no_automatic,
+        "wallbox_control": False,
+    }
+    component = WallboxAPI(mock_base, **arg_dict)
+    if not component.transport:
+        print("No usable credentials - pass --username and --password")
+        return
+
+    # One whole component cycle rather than a bare status read: publishing and automatic
+    # configuration are part of run(), and the entities and arguments they produce are what
+    # this harness is used to check before wiring the component into apps.yaml
+    print("Running one poll cycle...")
+    if not await component.run(0, True):
+        print("The poll cycle failed - see the messages above")
+        return
+    chargers = component.ordered_chargers()
+    if not chargers:
         print("No chargers found on this account")
         return
-    print("Chargers: {}".format(charger_ids))
-    for charger_id in charger_ids:
-        payload = await transport.get_status(charger_id)
-        if args.raw:
-            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
-        else:
-            print(normalise_charger(charger_id, payload))
 
-    target = args.charger if args.charger is not None else charger_ids[0]
+    print("")
+    print("Car order: {}".format(component.car_order))
+    print_charger_table(chargers)
+
+    if args.raw:
+        for charger in chargers:
+            print("\nRaw status for charger {}:".format(charger.charger_id))
+            print(json.dumps(await component.transport.get_status(component.api_id(charger)), indent=2, sort_keys=True, default=str))
+
+    if args.charger is not None:
+        charger = component.chargers.get(str(args.charger))
+        if not charger:
+            print("\nCharger {} is not on this account".format(args.charger))
+            return
+    else:
+        charger = chargers[0]
+    target = component.api_id(charger)
+
+    # The same calls the component issues, so they can be tried by hand against a live charger
+    transport = component.transport
     action = None
     if args.pause:
         action = ("pause", transport.pause(target))
@@ -886,11 +926,11 @@ async def run_wallbox_cli(args):  # pragma: no cover
         action = ("set Eco-Smart {}".format(args.eco_smart), transport.set_eco_smart(target, args.eco_smart))
     if not action:
         return
-    print("\nSending {} to {}...".format(action[0], target))
+    print("\nSending {} to {}...".format(action[0], charger.name))
     await action[1]
     print("Waiting {}s for the charger to report the change...".format(COMMAND_SETTLE_SECONDS))
     await asyncio.sleep(COMMAND_SETTLE_SECONDS)
-    print(normalise_charger(target, await transport.get_status(target)))
+    print_charger_table([normalise_charger(target, await transport.get_status(target))])
 
 
 def main():  # pragma: no cover
@@ -899,6 +939,7 @@ def main():  # pragma: no cover
     parser.add_argument("--username", required=True, help="Wallbox account email address")
     parser.add_argument("--password", required=True, help="Wallbox account password")
     parser.add_argument("--raw", action="store_true", help="Print each charger's full status payload as JSON")
+    parser.add_argument("--no-automatic", action="store_true", help="Skip the automatic configuration of car_charging_energy, car_charging_planned, car_charging_power and car_charging_now")
     parser.add_argument("--charger", default=None, help="Charger id to control; defaults to the first one")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--pause", action="store_true", help="Pause the charging session")
