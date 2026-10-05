@@ -1070,7 +1070,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 
 Wallbox chargers cannot report the car's state of charge, so there is no battery sensor.
 
-The controls need a Wallbox account with admin rights over the charger. Without them monitoring still works and Predbat logs a warning the first time a control is refused.
+Wallbox refuses some controls depending on the charger's state: a locked charger refuses pause, and a charger with nothing paused refuses resume. It may also refuse controls from an account without admin rights over the charger. When a control is refused Predbat logs a warning with the reason Wallbox gave, and monitoring carries on.
 
 #### Automatic configuration (wallbox)
 

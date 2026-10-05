@@ -50,8 +50,10 @@ other call sends `Authorization: Bearer <token>`, `Accept: application/json` and
 | Max charging current | `PUT v2/charger/{id}` | `{"maxChargingCurrent": <amps>}` |
 | Eco-Smart | `PUT v4/chargers/{id}/eco-smart` | `{"data": {"attributes": {"enabled": 0\|1, "mode": 0\|1}, "type": "eco_smart"}}` |
 
-Any call can return 429 (too many requests). The writes can return 403 when the account
-does not have admin rights over the charger.
+Any call can return 429 (too many requests). The writes can return 403: seen live for a pause sent
+to a locked charger, and treated by the Home Assistant integration as missing admin rights.
+They return 409 when the action does not apply in the charger's state, such as a resume
+with nothing paused.
 
 ### 2.3 Status fields used
 
@@ -102,7 +104,7 @@ One new file, `apps/predbat/wallbox.py`, in the shape of `myenergi.py`:
   `WallboxCharger`. Missing or malformed fields give safe defaults, never an exception.
 - `WallboxTransport` — owns the tokens and every HTTP call. A new `aiohttp.ClientSession`
   per request with a 30 second total timeout, as myenergi does. Raises `WallboxAuthError`
-  (bad credentials), `WallboxRateLimitError` (429), `WallboxPermissionError` (403 on a
+  (bad credentials), `WallboxRateLimitError` (429), `WallboxRefusedError` (403 on a
   write) or `WallboxApiError`, all under `WallboxError`. Every call is recorded with
   `record_api_call("wallbox", …)`.
 - `WallboxAPI(ComponentBase)` — polling, publishing, event handling, automatic
@@ -252,8 +254,8 @@ when they turn `wallbox_control` on.
 - `WallboxRateLimitError` skips polls on a doubling back-off (2, 4, 8 minutes) capped at
   15 minutes, and returns True so one 429 does not count as a failure. The cap keeps
   recovery inside the 60 minute health window.
-- `WallboxPermissionError` on a write logs once that the account needs admin rights over
-  the charger. Monitoring carries on.
+- `WallboxRefusedError` (403) on a control the user sent is logged each time with Wallbox's
+  reason. In the plan-led loop it is logged once. Monitoring carries on.
 - Any other `WallboxError` on a poll logs a warning and returns False.
 - `update_success_timestamp()` is called only after a poll that returned at least one
   charger.

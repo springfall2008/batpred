@@ -223,8 +223,13 @@ class WallboxRateLimitError(WallboxError):
     """Wallbox answered 429, too many requests."""
 
 
-class WallboxPermissionError(WallboxError):
-    """Wallbox refused a write because the account lacks admin rights over the charger."""
+class WallboxRefusedError(WallboxError):
+    """Wallbox answered 403 to a control.
+
+    Seen live when a pause is sent to a locked charger. The Home Assistant integration
+    treats the same status as the account lacking admin rights over the charger, so
+    either may be the cause and the status alone does not say which.
+    """
 
 
 class WallboxApiError(WallboxError):
@@ -295,7 +300,7 @@ class WallboxTransport:
                         raise WallboxRateLimitError("Wallbox rate limit reached calling {}".format(url))
                     if status == 403 and write:
                         record_api_call("wallbox", success=False, reason="auth_error")
-                        raise WallboxPermissionError("Wallbox refused {} - the account needs admin rights over the charger".format(url))
+                        raise WallboxRefusedError("Wallbox refused the control (HTTP 403 from {}). A locked charger refuses controls; it can also mean the account lacks admin rights over the charger".format(url))
                     if status in (401, 403):
                         record_api_call("wallbox", success=False, reason="auth_error")
                         raise WallboxAuthError("Wallbox rejected the credentials for {}".format(url))
@@ -444,7 +449,7 @@ class WallboxAPI(ComponentBase):
         self.queued_events = []
         self.skip_cycles = 0
         self.backoff_cycles = 0
-        self.permission_warned = False
+        self.refusal_warned = False
         # Charger ids in car order: entry N is car N. Append-only, so a car never changes number while Predbat runs
         self.car_order = []
         self._auto_configured_order = None
@@ -481,11 +486,11 @@ class WallboxAPI(ComponentBase):
         """The chargers that have been read, in car order."""
         return [self.chargers[charger_id] for charger_id in self.car_order if charger_id in self.chargers]
 
-    def warn_permission(self):
-        """Say once that the account cannot control the charger."""
-        if not self.permission_warned:
-            self.log("Warn: wallbox: Wallbox refused a control - the account needs admin rights over the charger. Monitoring continues")
-            self.permission_warned = True
+    def warn_refused_once(self, exc):
+        """Log a refusal from the plan-led loop once: it would otherwise repeat on every poll."""
+        if not self.refusal_warned:
+            self.log("Warn: wallbox: charge control refused: {}. Monitoring continues".format(exc))
+            self.refusal_warned = True
 
     def automatic_config(self):
         """Wire the charger entities into Predbat's car charging inputs.
@@ -556,8 +561,9 @@ class WallboxAPI(ComponentBase):
             except WallboxRateLimitError:
                 # Left on the queue, so it is retried once the back-off has passed
                 raise
-            except WallboxPermissionError:
-                self.warn_permission()
+            except WallboxRefusedError as exc:
+                # Something the user asked for, so every refusal is reported, with Wallbox's reason
+                self.log("Warn: wallbox: control refused: {}".format(exc))
             except Exception as exc:
                 # Anything else is dropped too: an event left on the queue would stop every later poll
                 self.log("Warn: wallbox: control failed: {}".format(exc))
@@ -600,8 +606,8 @@ class WallboxAPI(ComponentBase):
             self._auto_configured_order = list(self.car_order)
         try:
             await self.control_tick(self.now_utc_exact)
-        except WallboxPermissionError:
-            self.warn_permission()
+        except WallboxRefusedError as exc:
+            self.warn_refused_once(exc)
         except WallboxApiError as exc:
             # Monitoring succeeded, so a refused control is a warning, not a failed cycle
             self.log("Warn: wallbox: charge control failed: {}".format(exc))

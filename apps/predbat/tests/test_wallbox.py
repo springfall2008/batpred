@@ -29,7 +29,7 @@ from wallbox import (
     WallboxAPI,
     WallboxApiError,
     WallboxAuthError,
-    WallboxPermissionError,
+    WallboxRefusedError,
     WallboxRateLimitError,
     WallboxStateError,
     WallboxTransport,
@@ -467,17 +467,22 @@ def test_transport_control_requests():
     print("  ✓ Control calls send the right method, URL and body")
 
 
-def test_transport_control_refused_for_rights():
-    """A 403 on a write is a rights problem, not bad credentials, and is not retried behind a sign in."""
+def test_transport_control_refused():
+    """A 403 on a write is Wallbox refusing the control, not bad credentials, and is not retried behind a sign in.
+
+    Seen live for a pause sent to a locked charger from an admin account, so the message must
+    not claim the cause is missing rights.
+    """
     session, calls = _session([_response({}, status=403)])
     with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
         try:
             run_async(_signed_in_transport().set_locked(101, True))
-            raise AssertionError("Expected WallboxPermissionError")
-        except WallboxPermissionError:
-            pass
-    assert len(calls) == 1, "A rights refusal must not trigger a sign in and retry"
-    print("  ✓ A 403 on a write raises WallboxPermissionError")
+            raise AssertionError("Expected WallboxRefusedError")
+        except WallboxRefusedError as exc:
+            assert "locked" in str(exc) and "HTTP 403" in str(exc), str(exc)
+            assert "needs admin rights" not in str(exc), "Missing rights is one possible cause, not the diagnosis"
+    assert len(calls) == 1, "A refusal must not trigger a sign in and retry"
+    print("  ✓ A 403 on a write raises WallboxRefusedError without guessing the cause")
 
 
 def test_transport_control_accepts_an_empty_body():
@@ -828,15 +833,31 @@ def test_select_control():
     print("  ✓ Eco-Smart select sends only valid modes to chargers that support it")
 
 
-def test_control_refused_for_rights_warns_once():
-    """A rights refusal warns once across repeated attempts and does not fail the cycle."""
+def test_control_refused_is_logged_every_time_with_the_reason():
+    """Each control the user sends that Wallbox refuses is logged with Wallbox's reason; the cycle still succeeds."""
     component = _started_component()
     for _ in range(2):
-        component.transport.errors[("set_locked", 101, True)] = WallboxPermissionError("403")
-        run_async(component.switch_event("switch.predbat_wallbox_101_locked", "turn_on"))
+        component.transport.errors[("pause", 101)] = WallboxRefusedError("Wallbox refused the control (HTTP 403)")
+        run_async(component.switch_event("switch.predbat_wallbox_101_charging", "turn_off"))
         assert run_async(component.run(60, False)) is True
-    assert len([message for message in component.log_messages if "admin rights" in message]) == 1
-    print("  ✓ A rights refusal warns once and monitoring continues")
+    refusals = [message for message in component.log_messages if "control refused" in message and "HTTP 403" in message]
+    assert len(refusals) == 2, component.log_messages
+    assert not _logged(component, "needs admin rights")
+    print("  ✓ A refused control is logged each time with the reason")
+
+
+def test_plan_led_refusal_warns_once():
+    """A refusal inside the plan-led loop repeats every poll, so it is logged once, not every two minutes."""
+    component = _make_component(wallbox_control=True)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot", "off", {"planned": []})
+    for seconds, first in ((0, True), (120, False), (240, False)):
+        component.transport.errors[("pause", 101)] = WallboxRefusedError("Wallbox refused the control (HTTP 403)")
+        assert run_async(component.run(seconds, first)) is True
+    refusals = [message for message in component.log_messages if "refused" in message and "HTTP 403" in message]
+    assert len(refusals) == 1, component.log_messages
+    print("  ✓ A refusal in the plan-led loop is logged once")
 
 
 def test_control_failure_is_logged_and_not_retried():
@@ -1353,7 +1374,7 @@ def test_wallbox(my_predbat=None):
     test_normalise_handles_bad_values()
     test_normalise_captured_payloads()
     test_transport_control_requests()
-    test_transport_control_refused_for_rights()
+    test_transport_control_refused()
     test_transport_control_accepts_an_empty_body()
     test_transport_rejects_an_unknown_eco_smart_mode()
     test_component_registration()
@@ -1372,7 +1393,8 @@ def test_wallbox(my_predbat=None):
     test_switch_controls()
     test_number_control_clamps_and_ignores_junk()
     test_select_control()
-    test_control_refused_for_rights_warns_once()
+    test_control_refused_is_logged_every_time_with_the_reason()
+    test_plan_led_refusal_warns_once()
     test_control_failure_is_logged_and_not_retried()
     test_control_survives_a_rate_limit()
     test_charger_for_entity_requires_a_whole_id()
