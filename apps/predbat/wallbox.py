@@ -112,6 +112,9 @@ CHARGING_STATUS_IDS = (193, 194, 195)
 UNPLUGGED_STATUS_IDS = (0, 161, 162, 163, 165, 209)
 PAUSED_STATUS_IDS = (178, 182)
 
+# config_data.operation_mode when an OCPP backend, not the Wallbox cloud, runs the charger
+OPERATION_MODE_OCPP = "ocpp"
+
 ECO_SMART_OFF = "off"
 ECO_SMART_ECO = "eco_mode"
 ECO_SMART_FULL_SOLAR = "full_solar"
@@ -164,6 +167,15 @@ class WallboxCharger:
     eco_smart: Optional[str]
     # How the charger is being run: "ocpp" when an OCPP backend is in charge of it. Empty when not reported
     operation_mode: str = ""
+    # Where the charger is, as far as its status says: an IANA timezone, a country code and a postcode
+    timezone: str = ""
+    country: str = ""
+    zipcode: str = ""
+
+    @property
+    def ocpp(self):
+        """Is an OCPP backend running this charger."""
+        return self.operation_mode.lower() == OPERATION_MODE_OCPP
 
 
 def normalise_charger(charger_id, payload):
@@ -193,6 +205,10 @@ def normalise_charger(charger_id, payload):
         else:
             eco_smart = ECO_SMART_ECO
 
+    country = config.get("country")
+    if not isinstance(country, dict):
+        country = {}
+
     return WallboxCharger(
         charger_id=str(charger_id),
         name=str(payload.get("name") or "Wallbox {}".format(charger_id)),
@@ -211,6 +227,9 @@ def normalise_charger(charger_id, payload):
         max_available_current=_to_int(payload.get("max_available_power")),
         eco_smart=eco_smart,
         operation_mode=str(config.get("operation_mode") or ""),
+        timezone=str(config.get("timezone") or ""),
+        country=str(country.get("iso2") or country.get("code") or ""),
+        zipcode=str(config.get("zipcode") or ""),
     )
 
 
@@ -464,6 +483,7 @@ class WallboxAPI(ComponentBase):
         self.paused_by_predbat = set()
         self.control_windows = {}
         self.lock_warned = set()
+        self.ocpp_warned = set()
         self.control_state_loaded = False
         self.control_enabled = True
         self.transport = None
@@ -642,7 +662,19 @@ class WallboxAPI(ComponentBase):
         for charger in self.ordered_chargers():
             prefix = self.entity_prefix(charger)
             status_attributes = self.charger_attributes(charger, "status")
-            status_attributes.update({"status_id": charger.status_id, "name": charger.name, "serial_number": charger.serial, "part_number": charger.part_number, "software_version": charger.software_version, "operation_mode": charger.operation_mode})
+            status_attributes.update(
+                {
+                    "status_id": charger.status_id,
+                    "name": charger.name,
+                    "serial_number": charger.serial,
+                    "part_number": charger.part_number,
+                    "software_version": charger.software_version,
+                    "operation_mode": charger.operation_mode,
+                    "timezone": charger.timezone,
+                    "country": charger.country,
+                    "zipcode": charger.zipcode,
+                }
+            )
             current_attributes = self.charger_attributes(charger, "max_charging_current")
             current_attributes["max"] = charger.max_available_current if charger.max_available_current >= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
 
@@ -669,9 +701,27 @@ class WallboxAPI(ComponentBase):
             self.lock_warned.discard(charger.charger_id)
             return False
         if not once or charger.charger_id not in self.lock_warned:
-            self.log("Warn: wallbox: {} is locked, so Wallbox will refuse to pause or resume it. Unlock it with switch.{}_locked or in the Wallbox app; Predbat does not unlock chargers itself".format(charger.name, self.entity_prefix(charger)))
+            if charger.ocpp:
+                # Seen live: an unlock is accepted but has no effect while the backend holds the charger
+                self.log("Warn: wallbox: {} is locked by its OCPP backend, so Wallbox will refuse to pause or resume it, and unlocking it from Predbat or the Wallbox app has no effect".format(charger.name))
+            else:
+                self.log("Warn: wallbox: {} is locked, so Wallbox will refuse to pause or resume it. Unlock it with switch.{}_locked or in the Wallbox app; Predbat does not unlock chargers itself".format(charger.name, self.entity_prefix(charger)))
         if once:
             self.lock_warned.add(charger.charger_id)
+        return True
+
+    def held_by_ocpp(self, charger):
+        """Is an OCPP backend running the charger, which rules out Predbat-led charging. Says so once.
+
+        The backend decides when the car charges, so Predbat's plan must not pause or resume
+        it. The warning is given once per charger and again only after it has left OCPP mode.
+        """
+        if not charger.ocpp:
+            self.ocpp_warned.discard(charger.charger_id)
+            return False
+        if charger.charger_id not in self.ocpp_warned:
+            self.log("Warn: wallbox: {} is run by an OCPP backend, so Predbat-led charging is disabled for it. The backend decides when it charges".format(charger.name))
+            self.ocpp_warned.add(charger.charger_id)
         return True
 
     def charger_for_entity(self, entity_id):
@@ -885,6 +935,8 @@ class WallboxAPI(ComponentBase):
                 wanted = in_car_plan_window(self.control_windows[car_n], now)
                 if charger.status_id in UNPLUGGED_STATUS_IDS:
                     self.paused_by_predbat.discard(charger.charger_id)
+                    continue
+                if self.held_by_ocpp(charger):
                     continue
                 if not charger.connected:
                     # Updating, Error or Unknown: say nothing, and keep the record until the charger reports again

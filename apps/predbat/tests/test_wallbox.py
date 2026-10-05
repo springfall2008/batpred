@@ -346,11 +346,13 @@ def test_transport_rate_limit_and_failures():
     print("  ✓ Rate limit and failures map to the right errors and metric reasons")
 
 
-def _status(status_id=193, power=7.2, energy=4.5, locked=False, max_current=32, eco=None, name="Garage"):
+def _status(status_id=193, power=7.2, energy=4.5, locked=False, max_current=32, eco=None, name="Garage", mode=None):
     """Build a status payload in the shape Wallbox returns, for the fields Predbat reads."""
     config = {"max_charging_current": max_current, "locked": locked, "serial_number": "900001", "part_number": "PLP1-0-2-4-9-002-E", "software": {"currentVersion": "5.5.10"}}
     if eco is not None:
         config["ecosmart"] = eco
+    if mode is not None:
+        config["operation_mode"] = mode
     return {"status_id": status_id, "charging_power": power, "added_energy": energy, "max_available_power": 32, "name": name, "config_data": config}
 
 
@@ -1458,6 +1460,65 @@ def test_operation_mode_is_read_and_published():
     print("  ✓ Operation mode is read and published on the status sensor")
 
 
+def test_control_is_disabled_for_an_ocpp_charger():
+    """A charger run by an OCPP backend is never paused or resumed by the plan; other chargers still are."""
+    statuses = {101: _status(status_id=193, mode="ocpp"), 202: _status(status_id=193, mode="wallbox")}
+    component = _control_component({0: PLAN_OUTSIDE, 1: PLAN_OUTSIDE}, statuses)
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.count("pause") == 2 and ("pause", 101) not in component.transport.calls, component.transport.calls
+    assert component.paused_by_predbat == {"202"}
+    assert len([message for message in component.log_messages if "OCPP" in message and "Garage" in message]) == 1, component.log_messages
+
+    paused = _control_component({0: PLAN_INSIDE}, {101: _status(status_id=178, power=0, mode="ocpp")})
+    run_async(paused.control_tick(CONTROL_NOW))
+    assert paused.transport.calls == [], "Nor is an OCPP charger resumed inside a window"
+    print("  ✓ Plan-led control is disabled for a charger in OCPP mode")
+
+
+def test_control_resumes_once_ocpp_is_turned_off():
+    """Taking a charger out of OCPP mode puts it back under the plan, and the warning can be given again later."""
+    component = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=193, mode="ocpp")})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == []
+    component.transport.statuses[101] = _status(status_id=193, mode="wallbox")
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("pause", 101)]
+    print("  ✓ Plan-led control returns when OCPP mode is turned off")
+
+
+def test_lock_warning_names_ocpp_when_it_holds_the_lock():
+    """On an OCPP charger the user is told the backend holds the lock, not to unlock it, which does nothing."""
+    component = _started_component({101: _status(status_id=209, power=0, locked=1, mode="ocpp")})
+    run_async(component.switch_event_handler("switch.predbat_wallbox_101_charging", "turn_off"))
+    assert component.transport.calls == []
+    assert _logged(component, "OCPP") and not _logged(component, "Unlock it with")
+    print("  ✓ The lock warning names OCPP when the backend holds the lock")
+
+
+def test_location_and_timezone_are_read_and_published():
+    """The charger's timezone, country and postcode are shown on the status sensor."""
+    charger = normalise_charger(101, MOCK_STATUS_LOCKED_CAPTURED)
+    assert charger.timezone == "Europe/London" and charger.country == "GB" and charger.zipcode == ""
+
+    full = _status()
+    full["config_data"].update({"timezone": "Europe/Madrid", "country": {"iso2": "ES", "code": "ESP"}, "zipcode": "08019"})
+    charger = normalise_charger(101, full)
+    assert (charger.timezone, charger.country, charger.zipcode) == ("Europe/Madrid", "ES", "08019")
+
+    bare = normalise_charger(101, {"config_data": {"country": "not a dict", "timezone": None}})
+    assert (bare.timezone, bare.country, bare.zipcode) == ("", "", "")
+    three_letter = normalise_charger(101, {"config_data": {"country": {"code": "GBR"}}})
+    assert three_letter.country == "GBR", "Falls back to the three letter code when there is no two letter one"
+
+    component = _make_component({101: MOCK_STATUS_LOCKED_CAPTURED})
+    run_async(component.run(0, True))
+    attributes = component.base.entities["sensor.predbat_wallbox_101_status"]["attributes"]
+    assert attributes["timezone"] == "Europe/London" and attributes["country"] == "GB" and attributes["zipcode"] == ""
+    print("  ✓ Timezone, country and postcode are read and published")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1539,5 +1600,9 @@ def test_wallbox(my_predbat=None):
     test_friendly_names_carry_the_charger_name()
     test_friendly_names_without_a_usable_charger_name()
     test_operation_mode_is_read_and_published()
+    test_control_is_disabled_for_an_ocpp_charger()
+    test_control_resumes_once_ocpp_is_turned_off()
+    test_lock_warning_names_ocpp_when_it_holds_the_lock()
+    test_location_and_timezone_are_read_and_published()
     print("=" * 70)
     return False

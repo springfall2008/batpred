@@ -1058,7 +1058,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 
 | Entity | Description |
 | ------ | ----------- |
-| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready`. Its `operation_mode` attribute reads `ocpp` when an OCPP backend, such as Octopus for Intelligent Octopus Go, is running the charger |
+| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready`. Its `operation_mode` attribute reads `ocpp` when an OCPP backend, such as Octopus for Intelligent Octopus Go, is running the charger. The `timezone`, `country` and `zipcode` attributes give the charger's location as set in the Wallbox app |
 | `sensor.predbat_wallbox_<id>_power` | Charging power in W |
 | `sensor.predbat_wallbox_<id>_session_energy` | Energy added in the current session in kWh; resets with each session |
 | `binary_sensor.predbat_wallbox_<id>_connected` | On while a car is plugged in |
@@ -1095,6 +1095,7 @@ Things to know:
 - Wallbox can only pause a charger once it is charging, so a car plugged in outside a slot draws power until Predbat's next poll (two minutes by default).
 - Clear any schedule set in the Wallbox app. A charger that Wallbox is holding in `Scheduled` will not charge in a Predbat slot.
 - While Predbat-led charging is on, Predbat resumes a paused charger inside a planned slot even if you paused it yourself. Turn `switch.predbat_wallbox_control` off first if you want it to stay paused.
+- Predbat-led charging is disabled for a charger run by an OCPP backend (its status sensor's `operation_mode` reads `ocpp`). The backend decides when that charger charges, so Predbat leaves it alone and logs a warning once. Other chargers on the account are still controlled.
 - Predbat never unlocks a locked charger, and cannot pause or resume one. While a charger is locked Predbat-led charging leaves it alone and logs a warning once. A charger Predbat had paused is resumed once you unlock it.
 - Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
 
