@@ -656,6 +656,7 @@ class OctopusAPI(ComponentBase):
         self.automatic = automatic
         self.commands = []
         self.smart_control_pending = {}  # device_id -> (suspended, expiry) for a Smart Control change Octopus may not yet report
+        self.smart_control_confirmed = {}  # device_id -> suspended as Octopus last confirmed it, held while a change from the switch is unsent
         self.mpan = None
         self.tou_windows = None
         self.tou_windows_day = None
@@ -703,6 +704,10 @@ class OctopusAPI(ComponentBase):
         """
         Handle a turn on/off/toggle of an Intelligent Smart Control switch: show the new state straight away
         and queue the command that sends it to Octopus (rolled back if the command fails).
+
+        Only the latest change per device is queued, and the state Octopus last confirmed is kept aside until
+        every change has been sent, so a failure puts the switch back to that rather than to a state that was
+        only ever shown here.
         """
         suffix = self.get_entity_suffix(entity_id)
         device_id = self.suffix_to_device_id(suffix)
@@ -711,18 +716,26 @@ class OctopusAPI(ComponentBase):
         device = self.intelligent_devices.get(device_id)
         if not device:
             return
-        was_suspended = bool(device.get("suspended"))
         if service == "turn_on":
             enabled = True
         elif service == "turn_off":
             enabled = False
         elif service == "toggle":
-            enabled = was_suspended
+            enabled = bool(device.get("suspended"))
         else:
             return
+        self.smart_control_confirmed.setdefault(device_id, bool(device.get("suspended")))
         device["suspended"] = not enabled
         self.publish_smart_control_switch(device_id, device)
-        self.commands.append({"command": "set_intelligent_smart_control", "value": enabled, "device_id": device_id, "was_suspended": was_suspended})
+        self.commands = [command for command in self.commands if not self.is_smart_control_command(command, device_id)]
+        self.commands.append({"command": "set_intelligent_smart_control", "value": enabled, "device_id": device_id})
+
+    @staticmethod
+    def is_smart_control_command(command, device_id):
+        """
+        Whether a queued command sets Smart Control for device_id.
+        """
+        return command.get("command") == "set_intelligent_smart_control" and command.get("device_id") == device_id
 
     def apply_smart_control_pending(self, device_id, device):
         """
@@ -894,7 +907,7 @@ class OctopusAPI(ComponentBase):
                 await self.async_set_intelligent_target_schedule(account_id, target_time=value, device_id=device_id)
                 done_command = True
             elif command_name == "set_intelligent_smart_control":
-                await self.async_set_intelligent_smart_control(command.get("device_id", None), command.get("value", True), command.get("was_suspended", False))
+                await self.async_set_intelligent_smart_control(command.get("device_id", None), command.get("value", True))
                 done_command = True
             elif command_name == "join_saving_session_event":
                 event_code = command.get("event_code", None)
@@ -1213,10 +1226,13 @@ class OctopusAPI(ComponentBase):
         else:
             self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID {} found".format(device_id))
 
-    async def async_set_intelligent_smart_control(self, device_id, enabled, was_suspended=False):
+    async def async_set_intelligent_smart_control(self, device_id, enabled):
         """
         Turn Octopus Smart Control on (UNSUSPEND) or off (SUSPEND) for an intelligent device. If Octopus rejects
-        it the switch goes back to how it was, rather than showing a state that never happened.
+        it the switch goes back to the state Octopus last confirmed, rather than showing a state that never happened.
+
+        A change made from the switch while this one was being sent is queued behind it, so the switch keeps showing
+        that newer change and the confirmed state stays aside until the newer one is sent too.
         """
         device = self.intelligent_devices.get(device_id)
         if not device:
@@ -1229,15 +1245,17 @@ class OctopusAPI(ComponentBase):
         except Exception as error:  # pylint: disable=broad-exception-caught
             self.log("Warn: OctopusAPI: Smart Control {} for intelligent device {} raised {}".format(action, device_id, error))
             result = None
-        if not result or result.get("updateDeviceSmartControl") is None:
+        succeeded = bool(result) and result.get("updateDeviceSmartControl") is not None
+        if succeeded:
+            self.smart_control_confirmed[device_id] = not enabled
+            self.smart_control_pending[device_id] = (not enabled, datetime.now() + timedelta(seconds=SMART_CONTROL_PENDING_SECONDS))
+        else:
             self.log("Warn: OctopusAPI: Failed to {} Smart Control for intelligent device {}, putting the switch back".format(action, device_id))
-            device["suspended"] = was_suspended
-            self.publish_smart_control_switch(device_id, device)
-            return False
-        device["suspended"] = not enabled
-        self.smart_control_pending[device_id] = (not enabled, datetime.now() + timedelta(seconds=SMART_CONTROL_PENDING_SECONDS))
+        if any(self.is_smart_control_command(command, device_id) for command in self.commands):
+            return succeeded
+        device["suspended"] = self.smart_control_confirmed.pop(device_id, not enabled if succeeded else device.get("suspended"))
         self.publish_smart_control_switch(device_id, device)
-        return True
+        return succeeded
 
     async def async_join_saving_session_events(self, account_id, event_code):
         """
