@@ -186,17 +186,21 @@ async def _run(my_predbat):
     # because my_predbat is shared by every test in the run
     original_args = dict(my_predbat.args)
     del api.set_arg
-    api.intelligent_devices[ACTIVE_ID]["suspended"] = False
-    api.intelligent_devices[SUSPENDED_ID]["suspended"] = True
-    api.automatic_config({})
-    failed |= _check("t7 switch wired", my_predbat.args.get("octopus_intelligent_smart_control") == [active_switch], "args {}".format(my_predbat.args))
-    failed |= _check("t7 slot wired alongside", len(my_predbat.args.get("octopus_intelligent_slot", [])) == 1, "args {}".format(my_predbat.args))
-    api.intelligent_devices[ACTIVE_ID]["suspended"] = True
-    api.automatic_config({})
-    failed |= _check("t7 none when all suspended", my_predbat.args.get("octopus_intelligent_smart_control") == [], "args {}".format(my_predbat.args))
-    failed |= _check("t7 switches still published for suspended", api.published.get(active_switch) is not None, "")
-    my_predbat.args.clear()
-    my_predbat.args.update(original_args)
+    try:
+        api.intelligent_devices[ACTIVE_ID]["suspended"] = False
+        api.intelligent_devices[SUSPENDED_ID]["suspended"] = True
+        api.automatic_config({})
+        failed |= _check("t7 switch wired", my_predbat.args.get("octopus_intelligent_smart_control") == [active_switch], "args {}".format(my_predbat.args))
+        failed |= _check("t7 slot wired alongside", len(my_predbat.args.get("octopus_intelligent_slot", [])) == 1, "args {}".format(my_predbat.args))
+        api.intelligent_devices[ACTIVE_ID]["suspended"] = True
+        api.automatic_config({})
+        failed |= _check("t7 none when all suspended", my_predbat.args.get("octopus_intelligent_smart_control") == [], "args {}".format(my_predbat.args))
+        api.published = {}
+        await api.async_intelligent_update_sensor("acc-1")
+        failed |= _check("t7 switches still published for suspended", api.published.get(active_switch) == "off" and api.published.get(suspended_switch) == "off", "published {}".format(api.published))
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(original_args)
     return failed
 
 

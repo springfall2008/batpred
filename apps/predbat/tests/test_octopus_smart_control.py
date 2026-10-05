@@ -45,6 +45,7 @@ STATE_FIELDS = (
     "car_charging_soc",
     "car_charging_soc_next",
     "car_charging_loss",
+    "car_charging_limit_model",
 )
 ARG_KEYS = ("car_charging_loss", "car_charging_soc", "car_charging_limit", "octopus_intelligent_slot", "octopus_intelligent_smart_control")
 
