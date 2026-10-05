@@ -1052,11 +1052,16 @@ def capture_candidate(my_predbat):
             captured.append(found.group(1))
         return original(message, *args, **kwargs)
 
+    # Put back whatever was there before, so a caller's own log override survives
+    previous = my_predbat.__dict__.get("log")
     my_predbat.log = log
     try:
         my_predbat.calculate_plan(recompute=True)
     finally:
-        del my_predbat.log
+        if previous is None:
+            del my_predbat.log
+        else:
+            my_predbat.log = previous
     return captured[-1] if captured else None
 
 

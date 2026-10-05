@@ -288,6 +288,7 @@ from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
 from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
 from tests.test_log_replay_inputs import run_log_replay_inputs_tests
+from tests.test_replay_roundtrip import run_replay_roundtrip_tests
 from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
@@ -736,6 +737,7 @@ def main():
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
         ("dummy_inverter", run_dummy_inverter_tests, "Simulated inverter and battery component (model physics, controls, automatic config)", False),
         ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
+        ("replay_roundtrip", run_replay_roundtrip_tests, "Round trip: main loop against the dummy inverter, then replay its log", True),
         ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
