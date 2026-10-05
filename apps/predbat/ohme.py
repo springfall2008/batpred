@@ -25,7 +25,7 @@ import aiohttp
 import time
 from typing import Dict, List, Union
 from datetime import timedelta, timezone
-from const import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
 
@@ -61,6 +61,13 @@ ohme_attribute_table = {
 # Ohme's own energy figure cannot be used for this
 ENERGY_TODAY_ENTITY = "sensor.predbat_ohme_energy_today"
 POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
+# The charge session's slots, published in the shape of Octopus Intelligent dispatches
+SLOT_ACTIVE_ENTITY = "binary_sensor.predbat_ohme_slot_active"
+
+# What Predbat's car slot args are wired to the session slots as - see OhmeAPI.update_slot_mode().
+# Dispatches bring the Intelligent cheap rate with them, a charger schedule is car load only
+SLOT_MODE_INTELLIGENT = "octopus_intelligent"
+SLOT_MODE_CHARGER = "charger_schedule"
 
 # How often the Predbat-led control loop re-evaluates the plan. The plan is minute-granular so a
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
@@ -83,7 +90,7 @@ CHARGER_DISCOVERY_ENTITY_SPEC = {
 # regardless of whether Intelligent wiring is actually in use.
 CAR_DISCOVERY_ENTITY_SPEC = {
     "car_charging_soc": {"entity_id": "sensor.predbat_ohme_battery_percent", "domain": "sensor", "access": "r"},
-    "octopus_intelligent_slot": {"entity_id": "binary_sensor.predbat_ohme_slot_active", "domain": "binary_sensor", "access": "r"},
+    "octopus_intelligent_slot": {"entity_id": SLOT_ACTIVE_ENTITY, "domain": "binary_sensor", "access": "r"},
     "octopus_ready_time": {"entity_id": "select.predbat_ohme_target_time", "domain": "select", "access": "rw"},
     "octopus_charge_limit": {"entity_id": "number.predbat_ohme_target_percent", "domain": "number", "access": "rw"},
 }
@@ -230,6 +237,14 @@ class OhmeAPI(ComponentBase):
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = ohme_control
         self.control_active = False
+        # Whether the car is on Octopus Intelligent as last decided, None until the first decision
+        self.octopus_intelligent = None
+        # How the car slot args are wired to the session slots, None when they are not - see update_slot_mode()
+        self.slot_mode = None
+        # Ohme's own schedule is Predbat's car charging plan, as load only - see charger_slots_wanted()
+        self.charger_slots = False
+        # The reason charger_slots_wanted() last stood down, so it is only logged when it changes
+        self.charger_slots_blocked = None
         self.control_windows = []
         # The state we last pushed to the charger, None until we have acted or after releasing it
         self.control_charging = None
@@ -275,17 +290,23 @@ class OhmeAPI(ComponentBase):
             # Advanced settings are broken in latest API
             # await self.client.async_get_advanced_settings()
 
-        if first or refresh or (seconds % 120) == 0:
+        poll = first or refresh or (seconds % 120) == 0
+
+        # Who schedules the charge is decided ahead of the publish, as it sets how the session slots
+        # are published. Re-decided on every poll rather than once, so a move on or off an Octopus
+        # Intelligent tariff is picked up without a restart - see update_slot_mode()
+        slot_mode_changed = False
+        if poll and self.client.serial:
+            slot_mode_changed = await self.update_slot_mode()
+
+        if poll:
             await self.client.async_get_charge_session()
             await self.publish_data()
 
-        if first and self.client.serial:
-            if self.ohme_automatic:
-                await self.automatic_config()
-            octopus_intelligent = self.octopus_intelligent_wanted()
-            if octopus_intelligent:
-                await self.automatic_config_octopus_intelligent()
-            self.enable_control(octopus_intelligent)
+        if first and self.client.serial and self.ohme_automatic:
+            await self.automatic_config()
+        if slot_mode_changed:
+            await self.apply_slot_mode()
 
         # Unconditional and outside the "if first and self.client.serial:" block above, so a
         # transient failure on that one-shot cycle is retried rather than lost - see
@@ -304,6 +325,7 @@ class OhmeAPI(ComponentBase):
         """
         Decide whether Predbat-led charge control should run, and say why when it will not.
         """
+        self.control_active = False
         if not self.ohme_control:
             return
         if not self.ohme_automatic:
@@ -402,13 +424,13 @@ class OhmeAPI(ComponentBase):
             return mode is not ChargerMode.MAX_CHARGE
         return mode is not ChargerMode.PAUSED
 
-    async def release_charger(self):
+    async def release_charger(self, reason="Read only mode"):
         """
         Hand the charger back to Ohme's own smart schedule.
         """
         if self.control_charging is None:
             return
-        self.log("Info: Ohme API: Read only mode, releasing the charger back to Ohme")
+        self.log("Info: Ohme API: {}, releasing the charger back to Ohme".format(reason))
         if not self.control_charging:
             await self.client.async_resume_charge()
         await self.client.async_max_charge(False)
@@ -475,15 +497,96 @@ class OhmeAPI(ComponentBase):
         if not self.ohme_automatic:
             return False
 
-        # OctopusAPI has already detected this by the time we run - it sits earlier in
+        # OctopusAPI has already detected this by the time we first run - it sits earlier in
         # COMPONENT_LIST and Components.start() waits for each component's first run in turn
         octopus = self.base.components.get_component("octopus") if self.base.components else None
-        if not octopus:
+        tariff_code = (getattr(octopus, "tariffs", {}) or {}).get("import", {}).get("tariffCode") if octopus else None
+        if not tariff_code:
+            # No tariff to judge by - never an Octopus customer, or the Octopus component is between
+            # fetches. This is asked again on every poll, so an answer already given is kept rather
+            # than dropping an Intelligent car's cheap rate over a gap in the account data
+            return bool(self.octopus_intelligent)
+        return bool(octopus.is_intelligent_go_tariff(tariff_code))
+
+    async def update_slot_mode(self):
+        """
+        Decide who schedules the car, and so how the session slots are published and wired.
+
+        Run on every poll. The answer follows the Octopus tariff, which can change under a running
+        Predbat: left as first decided, a car moved onto Intelligent would never earn its cheap rate
+        and one moved off it would go on being given one, until the next restart.
+
+        Returns True when the wiring has to change, for apply_slot_mode() to do once the slots
+        have been published the new way.
+        """
+        octopus_intelligent = self.octopus_intelligent_wanted()
+        if octopus_intelligent != self.octopus_intelligent:
+            if octopus_intelligent:
+                self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
+            elif self.octopus_intelligent is not None:
+                self.log("Info: Ohme API: Octopus Intelligent is no longer in use, the Ohme slots no longer carry the Intelligent rate")
+            self.octopus_intelligent = octopus_intelligent
+            # Predbat-led control is ruled out by Intelligent, so it follows the same change
+            was_active = self.control_active
+            self.enable_control(octopus_intelligent)
+            if was_active and not self.control_active:
+                await self.release_charger(reason="Octopus Intelligent now schedules the charge")
+
+        if octopus_intelligent:
+            slot_mode = SLOT_MODE_INTELLIGENT
+        elif self.charger_slots_wanted(octopus_intelligent):
+            slot_mode = SLOT_MODE_CHARGER
+        else:
+            slot_mode = None
+        self.charger_slots = slot_mode == SLOT_MODE_CHARGER
+        if slot_mode == self.slot_mode:
             return False
-        tariff_code = (getattr(octopus, "tariffs", {}) or {}).get("import", {}).get("tariffCode")
-        if not octopus.is_intelligent_go_tariff(tariff_code):
+        self.slot_mode = slot_mode
+        return True
+
+    async def apply_slot_mode(self):
+        """
+        Wire Predbat's car slot args for the mode update_slot_mode() settled on.
+        """
+        if self.slot_mode == SLOT_MODE_INTELLIGENT:
+            await self.automatic_config_octopus_intelligent()
+            return
+        # Only the Intelligent wiring holds the car slots against the Octopus component
+        if self.base.car_slot_owner == "ohme":
+            self.base.car_slot_owner = None
+        if self.slot_mode == SLOT_MODE_CHARGER:
+            await self.automatic_config_charger_slots()
+        else:
+            self.clear_car_slots()
+
+    def charger_slots_wanted(self, octopus_intelligent):
+        """
+        Decide whether Ohme's own schedule should be Predbat's car charging plan.
+
+        Whoever starts and stops the charger owns the plan. With ohme_control that is Predbat, which
+        plans the charge itself. On Octopus Intelligent the slots are dispatches and bring the cheap
+        rate with them. Otherwise it is Ohme: a plan of Predbat's own would be carried out by nothing,
+        while the charger follows a schedule Predbat is not showing (#5399). The session slots are
+        used as the plan instead, as car load only - they earn no cheap rate on any other tariff.
+
+        Left alone when the car slots are already wired to something else, whether in apps.yaml or
+        by the Octopus component for its own Intelligent devices.
+        """
+        if not self.ohme_automatic or octopus_intelligent or self.control_active:
+            self.charger_slots_blocked = None
             return False
-        self.log("Info: Ohme API: Detected Intelligent Octopus tariff {}, taking the car slots from Ohme".format(tariff_code))
+        existing = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+        if isinstance(existing, list) and len(existing) == 1:
+            existing = existing[0]
+        # An unmatched regex from the apps.yaml default is still its literal "re:" string at this
+        # point, as it is for car_charging_energy in automatic_config() - that is not a real entity
+        if existing and existing != SLOT_ACTIVE_ENTITY and not (isinstance(existing, str) and existing.startswith("re:")):
+            # Asked on every poll, so only said when it changes
+            if existing != self.charger_slots_blocked:
+                self.log("Info: Ohme API: Leaving octopus_intelligent_slot set to {} rather than taking the car charging plan from Ohme".format(existing))
+            self.charger_slots_blocked = existing
+            return False
+        self.charger_slots_blocked = None
         return True
 
     async def automatic_config(self):
@@ -536,7 +639,47 @@ class OhmeAPI(ComponentBase):
         """
         self.log("Info: Ohme API: Setting Predbat to use Ohme")
         self.base.car_slot_owner = "ohme"
-        self.set_arg("octopus_intelligent_slot", "binary_sensor.predbat_ohme_slot_active")
+        self.wire_car_slots()
+
+    async def automatic_config_charger_slots(self):
+        """
+        Automatically set the predbat entities to take the car charging plan from Ohme's own schedule.
+
+        The same wiring as automatic_config_octopus_intelligent(), so the slots become the car plan
+        the way Intelligent dispatches do. What differs is how publish_data() labels them: as a
+        charger schedule, which is never priced as a cheap slot.
+
+        The car slots are deliberately not claimed from the Octopus component here. If Octopus
+        finds an Intelligent device of its own - ohme_automatic_octopus_intelligent set to false on
+        an Intelligent tariff, say - it must be free to wire the slots to its own dispatches, or
+        that car would be left on a schedule that never earns its cheap rate.
+        """
+        self.log("Info: Ohme API: Predbat is not controlling the charger, taking the car charging plan from Ohme's own schedule")
+        self.wire_car_slots()
+
+    def clear_car_slots(self):
+        """
+        Take the car slot args back off the Ohme entities, where they are still on them.
+
+        For when nothing of Ohme's should be the car plan any more - Predbat-led control taking
+        over from Intelligent, where Predbat plans the charge itself. Wiring that has since been
+        pointed elsewhere, by the Octopus component or the user, is not ours to clear.
+        """
+        existing = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+        if isinstance(existing, list) and len(existing) == 1:
+            existing = existing[0]
+        if existing != SLOT_ACTIVE_ENTITY:
+            return
+        self.log("Info: Ohme API: The Ohme slots are no longer the car charging plan, clearing the car slot wiring")
+        self.set_arg("octopus_intelligent_slot", [])
+        self.set_arg("octopus_ready_time", [])
+        self.set_arg("octopus_charge_limit", [])
+
+    def wire_car_slots(self):
+        """
+        Point the car slot args at the Ohme entities.
+        """
+        self.set_arg("octopus_intelligent_slot", SLOT_ACTIVE_ENTITY)
         self.set_arg("octopus_ready_time", "select.predbat_ohme_target_time")
         self.set_arg("octopus_charge_limit", "number.predbat_ohme_target_percent")
 
@@ -809,6 +952,9 @@ class OhmeAPI(ComponentBase):
             if start <= datetime.datetime.now().astimezone() <= end:
                 slot_active = True
             dispatch = {"start": start.strftime(TIME_FORMAT_HA), "end": end.strftime(TIME_FORMAT_HA), "energy": -slot_energy, "location": "AT_HOME"}
+            if self.charger_slots:
+                # Ohme's own schedule on a tariff with no dispatch rate: car load, not a cheap slot
+                dispatch["source"] = DISPATCH_SOURCE_CHARGER_SCHEDULE
             if is_completed:
                 completed_dispatches.append(dispatch)
             else:
@@ -817,7 +963,7 @@ class OhmeAPI(ComponentBase):
         if slots:
             slot_attributes["planned_dispatches"] = planned_dispatches
             slot_attributes["completed_dispatches"] = completed_dispatches
-        self.dashboard_item(entity_name_binary_sensor + "_slot_active", state=slot_active, attributes=slot_attributes, app="ohme")
+        self.dashboard_item(SLOT_ACTIVE_ENTITY, state=slot_active, attributes=slot_attributes, app="ohme")
 
         # Publish energy and battery data
         self.dashboard_item(entity_name_sensor + "_energy", state=energy, attributes=ohme_attribute_table.get("energy", {}), app="ohme")

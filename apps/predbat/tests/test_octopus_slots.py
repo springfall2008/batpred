@@ -112,6 +112,70 @@ def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, cons
     return failed
 
 
+def run_charger_schedule_slot_tests(my_predbat, now_utc, time_format):
+    """
+    A charger's own schedule (source charger-schedule, as the Ohme component publishes it off Octopus
+    Intelligent - #5399) is the car's plan but earns no cheap rate: load_octopus_slots() prices it at
+    the tariff, split wherever the rate changes, and rate_add_io_slots() leaves the rates alone.
+    """
+    failed = False
+    minutes_now = my_predbat.minutes_now
+    save_rate_import = my_predbat.rate_import.copy()
+    save_io_adjusted = my_predbat.io_adjusted
+
+    # A three band tariff under a two hour slot: 30p for the first 55 minutes, 15p for the next hour, then 30p
+    for minute in range(minutes_now, minutes_now + 240):
+        my_predbat.rate_import[minute] = 15 if minutes_now + 55 <= minute < minutes_now + 115 else 30
+    start = now_utc
+    end = now_utc + timedelta(minutes=120)
+    slot = [{"start": start.strftime(time_format), "end": end.strftime(time_format), "energy": -12.0, "source": "charger-schedule", "location": "AT_HOME"}]
+    expected = [
+        {"start": minutes_now, "end": minutes_now + 55, "kwh": 5.5, "average": 30, "cost": 165.0, "soc": 0.0, "octopus": True},
+        {"start": minutes_now + 55, "end": minutes_now + 115, "kwh": 6.0, "average": 15, "cost": 90.0, "soc": 0.0, "octopus": True},
+        {"start": minutes_now + 115, "end": minutes_now + 120, "kwh": 0.5, "average": 30, "cost": 15.0, "soc": 0.0, "octopus": True},
+    ]
+    failed |= run_load_octopus_slot_test("charger_schedule_split_by_rate", my_predbat, slot, expected, False, 0.0, 0.0, 1.0)
+
+    # The car pays the house rate in every part of the slot, so the prediction adds no premium for it
+    for minute in range(minutes_now, minutes_now + 120, 5):
+        car_rate = in_car_slot(minute, 1, [expected])[1][0]
+        if car_rate != my_predbat.rate_import[minute]:
+            print("ERROR: charger schedule car rate at minute {} should be the tariff rate {} got {}".format(minute, my_predbat.rate_import[minute], car_rate))
+            failed = True
+
+    # The same slot from Octopus Intelligent (no source) is still one slot at the dispatch rate
+    slot_iog = [{"start": start.strftime(time_format), "end": end.strftime(time_format), "energy": -12.0, "location": "AT_HOME"}]
+    expected_iog = [{"start": minutes_now, "end": minutes_now + 120, "kwh": 12.0, "average": 4, "cost": 48.0, "soc": 0.0, "octopus": True}]
+    failed |= run_load_octopus_slot_test("charger_schedule_vs_dispatch", my_predbat, slot_iog, expected_iog, False, 0.0, 0.0, 1.0)
+
+    # rate_add_io_slots: a charger schedule changes no rate and marks nothing as a dispatch, planned or completed
+    completed_start = now_utc - timedelta(minutes=180)
+    completed_end = now_utc - timedelta(minutes=120)
+    slot_completed = {"start": completed_start.strftime(time_format), "end": completed_end.strftime(time_format), "energy": -6.0, "source": "charger-schedule", "location": "AT_HOME"}
+    my_predbat.io_adjusted = {}
+    rates = my_predbat.rate_import.copy()
+    rates_before = rates.copy()
+    rates = my_predbat.rate_add_io_slots(0, rates, slot + [slot_completed])
+    if rates != rates_before:
+        changed = sorted(minute for minute in rates if rates[minute] != rates_before.get(minute))
+        print("ERROR: charger schedule slots should not change import rates, changed minutes {}".format(changed[:10]))
+        failed = True
+    if my_predbat.io_adjusted:
+        print("ERROR: charger schedule slots should not be marked io_adjusted, got {}".format(sorted(my_predbat.io_adjusted)[:10]))
+        failed = True
+
+    # Whereas the Intelligent dispatch does get the cheap rate, so the test above is not vacuous
+    my_predbat.io_adjusted = {}
+    rates = my_predbat.rate_add_io_slots(0, my_predbat.rate_import.copy(), slot_iog)
+    if rates.get(minutes_now + 60) != 4 or not my_predbat.io_adjusted:
+        print("ERROR: Intelligent dispatch should be stamped at the low rate, got {} io_adjusted {}".format(rates.get(minutes_now + 60), bool(my_predbat.io_adjusted)))
+        failed = True
+
+    my_predbat.rate_import = save_rate_import
+    my_predbat.io_adjusted = save_io_adjusted
+    return failed
+
+
 def run_load_octopus_slots_tests(my_predbat):
     """
     Test for load octopus slots
@@ -284,6 +348,8 @@ def run_load_octopus_slots_tests(my_predbat):
     future_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 120)
     slot_future_zero = [{"start": future_start.strftime(TIME_FORMAT), "end": future_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
     failed |= run_load_octopus_slot_test("zero_kwh_future", my_predbat, slot_future_zero, [], False, 0.0, 0.0, 1.0)
+
+    failed |= run_charger_schedule_slot_tests(my_predbat, now_utc, TIME_FORMAT)
 
     # --- containment overlap: completed dispatch inside a longer planned dispatch (#4497) ---
     # The HA Octopus Energy integration's completed_dispatches are merged ahead of

@@ -18,7 +18,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -3260,13 +3260,16 @@ class Octopus:
         rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
         completed dispatch consumes it like any other.
 
-        :param source: Dispatch source, e.g. smart-charge, bump-charge or BOOST
+        :param source: Dispatch source, e.g. smart-charge, bump-charge, BOOST or charger-schedule
         :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
         :param end_minutes: Dispatch end time in minutes from midnight
         :return: True if the dispatch is eligible for the off-peak rate
         """
         # Ignore bump-charge slots as their cost won't change
         if source == "bump-charge" or source == "BOOST":
+            return False
+        # A charger's own schedule on a tariff with no dispatch rate: car load only, never a cheap slot
+        if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
             return False
         if end_minutes <= self.minutes_now:
             return True
@@ -3513,6 +3516,31 @@ class Octopus:
         self.dispatch_unconfirmed_last[car_n] = dedup_key
         self.log("Octopus: Note: car {} dispatch active at {} but the car is not charging - import in this slot may be billed at the full rate, needs reconciling against the bill (GH#5080)".format(car_n, self.time_abs_str(slot)))
 
+    def split_slot_by_rate(self, start_minutes, end_minutes, kwh):
+        """
+        Split a car slot wherever the import rate changes, as (start, end, kwh, rate) chunks.
+
+        For a slot billed at the normal tariff rate rather than a dispatch rate - a charger's own
+        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE). Such a session commonly runs for hours and
+        crosses rate bands, so pricing all of it at the rate it starts on would give the car a rate
+        of its own that differs from the house rate for the rest of the slot (car_charge_slot_rate()).
+        kWh is apportioned to each chunk by its share of the slot's duration.
+        """
+        span = end_minutes - start_minutes
+        if span <= 0:
+            return []
+        chunks = []
+        chunk_start = start_minutes
+        rate = self.rate_import.get(start_minutes, self.rate_min_base)
+        for minute in range(start_minutes + 1, end_minutes):
+            minute_rate = self.rate_import.get(minute, rate)
+            if minute_rate != rate:
+                chunks.append((chunk_start, minute, kwh * (minute - chunk_start) / span, rate))
+                chunk_start = minute
+                rate = minute_rate
+        chunks.append((chunk_start, end_minutes, kwh * (end_minutes - chunk_start) / span, rate))
+        return chunks
+
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
         Turn octopus slots into charging plan
@@ -3590,7 +3618,9 @@ class Octopus:
             # approximation (real draw isn't perfectly uniform across the slot) but matches how
             # rate_add_io_slots() below treats rate as uniform per 30-min block too.
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
+            if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
+                chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
+            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
                 slot_block_start = (start_minutes // 30) * 30
                 num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
                 day_offset = (start_minutes - 720) // (24 * 60)
