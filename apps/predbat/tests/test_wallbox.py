@@ -22,10 +22,13 @@ from mock_base import MockBase
 
 from wallbox import (
     CHARGING_STATUS_IDS,
+    MAX_POLL_SECONDS,
+    MIN_POLL_SECONDS,
     PAUSED_STATUS_IDS,
     WALLBOX_API_URL,
     WALLBOX_AUTH_URL,
     WALLBOX_STATUS,
+    WallboxAPI,
     WallboxApiError,
     WallboxAuthError,
     WallboxCharger,
@@ -391,6 +394,261 @@ def test_transport_rejects_an_unknown_eco_smart_mode():
     print("  ✓ An unknown Eco-Smart mode is rejected locally")
 
 
+class _StubTransport:
+    """In-memory transport: serves statuses by charger id and records every call."""
+
+    def __init__(self, statuses=None):
+        """Hold the statuses to serve; errors maps a call tuple to an exception to raise once."""
+        self.statuses = statuses if statuses is not None else {101: _status()}
+        self.calls = []
+        self.errors = {}
+
+    def _record(self, *call):
+        """Record a call, raising the queued error for it if there is one."""
+        self.calls.append(call)
+        error = self.errors.pop(call, None) or self.errors.pop((call[0],), None)
+        if error:
+            raise error
+        return {}
+
+    async def list_chargers(self):
+        """Return the ids of the statuses held."""
+        self._record("list_chargers")
+        return list(self.statuses)
+
+    async def get_status(self, charger_id):
+        """Return one charger's status payload."""
+        self._record("get_status", charger_id)
+        return self.statuses[charger_id]
+
+    async def pause(self, charger_id):
+        """Record a pause."""
+        return self._record("pause", charger_id)
+
+    async def resume(self, charger_id):
+        """Record a resume."""
+        return self._record("resume", charger_id)
+
+    async def resume_schedule(self, charger_id):
+        """Record a resume schedule."""
+        return self._record("resume_schedule", charger_id)
+
+    async def set_locked(self, charger_id, locked):
+        """Record a lock change."""
+        return self._record("set_locked", charger_id, locked)
+
+    async def set_max_charging_current(self, charger_id, amps):
+        """Record a current change."""
+        return self._record("set_max_charging_current", charger_id, amps)
+
+    async def set_eco_smart(self, charger_id, mode):
+        """Record an Eco-Smart change."""
+        return self._record("set_eco_smart", charger_id, mode)
+
+    def count(self, name):
+        """How many times a call of this name was made."""
+        return len([call for call in self.calls if call[0] == name])
+
+
+def _make_component(statuses=None, **overrides):
+    """Build a WallboxAPI against MockBase with a stub transport and a captured log."""
+    args = {"username": "user@example.com", "password": "secret", "automatic": True, "wallbox_control": False, "poll_seconds": 120}
+    args.update(overrides)
+    component = WallboxAPI(MockBase(), **args)
+    component.transport = _StubTransport(statuses)
+    component.log_messages = []
+    component.log = component.log_messages.append
+    return component
+
+
+def _logged(component, text):
+    """Was a message containing this text logged."""
+    return any(text in message for message in component.log_messages)
+
+
+def test_component_registration():
+    """The component is registered with matching config keys and event filter."""
+    import inspect
+
+    from components import COMPONENT_LIST, load_component_class
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST["wallbox"]
+    assert load_component_class(entry) is WallboxAPI
+    assert entry["event_filter"] == "predbat_wallbox_"
+    assert entry["phase"] == 1 and entry["can_restart"] is True
+    assert entry["args"]["username"]["required"] is True and entry["args"]["username"]["secret"] is True
+    assert entry["args"]["password"]["required"] is True and entry["args"]["password"]["secret"] is True
+    assert {spec["config"] for spec in entry["args"].values()} == {"wallbox_username", "wallbox_password", "wallbox_automatic", "wallbox_control", "wallbox_poll_seconds"}
+    parameters = inspect.signature(WallboxAPI.initialize).parameters
+    for arg_name, spec in entry["args"].items():
+        assert arg_name in parameters, "initialize() has no parameter '{}'".format(arg_name)
+        assert spec["config"] in APPS_SCHEMA, "{} missing from APPS_SCHEMA".format(spec["config"])
+    print("  ✓ Component is registered with matching config keys")
+
+
+def test_component_poll_seconds_is_clamped():
+    """The poll interval is a whole number of minutes between the limits."""
+    assert _make_component(poll_seconds=120).poll_seconds == 120
+    assert _make_component(poll_seconds=90).poll_seconds == 120
+    assert _make_component(poll_seconds=5).poll_seconds == MIN_POLL_SECONDS
+    assert _make_component(poll_seconds=99999).poll_seconds == MAX_POLL_SECONDS
+    assert _make_component(poll_seconds="junk").poll_seconds == 120
+    print("  ✓ Poll interval is rounded and clamped")
+
+
+def test_component_missing_credentials():
+    """Without both credentials there is no transport and run() fails."""
+    component = WallboxAPI(MockBase(), username=None, password="secret")
+    assert component.transport is None
+    assert run_async(component.run(0, True)) is False
+    print("  ✓ Missing credentials leave the component failed")
+
+
+def test_component_publishes_one_charger():
+    """One charger without Eco-Smart publishes exactly the expected entities and values."""
+    component = _make_component()
+    assert run_async(component.run(0, True)) is True
+
+    entities = component.base.entities
+    prefix = "predbat_wallbox_101"
+    wallbox_entities = {name for name in entities if "_wallbox_" in name}
+    assert wallbox_entities == {
+        "sensor.{}_status".format(prefix), "sensor.{}_power".format(prefix), "sensor.{}_session_energy".format(prefix),
+        "binary_sensor.{}_connected".format(prefix), "binary_sensor.{}_charging".format(prefix),
+        "switch.{}_charging".format(prefix), "switch.{}_locked".format(prefix), "number.{}_max_charging_current".format(prefix),
+    }, wallbox_entities
+    assert entities["sensor.{}_status".format(prefix)]["state"] == "Charging"
+    status_attributes = entities["sensor.{}_status".format(prefix)]["attributes"]
+    assert status_attributes["status_id"] == 193 and status_attributes["serial_number"] == "900001" and status_attributes["name"] == "Garage"
+    assert entities["sensor.{}_power".format(prefix)]["state"] == 7200.0
+    assert entities["sensor.{}_power".format(prefix)]["attributes"]["unit_of_measurement"] == "W"
+    assert entities["sensor.{}_session_energy".format(prefix)]["state"] == 4.5
+    assert entities["binary_sensor.{}_connected".format(prefix)]["state"] == "on"
+    assert entities["binary_sensor.{}_charging".format(prefix)]["state"] == "on"
+    assert entities["switch.{}_charging".format(prefix)]["state"] == "on"
+    assert entities["switch.{}_locked".format(prefix)]["state"] == "off"
+    number = entities["number.{}_max_charging_current".format(prefix)]
+    assert number["state"] == 32 and number["attributes"]["min"] == 6 and number["attributes"]["max"] == 32 and number["attributes"]["step"] == 1
+    assert component.last_success_timestamp is not None
+    print("  ✓ One charger publishes the expected entities")
+
+
+def test_component_publishes_two_chargers_and_eco_smart():
+    """Each charger gets its own entities, and the Eco-Smart select appears only where supported."""
+    component = _make_component({202: _status(status_id=161, power=0, energy=0), 101: _status(eco={"enabled": True, "mode": 1})})
+    assert run_async(component.run(0, True)) is True
+
+    entities = component.base.entities
+    assert entities["sensor.predbat_wallbox_202_status"]["state"] == "Ready"
+    assert entities["binary_sensor.predbat_wallbox_202_connected"]["state"] == "off"
+    assert entities["switch.predbat_wallbox_202_charging"]["state"] == "off"
+    select = entities["select.predbat_wallbox_101_eco_smart"]
+    assert select["state"] == "full_solar" and select["attributes"]["options"] == ["off", "eco_mode", "full_solar"]
+    assert "select.predbat_wallbox_202_eco_smart" not in entities
+    assert [charger.charger_id for charger in component.ordered_chargers()] == ["101", "202"]
+    print("  ✓ Two chargers publish separately, Eco-Smart only where supported")
+
+
+def test_component_poll_cadence():
+    """Status is polled on the first run and every poll_seconds; the charger list every 30 minutes."""
+    component = _make_component()
+    run_async(component.run(0, True))
+    assert component.transport.count("get_status") == 1 and component.transport.count("list_chargers") == 1
+    run_async(component.run(60, False))
+    assert component.transport.count("get_status") == 1, "60s is between polls at poll_seconds=120"
+    run_async(component.run(120, False))
+    assert component.transport.count("get_status") == 2
+    assert component.transport.count("list_chargers") == 1, "The charger list is not refetched every poll"
+    run_async(component.run(1800, False))
+    assert component.transport.count("list_chargers") == 2
+    print("  ✓ Poll cadence follows poll_seconds and the 30 minute list refresh")
+
+
+def test_component_no_chargers():
+    """An account with no chargers warns on the first run and does not stamp a success."""
+    component = _make_component({})
+    assert run_async(component.run(0, True)) is True
+    assert _logged(component, "no chargers were found")
+    assert component.last_success_timestamp is None
+    assert not [name for name in component.base.entities if "_wallbox_" in name]
+    print("  ✓ An account with no chargers warns and publishes nothing")
+
+
+def test_component_one_charger_failing_does_not_blank_the_other():
+    """A status failure on one charger keeps the other published and keeps the charger order."""
+    component = _make_component({101: _status(), 202: _status(status_id=161, power=0)})
+    run_async(component.run(0, True))
+    component.transport.errors[("get_status", 202)] = WallboxApiError("HTTP 500")
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+
+    assert run_async(component.run(120, False)) is True
+    assert component.base.entities["sensor.predbat_wallbox_101_status"]["state"] == "Paused"
+    assert component.stale_ids == {"202"}
+    assert [charger.charger_id for charger in component.ordered_chargers()] == ["101", "202"], "Charger N must stay car N"
+    assert _logged(component, "could not read charger 202")
+
+    assert run_async(component.run(240, False)) is True
+    assert component.stale_ids == set()
+    print("  ✓ One failing charger does not blank the other")
+
+
+def test_component_every_charger_failing_fails_the_cycle():
+    """When no charger could be read the cycle fails and no success is stamped."""
+    component = _make_component()
+    component.transport.errors[("get_status",)] = WallboxApiError("HTTP 500")
+    assert run_async(component.run(0, True)) is False
+    assert component.last_success_timestamp is None
+    assert _logged(component, "poll failed")
+    print("  ✓ A poll that reads no charger fails the cycle")
+
+
+def test_component_auth_failure():
+    """Bad credentials log an error naming the config keys and fail the cycle."""
+    component = _make_component()
+    component.transport.errors[("list_chargers",)] = WallboxAuthError("rejected")
+    assert run_async(component.run(0, True)) is False
+    assert _logged(component, "Error: wallbox:") and _logged(component, "wallbox_username")
+    print("  ✓ Bad credentials are reported as an error")
+
+
+def test_component_rate_limit_backoff():
+    """A 429 skips polls on a doubling back-off capped at 15 minutes, then recovers."""
+    component = _make_component()
+    run_async(component.run(0, True))
+
+    component.transport.errors[("get_status",)] = WallboxRateLimitError("429")
+    assert run_async(component.run(120, False)) is True, "A rate limit after start-up is not a failed cycle"
+    assert component.skip_cycles == 2 and _logged(component, "rate limited")
+
+    polls = component.transport.count("get_status")
+    run_async(component.run(180, False))
+    run_async(component.run(240, False))
+    assert component.transport.count("get_status") == polls, "Both skipped cycles made no call"
+
+    for expected in (4, 8, 15, 15):
+        component.skip_cycles = 0
+        component.transport.errors[("get_status",)] = WallboxRateLimitError("429")
+        run_async(component.run(120, False))
+        assert component.skip_cycles == expected, (expected, component.skip_cycles)
+
+    component.skip_cycles = 0
+    assert run_async(component.run(120, False)) is True
+    assert component.backoff_cycles == 0, "A good poll resets the back-off"
+    print("  ✓ Rate limit back-off doubles, caps at 15 minutes and resets")
+
+
+def test_component_rate_limit_on_first_run_fails():
+    """A 429 on the very first run fails it, so the component is not marked started with no data."""
+    component = _make_component()
+    component.transport.errors[("list_chargers",)] = WallboxRateLimitError("429")
+    assert run_async(component.run(0, True)) is False
+    # The retry of the first run must poll, not be swallowed by the skip counter
+    assert run_async(component.run(0, True)) is True
+    assert "sensor.predbat_wallbox_101_status" in component.base.entities
+    print("  ✓ A rate limit on the first run fails it and the retry polls")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -413,5 +671,17 @@ def test_wallbox(my_predbat=None):
     test_transport_control_refused_for_rights()
     test_transport_control_accepts_an_empty_body()
     test_transport_rejects_an_unknown_eco_smart_mode()
+    test_component_registration()
+    test_component_poll_seconds_is_clamped()
+    test_component_missing_credentials()
+    test_component_publishes_one_charger()
+    test_component_publishes_two_chargers_and_eco_smart()
+    test_component_poll_cadence()
+    test_component_no_chargers()
+    test_component_one_charger_failing_does_not_blank_the_other()
+    test_component_every_charger_failing_fails_the_cycle()
+    test_component_auth_failure()
+    test_component_rate_limit_backoff()
+    test_component_rate_limit_on_first_run_fails()
     print("=" * 70)
     return False

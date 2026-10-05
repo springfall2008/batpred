@@ -30,6 +30,7 @@ from typing import Optional
 
 import aiohttp
 
+from component_base import ComponentBase
 from predbat_metrics import record_api_call
 
 WALLBOX_AUTH_URL = "https://user-api.wall-box.com/"
@@ -50,6 +51,22 @@ REMOTE_ACTION_RESUME_SCHEDULE = 9
 
 # How long the command line mode waits before reading a charger back after a control
 COMMAND_SETTLE_SECONDS = 8
+
+# components.py's is_alive() fails a component whose last successful update is more than
+# 60 minutes old, so the poll interval is capped at half that
+MIN_POLL_SECONDS = 60
+MAX_POLL_SECONDS = 30 * 60
+DEFAULT_POLL_SECONDS = 120
+CHARGER_LIST_SECONDS = 30 * 60
+
+# Rate limit back-off, in 60 second run cycles. The cap keeps recovery well inside the
+# 60 minute health window.
+RATE_LIMIT_MIN_CYCLES = 2
+RATE_LIMIT_MAX_CYCLES = 15
+
+MIN_CHARGING_CURRENT = 6
+# Used as the upper bound only when the charger does not report one
+DEFAULT_MAX_CHARGING_CURRENT = 32
 
 # Status id to (text, car connected). The text is the Home Assistant wallbox integration's
 # wording, so states match what existing users already see. A None status id means the
@@ -370,6 +387,187 @@ class WallboxTransport:
             raise WallboxApiError("unknown Eco-Smart mode '{}'".format(mode))
         attributes = {"enabled": 0 if mode == ECO_SMART_OFF else 1, "mode": 1 if mode == ECO_SMART_FULL_SOLAR else 0}
         return await self._api("PUT", "v4/chargers/{}/eco-smart".format(charger_id), body={"data": {"attributes": attributes, "type": "eco_smart"}}, write=True)
+
+
+wallbox_attribute_table = {
+    "status": {"friendly_name": "Wallbox Status", "icon": "mdi:information-outline"},
+    "power": {"friendly_name": "Wallbox Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "session_energy": {"friendly_name": "Wallbox Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    "connected": {"friendly_name": "Wallbox Car Connected", "icon": "mdi:ev-plug-type2"},
+    "charging": {"friendly_name": "Wallbox Charging", "icon": "mdi:battery-charging"},
+    "charging_switch": {"friendly_name": "Wallbox Charge", "icon": "mdi:ev-station"},
+    "locked": {"friendly_name": "Wallbox Locked", "icon": "mdi:lock"},
+    "max_charging_current": {"friendly_name": "Wallbox Maximum Charging Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "min": MIN_CHARGING_CURRENT, "step": 1},
+    "eco_smart": {"friendly_name": "Wallbox Eco-Smart", "icon": "mdi:solar-power", "options": ECO_SMART_OPTIONS},
+    "control": {"friendly_name": "Wallbox Charge Control", "icon": "mdi:ev-station"},
+}
+
+
+class WallboxAPI(ComponentBase):
+    """Wallbox component: monitoring, controls and Predbat-led charging for Wallbox chargers."""
+
+    def initialize(self, username, password, automatic=True, wallbox_control=False, poll_seconds=120):
+        """Set up component state and the transport."""
+        self.automatic = automatic
+        self.wallbox_control = bool(wallbox_control)
+        # ComponentBase.start() calls run() every 60 seconds, so the interval is a whole number of those
+        self.poll_seconds = min(MAX_POLL_SECONDS, max(MIN_POLL_SECONDS, int(round(_to_float(poll_seconds, DEFAULT_POLL_SECONDS) / 60.0)) * 60))
+
+        self.chargers = {}
+        self.charger_ids = []
+        self.stale_ids = set()
+        self.queued_events = []
+        self.skip_cycles = 0
+        self.backoff_cycles = 0
+        self.permission_warned = False
+        self._auto_configured = False
+        self.control_active = False
+        self.control_enabled = True
+        self.transport = None
+
+        if not username or not password:
+            self.log("Error: wallbox: wallbox_username and wallbox_password must both be set")
+            return
+        self.transport = WallboxTransport(self.log, username, password)
+
+    def entity_prefix(self, charger):
+        """Return the entity name prefix for a charger, e.g. predbat_wallbox_12345."""
+        return "{}_wallbox_{}".format(self.prefix, charger.charger_id)
+
+    def ordered_chargers(self):
+        """The chargers in id order. This order is what makes charger N the same thing as car N."""
+        return [self.chargers[charger_id] for charger_id in sorted(self.chargers)]
+
+    def warn_permission(self):
+        """Say once that the account cannot control the charger."""
+        if not self.permission_warned:
+            self.log("Warn: wallbox: Wallbox refused a control - the account needs admin rights over the charger. Monitoring continues")
+            self.permission_warned = True
+
+    async def load_control_state(self):
+        """Restore saved control state. Filled in with plan-led control."""
+
+    def enable_control(self):
+        """Decide whether plan-led control can run. Filled in with plan-led control."""
+
+    def automatic_config(self):
+        """Wire the charger entities into Predbat's car inputs. Filled in with automatic configuration."""
+
+    async def control_tick(self, now):
+        """Run one cycle of plan-led control. Filled in with plan-led control."""
+
+    async def run(self, seconds, first):
+        """Process queued control events, then poll and publish."""
+        if not self.transport:
+            return False
+        if first:
+            await self.load_control_state()
+            self.enable_control()
+            self.skip_cycles = 0
+        if self.skip_cycles > 0:
+            self.skip_cycles -= 1
+            return True
+        try:
+            refresh = await self.process_events()
+            if first or refresh or (seconds % self.poll_seconds) == 0:
+                return await self.poll(seconds, first)
+            return True
+        except WallboxRateLimitError:
+            self.backoff_cycles = min(RATE_LIMIT_MAX_CYCLES, max(RATE_LIMIT_MIN_CYCLES, self.backoff_cycles * 2))
+            self.skip_cycles = self.backoff_cycles
+            self.log("Warn: wallbox: rate limited by the Wallbox API, pausing polling for {} minutes".format(self.backoff_cycles))
+            # After start-up one rate limit is not a failure, but a first run that got no
+            # data must not mark the component started
+            return not first
+        except WallboxAuthError as exc:
+            self.log("Error: wallbox: sign in failed, check wallbox_username and wallbox_password: {}".format(exc))
+            return False
+        except WallboxError as exc:
+            self.log("Warn: wallbox: poll failed: {}".format(exc))
+            return False
+
+    async def process_events(self):
+        """Run every queued control. Returns True when at least one ran, so the caller polls afresh."""
+        refresh = False
+        while self.queued_events:
+            handler, *event_args = self.queued_events[0]
+            try:
+                await handler(*event_args)
+            except WallboxRateLimitError:
+                # Left on the queue, so it is retried once the back-off has passed
+                raise
+            except WallboxPermissionError:
+                self.warn_permission()
+            except WallboxError as exc:
+                self.log("Warn: wallbox: control failed: {}".format(exc))
+            self.queued_events.pop(0)
+            refresh = True
+        return refresh
+
+    async def poll(self, seconds, first):
+        """Read every charger, publish, and run automatic configuration and control."""
+        if first or not self.charger_ids or (seconds % CHARGER_LIST_SECONDS) == 0:
+            self.charger_ids = sorted(await self.transport.list_chargers(), key=str)
+        if not self.charger_ids:
+            if first:
+                self.log("Warn: wallbox: signed in but no chargers were found on the account")
+            return True
+
+        chargers = {}
+        stale_ids = set()
+        for charger_id in self.charger_ids:
+            key = str(charger_id)
+            try:
+                chargers[key] = normalise_charger(charger_id, await self.transport.get_status(charger_id))
+            except WallboxApiError as exc:
+                self.log("Warn: wallbox: could not read charger {}: {}".format(charger_id, exc))
+                # Keep the last record so the charger keeps its place in the car order,
+                # marked stale so control does not act on old state
+                if key in self.chargers:
+                    chargers[key] = self.chargers[key]
+                    stale_ids.add(key)
+        if len(stale_ids) == len(chargers):
+            raise WallboxApiError("no charger could be read")
+
+        self.chargers = chargers
+        self.stale_ids = stale_ids
+        await self.publish_data()
+        if self.automatic and not self._auto_configured:
+            self.automatic_config()
+            self._auto_configured = True
+        try:
+            await self.control_tick(self.now_utc_exact)
+        except WallboxPermissionError:
+            self.warn_permission()
+        except WallboxApiError as exc:
+            # Monitoring succeeded, so a refused control is a warning, not a failed cycle
+            self.log("Warn: wallbox: charge control failed: {}".format(exc))
+        self.backoff_cycles = 0
+        self.update_success_timestamp()
+        return True
+
+    async def publish_data(self):
+        """Publish every known charger as Predbat entities."""
+        if self.control_active:
+            # Published only while control could act on it, so the switch is never a lie
+            self.dashboard_item("switch.{}_wallbox_control".format(self.prefix), state="on" if self.control_enabled else "off", attributes=wallbox_attribute_table["control"], app="wallbox")
+        for charger in self.ordered_chargers():
+            prefix = self.entity_prefix(charger)
+            status_attributes = dict(wallbox_attribute_table["status"])
+            status_attributes.update({"status_id": charger.status_id, "name": charger.name, "serial_number": charger.serial, "part_number": charger.part_number, "software_version": charger.software_version})
+            current_attributes = dict(wallbox_attribute_table["max_charging_current"])
+            current_attributes["max"] = charger.max_available_current if charger.max_available_current >= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
+
+            self.dashboard_item("sensor.{}_status".format(prefix), state=charger.status, attributes=status_attributes, app="wallbox")
+            self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=wallbox_attribute_table["power"], app="wallbox")
+            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=wallbox_attribute_table["session_energy"], app="wallbox")
+            self.dashboard_item("binary_sensor.{}_connected".format(prefix), state="on" if charger.connected else "off", attributes=wallbox_attribute_table["connected"], app="wallbox")
+            self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=wallbox_attribute_table["charging"], app="wallbox")
+            self.dashboard_item("switch.{}_charging".format(prefix), state="on" if charger.charging else "off", attributes=wallbox_attribute_table["charging_switch"], app="wallbox")
+            self.dashboard_item("switch.{}_locked".format(prefix), state="on" if charger.locked else "off", attributes=wallbox_attribute_table["locked"], app="wallbox")
+            self.dashboard_item("number.{}_max_charging_current".format(prefix), state=charger.max_charging_current, attributes=current_attributes, app="wallbox")
+            if charger.eco_smart is not None:
+                self.dashboard_item("select.{}_eco_smart".format(prefix), state=charger.eco_smart, attributes=wallbox_attribute_table["eco_smart"], app="wallbox")
 
 
 async def run_wallbox_cli(args):  # pragma: no cover
