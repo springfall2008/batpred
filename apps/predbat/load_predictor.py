@@ -1877,12 +1877,13 @@ class LoadPredictor:
 
         return result
 
-    def save(self, filepath):
+    def save(self, filepath, forecast_hours=None):
         """
         Save model to file.
 
         Args:
             filepath: Path to save model (without extension)
+            forecast_hours: Configured forecast hours, or None to retain the last prediction horizon
         """
         if not self.model_initialized:
             self.log("Warn: ML Predictor: No model to save")
@@ -1890,11 +1891,12 @@ class LoadPredictor:
 
         try:
             # Prepare metadata
+            predict_horizon = self.predict_horizon if forecast_hours is None else max(int(forecast_hours), 24) * (60 // CHUNK_MINUTES)
             metadata = {
                 "model_version": MODEL_VERSION,
                 "lookback_steps": LOOKBACK_STEPS,
                 "output_steps": OUTPUT_STEPS,
-                "predict_horizon": self.predict_horizon,
+                "predict_horizon": predict_horizon,
                 "hidden_sizes": HIDDEN_SIZES,
                 "training_timestamp": self.training_timestamp.isoformat() if self.training_timestamp else None,
                 "validation_mae": float(self.validation_mae) if self.validation_mae else None,

@@ -1041,7 +1041,7 @@ class LoadMLComponent(ComponentBase):
 
                 # Save model (fast - no lock needed)
                 if self.model_filepath:
-                    self.predictor.save(self.model_filepath)
+                    self.predictor.save(self.model_filepath, forecast_hours=self.get_arg("forecast_hours", 48))
             else:
                 self.log("Warn: ML Component: Training failed")
 

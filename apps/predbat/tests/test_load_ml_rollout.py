@@ -302,6 +302,42 @@ def _test_component_reads_current_forecast_hours():
         assert "over {:g}h".format(hours) in messages[-1], "Component log must show the actual duration"
 
 
+def _test_component_saves_configured_horizon_before_prediction():
+    """Initial and subsequent training saves must use the current configured horizon."""
+    import asyncio
+    import json
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from load_ml_component import LoadMLComponent
+
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+    settings = {"load_today": ["sensor.load_today"]}
+    messages = []
+    base = SimpleNamespace(prefix="predbat", config_root=None, now_utc=now, midnight_utc=now.replace(hour=0, minute=0), local_tz=timezone.utc, args=settings, log=messages.append)
+    base.get_arg = lambda key, default=None, **kwargs: settings.get(key, default)
+    component = LoadMLComponent(base, load_ml_enable=True)
+    component.predictor = _collapsed_predictor(0.05)
+    component.load_data = _spike_history(now)
+    component.load_data_age_days = HISTORY_DAYS
+
+    with tempfile.TemporaryDirectory() as directory:
+        component.model_filepath = str(Path(directory) / "model.npz")
+        with patch.object(component.predictor, "train_curriculum", return_value=0.01), patch.object(component.predictor, "predict") as predict:
+            for requested, expected_steps, is_initial in ((96, 1152, True), (31, 372, False), (12, 288, False), (412, 4944, False), (None, 576, False)):
+                if requested is None:
+                    settings.pop("forecast_hours", None)
+                else:
+                    settings["forecast_hours"] = requested
+                asyncio.run(component._do_training(is_initial))
+                with np.load(component.model_filepath) as saved:
+                    metadata = json.loads(str(saved["metadata_json"]))
+                assert metadata["predict_horizon"] == expected_steps, "Training save must reflect the setting before any prediction"
+            predict.assert_not_called()
+
+
 def _test_component_future_inputs_outlast_short_history():
     """Available future temperatures and rates must not be clipped to load or PV history."""
     import asyncio
@@ -408,6 +444,7 @@ def run_load_ml_rollout_tests(my_predbat=None):
         _test_configurable_forecast_preserves_shared_predictions,
         _test_configurable_forecast_saved_model_and_input_fallback,
         _test_component_reads_current_forecast_hours,
+        _test_component_saves_configured_horizon_before_prediction,
         _test_component_future_inputs_outlast_short_history,
         _test_load_ml_temperature_chart_uses_forecast_hours,
     ):

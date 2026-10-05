@@ -1223,6 +1223,54 @@ def _test_temperature_forecast_horizon(my_predbat=None):
     return 0
 
 
+def _test_run_failed_refresh_publishes_retained_cache(my_predbat=None):
+    """Failed startup and horizon refreshes must immediately publish usable cached data."""
+    async def check_refresh():
+        """Keep cache age, failed request status and hourly retry cadence intact."""
+        for first in (True, False):
+            component = MockTemperatureAPI(51.5, -0.1, "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m")
+            settings = {"forecast_hours": 96}
+            component.get_arg = lambda key, default=None, **kwargs: settings.get(key, default)
+            cached_time = datetime.now() - timedelta(minutes=10)
+            cached_data = {
+                "utc_offset_seconds": 0,
+                "current": {"temperature_2m": 10.0},
+                "hourly": {"time": [(datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M")], "temperature_2m": [9.5]}
+            }
+
+            async def restore_cache():
+                """Restore the fresh but short cache on startup."""
+                component.temperature_data = cached_data
+                component.last_updated_timestamp = cached_time
+
+            if not first:
+                await restore_cache()
+                component.temperature_forecast_minutes = 48 * 60
+            seconds = 0 if first else 60
+            with patch.object(component, "load_temperature_cache", side_effect=restore_cache), patch.object(component, "save_temperature_cache", new_callable=AsyncMock) as save, patch.object(component, "update_success_timestamp") as success:
+                with patch("temperature.aiohttp.ClientSession", side_effect=aiohttp.ClientError("Unavailable")), patch("temperature.asyncio.sleep", new_callable=AsyncMock), patch("temperature.record_api_call") as record:
+                    result = await component.run(seconds=seconds, first=first)
+                assert result, "A failed refresh must keep the component alive"
+                sensor = component.dashboard_items.get("sensor.predbat_temperature")
+                assert sensor is not None, "Retained cache must be published during the failed refresh run"
+                assert sensor["state"] == 10.0 and list(sensor["attributes"]["results"].values()) == [9.5]
+                assert component.temperature_data is cached_data and component.last_updated_timestamp == cached_time
+                assert sensor["attributes"]["last_updated"] == str(cached_time), "Publishing must not make old weather appear fresh"
+                assert component.failures_total == 1, "Failed request must still be counted"
+                record.assert_called_once_with("temperature", False, "connection_error")
+                success.assert_not_called()
+                save.assert_not_awaited()
+                with patch.object(component, "fetch_temperature_data", new_callable=AsyncMock, return_value=None) as fetch:
+                    await component.run(seconds=seconds + 60, first=False)
+                    fetch.assert_not_awaited()
+                    await component.run(seconds=3600, first=False)
+                    fetch.assert_awaited_once()
+                assert component.last_updated_timestamp == cached_time
+
+    asyncio.run(check_refresh())
+    return 0
+
+
 def test_temperature(my_predbat=None):
     """
     Comprehensive test suite for External Temperature API.
@@ -1265,6 +1313,7 @@ def test_temperature(my_predbat=None):
         ("run_saves_cache", _test_run_saves_to_cache, "successful fetch saves to storage cache"),
         ("run_no_save_failed", _test_run_no_save_on_failed_fetch, "failed fetch does not save to cache"),
         ("forecast_horizon", _test_temperature_forecast_horizon, "Forecast length, provider limit and cache refresh"),
+        ("failed_refresh_cache", _test_run_failed_refresh_publishes_retained_cache, "Failed refresh publishes retained cache immediately"),
     ]
 
     print("\n" + "=" * 70)

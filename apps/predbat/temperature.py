@@ -99,6 +99,9 @@ class TemperatureAPI(ComponentBase):
                     self.last_updated_timestamp = datetime.now()
                     self.publish_temperature_sensor()
                     await self.save_temperature_cache()
+                elif self.temperature_data is not None:
+                    # Publish retained data without treating the failed fetch as fresh or successful.
+                    self.publish_temperature_sensor()
             elif self.temperature_data is not None:
                 self.temperature_forecast_minutes = forecast_minutes
                 self.update_success_timestamp()
