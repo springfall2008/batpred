@@ -425,6 +425,11 @@ stretch the range and pull ordinary-price slots in or out. A free or discounted 
 and a rate override you put on an event slot (rates_import_override, rates_export_override or a manual rate) is kept.
 The event rates themselves are still used when planning.
 
+When an export event pays more than the tariff's most expensive import rate, the plan is also offered every import slot
+cheaper than the event's export price before it starts, so the battery can be charged ahead of the event to export into it.
+The low rate sensors (binary_sensor.predbat_low_rate_slot and predbat.low_rate_start, \_end, \_cost and \_duration) still
+show only the tariff's own cheap slots.
+
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.

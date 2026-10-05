@@ -27,6 +27,10 @@ rate (rate_import_pre_saving/rate_export_pre_saving: the tariff snapshotted afte
 overlay and before the session loaders) rather than excluding it outright. self.rate_max/rate_min/rate_average (and the export equivalents) are deliberately left
 untouched - they feed dashboard sensors, graph scaling, and plan.py pricing, where the real boosted
 price is what should be shown.
+
+Ahead of an export event that pays more than the tariff's highest import price, find_low_rate_windows()
+also gives the plan the import windows before the event, so it can still charge to export into it
+(#249). The low rate sensors keep the tariff's own cheap windows (low_rates_tariff).
 """
 
 from datetime import timedelta
@@ -546,6 +550,165 @@ def test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_pr
     return failed
 
 
+def test_plan_charges_ahead_of_a_qualifying_export_event(my_predbat):
+    """The plan must be offered import windows before an export event that beats the tariff's highest import price (#249).
+
+    _setup_export_event(): 20p night / 30p day import, flat 15p export with a +50p event at 10:00-12:00,
+    so the event pays 65p against a 30p import maximum. find_low_rate_windows() must give the plan the
+    30p day-rate window that ends at the event, and only the tariff's cheap windows after it. The low
+    rate sensors' windows must stay at the 20p night rate (GH#5050).
+    """
+    print("**** test_plan_charges_ahead_of_a_qualifying_export_event ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    my_predbat.set_rate_thresholds()
+    if my_predbat.rate_import_pre_event_end != 600 or my_predbat.rate_import_pre_event_threshold != 65.0:
+        print("ERROR: the 10:00 event paying 65p should qualify, got end {} threshold {}".format(my_predbat.rate_import_pre_event_end, my_predbat.rate_import_pre_event_threshold))
+        failed = True
+
+    my_predbat.find_low_rate_windows()
+    pre_event = [window for window in my_predbat.low_rates if window["end"] <= 600]
+    after_event = [window for window in my_predbat.low_rates if window["end"] > 600]
+    if not any(window["average"] == 30.0 for window in pre_event):
+        print("ERROR: the 30p day rate before the event should be a plan charge window, got {}".format([(w["start"], w["end"], w["average"]) for w in pre_event]))
+        failed = True
+    if any(window["average"] != 20.0 for window in after_event):
+        print("ERROR: after the event only the tariff's 20p night windows should be offered, got {}".format([(w["start"], w["end"], w["average"]) for w in after_event]))
+        failed = True
+    if sorted(set(window["average"] for window in my_predbat.low_rates_tariff)) != [20.0]:
+        print("ERROR: the low rate sensors' windows should hold only the 20p night rate, got {}".format(sorted(set(window["average"] for window in my_predbat.low_rates_tariff))))
+        failed = True
+    starts = [window["start"] for window in my_predbat.low_rates]
+    if starts != sorted(starts) or any(my_predbat.low_rates[n]["end"] > my_predbat.low_rates[n + 1]["start"] for n in range(len(starts) - 1)):
+        print("ERROR: plan windows should be in time order and not overlap, got {}".format([(w["start"], w["end"]) for w in my_predbat.low_rates]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_pre_charge_for_a_same_day_saving_session(my_predbat):
+    """The #5163 review's case: a session announced after the night rate has passed must still get a pre-charge.
+
+    7p/30p import (00:00-06:00 night), 15p export, a +300p Octopus saving session at 17:30-18:30 on both
+    import and export, time 10:00. main offered 15 charge windows before the session and the first
+    version of this PR none; the plan must have some again, and none at the day rate after it.
+    """
+    print("**** test_pre_charge_for_a_same_day_saving_session ****")
+    failed = False
+
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.forecast_minutes = 24 * 60
+    session = set(range(17 * 60 + 30, 18 * 60 + 30))
+    rate_import_base = {minute: (7.0 if (minute // 60) % 24 < 6 else 30.0) for minute in range(0, 48 * 60)}
+    rate_export_base = {minute: 15.0 for minute in range(0, 48 * 60)}
+    rate_import = {minute: rate + (300.0 if minute in session else 0.0) for minute, rate in rate_import_base.items()}
+    rate_export = {minute: rate + (300.0 if minute in session else 0.0) for minute, rate in rate_export_base.items()}
+
+    my_predbat.rate_import = rate_import
+    my_predbat.rate_import_base = rate_import_base
+    my_predbat.rate_import_pre_saving = rate_import_base.copy()
+    my_predbat.rate_import_replicated = {minute: "saving" for minute in session}
+    my_predbat.rate_import_saving_minutes = set(session)
+    my_predbat.rate_export = rate_export
+    my_predbat.rate_export_base = rate_export_base
+    my_predbat.rate_export_pre_saving = rate_export_base.copy()
+    my_predbat.rate_export_replicated = {minute: "saving" for minute in session}
+    my_predbat.rate_export_saving_minutes = set(session)
+    my_predbat.rate_min, my_predbat.rate_max, my_predbat.rate_average, _, _ = my_predbat.rate_minmax(rate_import)
+    my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
+    my_predbat.rate_low_threshold = 0
+    my_predbat.rate_high_threshold = 0
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.num_cars = 0
+
+    my_predbat.set_rate_thresholds()
+    my_predbat.find_low_rate_windows()
+
+    before = [window for window in my_predbat.low_rates if window["end"] <= 17 * 60 + 30]
+    after_day = [window for window in my_predbat.low_rates if window["start"] >= 18 * 60 + 30 and window["average"] >= 30.0]
+    if not before:
+        print("ERROR: no charge window before the 17:30 session - the pre-charge is lost, got {}".format([(w["start"], w["end"], w["average"]) for w in my_predbat.low_rates]))
+        failed = True
+    if after_day:
+        print("ERROR: day-rate windows after the session should not be offered, got {}".format([(w["start"], w["end"]) for w in after_day]))
+        failed = True
+    if any(window["average"] >= 30.0 for window in my_predbat.low_rates_tariff):
+        print("ERROR: the low rate sensors should not show the 30p day rate, got {}".format(sorted(set(w["average"] for w in my_predbat.low_rates_tariff))))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_no_pre_charge_for_an_event_below_the_import_price(my_predbat):
+    """An export event that does not beat the tariff's highest import price must not widen the plan's windows (#5237).
+
+    A +10p event on 15p export pays 25p, below the 30p day import rate, so charging ahead of it cannot pay.
+    With no qualifying event the plan and the sensors share the one tariff scan.
+    """
+    print("**** test_no_pre_charge_for_an_event_below_the_import_price ****")
+    failed = False
+
+    _setup_export_event(my_predbat, export_boost=10.0)
+    my_predbat.set_rate_thresholds()
+    if my_predbat.rate_import_pre_event_end is not None:
+        print("ERROR: a 25p event below the 30p import maximum should not qualify, got end {}".format(my_predbat.rate_import_pre_event_end))
+        failed = True
+
+    my_predbat.find_low_rate_windows()
+    if sorted(set(window["average"] for window in my_predbat.low_rates)) != [20.0]:
+        print("ERROR: only the 20p night rate should be a plan charge window, got {}".format(sorted(set(window["average"] for window in my_predbat.low_rates))))
+        failed = True
+    if my_predbat.low_rates_tariff is not my_predbat.low_rates:
+        print("ERROR: with no qualifying event the sensors should share the plan's windows, not a second scan")
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_low_rate_sensors_publish_tariff_windows(my_predbat):
+    """publish_rates_import() must drive the low rate sensors from low_rates_tariff, not the plan's low_rates (GH#5050)."""
+    print("**** test_low_rate_sensors_publish_tariff_windows ****")
+    failed = False
+
+    my_predbat.minutes_now = 12 * 60
+    # The plan's window covers now at the 30p day rate; the tariff's own next cheap window is tonight
+    my_predbat.low_rates = [{"start": 6 * 60, "end": 22 * 60, "average": 30.0}]
+    my_predbat.low_rates_tariff = [{"start": 22 * 60, "end": 30 * 60, "average": 20.0}]
+
+    published = {}
+
+    def record(entity, state, attributes=None, app=None):
+        """Record each published state instead of sending it."""
+        published[entity] = state
+
+    my_predbat.dashboard_item = record
+    try:
+        my_predbat.publish_rates_import()
+    finally:
+        del my_predbat.dashboard_item
+
+    slot = published.get("binary_sensor." + my_predbat.prefix + "_low_rate_slot")
+    cost = published.get(my_predbat.prefix + ".low_rate_cost")
+    if slot != "off":
+        print("ERROR: low_rate_slot should be off on the 30p day rate, got {} - it followed the plan's event-widened windows".format(slot))
+        failed = True
+    if cost != 20.0:
+        print("ERROR: low_rate_cost should be the tariff's 20p night window, got {}".format(cost))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat):
     """A real Axle export event on a flat 20p export tariff must not hide the ordinary windows (#4036, #5221).
 
@@ -959,12 +1122,15 @@ _SNAPSHOT_FIELDS = (
     "rate_export_min_minute",
     "rate_export_max_minute",
     "rate_import_cost_threshold",
+    "rate_import_pre_event_end",
+    "rate_import_pre_event_threshold",
     "rate_export_cost_threshold",
     # test_compare_and_annual_clear_stale_saving_minutes drives the real scan pipeline through
     # annual._apply_rates()/Compare.fetch_rates(), which populate these from its synthetic tariff -
     # unrestored they leak a 48h tariff's windows onto the shared fixture (#5079 class of bug, and
     # test_pv90.py depends on them being empty after reset_inverter()).
     "low_rates",
+    "low_rates_tariff",
     "high_export_rates",
     "rate_min_forward",
     "rate_low_threshold",
@@ -997,6 +1163,10 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_set_rate_thresholds_ignores_small_saving_boost_in_manual_import_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_manual_mode(my_predbat)
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_predbat)
+        failed |= test_plan_charges_ahead_of_a_qualifying_export_event(my_predbat)
+        failed |= test_pre_charge_for_a_same_day_saving_session(my_predbat)
+        failed |= test_no_pre_charge_for_an_event_below_the_import_price(my_predbat)
+        failed |= test_low_rate_sensors_publish_tariff_windows(my_predbat)
         failed |= test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat)
         failed |= test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table(my_predbat)
         failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)

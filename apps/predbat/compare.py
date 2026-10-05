@@ -209,10 +209,7 @@ class Compare:
         # Find charging windows
         if pb.rate_import:
             # Find charging window
-            pb.low_rates, lowest, highest = pb.rate_scan_window(pb.rate_import, 5, pb.rate_import_cost_threshold, False)
-            # Update threshold automatically
-            if pb.rate_low_threshold == 0 and highest >= pb.rate_min:
-                pb.rate_import_cost_threshold = highest
+            pb.find_low_rate_windows()
 
         # Compare to see if rates changes
         for minute in range(pb.minutes_now, pb.forecast_minutes + pb.minutes_now):
