@@ -383,6 +383,10 @@ class WallboxTransport:
                     charger_ids.append(charger["id"])
         return charger_ids
 
+    async def get(self, path):
+        """Read any API path and return the decoded reply. Read-only, for exploring the API from the command line."""
+        return await self._api("GET", path)
+
     async def get_status(self, charger_id):
         """Return the raw status payload of one charger."""
         return await self._api("GET", "chargers/status/{}".format(charger_id))
@@ -638,6 +642,23 @@ class WallboxAPI(ComponentBase):
             if charger.eco_smart is not None:
                 self.dashboard_item("select.{}_eco_smart".format(prefix), state=charger.eco_smart, attributes=wallbox_attribute_table["eco_smart"], app="wallbox")
 
+    def held_by_lock(self, charger, once=False):
+        """Is the charger locked, which makes Wallbox refuse to pause or resume it. Says why when it is.
+
+        Seen live: a locked charger answers a pause with 403 and a resume with 409, so
+        neither is sent. With once set the warning is given a single time per charger
+        until it is unlocked, for the plan-led loop that would otherwise repeat it on
+        every poll.
+        """
+        if not charger.locked:
+            self.lock_warned.discard(charger.charger_id)
+            return False
+        if not once or charger.charger_id not in self.lock_warned:
+            self.log("Warn: wallbox: {} is locked, so Wallbox will refuse to pause or resume it. Unlock it with switch.{}_locked or in the Wallbox app; Predbat does not unlock chargers itself".format(charger.name, self.entity_prefix(charger)))
+        if once:
+            self.lock_warned.add(charger.charger_id)
+        return True
+
     def charger_for_entity(self, entity_id):
         """Find the charger an entity belongs to, or None.
 
@@ -682,6 +703,8 @@ class WallboxAPI(ComponentBase):
             return
         turn_on = service == "turn_on"
         if entity_id.endswith("_charging"):
+            if self.held_by_lock(charger):
+                return
             self.log("Info: wallbox: {} charging on {}".format("resuming" if turn_on else "pausing", charger.name))
             if turn_on:
                 await self.transport.resume(self.api_id(charger))
@@ -819,6 +842,9 @@ class WallboxAPI(ComponentBase):
                 charger = self.chargers.get(charger_id)
                 if charger and charger_id in self.stale_ids:
                     continue
+                if charger and charger.paused and self.held_by_lock(charger, once=True):
+                    # Cannot be resumed until it is unlocked, so it stays on the list
+                    continue
                 if charger and charger.paused:
                     self.log("Info: wallbox: releasing {}".format(charger.name))
                     await self.transport.resume(self.api_id(charger))
@@ -848,12 +874,8 @@ class WallboxAPI(ComponentBase):
                 if not charger.connected:
                     # Updating, Error or Unknown: say nothing, and keep the record until the charger reports again
                     continue
-                if wanted and charger.locked:
-                    if charger.charger_id not in self.lock_warned:
-                        self.log("Warn: wallbox: {} is locked, so it will not charge in its planned window. Predbat does not unlock chargers".format(charger.name))
-                        self.lock_warned.add(charger.charger_id)
+                if self.held_by_lock(charger, once=True):
                     continue
-                self.lock_warned.discard(charger.charger_id)
                 if wanted and charger.paused:
                     self.log("Info: wallbox: resuming {} for car {}".format(charger.name, car_n))
                     await self.transport.resume(self.api_id(charger))
@@ -922,8 +944,15 @@ async def run_wallbox_cli(args):  # pragma: no cover
         charger = chargers[0]
     target = component.api_id(charger)
 
-    # The same calls the component issues, so they can be tried by hand against a live charger
     transport = component.transport
+    if args.get:
+        print("\nGET {}:".format(args.get))
+        print(json.dumps(await transport.get(args.get), indent=2, sort_keys=True, default=str))
+
+    # The same calls the component issues, so they can be tried by hand against a live charger
+    if (args.pause or args.resume or args.resume_schedule) and component.held_by_lock(charger):
+        print("\nNot sent: {} is locked. Run --unlock first".format(charger.name))
+        return
     action = None
     if args.pause:
         action = ("pause", transport.pause(target))
@@ -954,6 +983,7 @@ def main():  # pragma: no cover
     parser.add_argument("--username", required=True, help="Wallbox account email address")
     parser.add_argument("--password", required=True, help="Wallbox account password")
     parser.add_argument("--raw", action="store_true", help="Print each charger's full status payload as JSON")
+    parser.add_argument("--get", default=None, help="Read-only: GET this API path, e.g. v3/chargers/<id>/ocpp-configuration, and print the reply. For exploring the API")
     parser.add_argument("--no-automatic", action="store_true", help="Skip the automatic configuration of car_charging_energy, car_charging_planned, car_charging_power and car_charging_now")
     parser.add_argument("--charger", default=None, help="Charger id to control; defaults to the first one")
     group = parser.add_mutually_exclusive_group()

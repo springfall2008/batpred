@@ -1355,6 +1355,65 @@ def test_control_refused_for_state_is_logged_plainly():
     print("  ✓ A control refused for the charger's state is logged plainly")
 
 
+def test_switch_refuses_pause_and_resume_while_locked():
+    """Wallbox refuses pause and resume on a locked charger, so they are not sent and the user is told why."""
+    for service in ("turn_on", "turn_off"):
+        component = _started_component({101: _status(status_id=210, power=0, locked=1)})
+        run_async(component.switch_event_handler("switch.predbat_wallbox_101_charging", service))
+        assert component.transport.calls == [], (service, component.transport.calls)
+        assert _logged(component, "is locked") and _logged(component, "unlock")
+
+    # The lock switch itself must still work, or there would be no way out
+    component = _started_component({101: _status(status_id=210, power=0, locked=1)})
+    run_async(component.switch_event_handler("switch.predbat_wallbox_101_locked", "turn_off"))
+    assert component.transport.calls == [("set_locked", 101, False)]
+    print("  ✓ Pause and resume are not sent to a locked charger; unlock still is")
+
+
+def test_control_leaves_a_locked_charger_alone_and_warns_once():
+    """Plan-led control sends nothing to a locked charger, whichever way the plan points, and says so once."""
+    for plan in (PLAN_INSIDE, PLAN_OUTSIDE):
+        for status_id in (193, 178, 210):
+            component = _control_component({0: plan}, {101: _status(status_id=status_id, locked=1)})
+            run_async(component.control_tick(CONTROL_NOW))
+            run_async(component.control_tick(CONTROL_NOW))
+            assert component.transport.calls == [], (status_id, component.transport.calls)
+            assert len([message for message in component.log_messages if "is locked" in message]) == 1, component.log_messages
+    print("  ✓ Plan-led control leaves a locked charger alone and warns once")
+
+
+def test_release_waits_for_a_locked_charger():
+    """A charger Predbat paused that is now locked cannot be resumed; the record is kept until it is unlocked."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.paused_by_predbat == {"101"}
+
+    component.transport.statuses[101] = _status(status_id=178, power=0, locked=1)
+    _load_chargers(component)
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [] and component.paused_by_predbat == {"101"}
+    assert len([message for message in component.log_messages if "is locked" in message]) == 1
+
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)]
+    assert component.paused_by_predbat == set()
+    print("  ✓ Release waits for a locked charger to be unlocked")
+
+
+def test_transport_get_reads_any_path():
+    """The read-only probe sends an authenticated GET to the path it is given."""
+    session, calls = _session([_response({"ocpp": "enabled"})])
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call"):
+        reply = run_async(_signed_in_transport().get("v3/chargers/101/something"))
+    assert reply == {"ocpp": "enabled"}
+    assert (calls[0]["method"], calls[0]["url"], calls[0]["json"]) == ("GET", WALLBOX_API_URL + "v3/chargers/101/something", None)
+    print("  ✓ The read-only probe sends an authenticated GET")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1429,5 +1488,9 @@ def test_wallbox(my_predbat=None):
     test_normalise_real_locked_capture()
     test_transport_conflict_is_a_state_error()
     test_control_refused_for_state_is_logged_plainly()
+    test_switch_refuses_pause_and_resume_while_locked()
+    test_control_leaves_a_locked_charger_alone_and_warns_once()
+    test_release_waits_for_a_locked_charger()
+    test_transport_get_reads_any_path()
     print("=" * 70)
     return False

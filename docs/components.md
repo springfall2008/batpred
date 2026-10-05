@@ -1070,7 +1070,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 
 Wallbox chargers cannot report the car's state of charge, so there is no battery sensor.
 
-Wallbox refuses some controls depending on the charger's state: a locked charger refuses pause, and a charger with nothing paused refuses resume. It may also refuse controls from an account without admin rights over the charger. When a control is refused Predbat logs a warning with the reason Wallbox gave, and monitoring carries on.
+A locked charger cannot be paused or resumed: Wallbox refuses both. Predbat therefore does not send them while the charger is locked, and logs a warning asking you to unlock it with `switch.predbat_wallbox_<id>_locked` or in the Wallbox app. Wallbox can also refuse a control for other reasons, such as a resume with nothing paused, or an account without admin rights over the charger. When that happens Predbat logs a warning with the reason Wallbox gave, and monitoring carries on.
 
 #### Automatic configuration (wallbox)
 
@@ -1091,7 +1091,7 @@ Things to know:
 - Wallbox can only pause a charger once it is charging, so a car plugged in outside a slot draws power until Predbat's next poll (two minutes by default).
 - Clear any schedule set in the Wallbox app. A charger that Wallbox is holding in `Scheduled` will not charge in a Predbat slot.
 - While Predbat-led charging is on, Predbat resumes a paused charger inside a planned slot even if you paused it yourself. Turn `switch.predbat_wallbox_control` off first if you want it to stay paused.
-- Predbat never unlocks a locked charger. It logs a warning if a locked charger misses its slot.
+- Predbat never unlocks a locked charger, and cannot pause or resume one. While a charger is locked Predbat-led charging leaves it alone and logs a warning once. A charger Predbat had paused is resumed once you unlock it.
 - Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
 
 #### Configuration Options (wallbox)

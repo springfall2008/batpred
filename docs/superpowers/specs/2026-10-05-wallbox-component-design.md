@@ -220,8 +220,11 @@ shared `utils.parse_car_plan_windows` / `in_car_plan_window`:
 - Outside a window and the charger is Charging → pause, and record that Predbat paused it.
 - Any other state → no action. Resume applies only to a Paused charger: one in Scheduled
   is following its own schedule and one in Waiting is waiting on the car, so neither is
-  sent anything. A locked charger is left alone with a one-off warning; Predbat never
-  unlocks it.
+  sent anything.
+- A locked charger is sent neither pause nor resume, by plan-led control, by release or by
+  the manual switch: Wallbox refuses both while it is locked (seen live: 403 and 409).
+  Plan-led control warns once per charger; the manual switch warns each time. Predbat never
+  unlocks a charger. A charger Predbat paused stays on its list until it is unlocked.
 
 At most one command is sent per charger per poll, and only on freshly polled state, so a
 slow charger is not sent the same command repeatedly.
