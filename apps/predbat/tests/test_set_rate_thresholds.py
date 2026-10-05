@@ -476,12 +476,12 @@ def test_saving_minute_keeps_user_override(my_predbat):
             print("ERROR: {}: rate_import_cost_threshold should be {:.2f} (average with the override kept), got {}".format(label, expected, my_predbat.rate_import_cost_threshold))
             failed = True
 
-    # With no session minutes nothing reads the snapshot, so it is left untouched
+    # With no session minutes nothing reads the snapshot, so none of it is kept
     _setup_two_rate_tariff(my_predbat, event_start=17 * 60, event_end=19 * 60, event_boost=50.0)
     pre_saving = my_predbat.rate_import_pre_saving
     _, returned = my_predbat.apply_rate_overrides(my_predbat.rate_import, pre_saving, set(), cases[0][1], "rates_import_override", {}, True, my_predbat.rate_import_replicated)
-    if returned is not pre_saving or returned[17 * 60] != 25.95:
-        print("ERROR: with no saving minutes the pre-saving snapshot should come back untouched, got {} at 17:00".format(returned.get(17 * 60)))
+    if returned != {} or pre_saving[17 * 60] != 25.95:
+        print("ERROR: with no saving minutes nothing of the snapshot should be kept, nor the caller's snapshot changed, got {} minutes".format(len(returned)))
         failed = True
 
     if not failed:
@@ -759,8 +759,8 @@ def test_pre_saving_snapshot_only_with_overrides_and_session_minutes(my_predbat)
         _, returned = my_predbat.apply_rate_overrides(my_predbat.rate_import, pre_saving, my_predbat.rate_import_saving_minutes, [], "rates_import_override", {}, True, my_predbat.rate_import_replicated)
     finally:
         del my_predbat.basic_rates
-    if len(calls) != 1 or returned is not pre_saving:
-        print("ERROR: with no overrides the snapshot should be left alone and basic_rates() run once, got {} calls".format(len(calls)))
+    if len(calls) != 1 or returned != {minute: pre_saving[minute] for minute in my_predbat.rate_import_saving_minutes}:
+        print("ERROR: with no overrides basic_rates() should run once and the snapshot come back unchanged at the session minutes, got {} calls".format(len(calls)))
         failed = True
 
     kept = my_predbat.pre_saving_for_session_minutes(pre_saving, my_predbat.rate_import_saving_minutes)
@@ -770,6 +770,71 @@ def test_pre_saving_snapshot_only_with_overrides_and_session_minutes(my_predbat)
     if my_predbat.rate_minmax_excluding_saving(my_predbat.rate_import, my_predbat.rate_import_saving_minutes, kept) != my_predbat.rate_minmax_excluding_saving(my_predbat.rate_import, my_predbat.rate_import_saving_minutes, pre_saving):
         print("ERROR: the threshold stats should be the same from the session-minute snapshot as from the full one")
         failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_events_are_found_from_session_minutes(my_predbat):
+    """An event is a run of session minutes; price only decides whether it qualifies.
+
+    Two Axle-style export events at 10:00-12:00 and 16:00-18:00 boost export only, so their import stays at
+    the 30p day rate: the earlier one's minutes must still not be plan charge windows. A dip in the later
+    event's export price must not split it, so pre-event windows stop at 16:00, not mid-event.
+    """
+    print("**** test_events_are_found_from_session_minutes ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    later = set(range(16 * 60, 18 * 60))
+    for minute in later:
+        my_predbat.rate_export[minute] = 65.0 if minute < 17 * 60 or minute >= 17 * 60 + 30 else 15.0
+    my_predbat.rate_export_saving_minutes |= later
+    my_predbat.rate_export_pre_saving.update({minute: 15.0 for minute in later})
+    my_predbat.set_rate_thresholds()
+    my_predbat.find_low_rate_windows()
+
+    if my_predbat.rate_import_pre_event_end != 16 * 60:
+        print("ERROR: the last event should start at 16:00 despite its price dip, got {}".format(my_predbat.rate_import_pre_event_end))
+        failed = True
+    in_event = [window for window in my_predbat.low_rates if window["start"] < 16 * 60 and window["end"] > 600 and window["start"] < 720]
+    if in_event:
+        print("ERROR: the earlier 10:00-12:00 event should not be a charge window, got {}".format([(w["start"], w["end"]) for w in in_event]))
+        failed = True
+    if not any(window["start"] >= 720 and window["end"] <= 16 * 60 for window in my_predbat.low_rates):
+        print("ERROR: the day rate between the two events should be offered ahead of the later one, got {}".format([(w["start"], w["end"]) for w in my_predbat.low_rates]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_compare_override_on_session_minutes_uses_whole_table(my_predbat):
+    """A compare tariff's override must reach the session minutes' pre-session rates as it reaches the rates.
+
+    The kept snapshot holds only the session minutes; basic_rates() bounds and wraps override ranges by
+    a table's last minute, so applied to the bare snapshot an all-day increment landed several times and
+    an override starting after the session was skipped.
+    """
+    print("**** test_compare_override_on_session_minutes_uses_whole_table ****")
+    failed = False
+
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+    flat = {minute: 10.0 for minute in range(0, 48 * 60)}
+    cases = [
+        ("all-day +2p", set(range(4 * 60, 5 * 60)), [{"rate_increment": 2.0}], 12.0),
+        ("23:00-05:00 at 50p", set(range(3 * 60, 4 * 60)), [{"start": "23:00:00", "end": "05:00:00", "rate": 50.0}], 50.0),
+    ]
+    for label, session, override, expected in cases:
+        pre_saving = {minute: 10.0 for minute in session}
+        kept = my_predbat.override_session_rates(flat, pre_saving, session, override, "rates_import_override", {}, True, include_manual_api=False)
+        values = sorted(set(kept.values()))
+        if set(kept) != session or values != [expected]:
+            print("ERROR: {}: the session minutes should all be {} after the override, got {}".format(label, expected, values))
+            failed = True
 
     if not failed:
         print("PASS")
@@ -1351,6 +1416,7 @@ _SNAPSHOT_FIELDS = (
     "rate_import_cost_threshold",
     "rate_import_pre_event_end",
     "rate_import_pre_event_threshold",
+    "rate_import_pre_event_minutes",
     "rate_export_cost_threshold",
     # test_compare_and_annual_clear_stale_saving_minutes drives the real scan pipeline through
     # annual._apply_rates()/Compare.fetch_rates(), which populate these from its synthetic tariff -
@@ -1404,6 +1470,8 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_earlier_event_is_not_a_charge_window(my_predbat)
         failed |= test_event_in_progress_needs_no_pre_charge(my_predbat)
         failed |= test_pre_saving_snapshot_only_with_overrides_and_session_minutes(my_predbat)
+        failed |= test_events_are_found_from_session_minutes(my_predbat)
+        failed |= test_compare_override_on_session_minutes_uses_whole_table(my_predbat)
         failed |= test_pre_event_window_running_into_the_event_is_cut(my_predbat)
         failed |= test_manual_threshold_gets_no_pre_event_windows(my_predbat)
         failed |= test_car_plan_uses_tariff_windows(my_predbat)
