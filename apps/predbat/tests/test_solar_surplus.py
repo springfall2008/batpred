@@ -8,7 +8,10 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+import copy
+
+from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from utils import pack_export_limit
 from tests.test_infra import reset_inverter
 
 SURPLUS_ENTITY = ".solar_surplus_power"
@@ -66,17 +69,23 @@ def run_export_slot_tests(my_predbat):
     """
     failed = False
     saved = {key: getattr(my_predbat, key) for key in ["minutes_now", "export_window_best", "export_limits_best", "set_export_window"]}
+    saved_items = copy.deepcopy(my_predbat.ha_interface.dummy_items)
     window = [{"start": 600, "end": 660}]
 
     try:
         print("Test: inside a force export window the sensor is on")
-        failed |= check_export_slot(my_predbat, "inside window", 630, window, [10.0], True, True)
+        failed |= check_export_slot(my_predbat, "inside window", 630, window, [pack_export_limit(EXPORT_MODE_TARGET, 10)], True, True)
 
         print("Test: a freeze export window counts, as Predbat is selling the solar")
-        failed |= check_export_slot(my_predbat, "freeze export", 630, window, [EXPORT_LIMIT_FREEZE], True, True)
+        failed |= check_export_slot(my_predbat, "freeze export", 630, window, [pack_export_limit(EXPORT_MODE_FREEZE)], True, True)
 
         print("Test: a window left at the idle limit is not an export slot")
-        failed |= check_export_slot(my_predbat, "idle limit", 630, window, [EXPORT_LIMIT_IDLE], True, False)
+        failed |= check_export_slot(my_predbat, "idle limit", 630, window, [pack_export_limit(EXPORT_MODE_IDLE)], True, False)
+
+        print("Test: the bare numbers an older saved plan decodes into read the same way")
+        failed |= check_export_slot(my_predbat, "legacy target", 630, window, [10.0], True, True)
+        failed |= check_export_slot(my_predbat, "legacy freeze", 630, window, [EXPORT_LIMIT_FREEZE], True, True)
+        failed |= check_export_slot(my_predbat, "legacy idle", 630, window, [EXPORT_LIMIT_IDLE], True, False)
 
         print("Test: before and after the window the sensor is off")
         failed |= check_export_slot(my_predbat, "before window", 599, window, [10.0], True, False)
@@ -99,6 +108,8 @@ def run_export_slot_tests(my_predbat):
     finally:
         for key, value in saved.items():
             setattr(my_predbat, key, value)
+        my_predbat.ha_interface.dummy_items.clear()
+        my_predbat.ha_interface.dummy_items.update(saved_items)
 
     return failed
 
@@ -112,6 +123,7 @@ def run_solar_surplus_tests(my_predbat):
     failed = False
 
     saved = {key: getattr(my_predbat, key) for key in ["grid_power", "battery_power", "pv_power", "car_charging_power", "car_charging_power_configured", "car_energy_reported_load"]}
+    saved_items = copy.deepcopy(my_predbat.ha_interface.dummy_items)
     try:
         print("Test: with no car charging the surplus is the grid export")
         failed |= check_surplus(my_predbat, "plain export", grid_power=2000, battery_power=0, car_charging_power=0, car_configured=False, expect_state=2.0)
@@ -198,6 +210,8 @@ def run_solar_surplus_tests(my_predbat):
     finally:
         for key, value in saved.items():
             setattr(my_predbat, key, value)
+        my_predbat.ha_interface.dummy_items.clear()
+        my_predbat.ha_interface.dummy_items.update(saved_items)
 
     failed |= run_export_slot_tests(my_predbat)
 
