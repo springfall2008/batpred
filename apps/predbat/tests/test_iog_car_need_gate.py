@@ -94,6 +94,15 @@ def run_surplus_minutes_tests(my_predbat):
     surplus = my_predbat.octopus_surplus_minutes()
     failed |= _expect("elapsed untouched", surplus == set(range(10 * 60, 11 * 60)), "expected 10:00-11:00 only")
 
+    # Mid half hour, with the car already full: the rest of the current half hour stays cheap (the car may have
+    # charged earlier in it), and nothing elapsed is ever touched
+    my_predbat.minutes_now = 14 * 60 + 10
+    my_predbat.octopus_slots = [[_slot(my_predbat, 13.5, 15, 20.0)]]
+    my_predbat.car_charging_slots = [[{"start": 14 * 60 + 10, "end": 15 * 60, "kwh": 0.0, "octopus": True}]]
+    surplus = my_predbat.octopus_surplus_minutes()
+    failed |= _expect("current half hour kept", surplus == set(range(14 * 60 + 30, 15 * 60)), "expected 14:30-15:00 only, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    my_predbat.minutes_now = 10 * 60
+
     # Rates are shared: a minute another car still needs stays cheap
     my_predbat.num_cars = 2
     my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)], [_slot(my_predbat, 14, 14.5, 5.0)]]

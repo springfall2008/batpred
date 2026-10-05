@@ -3819,6 +3819,9 @@ class Octopus:
             return set()
         dispatch_minutes = set()
         needed_minutes = set()
+        # The current half hour is never surplus: the car may have charged earlier in it, which makes the whole
+        # period cheap, and once the car is full its slots no longer show that
+        next_period = ((self.minutes_now + 29) // 30) * 30
         for car_n in range(min(self.num_cars, len(self.octopus_slots), len(self.car_charging_slots))):
             car_slots = self.car_charging_slots[car_n]
             if not any(slot.get("octopus", False) for slot in car_slots):
@@ -3828,7 +3831,7 @@ class Octopus:
                 if start_minutes == end_minutes:
                     continue
                 start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
-                dispatch_minutes.update(range(max(start_minutes, self.minutes_now), end_minutes))
+                dispatch_minutes.update(range(max(start_minutes, next_period), end_minutes))
             for slot in car_slots:
                 # A cancelled car's slots are zeroed with their kWh kept in kwh_cancelled (dynamic_load_car_check());
                 # cancellation decides their rate itself, so they still count as needed here
