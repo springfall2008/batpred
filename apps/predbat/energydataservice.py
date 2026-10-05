@@ -7,6 +7,7 @@ rate dictionaries.
 
 from datetime import datetime, timezone
 from utils import dp4
+from rate_periods import extract_rate_periods, extend_rate_periods
 
 
 class Energidataservice:
@@ -16,10 +17,11 @@ class Energidataservice:
     and converts to per-minute rate dictionaries.
     """
 
-    def fetch_energidataservice_rates(self, entity_id, adjust_key=None):
+    def fetch_energidataservice_rates(self, entity_id, adjust_key=None, periods_out=None):
         """
         Read Energi Data Service attributes, add tariffs, and expand to per-minute values
         across each 15-minute interval (matches the new feed).
+        Optional periods_out retains source cadence before forecast padding.
         """
         data_all = []
         rate_data = {}
@@ -64,6 +66,8 @@ class Energidataservice:
                 adjust_key=adjust_key,
                 scale=1.0,
                 use_cent=use_cent,
+                periods_out=periods_out,
+                source_id=entity_id,
             )
 
         return rate_data
@@ -78,10 +82,13 @@ class Energidataservice:
         adjust_key=None,
         scale=1.0,
         use_cent=False,
+        periods_out=None,
+        source_id="energidataservice",
     ):
         """
         Convert 15-minute rate data into a per-minute dict keyed by minute offset from midnight_utc.
         FIXED: Handles timezone/DST correctly.
+        Optional periods_out receives UTC bounds with cadence provenance.
         """
         rate_data = {}
         min_minute = -forecast_days * 24 * 60
@@ -102,6 +109,8 @@ class Energidataservice:
                 delta = int((t1 - t0).total_seconds() / 60)
                 if 15 <= delta <= 60:
                     interval_minutes = delta
+
+        extend_rate_periods(periods_out, extract_rate_periods(data, source_id, from_key=from_key, interval_minutes=interval_minutes, timezone_name="UTC"))
 
         for entry in data:
             start_time_str = entry.get(from_key)

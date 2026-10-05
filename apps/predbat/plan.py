@@ -61,6 +61,7 @@ from utils import (
     round_out_to_period,
 )
 from prediction import Prediction
+from rate_history_adapter import record_iog_confirmation
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
@@ -569,6 +570,7 @@ class Plan:
                 if seen_minute is not None:
                     period_end = self.midnight_utc + timedelta(minutes=round_out_to_period(int(seen_minute), int(seen_minute) + 1)[1])
                     self.dynamic_load_car_confirmed[car_n] = max(self.dynamic_load_car_confirmed.get(car_n, period_end), period_end)
+                    record_iog_confirmation(self, car_n, period_end, now + timedelta(minutes=self.args.get("clock_skew", 0)))
             return False
         if not_charging:
             since = self.dynamic_load_car_since.setdefault(car_n, timed_at) if record else self.dynamic_load_car_since.get(car_n)

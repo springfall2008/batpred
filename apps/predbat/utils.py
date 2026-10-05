@@ -251,6 +251,7 @@ DEBUG_EXCLUDE_LIST = [
     "ge_url_cache",
     "github_url_cache",
     "octopus_url_cache",
+    "rate_history",
     "secrets",
 ]
 

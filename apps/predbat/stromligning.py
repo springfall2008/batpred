@@ -1,9 +1,10 @@
 from datetime import datetime
 from utils import dp4
+from rate_periods import extract_rate_periods, extend_rate_periods
 
 
 class Stromligning:
-    def fetch_stromligning_rates(self, entity_id_today, entity_id_tomorrow, entity_id_today_export=None, entity_id_tomorrow_export=None, adjust_key=None):
+    def fetch_stromligning_rates(self, entity_id_today, entity_id_tomorrow, entity_id_today_export=None, entity_id_tomorrow_export=None, adjust_key=None, periods_out=None):
         """
         Read Strømligning attributes from 4 sensors (today/tomorrow for import/export).
         Strømligning provides 15-minute intervals with price, start, and end times.
@@ -14,6 +15,7 @@ class Stromligning:
             entity_id_today_export: Sensor for today's export prices (optional)
             entity_id_tomorrow_export: Sensor for tomorrow's export prices (optional)
             adjust_key: Optional key for adjustments
+            periods_out: Optional collector for declared UTC source bounds
 
         Returns:
             dict: Per-minute rate data keyed by minute offset from midnight_utc
@@ -66,11 +68,13 @@ class Stromligning:
                 self.midnight_utc,
                 scale=scale,
                 adjust_key=adjust_key,
+                periods_out=periods_out,
+                source_id=entity_id_today or entity_id_tomorrow,
             )
 
         return rate_data
 
-    def _minute_data_stromligning_rates(self, data, forecast_days, midnight_utc, scale=1.0, adjust_key=None):
+    def _minute_data_stromligning_rates(self, data, forecast_days, midnight_utc, scale=1.0, adjust_key=None, periods_out=None, source_id="stromligning"):
         """
         Convert 15-minute Strømligning rate data into a per-minute dict keyed by minute offset from midnight_utc.
 
@@ -78,10 +82,13 @@ class Stromligning:
         - price: Price value (already in correct unit)
         - start: ISO timestamp for interval start
         - end: ISO timestamp for interval end
+        Optional periods_out receives the declared bounds, not forecast padding.
         """
         rate_data = {}
         min_minute = -forecast_days * 24 * 60
         max_minute = forecast_days * 24 * 60
+
+        extend_rate_periods(periods_out, extract_rate_periods(data, source_id, from_key="start", to_key="end", period_kind="interval"))
 
         for entry in data:
             start_time_str = entry.get("start")

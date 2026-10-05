@@ -782,6 +782,9 @@ class UserInterface:
         """
         Read debug yaml - used for debugging scenarios not for the main code
         """
+        self.rate_history = None
+        self.rate_history_replay = True
+        self.rate_history_accounting_enabled = False
         debug = {}
         if os.path.exists(filename):
             with open(filename, "r") as file:
@@ -811,6 +814,10 @@ class UserInterface:
                         inverter_obj.export_limits = export_limits_from_stored(inverter_obj.export_limits)
                     new_inverters.append(inverter_obj)
                 self.inverters = new_inverters
+
+        # A replay can use archived accounting views, but never a live history writer.
+        self.rate_history = None
+        self.rate_history_replay = True
 
         # Handle old-format octopus_slots (flat list of dicts) vs new format (list-of-lists per car)
         if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):

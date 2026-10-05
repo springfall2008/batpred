@@ -56,6 +56,7 @@ class AxleAPI(ComponentBase):
         self.failures_total = 0
         self.history_loaded = False
         self.event_history = []  # List of past events
+        self.managed_price_periods = []  # Exact latest curve scope, including null participation
         self.current_event = {  # Current event
             "start_time": None,
             "end_time": None,
@@ -95,6 +96,7 @@ class AxleAPI(ComponentBase):
         without waiting for the first API fetch.
         """
         loaded = False
+        managed_metadata_loaded = False
 
         if not loaded:
             # Fallback: load from HA sensor (may be unavailable on fresh restart)
@@ -103,6 +105,13 @@ class AxleAPI(ComponentBase):
                 event_history = self.get_state_wrapper(sensor_id, attribute="event_history")
                 event_current = self.get_state_wrapper(sensor_id, attribute="event_current")
                 updated_at = self.get_state_wrapper(sensor_id, attribute="updated_at")
+                managed_periods = self.get_state_wrapper(sensor_id, attribute="managed_price_periods")
+                if self.managed_mode and isinstance(managed_periods, list):
+                    self.managed_price_periods = managed_periods
+                    managed_metadata_loaded = True
+                    loaded = True
+                    if updated_at:
+                        self.updated_at = updated_at
                 if isinstance(event_history, list):
                     now = self.now_utc
                     for event in event_history:
@@ -130,14 +139,18 @@ class AxleAPI(ComponentBase):
                 self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
 
         storage = getattr(self, "storage", None)
-        if not loaded and storage:
+        if storage and (not loaded or (self.managed_mode and not managed_metadata_loaded)):
             try:
                 data = await storage.load("axle", "event_history")
                 if data and isinstance(data, dict):
                     # Support both old list format and new dict format
-                    self.event_history = data.get("event_history", [])
-                    self.current_event = data.get("current_event", {})
-                    self.updated_at = data.get("updated_at")
+                    if not loaded:
+                        self.event_history = data.get("event_history", [])
+                        self.current_event = data.get("current_event", {})
+                        self.updated_at = data.get("updated_at")
+                    managed_periods = data.get("managed_price_periods")
+                    if self.managed_mode and isinstance(managed_periods, list) and not managed_metadata_loaded:
+                        self.managed_price_periods = managed_periods
                     loaded = True
                     self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from storage (updated_at: {self.updated_at})")
             except Exception as e:
@@ -158,6 +171,7 @@ class AxleAPI(ComponentBase):
                     "event_history": self.event_history,
                     "current_event": self.current_event,
                     "updated_at": self.updated_at,
+                    "managed_price_periods": getattr(self, "managed_price_periods", []),
                 }
                 await storage.save("axle", "event_history", data, format="yaml", expiry=None)
             except Exception as e:
@@ -464,16 +478,19 @@ class AxleAPI(ComponentBase):
         the wholesale price to both rate_export and rate_import for an export-direction session
         (high price = more export and pricier import; negative price = cheap import, which
         also encourages charging). Null prices are skipped (no modification, normal tariff
-        applies).
+        applies). Explicit null withdraws only a matching current/future provisional
+        managed entry; absent periods and closed past entries are not cancellation.
+        The exact returned scope, including null, is published separately for history.
         """
         prices = data.get("half_hourly_traded_prices", [])
         session_count = 0
+        managed_periods = []
+        now = self.now_utc
 
         for slot in prices:
+            if "price_gbp_per_mwh" not in slot:
+                continue  # A missing value is unknown, not an explicit withdrawal.
             price_gbp_mwh = slot.get("price_gbp_per_mwh")
-            if price_gbp_mwh is None:
-                continue
-
             start_str = slot.get("start_timestamp")
             if not start_str:
                 continue
@@ -485,7 +502,20 @@ class AxleAPI(ComponentBase):
                 continue
 
             end_dt = start_dt + timedelta(minutes=30)
-            pence_per_kwh = price_gbp_mwh / 10  # GBP/MWh -> p/kWh
+            pence_per_kwh = price_gbp_mwh / 10 if price_gbp_mwh is not None else None  # GBP/MWh -> p/kWh
+            managed_periods.append({"start_time": start_dt.astimezone(timezone.utc).isoformat(), "end_time": end_dt.astimezone(timezone.utc).isoformat(), "pence_per_kwh": pence_per_kwh})
+            if price_gbp_mwh is None:
+                if end_dt > now:
+                    kept_events = []
+                    for event in self.event_history:
+                        try:
+                            matching = str2time(event.get("start_time")) == start_dt and str2time(event.get("end_time")) == end_dt
+                        except (ValueError, TypeError):
+                            matching = False
+                        if not matching:
+                            kept_events.append(event)
+                    self.event_history = kept_events
+                continue
 
             start_formatted = start_dt.strftime(TIME_FORMAT)
             end_formatted = end_dt.strftime(TIME_FORMAT)
@@ -502,6 +532,7 @@ class AxleAPI(ComponentBase):
             self.add_event_to_history(session, allow_future=True)
             session_count += 1
 
+        self.managed_price_periods = managed_periods
         self.log(f"AxleAPI: Processed {session_count} price curve slots into sessions")
 
         # Update current event to the nearest future/active slot for sensor state
@@ -563,6 +594,7 @@ class AxleAPI(ComponentBase):
                 "event_history": self.event_history,
                 "updated_at": self.updated_at,
                 "managed_mode": self.managed_mode,
+                "managed_price_periods": getattr(self, "managed_price_periods", []),
             },
         )
 

@@ -853,7 +853,7 @@ class HAInterface(ComponentBase):
         last_changed = item.get("last_changed", item.get("last_updated", None))
         if "state" in item:
             state = item["state"]
-            self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+            self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed, "last_updated": item.get("last_updated"), "last_reported": item.get("last_reported")}
             if not nodb and self.db_enable and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:

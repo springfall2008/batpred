@@ -173,6 +173,41 @@ def test_hainterface_update_state_item_basic(my_predbat=None):
     return failed
 
 
+def test_hainterface_update_state_item_freshness(my_predbat=None):
+    """Test steady power retains fresh HA report times without changing normalised state."""
+    print("\n=== Testing HAInterface raw state freshness for steady power ===")
+    failed = 0
+    ha_interface = create_ha_interface(MockBase(), ha_key=None, db_enable=False, db_mirror_ha=False, db_primary=False)
+    old_changed = "2025-12-25T10:00:00Z"
+    old_updated = "2025-12-25T10:30:00Z"
+    fresh_reported = "2025-12-25T12:00:00Z"
+    item = {"state": "7000", "attributes": {"unit_of_measurement": "W"}, "last_changed": old_changed, "last_updated": old_updated, "last_reported": fresh_reported}
+    ha_interface.update_state_item(item, "sensor.charger_power", nodb=True)
+    raw = ha_interface.get_state("sensor.charger_power", raw=True)
+    for key in ("last_changed", "last_updated", "last_reported"):
+        if raw.get(key) != item[key]:
+            print(f"ERROR: Raw state should preserve {key}")
+            failed += 1
+    if ha_interface.get_state("sensor.charger_power") != "7000" or ha_interface.get_state("sensor.charger_power", attribute="unit_of_measurement") != "W":
+        print("ERROR: Normalised state and attributes should be unchanged")
+        failed += 1
+
+    item["last_reported"] = "2025-12-25T12:01:00Z"
+    ha_interface.update_state_item(item, "sensor.charger_power", nodb=True)
+    raw = ha_interface.get_state("sensor.charger_power", raw=True)
+    if raw.get("last_reported") != item["last_reported"] or raw.get("last_changed") != old_changed or raw.get("last_updated") != old_updated:
+        print("ERROR: A steady power report should refresh only its report timestamp")
+        failed += 1
+
+    legacy = {"state": "0", "attributes": {}, "last_updated": old_updated}
+    ha_interface.update_state_item(legacy, "sensor.charger_power", nodb=True)
+    raw = ha_interface.get_state("sensor.charger_power", raw=True)
+    if raw.get("last_changed") != old_updated or raw.get("last_updated") != old_updated or raw.get("last_reported") is not None:
+        print("ERROR: Legacy states should retain timestamp fallback without inventing a report time")
+        failed += 1
+    return failed
+
+
 def test_hainterface_update_state_item_db_mirror(my_predbat=None):
     """Test update_state_item() calls DatabaseManager when db_mirror_ha enabled"""
     print("\n=== Testing HAInterface update_state_item() DB mirroring ===")
@@ -545,6 +580,7 @@ def run_hainterface_state_tests(my_predbat):
 
     # update_state_item tests
     failed += test_hainterface_update_state_item_basic(my_predbat)
+    failed += test_hainterface_update_state_item_freshness(my_predbat)
     failed += test_hainterface_update_state_item_db_mirror(my_predbat)
 
     # update_state tests
