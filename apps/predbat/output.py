@@ -165,7 +165,8 @@ class Output:
 
                 # Show when the window really began, not the planner's clamped start, so the
                 # displayed start time stops walking forward once charging is underway (#269).
-                # Octopus slots carry no start_orig, so they keep their own start unchanged.
+                # Octopus slots carry no start_orig and show their own start - which the Octopus
+                # component trims to now once a dispatch is underway, so those still move.
                 window_start = window.get("start_orig", window["start"])
 
                 time_format_time = "%H:%M:%S"

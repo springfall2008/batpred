@@ -506,7 +506,7 @@ class GatewayMQTT(ComponentBase):
 
         Datetimes are localized using ``self.local_tz`` so comparisons respect the component
         timezone and DST transitions.  The plan carries no year; ``utils.parse_car_plan_windows()``
-        (shared with myenergi and GivEnergy EVC) rebuilds it around now, so a window that straddles
+        (shared with the other charger components) rebuilds it around now, so a window that straddles
         New Year is anchored correctly whichever side of midnight it is read (#269).
         """
         planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot", attribute="planned") or []
