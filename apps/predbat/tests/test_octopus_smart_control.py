@@ -11,6 +11,8 @@
 import copy
 from datetime import timedelta
 
+from const import DISPATCH_SOURCE_CHARGER_SCHEDULE
+
 from tests.test_multi_car_iog import pin_test_clock, restore_test_clock
 
 SLOT_SENSOR = "binary_sensor.octopus_energy_abc123_intelligent_dispatching"
@@ -191,6 +193,15 @@ def run_octopus_smart_control_tests(my_predbat):
         items[SWITCH] = "on"
         kwh = _slots(my_predbat)
         failed |= _check("t10 all on", kwh == [2.0, 3.0, 5.0, 10.0], "kwh {}".format(kwh))
+        _setup(my_predbat)
+
+        print("Test 10b: a charger's own schedule (the Ohme component's wiring) is kept while Smart Control is off")
+        attributes = copy.deepcopy(items[SLOT_SENSOR])
+        attributes["planned_dispatches"][0]["source"] = DISPATCH_SOURCE_CHARGER_SCHEDULE
+        my_predbat.ha_interface.set_state(SLOT_SENSOR, "off", attributes=attributes)
+        items[SWITCH] = "off"
+        kwh = _slots(my_predbat)
+        failed |= _check("t10b schedule kept", kwh == [5.0, 10.0], "kwh {}".format(kwh))
         _setup(my_predbat)
 
         print("Test 11: the state is case-insensitive, and an odd state string is no evidence")

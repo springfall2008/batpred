@@ -33,6 +33,7 @@ from const import (
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
     OCTOPUS_MANUAL_DISPATCH_SOURCES,
+    DISPATCH_SOURCE_CHARGER_SCHEDULE,
     CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
@@ -1547,10 +1548,11 @@ class Fetch:
                     self.octopus_slots[car_n] += completed
                 # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
                 # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
-                # the manual bump/boost charges the user asked for themselves
+                # the manual bump/boost charges the user asked for themselves. So is a charger's own schedule: the Ohme
+                # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it
                 planned_used = planned
                 if self.octopus_smart_control_off(car_n, save=save):
-                    planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES]
+                    planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES + (DISPATCH_SOURCE_CHARGER_SCHEDULE,)]
                 if planned_used and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
