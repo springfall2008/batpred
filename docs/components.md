@@ -883,7 +883,7 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 #### When to enable (ohme)
 
 - You have an Ohme EV charger
-- You want Predbat to factor in the charging plan within Ohme, this is mostly used with Octopus Intelligent GO.
+- You want Predbat to factor in the charging plan within Ohme. On Octopus Intelligent GO the Ohme slots also bring the off-peak rate; on any other tariff they are used as car load only.
 
 #### Important notes (ohme)
 
@@ -899,7 +899,7 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
-| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car |
+| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car. Unless `ohme_control` is on, the car charging plan is taken from Ohme's own schedule |
 | `ohme_control` | Boolean | No | `False` | `ohme_control` | Set to `true` to let Predbat start and stop the charger from its own plan. Requires `ohme_automatic`; released by read only mode |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on, or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
 

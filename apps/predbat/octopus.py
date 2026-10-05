@@ -18,7 +18,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
@@ -3260,13 +3260,16 @@ class Octopus:
         rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
         completed dispatch consumes it like any other.
 
-        :param source: Dispatch source, e.g. smart-charge, bump-charge or BOOST
+        :param source: Dispatch source, e.g. smart-charge, bump-charge, BOOST or charger-schedule
         :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
         :param end_minutes: Dispatch end time in minutes from midnight
         :return: True if the dispatch is eligible for the off-peak rate
         """
         # Ignore bump-charge slots as their cost won't change
         if source == "bump-charge" or source == "BOOST":
+            return False
+        # A charger's own schedule on a tariff with no dispatch rate: car load only, never a cheap slot
+        if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
             return False
         if end_minutes <= self.minutes_now:
             return True
@@ -3513,6 +3516,72 @@ class Octopus:
         self.dispatch_unconfirmed_last[car_n] = dedup_key
         self.log("Octopus: Note: car {} dispatch active at {} but the car is not charging - import in this slot may be billed at the full rate, needs reconciling against the bill (GH#5080)".format(car_n, self.time_abs_str(slot)))
 
+    def split_slot_by_rate(self, start_minutes, end_minutes, kwh):
+        """
+        Split a car slot wherever the import rate changes, as (start, end, kwh, rate) chunks.
+
+        For a slot billed at the normal tariff rate rather than a dispatch rate - a charger's own
+        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE). Such a session commonly runs for hours and
+        crosses rate bands, so pricing all of it at the rate it starts on would give the car a rate
+        of its own that differs from the house rate for the rest of the slot (car_charge_slot_rate()).
+        kWh is apportioned to each chunk by its share of the slot's duration.
+        """
+        span = end_minutes - start_minutes
+        if span <= 0:
+            return []
+        chunks = []
+        chunk_start = start_minutes
+        rate = self.rate_import.get(start_minutes, self.rate_min_base)
+        for minute in range(start_minutes + 1, end_minutes):
+            minute_rate = self.rate_import.get(minute, rate)
+            if minute_rate != rate:
+                chunks.append((chunk_start, minute, kwh * (minute - chunk_start) / span, rate))
+                chunk_start = minute
+                rate = minute_rate
+        chunks.append((chunk_start, end_minutes, kwh * (end_minutes - chunk_start) / span, rate))
+        return chunks
+
+    def reprice_charger_schedule_slots(self):
+        """
+        Price the charger schedule slots in the car plan against this cycle's import rates.
+
+        load_octopus_slots() runs before the rates are built - the Intelligent dispatches it reads are
+        what the rates are built from - so it can only price a slot on the previous cycle's rate_import:
+        empty on the first cycle after a restart, a day out on the first after midnight, and behind
+        whenever new rates arrive. An Intelligent slot does not care, it is priced at the dispatch
+        rate. A charger schedule is priced at the tariff, so each of its slots is split and priced
+        again here, once the rates are known.
+
+        Done in place rather than by building the slots again, so that what dynamic_load_car_check()
+        has cancelled in between stays cancelled.
+        """
+        for car_n in range(min(self.num_cars, len(self.car_charging_slots))):
+            slots = self.car_charging_slots[car_n]
+            if not any(slot.get("tariff_rate", False) for slot in slots):
+                continue
+            new_slots = []
+            for slot in slots:
+                span = slot["end"] - slot["start"]
+                if not slot.get("tariff_rate", False) or span <= 0:
+                    new_slots.append(slot)
+                    continue
+                kwh_left = slot["kwh"]
+                for chunk_start, chunk_end, chunk_kwh, rate in self.split_slot_by_rate(slot["start"], slot["end"], slot["kwh"]):
+                    kwh_left -= chunk_kwh
+                    new_slot = slot.copy()
+                    new_slot["start"] = chunk_start
+                    new_slot["end"] = chunk_end
+                    new_slot["kwh"] = chunk_kwh
+                    new_slot["average"] = rate
+                    new_slot["cost"] = dp2(rate * chunk_kwh)
+                    if "soc" in slot:
+                        # The slot's own figure is the car at its end, so each part stops short by what follows it
+                        new_slot["soc"] = dp2(max(slot["soc"] - max(kwh_left, 0) * self.car_charging_loss, 0))
+                    if "kwh_cancelled" in slot:
+                        new_slot["kwh_cancelled"] = slot["kwh_cancelled"] * (chunk_end - chunk_start) / span
+                    new_slots.append(new_slot)
+            self.car_charging_slots[car_n] = new_slots
+
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
         Turn octopus slots into charging plan
@@ -3590,7 +3659,11 @@ class Octopus:
             # approximation (real draw isn't perfectly uniform across the slot) but matches how
             # rate_add_io_slots() below treats rate as uniform per 30-min block too.
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
+            # Marked so reprice_charger_schedule_slots() can find them again once this cycle's rates are built
+            charger_schedule = source == DISPATCH_SOURCE_CHARGER_SCHEDULE
+            if charger_schedule:
+                chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
+            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
                 slot_block_start = (start_minutes // 30) * 30
                 num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
                 day_offset = (start_minutes - 720) // (24 * 60)
@@ -3644,6 +3717,8 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
+                        if charger_schedule:
+                            new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
 
                         if end_minutes_original > end_minutes:
@@ -3655,6 +3730,8 @@ class Octopus:
                             new_slot["cost"] = 0.0
                             new_slot["soc"] = dp2(car_soc)
                             new_slot["octopus"] = True
+                            if charger_schedule:
+                                new_slot["tariff_rate"] = True
                             new_slots.append(new_slot)
 
                     else:
@@ -3667,6 +3744,8 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
+                        if charger_schedule:
+                            new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
         return new_slots
 

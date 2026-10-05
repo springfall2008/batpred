@@ -527,6 +527,100 @@ def run_multi_car_iog_adhoc_dispatch_test(testname, my_predbat):
     return failed
 
 
+def run_charger_schedule_plan_test(testname, my_predbat):
+    """
+    Issue #5399: off Octopus Intelligent, and with Predbat not controlling the charger, the Ohme
+    component publishes the charger's own schedule as dispatches with source charger-schedule and
+    wires octopus_intelligent_slot to them. This drives the real fetch_sensor_data_cars() and
+    fetch_sensor_data_car_planning() to check that schedule becomes the car plan - rather than a plan
+    of Predbat's own from plan_car_charging() that nothing would carry out - and that a plugged in car
+    with no schedule gets no plan at all.
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    entity_id = "binary_sensor.predbat_ohme_slot_active"
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_now = [False]
+    my_predbat.car_charging_plan_smart = [False]
+    my_predbat.car_charging_plan_max_price = [0]
+    my_predbat.car_charging_plan_time = ["07:00:00"]
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.car_charging_limit = [100.0]
+    my_predbat.car_charging_rate = [7.4]
+    my_predbat.car_charging_exclusive = [False]
+    my_predbat.car_charging_manual_soc = [False]
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.octopus_intelligent_ignore_unplugged = True
+    my_predbat.octopus_intelligent_consider_full = False
+
+    saved_clock = pin_test_clock(my_predbat)
+    saved_plan_car_charging = my_predbat.plan_car_charging
+    plan_calls = []
+
+    def fake_plan_car_charging(car_n, low_rates):
+        """Record a call to Predbat's own car planner, which must not run for this car"""
+        plan_calls.append(car_n)
+        return [{"start": 0, "end": 60, "kwh": 99.0, "average": 10, "cost": 990.0, "octopus": False}]
+
+    my_predbat.plan_car_charging = fake_plan_car_charging
+
+    my_predbat.args["car_charging_loss"] = 0.0
+    my_predbat.args["car_charging_soc"] = [28.0]
+    my_predbat.args["car_charging_limit"] = [100.0]
+    my_predbat.args["octopus_intelligent_slot"] = entity_id
+
+    slot_start = (my_predbat.now_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    slot_end = (my_predbat.now_utc + timedelta(minutes=180)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    schedule = [{"start": slot_start, "end": slot_end, "energy": -14.8, "location": "AT_HOME", "source": "charger-schedule"}]
+
+    for name, planned_dispatches in [("with a schedule", schedule), ("with no schedule", [])]:
+        # Plugged in either way - binary_sensor.predbat_ohme_connected, which is car_charging_planned
+        my_predbat.car_charging_planned = [True]
+        my_predbat.car_charging_slots = [[]]
+        my_predbat.octopus_slots = [[]]
+        del plan_calls[:]
+        attributes = {"planned_dispatches": planned_dispatches, "completed_dispatches": []} if planned_dispatches else {}
+        my_predbat.ha_interface.set_state(entity_id, "off", attributes=attributes)
+
+        my_predbat.fetch_sensor_data_cars()
+        my_predbat.fetch_sensor_data_car_planning()
+
+        slots = my_predbat.car_charging_slots[0]
+        if plan_calls:
+            print("ERROR: {}: plan_car_charging should not run when the charger schedules the car".format(name))
+            failed = True
+        if planned_dispatches:
+            total_kwh = sum(slot["kwh"] for slot in slots)
+            if not slots or slots[0]["start"] != 12 * 60 + 60 or slots[-1]["end"] != 12 * 60 + 180 or abs(total_kwh - 14.8) > 0.01 or not all(slot.get("octopus") for slot in slots):
+                print("ERROR: {}: car plan should be the charger's schedule, got {}".format(name, slots))
+                failed = True
+            if not my_predbat.car_charging_planned[0]:
+                print("ERROR: {}: car_charging_planned should be True".format(name))
+                failed = True
+            # The schedule is trusted over the SoC and battery size Ohme cannot report reliably
+            if not my_predbat.car_charging_limit_model or my_predbat.car_charging_limit_model[0] <= my_predbat.car_charging_limit[0]:
+                print("ERROR: {}: model charge limit should be uncapped, got {}".format(name, my_predbat.car_charging_limit_model))
+                failed = True
+        else:
+            if slots or my_predbat.car_charging_planned[0]:
+                print("ERROR: {}: no car charge should be planned, got slots {} planned {}".format(name, slots, my_predbat.car_charging_planned))
+                failed = True
+
+    my_predbat.plan_car_charging = saved_plan_car_charging
+    my_predbat.car_charging_slots = [[]]
+    my_predbat.octopus_slots = [[]]
+    my_predbat.car_charging_limit_model = None
+    restore_test_clock(my_predbat, saved_clock)
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
 def run_iog_model_limit_fetch_test(testname, my_predbat):
     """
     Issue #4967: with octopus_intelligent_consider_full off (the default), fetch_sensor_data_cars()
@@ -890,4 +984,5 @@ def run_multi_car_iog_tests(my_predbat):
     failed |= run_iog_model_limit_fetch_test("multi_car_iog_model_limit_fetch_4967", my_predbat)
     failed |= run_iog_consider_full_predict_test("multi_car_iog_consider_full_predict_4967", my_predbat)
     failed |= run_update_car_manual_soc_cap_test("multi_car_iog_manual_soc_cap_4967", my_predbat)
+    failed |= run_charger_schedule_plan_test("charger_schedule_is_the_car_plan_5399", my_predbat)
     return failed
