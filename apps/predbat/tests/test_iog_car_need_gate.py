@@ -101,6 +101,15 @@ def run_surplus_minutes_tests(my_predbat):
     surplus = my_predbat.octopus_surplus_minutes()
     failed |= _expect("other car's need kept", not (surplus & set(range(14 * 60, 14 * 60 + 30))) and (13 * 60 + 30) in surplus, "14:00-14:30 is needed by car 1")
 
+    # A cancelled car's slots are zeroed with the kWh kept in kwh_cancelled: still needed, cancellation
+    # (#5229) decides their rate - including the rest of a half hour the car was seen charging in
+    cancelled = [{"start": 13 * 60, "end": 13 * 60 + 20, "kwh": 0, "kwh_cancelled": 5.0, "octopus": True}, {"start": 13 * 60 + 20, "end": 15 * 60, "kwh": 0, "octopus": True}]
+    my_predbat.num_cars = 1
+    my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]
+    my_predbat.car_charging_slots = [cancelled]
+    surplus = my_predbat.octopus_surplus_minutes()
+    failed |= _expect("cancelled car's need kept", surplus == set(range(13 * 60 + 30, 15 * 60)), "13:00-13:30 is still needed by the cancelled car")
+
     # A car not modelled from its Octopus slots (e.g. ignored while unplugged) is left alone
     my_predbat.num_cars = 1
     my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]

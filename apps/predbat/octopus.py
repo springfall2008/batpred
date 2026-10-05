@@ -3830,7 +3830,9 @@ class Octopus:
                 start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
                 dispatch_minutes.update(range(max(start_minutes, self.minutes_now), end_minutes))
             for slot in car_slots:
-                if slot.get("kwh", 0) > 0:
+                # A cancelled car's slots are zeroed with their kWh kept in kwh_cancelled (dynamic_load_car_check());
+                # cancellation decides their rate itself, so they still count as needed here
+                if slot.get("kwh", 0) > 0 or slot.get("kwh_cancelled", 0) > 0:
                     start_minutes, end_minutes = round_out_to_period(slot["start"], slot["end"])
                     needed_minutes.update(range(start_minutes, end_minutes))
         return {minute for minute in dispatch_minutes - needed_minutes if not self.in_iog_fixed_window(minute)}
