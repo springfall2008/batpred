@@ -602,6 +602,12 @@ def test_octopus_rule_discovery_wait_is_bounded():
     run_async(component.charger_control_tick(_now()))
     assert component.commands[-1] == ("a", "off", 0), "Predbat drives it again once discovery has wired nothing for it: {}".format(component.commands)
 
+    # A wait left over from before a charger's driver became known does not cut the next wait short
+    wired = _octopus_component(None, is_charger=False)
+    wired.charger_control_discovery_since = datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)
+    run_async(wired.charger_control_tick(_now()))
+    assert wired.charger_control_discovery_since is None, wired.charger_control_discovery_since
+
 
 def test_octopus_rule_cannot_tell_releases_a_held_charger():
     """A charger Predbat holds stopped is released, not just let go, when nobody is known to take it over."""

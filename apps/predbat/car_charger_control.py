@@ -37,9 +37,9 @@ def parse_dispatch_time(value):
 # A guest switch left on turns itself off after this long, for chargers that cannot tell a car was unplugged
 GUEST_CHARGING_MAX_HOURS = 12
 
-# How long chargers are left alone waiting for the Octopus or Kraken component to wire its Intelligent devices.
-# Discovery normally finishes in the first cycle or two; a component that never gets there (a failed login,
-# say) must not leave every charger uncontrolled for good
+# How long a charger is held as it is while the Octopus or Kraken component wires its Intelligent devices.
+# Discovery normally finishes in the first cycle or two; past this, one that never gets there (a failed login,
+# say) is treated as cannot tell - warned about once, and a charger Predbat holds is handed back
 OCTOPUS_DISCOVERY_WAIT_MINUTES = 15
 
 # The strings get_arg() reads as true for a boolean setting
@@ -537,6 +537,9 @@ class CarChargerControl:
     async def charger_control_drive_one(self, car_n, key, handle, now):
         """Drive one charger from car car_n's plan, or leave it to Octopus."""
         drives = self.charger_control_octopus_drives_charger(car_n)
+        if drives is not None:
+            # Known either way, so a later wait for discovery starts its clock afresh
+            self.charger_control_discovery_since = None
         # An explicit control: true is the user saying their charger is not the Octopus
         # device, so it overrides "cannot tell" - but never a known charge point
         if drives is True or (drives is None and self.charger_control_config is not True):
