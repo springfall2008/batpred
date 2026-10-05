@@ -3623,6 +3623,14 @@ class Octopus:
                 # Emission is future-only, so dispatch_billed_off_peak()'s completed-dispatch exemption
                 # (#4946) can never apply here - a plain location test is equivalent and is kept as-is.
                 if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
+                    if octopus_intelligent_consider_full and start_minutes < self.minutes_now:
+                        # A dispatch in progress: only its remaining span and energy are still to come, so cap the
+                        # car's need from now, not from the dispatch's original start. The Octopus API component
+                        # already trims a running dispatch (trim_started_dispatch()); octopus_intelligent_slot doesn't.
+                        # Done after the slot-cap chunking above, which counts the dispatch from its real start.
+                        kwh = kwh * (end_minutes - self.minutes_now) / (end_minutes - start_minutes)
+                        kwh_original = kwh
+                        start_minutes = self.minutes_now
                     kwh_expected = kwh * self.car_charging_loss
                     if octopus_intelligent_consider_full:
                         kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
@@ -3802,6 +3810,21 @@ class Octopus:
         minute_of_day = minute % (24 * 60)
         return minute_of_day >= window_start or minute_of_day < window_end
 
+    def octopus_surplus_from(self):
+        """
+        The first minute the car-need gate can withhold: the half hour after the current one, as the car may
+        already have charged in the current one, making the whole period cheap.
+        """
+        return (self.minutes_now // 30 + 1) * 30
+
+    def octopus_surplus_changed(self, previous):
+        """
+        Whether this cycle's surplus differs from the previous cycle's, so the plan must be recomputed. Only the
+        part of the previous surplus still ahead is compared, so time passing alone isn't a change.
+        """
+        start = self.octopus_surplus_from()
+        return {minute for minute in previous if minute >= start} != self.octopus_surplus
+
     def octopus_surplus_minutes(self):
         """
         Future Octopus Intelligent dispatch minutes no car can use, when octopus_intelligent_consider_full is on.
@@ -3813,10 +3836,8 @@ class Octopus:
 
         Decided per car, then shared, as the rates are shared: a minute stays cheap if any car can still use
         it before the point that car's own cheap rate ends (dynamic_load_car_strip_from()). A car can use
-        - its needed slots - with kWh left, or kWh kept in kwh_cancelled for a cancelled car;
-        - the whole of a dispatch in progress now. Its capped slots can't be relied on mid-dispatch (one from
-          octopus_intelligent_slot isn't trimmed to now, so its finish is worked out from its original start),
-          and dynamic load cancels it in real time once the car stops charging;
+        - its needed slots - with kWh left, or kWh kept in kwh_cancelled for a cancelled car. A dispatch in
+          progress is capped from now (see load_octopus_slots()), so this holds mid-dispatch too;
         - every dispatch, for a car not modelled from its Octopus slots this cycle (e.g. ignored while unplugged).
 
         Rounded out to whole 30 minute rate periods, from the half hour after the current one (the car may have
@@ -3826,7 +3847,7 @@ class Octopus:
             return set()
         dispatch_minutes = set()
         usable_minutes = set()
-        next_period = (self.minutes_now // 30 + 1) * 30
+        next_period = self.octopus_surplus_from()
         for car_n in range(min(self.num_cars, len(self.octopus_slots))):
             car_slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
             modelled = any(slot.get("octopus", False) for slot in car_slots)
@@ -3836,10 +3857,9 @@ class Octopus:
                 start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
                 if start_minutes == end_minutes:
                     continue
-                in_progress = start_minutes <= self.minutes_now < end_minutes
                 start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
                 dispatch_minutes.update(range(max(start_minutes, next_period), end_minutes))
-                if in_progress or not modelled:
+                if not modelled:
                     usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
             for slot in car_slots:
                 if slot.get("kwh", 0) > 0 or slot.get("kwh_cancelled", 0) > 0:

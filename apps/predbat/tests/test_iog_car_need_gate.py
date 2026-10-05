@@ -91,12 +91,12 @@ def run_surplus_minutes_tests(my_predbat):
     surplus = my_predbat.octopus_surplus_minutes()
     failed |= _expect("fixed window untouched", surplus == set(range(23 * 60, 23 * 60 + 30)), "only 23:00-23:30 is dispatch-only, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
 
-    # A dispatch in progress is never trimmed: its capped slots can't be relied on mid-dispatch, and dynamic
-    # load cancels it once the car stops. Elapsed minutes are never touched either.
+    # A dispatch in progress with the car already full: from the next half hour it is surplus like any other
+    # (its capped slots are worked out from now, see load_octopus_slots()). Elapsed minutes are never touched.
     my_predbat.octopus_slots = [[_slot(my_predbat, 9, 11, 20.0)]]
-    my_predbat.car_charging_slots = [[{"start": 9 * 60, "end": 11 * 60, "kwh": 0.0, "octopus": True}]]
+    my_predbat.car_charging_slots = [[{"start": 10 * 60, "end": 11 * 60, "kwh": 0.0, "octopus": True}]]
     surplus = my_predbat.octopus_surplus_minutes()
-    failed |= _expect("in-progress dispatch kept", surplus == set(), "expected nothing, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    failed |= _expect("in-progress dispatch from the next half hour", surplus == set(range(10 * 60 + 30, 11 * 60)), "expected 10:30-11:00, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
 
     # The clock is floored to five minutes, so a fetch at 14:02 reads 14:00: the current half hour must still be
     # kept, as the car may already have charged in it. A dispatch starting later in it rounds out to 14:00.
@@ -226,15 +226,72 @@ def run_end_to_end_tests(my_predbat):
 
     for feed in (False, True):
         path = "feed" if feed else "overlay"
-        # In progress at 14:10: the untrimmed dispatch's capped slot ends at 13:30, from its original start, though
-        # the car is still charging - the running dispatch is left alone
+        # In progress at 14:10, untrimmed as octopus_intelligent_slot reports it: 5 kWh at the remaining 10 kW
+        # runs to 14:40, so the car's need is capped from now and 14:30-15:00 stays cheap
         rates, io_adjusted, _ = _end_to_end(my_predbat, True, feed, minutes_now=14 * 60 + 10)
-        failed |= _expect("{}: in-progress dispatch kept".format(path), all(rates[minute] == 4.0 for minute in range(14 * 60 + 10, 15 * 60)), "14:10-15:00 should stay 4p, got {}".format(sorted({rates[minute] for minute in range(14 * 60 + 10, 15 * 60)})))
+        failed |= _expect(
+            "{}: in-progress dispatch capped from now".format(path), all(rates[minute] == 4.0 for minute in range(14 * 60 + 10, 15 * 60)), "14:10-15:00 should stay 4p, got {}".format(sorted({rates[minute] for minute in range(14 * 60 + 10, 15 * 60)}))
+        )
 
         # A cancelled second car's need mustn't keep the full car's surplus cheap: neither will charge then
         rates, io_adjusted, _ = _end_to_end(my_predbat, True, feed, cancelled_second_car=True)
         failed |= _expect("{}: needed half hour still cheap with a cancelled car".format(path), all(rates[minute] == 4.0 for minute in needed), "13:00-13:30 should be 4p")
         failed |= _expect("{}: cancelled car's need not shared".format(path), all(rates[minute] == 30.0 for minute in surplus), "13:30-15:00 should be 30p, got {}".format(sorted({rates[minute] for minute in surplus})))
+    return failed
+
+
+def _long_dispatch_surplus(my_predbat, minutes_now, chunked):
+    """
+    #5403 review: car at 55 of 60 kWh (needs 5 kWh), consider_full on, Octopus charging 13:00-17:00 either as
+    one 28 kWh dispatch or as eight half-hour 3.5 kWh dispatches. Returns the surplus from the real capping.
+    """
+    my_predbat.minutes_now = minutes_now
+    my_predbat.forecast_minutes = 3 * 24 * 60
+    my_predbat.num_cars = 1
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 12
+    reset_rates(my_predbat, 30, 5)
+    my_predbat.rate_min = 4
+    my_predbat.rate_min_base = 4
+    my_predbat.rate_max_base = 30
+    my_predbat.car_charging_soc = [55.0]
+    my_predbat.car_charging_limit = [60.0]
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_rate = [7.0]
+    my_predbat.dynamic_load_car_effective = {}
+    my_predbat.dynamic_load_car_confirmed = {}
+    my_predbat.octopus_intelligent_consider_full = True
+    if chunked:
+        dispatches = [_slot(my_predbat, 13 + n / 2, 13.5 + n / 2, 3.5) for n in range(8)]
+    else:
+        dispatches = [_slot(my_predbat, 13, 17, 28.0)]
+    my_predbat.octopus_slots = [dispatches]
+    my_predbat.car_charging_slots = [my_predbat.load_octopus_slots(0, dispatches, True)]
+    return my_predbat.octopus_surplus_minutes()
+
+
+def run_long_dispatch_tests(my_predbat):
+    """The gate must give the same answer whether or not a long dispatch has started, however Octopus chunks it."""
+    failed = False
+    for minutes_now in (12 * 60 + 55, 13 * 60 + 5):
+        for chunked in (False, True):
+            surplus = _long_dispatch_surplus(my_predbat, minutes_now, chunked)
+            name = "{} at {:02d}:{:02d}".format("eight half hours" if chunked else "one dispatch", minutes_now // 60, minutes_now % 60)
+            failed |= _expect(name, surplus == set(range(14 * 60, 17 * 60)), "expected 14:00-17:00 withheld, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    return failed
+
+
+def run_replan_trigger_tests(my_predbat):
+    """A surplus change forces a replan, but time passing alone does not."""
+    failed = False
+    my_predbat.minutes_now = 13 * 60 + 5
+    my_predbat.octopus_surplus = set(range(14 * 60, 17 * 60))
+    failed |= _expect("unchanged", not my_predbat.octopus_surplus_changed(set(range(14 * 60, 17 * 60))), "same surplus is not a change")
+    failed |= _expect("car needs more", my_predbat.octopus_surplus_changed(set(range(15 * 60, 17 * 60))), "a different future surplus is a change")
+    # The cycle at 12:55 withheld 13:00-17:00; at 13:05 the current half hour is no longer withheld
+    my_predbat.octopus_surplus = set(range(13 * 60 + 30, 17 * 60))
+    failed |= _expect("time passing", not my_predbat.octopus_surplus_changed(set(range(13 * 60, 17 * 60))), "a previous surplus that now starts in the current half hour is not a change")
+    failed |= _expect("gate switched on", my_predbat.octopus_surplus_changed(set()), "a new surplus is a change")
     return failed
 
 
@@ -247,6 +304,8 @@ def run_iog_car_need_gate_tests(my_predbat):
     try:
         failed |= run_surplus_minutes_tests(my_predbat)
         failed |= run_end_to_end_tests(my_predbat)
+        failed |= run_long_dispatch_tests(my_predbat)
+        failed |= run_replan_trigger_tests(my_predbat)
     finally:
         for attr, value in saved.items():
             setattr(my_predbat, attr, value)
