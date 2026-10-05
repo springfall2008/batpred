@@ -31,6 +31,7 @@ from wallbox import (
     WallboxAuthError,
     WallboxPermissionError,
     WallboxRateLimitError,
+    WallboxStateError,
     WallboxTransport,
     basic_auth_header,
     normalise_charger,
@@ -1308,6 +1309,31 @@ def test_normalise_real_locked_capture():
     print("  ✓ A real locked-charger capture is normalised")
 
 
+def test_transport_conflict_is_a_state_error():
+    """A 409 means the charger cannot do that in its current state, e.g. resume with nothing paused."""
+    session, calls = _session([_response({}, status=409)])
+    with patch("aiohttp.ClientSession", return_value=session), patch("wallbox.record_api_call") as mock_record:
+        try:
+            run_async(_signed_in_transport().resume(101))
+            raise AssertionError("Expected WallboxStateError")
+        except WallboxStateError as exc:
+            assert "current state" in str(exc), str(exc)
+            assert isinstance(exc, WallboxApiError), "Callers that handle API errors must still catch it"
+    assert len(calls) == 1 and mock_record.call_args.kwargs.get("reason") == "client_error"
+    print("  ✓ A 409 is reported as the charger refusing the action in its current state")
+
+
+def test_control_refused_for_state_is_logged_plainly():
+    """A resume the charger refuses is logged with the reason, dropped, and polling carries on."""
+    component = _started_component()
+    component.transport.errors[("resume", 101)] = WallboxStateError("Wallbox refused the action: the charger cannot do that in its current state")
+    run_async(component.switch_event("switch.predbat_wallbox_101_charging", "turn_on"))
+    assert run_async(component.run(60, False)) is True
+    assert _logged(component, "control failed") and _logged(component, "current state")
+    assert component.queued_events == []
+    print("  ✓ A control refused for the charger's state is logged plainly")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1379,5 +1405,7 @@ def test_wallbox(my_predbat=None):
     test_control_keeps_its_record_through_a_transient_status()
     test_control_state_load_is_retried()
     test_normalise_real_locked_capture()
+    test_transport_conflict_is_a_state_error()
+    test_control_refused_for_state_is_logged_plainly()
     print("=" * 70)
     return False

@@ -231,6 +231,10 @@ class WallboxApiError(WallboxError):
     """Any other failure: a bad status, a timeout, a dropped connection or an unreadable body."""
 
 
+class WallboxStateError(WallboxApiError):
+    """Wallbox answered 409: the charger cannot do what was asked in its current state."""
+
+
 def basic_auth_header(username, password):
     """Build an HTTP Basic Authorization header value, encoded as UTF-8."""
     token = base64.b64encode("{}:{}".format(username, password).encode("utf-8")).decode("ascii")
@@ -295,6 +299,11 @@ class WallboxTransport:
                     if status in (401, 403):
                         record_api_call("wallbox", success=False, reason="auth_error")
                         raise WallboxAuthError("Wallbox rejected the credentials for {}".format(url))
+                    if status == 409:
+                        # Seen live for a resume sent to a charger with nothing paused: the request
+                        # was understood, the charger is just not in a state where it applies
+                        record_api_call("wallbox", success=False, reason="client_error")
+                        raise WallboxStateError("Wallbox refused the action: the charger cannot do that in its current state (HTTP 409 from {})".format(url))
                     if status < 200 or status >= 300:
                         record_api_call("wallbox", success=False, reason="server_error" if status >= 500 else "client_error")
                         raise WallboxApiError("HTTP {} from {}".format(status, url))
@@ -950,7 +959,11 @@ def main():  # pragma: no cover
     group.add_argument("--max-current", type=int, default=None, help="Set the maximum charging current in amps")
     group.add_argument("--eco-smart", choices=ECO_SMART_OPTIONS, default=None, help="Set the Eco-Smart mode")
     args = parser.parse_args()
-    asyncio.run(run_wallbox_cli(args))
+    try:
+        asyncio.run(run_wallbox_cli(args))
+    except WallboxError as exc:
+        # A refused control or a failed read is an answer, not a crash
+        print("\nWallbox call failed: {}".format(exc))
 
 
 if __name__ == "__main__":
