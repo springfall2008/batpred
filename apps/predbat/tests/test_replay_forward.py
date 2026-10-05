@@ -662,6 +662,29 @@ def test_pv_exact():
     return 0
 
 
+def test_cars_input():
+    """A logged car state is parsed, carried past a dropped run, and set on the instance by apply_run."""
+    lines = """2026-10-05 17:25:00.000000: --------------- PredBat - update at 2026-10-05 17:25:00+01:00 with clock skew 0 minutes, minutes now 1045
+2026-10-05 17:25:01.000000: Replay input: cars changed {'car_charging_planned': [True], 'car_charging_soc': [33.11], 'car_charging_slots': [[{'start': 1290, 'end': 1350, 'kwh': 7.658, 'octopus': True}]], 'car_charging_limit_model': [9999.0]}
+2026-10-05 17:25:41.000000: --------------- PredBat - update at 2026-10-05 17:25:00+01:00 with clock skew 0 minutes, minutes now 1045
+2026-10-05 17:25:42.000000: Inverter 0 SoC: 18.08kWh 100%, current charge rate 9200W, current discharge rate 9660W, current battery power 0W
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(lines)
+        runs = parse_log(path)
+    if len(runs) != 1 or runs[0].get("cars", {}).get("car_charging_soc") != [33.11]:
+        print("ERROR: the dropped run's car state should carry to the next run: {}".format(runs))
+        return 1
+    bat = SimpleNamespace(minutes_now=1040, now_utc=datetime(2026, 10, 5, 16, 20, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, car_charging_planned=[False], car_charging_slots=[[]])
+    apply_run(bat, {"today": None, "force": None, "time": "2026-10-05 17:20:00+01:00"}, runs[0])
+    if bat.car_charging_planned != [True] or bat.car_charging_slots[0][0]["kwh"] != 7.658 or bat.car_charging_limit_model != [9999.0]:
+        print("ERROR: car state not applied: {}".format(vars(bat)))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -691,4 +714,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_apply_logged_rates_from_before_midnight()
     failed += test_load_exact()
     failed += test_pv_exact()
+    failed += test_cars_input()
     return failed
