@@ -1446,6 +1446,18 @@ def test_friendly_names_without_a_usable_charger_name():
     print("  ✓ Friendly names cope with a missing or already-branded charger name")
 
 
+def test_operation_mode_is_read_and_published():
+    """The charger's operation mode (ocpp when an OCPP backend runs it) is shown on the status sensor."""
+    assert normalise_charger(101, MOCK_STATUS_LOCKED_CAPTURED).operation_mode == "ocpp"
+    assert normalise_charger(101, _status()).operation_mode == "", "A payload without the field gives an empty mode, not an error"
+    assert normalise_charger(101, {"config_data": {"operation_mode": None}}).operation_mode == ""
+
+    component = _make_component({101: MOCK_STATUS_LOCKED_CAPTURED})
+    run_async(component.run(0, True))
+    assert component.base.entities["sensor.predbat_wallbox_101_status"]["attributes"]["operation_mode"] == "ocpp"
+    print("  ✓ Operation mode is read and published on the status sensor")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1526,5 +1538,6 @@ def test_wallbox(my_predbat=None):
     test_transport_get_reads_any_path()
     test_friendly_names_carry_the_charger_name()
     test_friendly_names_without_a_usable_charger_name()
+    test_operation_mode_is_read_and_published()
     print("=" * 70)
     return False

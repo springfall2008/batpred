@@ -162,6 +162,8 @@ class WallboxCharger:
     max_charging_current: int
     max_available_current: int
     eco_smart: Optional[str]
+    # How the charger is being run: "ocpp" when an OCPP backend is in charge of it. Empty when not reported
+    operation_mode: str = ""
 
 
 def normalise_charger(charger_id, payload):
@@ -208,6 +210,7 @@ def normalise_charger(charger_id, payload):
         max_charging_current=_to_int(config.get("max_charging_current")),
         max_available_current=_to_int(payload.get("max_available_power")),
         eco_smart=eco_smart,
+        operation_mode=str(config.get("operation_mode") or ""),
     )
 
 
@@ -639,7 +642,7 @@ class WallboxAPI(ComponentBase):
         for charger in self.ordered_chargers():
             prefix = self.entity_prefix(charger)
             status_attributes = self.charger_attributes(charger, "status")
-            status_attributes.update({"status_id": charger.status_id, "name": charger.name, "serial_number": charger.serial, "part_number": charger.part_number, "software_version": charger.software_version})
+            status_attributes.update({"status_id": charger.status_id, "name": charger.name, "serial_number": charger.serial, "part_number": charger.part_number, "software_version": charger.software_version, "operation_mode": charger.operation_mode})
             current_attributes = self.charger_attributes(charger, "max_charging_current")
             current_attributes["max"] = charger.max_available_current if charger.max_available_current >= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
 
@@ -905,9 +908,13 @@ class WallboxAPI(ComponentBase):
 
 def print_charger_table(chargers):  # pragma: no cover
     """Print the charger summary table, for the poll and for a command read-back alike."""
-    print("{:<12} {:<20} {:<34} {:>9} {:>12} {:>6} {:>7}".format("CHARGER", "NAME", "STATUS", "POWER W", "SESSION kWh", "MAX A", "LOCKED"))
+    print("{:<12} {:<20} {:<34} {:>9} {:>12} {:>6} {:>7} {:>8}".format("CHARGER", "NAME", "STATUS", "POWER W", "SESSION kWh", "MAX A", "LOCKED", "MODE"))
     for charger in chargers:
-        print("{:<12} {:<20} {:<34} {:>9.0f} {:>12.2f} {:>6} {:>7}".format(charger.charger_id, charger.name[:20], charger.status, charger.power_w, charger.session_energy_kwh, charger.max_charging_current, "yes" if charger.locked else "no"))
+        print(
+            "{:<12} {:<20} {:<34} {:>9.0f} {:>12.2f} {:>6} {:>7} {:>8}".format(
+                charger.charger_id, charger.name[:20], charger.status, charger.power_w, charger.session_energy_kwh, charger.max_charging_current, "yes" if charger.locked else "no", charger.operation_mode or "-"
+            )
+        )
 
 
 async def run_wallbox_cli(args):  # pragma: no cover

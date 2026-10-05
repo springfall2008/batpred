@@ -67,6 +67,7 @@ with nothing paused.
 | `config_data.max_charging_current` | Amps |
 | `config_data.locked` | Lock state |
 | `config_data.serial_number`, `.part_number`, `.software.currentVersion` | Identity |
+| `config_data.operation_mode` | `ocpp` when an OCPP backend runs the charger; published as an attribute of the status sensor. Seen live: such a charger stays Locked and an API unlock has no effect |
 | `config_data.ecosmart.enabled`, `.mode` | Absent when the charger has no Eco-Smart; mode 0 is eco, 1 is full solar |
 
 The payload has a `state_of_charge` field, but a Type 2 connector cannot report the car's

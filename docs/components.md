@@ -1058,7 +1058,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 
 | Entity | Description |
 | ------ | ----------- |
-| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready` |
+| `sensor.predbat_wallbox_<id>_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready`. Its `operation_mode` attribute reads `ocpp` when an OCPP backend, such as Octopus for Intelligent Octopus Go, is running the charger |
 | `sensor.predbat_wallbox_<id>_power` | Charging power in W |
 | `sensor.predbat_wallbox_<id>_session_energy` | Energy added in the current session in kWh; resets with each session |
 | `binary_sensor.predbat_wallbox_<id>_connected` | On while a car is plugged in |
@@ -1071,6 +1071,8 @@ For each charger, with `<id>` being the Wallbox charger id:
 Each entity's friendly name includes the name you gave the charger in the Wallbox app, for example `Wallbox Garage Power`, so two chargers are easy to tell apart. The entity ids use the charger id, which does not change if you rename the charger.
 
 Wallbox chargers cannot report the car's state of charge, so there is no battery sensor.
+
+A charger run by an OCPP backend is held locked by that backend, and unlocking it from Predbat or the Wallbox app has no effect: the controls below will not work on it, and the backend decides when the car charges.
 
 A locked charger cannot be paused or resumed: Wallbox refuses both. Predbat therefore does not send them while the charger is locked, and logs a warning asking you to unlock it with `switch.predbat_wallbox_<id>_locked` or in the Wallbox app. Wallbox can also refuse a control for other reasons, such as a resume with nothing paused, or an account without admin rights over the charger. When that happens Predbat logs a warning with the reason Wallbox gave, and monitoring carries on.
 
