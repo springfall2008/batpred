@@ -215,6 +215,10 @@ def run_octopus_smart_control_tests(my_predbat):
             _slots(my_predbat, save=True)
             now_off = [x for x in logs if "Smart Control is now Off" in x]
             failed |= _check("t12 logged once", len(now_off) == 1, "logs {}".format(logs))
+            items[SWITCH] = "unavailable"
+            _slots(my_predbat, save=True)
+            no_longer = [x for x in logs if "Smart Control is no longer Off" in x]
+            failed |= _check("t12 unavailable is not called On", len(no_longer) == 1 and "is unavailable" in no_longer[0] and not [x for x in logs if "Smart Control is now On" in x], "logs {}".format(logs))
         finally:
             my_predbat.log = real_log
 

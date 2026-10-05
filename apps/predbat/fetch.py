@@ -1466,7 +1466,11 @@ class Fetch:
         off = isinstance(state, str) and state.lower() == "off"
         if save and off != self.octopus_smart_control_off_logged.get(car_n, False):
             self.octopus_smart_control_off_logged[car_n] = off
-            self.log("Car {} Octopus Smart Control is now {} ({}), planned Octopus dispatches are {}".format(car_n, "Off" if off else "On", switch_id, "ignored" if off else "used"))
+            if off:
+                self.log("Car {} Octopus Smart Control is now Off ({}), planned Octopus dispatches are ignored".format(car_n, switch_id))
+            else:
+                # Not necessarily On: unknown or unavailable is no evidence either way, so say what the switch reports
+                self.log("Car {} Octopus Smart Control is no longer Off ({} is {}), planned Octopus dispatches are used".format(car_n, switch_id, state))
         return off
 
     def fetch_sensor_data_cars(self, save=True):
