@@ -3804,41 +3804,48 @@ class Octopus:
 
     def octopus_surplus_minutes(self):
         """
-        Future Octopus Intelligent dispatch minutes no car needs, when octopus_intelligent_consider_full is on.
+        Future Octopus Intelligent dispatch minutes no car can use, when octopus_intelligent_consider_full is on.
 
         load_octopus_slots() already ends each car's slots where the car reaches its limit, so a dispatch
-        minute none of the cars' remaining slots cover is one the car won't draw in, and Octopus only bills
-        a dispatch cheap when the car charges in it (#4482). Its cheap rate is withheld from the house
-        battery's plan the same way a cancelled car's is (see dynamic_load_car_strip_feed_rates()).
+        minute no car still needs is one no car will draw in, and Octopus only bills a dispatch cheap when
+        the car charges in it (#4482). Its cheap rate is withheld from the house battery's plan the same way
+        a cancelled car's is (see dynamic_load_car_strip_feed_rates()).
 
-        Rounded out to whole 30 minute rate periods, from now onwards and outside the fixed window. Rates
-        are shared, so a minute any car still needs is kept. A car not modelled from its Octopus slots this
-        cycle (e.g. ignored while unplugged) is left alone: there is no need to compare its dispatches with.
+        Decided per car, then shared, as the rates are shared: a minute stays cheap if any car can still use
+        it before the point that car's own cheap rate ends (dynamic_load_car_strip_from()). A car can use
+        - its needed slots - with kWh left, or kWh kept in kwh_cancelled for a cancelled car;
+        - the whole of a dispatch in progress now. Its capped slots can't be relied on mid-dispatch (one from
+          octopus_intelligent_slot isn't trimmed to now, so its finish is worked out from its original start),
+          and dynamic load cancels it in real time once the car stops charging;
+        - every dispatch, for a car not modelled from its Octopus slots this cycle (e.g. ignored while unplugged).
+
+        Rounded out to whole 30 minute rate periods, from the half hour after the current one (the car may have
+        charged earlier in it, making the whole period cheap) and outside the fixed window.
         """
         if not self.octopus_intelligent_consider_full:
             return set()
         dispatch_minutes = set()
-        needed_minutes = set()
-        # The current half hour is never surplus: the car may have charged earlier in it, which makes the whole
-        # period cheap, and once the car is full its slots no longer show that
-        next_period = ((self.minutes_now + 29) // 30) * 30
-        for car_n in range(min(self.num_cars, len(self.octopus_slots), len(self.car_charging_slots))):
-            car_slots = self.car_charging_slots[car_n]
-            if not any(slot.get("octopus", False) for slot in car_slots):
-                continue
+        usable_minutes = set()
+        next_period = (self.minutes_now // 30 + 1) * 30
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            car_slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
+            modelled = any(slot.get("octopus", False) for slot in car_slots)
+            strip_from = self.dynamic_load_car_strip_from(car_n)
+            usable_until = strip_from if strip_from is not None else float("inf")
             for slot in self.octopus_slots[car_n]:
                 start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
                 if start_minutes == end_minutes:
                     continue
+                in_progress = start_minutes <= self.minutes_now < end_minutes
                 start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
                 dispatch_minutes.update(range(max(start_minutes, next_period), end_minutes))
+                if in_progress or not modelled:
+                    usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
             for slot in car_slots:
-                # A cancelled car's slots are zeroed with their kWh kept in kwh_cancelled (dynamic_load_car_check());
-                # cancellation decides their rate itself, so they still count as needed here
                 if slot.get("kwh", 0) > 0 or slot.get("kwh_cancelled", 0) > 0:
                     start_minutes, end_minutes = round_out_to_period(slot["start"], slot["end"])
-                    needed_minutes.update(range(start_minutes, end_minutes))
-        return {minute for minute in dispatch_minutes - needed_minutes if not self.in_iog_fixed_window(minute)}
+                    usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
+        return {minute for minute in dispatch_minutes - usable_minutes if not self.in_iog_fixed_window(minute)}
 
     def dynamic_load_car_strip_feed_rates(self, rates):
         """

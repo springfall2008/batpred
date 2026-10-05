@@ -37,6 +37,7 @@ _ATTRS = [
     "io_adjusted",
     "octopus_surplus",
     "dynamic_load_car_effective",
+    "dynamic_load_car_confirmed",
     "dynamic_load_car_stripped",
     "rate_min",
     "rate_min_base",
@@ -71,6 +72,8 @@ def run_surplus_minutes_tests(my_predbat):
     failed = False
     my_predbat.minutes_now = 10 * 60
     my_predbat.num_cars = 1
+    my_predbat.dynamic_load_car_effective = {}
+    my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]
     needed = [{"start": 13 * 60, "end": 13 * 60 + 20, "kwh": 5.0, "octopus": True}, {"start": 13 * 60 + 20, "end": 15 * 60, "kwh": 0.0, "octopus": True}]
     my_predbat.car_charging_slots = [needed]
@@ -88,19 +91,27 @@ def run_surplus_minutes_tests(my_predbat):
     surplus = my_predbat.octopus_surplus_minutes()
     failed |= _expect("fixed window untouched", surplus == set(range(23 * 60, 23 * 60 + 30)), "only 23:00-23:30 is dispatch-only, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
 
-    # Elapsed minutes are history - only from now onwards
+    # A dispatch in progress is never trimmed: its capped slots can't be relied on mid-dispatch, and dynamic
+    # load cancels it once the car stops. Elapsed minutes are never touched either.
     my_predbat.octopus_slots = [[_slot(my_predbat, 9, 11, 20.0)]]
     my_predbat.car_charging_slots = [[{"start": 9 * 60, "end": 11 * 60, "kwh": 0.0, "octopus": True}]]
     surplus = my_predbat.octopus_surplus_minutes()
-    failed |= _expect("elapsed untouched", surplus == set(range(10 * 60, 11 * 60)), "expected 10:00-11:00 only")
+    failed |= _expect("in-progress dispatch kept", surplus == set(), "expected nothing, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
 
-    # Mid half hour, with the car already full: the rest of the current half hour stays cheap (the car may have
-    # charged earlier in it), and nothing elapsed is ever touched
-    my_predbat.minutes_now = 14 * 60 + 10
-    my_predbat.octopus_slots = [[_slot(my_predbat, 13.5, 15, 20.0)]]
-    my_predbat.car_charging_slots = [[{"start": 14 * 60 + 10, "end": 15 * 60, "kwh": 0.0, "octopus": True}]]
+    # The clock is floored to five minutes, so a fetch at 14:02 reads 14:00: the current half hour must still be
+    # kept, as the car may already have charged in it. A dispatch starting later in it rounds out to 14:00.
+    my_predbat.minutes_now = 14 * 60
+    my_predbat.octopus_slots = [[_slot(my_predbat, 14.25, 15, 20.0)]]
+    my_predbat.car_charging_slots = [[{"start": 14 * 60 + 15, "end": 15 * 60, "kwh": 0.0, "octopus": True}]]
     surplus = my_predbat.octopus_surplus_minutes()
-    failed |= _expect("current half hour kept", surplus == set(range(14 * 60 + 30, 15 * 60)), "expected 14:30-15:00 only, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    failed |= _expect("current half hour kept on the boundary", surplus == set(range(14 * 60 + 30, 15 * 60)), "expected 14:30-15:00 only, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+
+    # And mid half hour
+    my_predbat.minutes_now = 14 * 60 + 10
+    my_predbat.octopus_slots = [[_slot(my_predbat, 14 + 20 / 60, 15, 20.0)]]
+    my_predbat.car_charging_slots = [[{"start": 14 * 60 + 20, "end": 15 * 60, "kwh": 0.0, "octopus": True}]]
+    surplus = my_predbat.octopus_surplus_minutes()
+    failed |= _expect("current half hour kept mid-period", surplus == set(range(14 * 60 + 30, 15 * 60)), "expected 14:30-15:00 only, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
     my_predbat.minutes_now = 10 * 60
 
     # Rates are shared: a minute another car still needs stays cheap
@@ -110,46 +121,77 @@ def run_surplus_minutes_tests(my_predbat):
     surplus = my_predbat.octopus_surplus_minutes()
     failed |= _expect("other car's need kept", not (surplus & set(range(14 * 60, 14 * 60 + 30))) and (13 * 60 + 30) in surplus, "14:00-14:30 is needed by car 1")
 
-    # A cancelled car's slots are zeroed with the kWh kept in kwh_cancelled: still needed, cancellation
-    # (#5229) decides their rate - including the rest of a half hour the car was seen charging in
-    cancelled = [{"start": 13 * 60, "end": 13 * 60 + 20, "kwh": 0, "kwh_cancelled": 5.0, "octopus": True}, {"start": 13 * 60 + 20, "end": 15 * 60, "kwh": 0, "octopus": True}]
-    my_predbat.num_cars = 1
-    my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]
-    my_predbat.car_charging_slots = [cancelled]
+    # A cancelled car's need counts only until its cheap rate ends (strip_from): its slots are zeroed with the kWh
+    # kept in kwh_cancelled, and it mustn't keep a minute cheap for a full car that won't charge in it either
+    my_predbat.dynamic_load_car_effective = {0: False, 1: True}
+    my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)], [_slot(my_predbat, 14, 15, 10.0)]]
+    my_predbat.car_charging_slots = [needed, [{"start": 14 * 60, "end": 15 * 60, "kwh": 0, "kwh_cancelled": 10.0, "octopus": True}]]
     surplus = my_predbat.octopus_surplus_minutes()
-    failed |= _expect("cancelled car's need kept", surplus == set(range(13 * 60 + 30, 15 * 60)), "13:00-13:30 is still needed by the cancelled car")
+    failed |= _expect("cancelled car's need not shared", surplus == set(range(13 * 60 + 30, 15 * 60)), "car 1 is cancelled, so 14:00-15:00 is nobody's, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
 
-    # A car not modelled from its Octopus slots (e.g. ignored while unplugged) is left alone
+    # ...but the rest of a half hour a cancelled car was seen charging in stays cheap (GH#5316), and no more
     my_predbat.num_cars = 1
+    my_predbat.minutes_now = 13 * 60 + 10
+    my_predbat.dynamic_load_car_effective = {0: True}
+    my_predbat.dynamic_load_car_confirmed = {0: my_predbat.midnight_utc + timedelta(hours=13, minutes=30)}
+    my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]
+    my_predbat.car_charging_slots = [[{"start": 13 * 60, "end": 13 * 60 + 20, "kwh": 0, "kwh_cancelled": 5.0, "octopus": True}, {"start": 13 * 60 + 20, "end": 15 * 60, "kwh": 0, "octopus": True}]]
+    surplus = my_predbat.octopus_surplus_minutes()
+    failed |= _expect("cancelled car kept only to strip_from", surplus == set(range(13 * 60 + 30, 15 * 60)), "expected 13:30-15:00, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.dynamic_load_car_effective = {}
+    my_predbat.dynamic_load_car_confirmed = {}
+
+    # A car not modelled from its Octopus slots (e.g. ignored while unplugged) keeps its dispatches cheap...
     my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]
     my_predbat.car_charging_slots = [[]]
-    failed |= _expect("car not modelled is ignored", my_predbat.octopus_surplus_minutes() == set(), "no capped slots to compare with")
+    failed |= _expect("car not modelled is kept", my_predbat.octopus_surplus_minutes() == set(), "no capped slots to compare with")
+
+    # ...including where a full car's dispatch overlaps it, unless that car is cancelled
+    my_predbat.num_cars = 2
+    my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)], [_slot(my_predbat, 14, 15, 10.0)]]
+    my_predbat.car_charging_slots = [needed, []]
+    surplus = my_predbat.octopus_surplus_minutes()
+    failed |= _expect("dispatch of a car not modelled kept", surplus == set(range(13 * 60 + 30, 14 * 60)), "expected 13:30-14:00, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    my_predbat.dynamic_load_car_effective = {1: True}
+    surplus = my_predbat.octopus_surplus_minutes()
+    failed |= _expect("cancelled car not modelled is not kept", surplus == set(range(13 * 60 + 30, 15 * 60)), "expected 13:30-15:00, got {}".format(sorted(surplus)[:1] + sorted(surplus)[-1:]))
+    my_predbat.dynamic_load_car_effective = {}
+    my_predbat.num_cars = 1
     return failed
 
 
-def _end_to_end(my_predbat, consider_full, feed):
+def _end_to_end(my_predbat, consider_full, feed, minutes_now=10 * 60, cancelled_second_car=False):
     """
     Car at 95 of 100 kWh with a 13:00-15:00 dispatch Octopus sized at 20 kWh: the car needs 5 kWh, the
     first half hour. Runs the real capping, surplus and both rate paths, returns (rates, io_adjusted).
-    With feed, the rate feed has already discounted and flagged the whole dispatch.
+    With feed, the rate feed has already discounted and flagged the whole dispatch. With
+    cancelled_second_car, a second car whose 14:00-15:00 dispatch dynamic load has cancelled shares it.
+    The dispatch is left untrimmed, as octopus_intelligent_slot reports it.
     """
-    my_predbat.minutes_now = 10 * 60
+    my_predbat.minutes_now = minutes_now
     my_predbat.forecast_minutes = 3 * 24 * 60
-    my_predbat.num_cars = 1
+    my_predbat.num_cars = 2 if cancelled_second_car else 1
     my_predbat.args["octopus_slot_low_rate"] = True
     my_predbat.args["octopus_slot_max"] = 12
     reset_rates(my_predbat, 30, 5)
     my_predbat.rate_min = 4
     my_predbat.rate_min_base = 4
     my_predbat.rate_max_base = 30
-    my_predbat.car_charging_soc = [95.0]
-    my_predbat.car_charging_limit = [100.0]
+    my_predbat.car_charging_soc = [95.0, 0.0]
+    my_predbat.car_charging_limit = [100.0, 100.0]
     my_predbat.car_charging_loss = 1.0
-    my_predbat.car_charging_rate = [10.0]
+    my_predbat.car_charging_rate = [10.0, 10.0]
     my_predbat.dynamic_load_car_effective = {}
+    my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.octopus_intelligent_consider_full = consider_full
     my_predbat.octopus_slots = [[_slot(my_predbat, 13, 15, 20.0)]]
     my_predbat.car_charging_slots = [my_predbat.load_octopus_slots(0, my_predbat.octopus_slots[0], consider_full)]
+    if cancelled_second_car:
+        # As dynamic_load_car_check() leaves a cancelled car: future slots zeroed, the kWh kept
+        my_predbat.octopus_slots.append([_slot(my_predbat, 14, 15, 10.0)])
+        my_predbat.car_charging_slots.append([{"start": 14 * 60, "end": 15 * 60, "kwh": 0, "kwh_cancelled": 10.0, "octopus": True}])
+        my_predbat.dynamic_load_car_effective = {0: False, 1: True}
 
     rates = _day_rates(-96 * 60, 3 * 24 * 60, 30.0)
     my_predbat.io_adjusted = {}
@@ -159,7 +201,8 @@ def _end_to_end(my_predbat, consider_full, feed):
             my_predbat.io_adjusted[minute] = True
     my_predbat.octopus_surplus = my_predbat.octopus_surplus_minutes()
     rates = my_predbat.dynamic_load_car_strip_feed_rates(rates)
-    rates = my_predbat.rate_add_io_slots(0, rates, my_predbat.octopus_slots[0])
+    for car_n in range(my_predbat.num_cars):
+        rates = my_predbat.rate_add_io_slots(car_n, rates, my_predbat.octopus_slots[car_n])
     return rates, my_predbat.io_adjusted, my_predbat.car_charging_slots[0]
 
 
@@ -180,6 +223,18 @@ def run_end_to_end_tests(my_predbat):
 
     rates, io_adjusted, _ = _end_to_end(my_predbat, False, False)
     failed |= _expect("consider_full off: whole dispatch cheap", all(rates[minute] == 4.0 for minute in range(13 * 60, 15 * 60)), "behaviour must be unchanged with the switch off")
+
+    for feed in (False, True):
+        path = "feed" if feed else "overlay"
+        # In progress at 14:10: the untrimmed dispatch's capped slot ends at 13:30, from its original start, though
+        # the car is still charging - the running dispatch is left alone
+        rates, io_adjusted, _ = _end_to_end(my_predbat, True, feed, minutes_now=14 * 60 + 10)
+        failed |= _expect("{}: in-progress dispatch kept".format(path), all(rates[minute] == 4.0 for minute in range(14 * 60 + 10, 15 * 60)), "14:10-15:00 should stay 4p, got {}".format(sorted({rates[minute] for minute in range(14 * 60 + 10, 15 * 60)})))
+
+        # A cancelled second car's need mustn't keep the full car's surplus cheap: neither will charge then
+        rates, io_adjusted, _ = _end_to_end(my_predbat, True, feed, cancelled_second_car=True)
+        failed |= _expect("{}: needed half hour still cheap with a cancelled car".format(path), all(rates[minute] == 4.0 for minute in needed), "13:00-13:30 should be 4p")
+        failed |= _expect("{}: cancelled car's need not shared".format(path), all(rates[minute] == 30.0 for minute in surplus), "13:30-15:00 should be 30p, got {}".format(sorted({rates[minute] for minute in surplus})))
     return failed
 
 
