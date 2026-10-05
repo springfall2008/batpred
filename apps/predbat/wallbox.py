@@ -1058,6 +1058,7 @@ class WallboxAPI(ComponentBase):
                 await self.save_control_state()
             await self.transport.pause(self.api_id(charger))
 
+
 def print_charger_table(chargers):  # pragma: no cover
     """Print the charger summary table, for the poll and for a command read-back alike."""
     print("{:<12} {:<20} {:<34} {:>9} {:>12} {:>6} {:>7} {:>8}".format("CHARGER", "NAME", "STATUS", "POWER W", "SESSION kWh", "MAX A", "LOCKED", "MODE"))
