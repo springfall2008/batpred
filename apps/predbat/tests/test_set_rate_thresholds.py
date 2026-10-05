@@ -639,6 +639,103 @@ def test_pre_charge_for_a_same_day_saving_session(my_predbat):
     if any(window["average"] >= 30.0 for window in my_predbat.low_rates_tariff):
         print("ERROR: the low rate sensors should not show the 30p day rate, got {}".format(sorted(set(w["average"] for w in my_predbat.low_rates_tariff))))
         failed = True
+    # The automatic tightening follows the tariff's own windows, not the pre-event day rate
+    if my_predbat.rate_import_cost_threshold != 7.0:
+        print("ERROR: the tightened import threshold should be the tariff's 7p, got {} - the pre-event day rate leaked into it".format(my_predbat.rate_import_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_pre_event_window_running_into_the_event_is_cut(my_predbat):
+    """A pre-event window whose import price carries on into the event must be cut at the event start, not dropped.
+
+    _setup_export_event() boosts export only, so the 30p day rate runs straight through the 10:00 event.
+    With slots combined the day rate is one 06:00-22:00 window; it must come back as 06:00-10:00 at
+    30p rather than disappear and take the pre-charge with it (#5163 review).
+    """
+    print("**** test_pre_event_window_running_into_the_event_is_cut ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    combine_charge_slots = my_predbat.combine_charge_slots
+    my_predbat.combine_charge_slots = True
+    try:
+        my_predbat.set_rate_thresholds()
+        my_predbat.find_low_rate_windows()
+    finally:
+        my_predbat.combine_charge_slots = combine_charge_slots
+
+    cut = [window for window in my_predbat.low_rates if window["start"] == 6 * 60]
+    if not cut or cut[0]["end"] != 600 or cut[0]["average"] != 30.0:
+        print("ERROR: the 06:00 day-rate window should be cut to end at the 10:00 event at 30p, got {}".format([(w["start"], w["end"], w["average"]) for w in my_predbat.low_rates]))
+        failed = True
+    if any(window["start"] < 600 < window["end"] for window in my_predbat.low_rates):
+        print("ERROR: no plan window should run across the event start, got {}".format([(w["start"], w["end"]) for w in my_predbat.low_rates]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_manual_threshold_gets_no_pre_event_windows(my_predbat):
+    """A manual import threshold is the user's cap: no pre-event window above it, however much the event pays."""
+    print("**** test_manual_threshold_gets_no_pre_event_windows ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    my_predbat.rate_low_threshold = 0.9
+    my_predbat.set_rate_thresholds()
+    my_predbat.find_low_rate_windows()
+
+    if my_predbat.rate_import_pre_event_end is not None:
+        print("ERROR: manual mode should not look for a pre-event charge, got event start {}".format(my_predbat.rate_import_pre_event_end))
+        failed = True
+    above = [window for window in my_predbat.low_rates if window["average"] > my_predbat.rate_import_cost_threshold]
+    if above:
+        print("ERROR: no plan window should be above the manual threshold {}, got {}".format(my_predbat.rate_import_cost_threshold, [(w["start"], w["end"], w["average"]) for w in above]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_car_plan_uses_tariff_windows(my_predbat):
+    """Car charging must be planned on the tariff's own windows: a car cannot export into the event (#5163 review)."""
+    print("**** test_car_plan_uses_tariff_windows ****")
+    failed = False
+
+    plan_windows = [{"start": 6 * 60, "end": 10 * 60, "average": 30.0}]
+    tariff_windows = [{"start": 22 * 60, "end": 30 * 60, "average": 20.0}]
+    my_predbat.low_rates = plan_windows
+    my_predbat.low_rates_tariff = tariff_windows
+    my_predbat.num_cars = 1
+    my_predbat.octopus_intelligent_charging = False
+    my_predbat.car_charging_planned = [True] + my_predbat.car_charging_planned[1:]
+    my_predbat.car_charging_now = [False] + my_predbat.car_charging_now[1:]
+    # fetch_sensor_data_car_planning() writes into these lists in place, so give it copies the snapshot can restore past
+    my_predbat.car_charging_slots = list(my_predbat.car_charging_slots)
+
+    seen = []
+
+    def record(car_n, low_rates):
+        """Record the windows the car is planned on."""
+        seen.append(low_rates)
+        return []
+
+    my_predbat.plan_car_charging = record
+    try:
+        my_predbat.fetch_sensor_data_car_planning()
+    finally:
+        del my_predbat.plan_car_charging
+
+    if seen != [tariff_windows]:
+        print("ERROR: the car should be planned on low_rates_tariff, got {}".format(seen))
+        failed = True
 
     if not failed:
         print("PASS")
@@ -1141,6 +1238,14 @@ _SNAPSHOT_FIELDS = (
     "alert_active_keep",
     "manual_soc_keep",
     "num_cars",
+    # Set by the window-cutting and car planning tests
+    "combine_charge_slots",
+    "octopus_intelligent_charging",
+    "car_charging_planned",
+    "car_charging_now",
+    "car_charging_slots",
+    # compare.fetch_rates() resets io_adjusted when a tariff replaces the import rates
+    "io_adjusted",
 )
 
 
@@ -1168,6 +1273,9 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_predbat)
         failed |= test_plan_charges_ahead_of_a_qualifying_export_event(my_predbat)
         failed |= test_pre_charge_for_a_same_day_saving_session(my_predbat)
+        failed |= test_pre_event_window_running_into_the_event_is_cut(my_predbat)
+        failed |= test_manual_threshold_gets_no_pre_event_windows(my_predbat)
+        failed |= test_car_plan_uses_tariff_windows(my_predbat)
         failed |= test_no_pre_charge_for_an_event_below_the_import_price(my_predbat)
         failed |= test_low_rate_sensors_publish_tariff_windows(my_predbat)
         failed |= test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat)

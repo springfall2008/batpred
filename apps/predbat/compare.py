@@ -587,7 +587,7 @@ class Compare:
             if my_predbat.car_charging_planned[car_n] or my_predbat.car_charging_now[car_n]:
                 self.log("Re-plan car {} for charging to {}".format(car_n, my_predbat.car_charging_limit[car_n]))
                 my_predbat.car_charging_plan_smart[car_n] = True
-                my_predbat.car_charging_slots[car_n] = my_predbat.plan_car_charging(car_n, my_predbat.low_rates)
+                my_predbat.car_charging_slots[car_n] = my_predbat.plan_car_charging(car_n, my_predbat.low_rates_tariff)
 
             if my_predbat.car_charging_planned[car_n] and my_predbat.car_charging_exclusive[car_n]:
                 break

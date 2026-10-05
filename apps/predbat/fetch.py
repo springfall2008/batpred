@@ -1437,11 +1437,12 @@ class Fetch:
                         self.car_charging_soc[car_n],
                         limit_percent,
                         self.car_charging_limit[car_n],
-                        self.low_rates,
+                        self.low_rates_tariff,
                         self.car_charging_plan_time[car_n],
                     )
                 )
-                self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
+                # The tariff's own windows: a car cannot export, so the plan's pre-event windows are no use to it
+                self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates_tariff)
             else:
                 self.log("Car {} charging is not planned as it is not plugged in".format(car_n))
 
@@ -2538,28 +2539,40 @@ class Fetch:
         Scan the import rates for the low rate sensors' windows (low_rates_tariff) and the plan's charge windows (low_rates)
 
         Both start from rate_import_cost_threshold, which is worked out on the tariff's own prices so
-        a saving session or Axle reward does not make the whole day read as cheap (GH#5050). Ahead of
-        an export event that pays more than the tariff's highest import price, the plan also gets every
-        import window up to the event's export price that ends before the event starts, so it can
-        charge the battery to export into it (#249). The sensors keep the tariff's own cheap windows.
+        a saving session or Axle reward does not make the whole day read as cheap (GH#5050). In
+        automatic mode, ahead of an export event that pays more than the tariff's highest import price,
+        the plan also gets every import window up to the event's export price before the event starts,
+        cut at the start, so it can charge the battery to export into it (#249). The sensors, the car
+        plan and the automatic threshold tightening keep the tariff's own cheap windows.
         """
         curr = self.currency_symbols[1]
         self.low_rates_tariff, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
         self.low_rates = self.low_rates_tariff
+        self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
 
         event_start = self.rate_import_pre_event_end
         if event_start is not None and self.rate_import_pre_event_threshold > self.rate_import_cost_threshold:
-            pre_event, _, _ = self.rate_scan_window(self.rate_import, 5, self.rate_import_pre_event_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
-            pre_event = [window for window in pre_event if window["end"] <= event_start]
+            pre_event = []
+            scanned, _, _ = self.rate_scan_window(self.rate_import, 5, self.rate_import_pre_event_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
+            for window in scanned:
+                if window["start"] >= event_start:
+                    break
+                if window["end"] > event_start:
+                    # A window running into the event (the import price does not change at its start) is cut there
+                    minutes = [minute for minute in range(window["start"], event_start, 5) if minute in self.rate_import]
+                    if not minutes:
+                        break
+                    window = {"start": window["start"], "end": event_start, "average": dp2(sum(self.rate_import[minute] for minute in minutes) / len(minutes))}
+                    if window["end"] <= self.minutes_now:
+                        break
+                pre_event.append(window)
             if pre_event:
                 after_event, _, _ = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=alt_rates, pv_light_dark=pv_light_dark, start_minute=pre_event[-1]["end"])
                 self.low_rates = pre_event + after_event
-                averages = [window["average"] for window in self.low_rates]
-                lowest, highest = min(averages), max(averages)
                 self.log("Low Import rate windows ahead of the export event at {}: {}".format(self.time_abs_str(event_start), len(pre_event)))
 
-        self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
-        # Update threshold automatically
+        # Update threshold automatically, from the tariff's own windows so the published threshold does not
+        # take in the pre-event day rate (GH#5050)
         if self.rate_low_threshold == 0 and highest >= self.rate_min:
             self.rate_import_cost_threshold = highest
 
@@ -2569,8 +2582,11 @@ class Fetch:
 
         An event qualifies when its export price beats the tariff's own highest import price, so filling
         the battery at any tariff rate before it can pay. The threshold is the best such export price, so
-        only import slots cheaper than that are offered.
+        only import slots at or below that are offered. A manual threshold (rate_low_threshold) is the
+        user's cap on what Predbat charges at, so this only applies in automatic mode.
         """
+        if self.rate_low_threshold > 0:
+            return None, None
         end_minute = self.minutes_now + self.forecast_minutes
         event_minutes = {minute for minute in self.rate_export_saving_minutes if self.minutes_now <= minute < end_minute and self.rate_export.get(minute, 0) > tariff_import_max}
         if not event_minutes:
