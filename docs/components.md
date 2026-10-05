@@ -1074,7 +1074,7 @@ The controls need a Wallbox account with admin rights over the charger. Without 
 
 #### Automatic configuration (wallbox)
 
-With `wallbox_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** to the Wallbox entities, and raises **num_cars** to the number of chargers. Chargers are taken in order of their id, so the first charger is car 0. A **car_charging_now** you have set yourself is kept.
+With `wallbox_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** to the Wallbox entities, and raises **num_cars** to the number of chargers. Chargers are taken in numeric order of their id, so the charger with the lowest id is car 0. A charger added to the account while Predbat is running becomes the next car. A **car_charging_now** you have set yourself is kept.
 
 Predbat does not set **car_charging_soc**. If you want Predbat to plan to a target charge level, set it from your car's own integration.
 
@@ -1090,6 +1090,7 @@ Things to know:
 
 - Wallbox can only pause a charger once it is charging, so a car plugged in outside a slot draws power until Predbat's next poll (two minutes by default).
 - Clear any schedule set in the Wallbox app. A charger that Wallbox is holding in `Scheduled` will not charge in a Predbat slot.
+- While Predbat-led charging is on, Predbat resumes a paused charger inside a planned slot even if you paused it yourself. Turn `switch.predbat_wallbox_control` off first if you want it to stay paused.
 - Predbat never unlocks a locked charger. It logs a warning if a locked charger misses its slot.
 - Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
 

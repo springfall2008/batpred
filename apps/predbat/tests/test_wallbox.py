@@ -884,7 +884,8 @@ def _control_component(plans, statuses=None, storage=None, **overrides):
 
 def _load_chargers(component):
     """Load the stub transport's current statuses into the component, as a poll would."""
-    component.charger_ids = sorted(component.transport.statuses, key=str)
+    component.charger_ids = list(component.transport.statuses)
+    component.update_car_order(component.charger_ids)
     component.chargers = {str(charger_id): normalise_charger(charger_id, payload) for charger_id, payload in component.transport.statuses.items()}
     component.stale_ids = set()
     component.transport.calls = []
@@ -1067,10 +1068,121 @@ def test_control_failure_does_not_fail_the_cycle():
     component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot", "off", {"planned": []})
     component.transport.errors[("pause", 101)] = WallboxApiError("HTTP 500")
     assert run_async(component.run(0, True)) is True
-    assert _logged(component, "charge control failed") and component.paused_by_predbat == set()
+    # The pause is recorded before it is sent, in case it was applied and only the reply was lost
+    assert _logged(component, "charge control failed") and component.paused_by_predbat == {"101"}
+    assert component.transport.count("pause") == 1
     run_async(component.run(120, False))
-    assert component.paused_by_predbat == {"101"}
+    assert component.transport.count("pause") == 2 and component.paused_by_predbat == {"101"}
     print("  ✓ A refused control is a warning and is retried")
+
+
+def test_car_order_is_numeric_and_survives_a_first_poll_failure():
+    """Charger N is car N by numeric id, even when a charger could not be read on the first poll."""
+    component = _make_component({12345: _status(), 9999: _status()})
+    component.transport.errors[("get_status", 9999)] = WallboxApiError("HTTP 500")
+    assert run_async(component.run(0, True)) is True
+    assert component.car_order == ["9999", "12345"], component.car_order
+    assert component.base.args["car_charging_energy"] == ["sensor.predbat_wallbox_9999_session_energy", "sensor.predbat_wallbox_12345_session_energy"]
+    assert component.base.args["num_cars"] == 2
+    print("  ✓ Car order is numeric and survives a first poll failure")
+
+
+def test_car_order_appends_a_charger_added_later():
+    """A charger added to the account later becomes the next car; existing cars keep their number."""
+    component = _make_component({9999: _status()})
+    run_async(component.run(0, True))
+    component.transport.statuses[123] = _status()
+    run_async(component.run(1800, False))
+    assert component.car_order == ["9999", "123"], component.car_order
+    assert component.base.args["car_charging_energy"] == ["sensor.predbat_wallbox_9999_session_energy", "sensor.predbat_wallbox_123_session_energy"]
+    assert component.base.args["num_cars"] == 2
+    print("  ✓ A charger added later becomes the next car")
+
+
+def test_control_follows_the_car_order():
+    """Control drives each charger from the car it was configured as, not from a re-sorted list."""
+    component = _control_component({0: PLAN_OUTSIDE, 1: PLAN_INSIDE}, {12345: _status(), 9999: _status()})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("pause", 9999)], component.transport.calls
+    print("  ✓ Control follows the configured car order")
+
+
+def test_bad_event_does_not_wedge_the_queue():
+    """An infinite number, or a handler that raises something unexpected, is dropped and polling goes on."""
+    component = _started_component()
+    run_async(component.number_event("number.predbat_wallbox_101_max_charging_current", "inf"))
+    assert run_async(component.run(60, False)) is True
+    assert component.queued_events == [] and component.transport.count("set_max_charging_current") == 0
+
+    component.transport.errors[("pause", 101)] = RuntimeError("unexpected")
+    run_async(component.switch_event("switch.predbat_wallbox_101_charging", "turn_off"))
+    assert run_async(component.run(120, False)) is True
+    assert component.queued_events == [] and _logged(component, "control failed")
+    assert component.transport.count("get_status") >= 1, "Polling carried on after the bad event"
+
+    infinite = normalise_charger(101, {"status_id": 193, "charging_power": float("inf"), "added_energy": float("nan")})
+    assert infinite.power_w == 0.0 and infinite.session_energy_kwh == 0.0
+    print("  ✓ A bad event is dropped and does not stop polling")
+
+
+def test_control_records_a_pause_whose_response_was_lost():
+    """A pause that fails after Wallbox applied it is still Predbat's to release."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    component.transport.errors[("pause", 101)] = WallboxApiError("timed out")
+    try:
+        run_async(component.control_tick(CONTROL_NOW))
+        raise AssertionError("Expected WallboxApiError")
+    except WallboxApiError:
+        pass
+    assert component.paused_by_predbat == {"101"}
+
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+    _load_chargers(component)
+    run_async(component.switch_event_handler("switch.predbat_wallbox_control", "turn_off"))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], component.transport.calls
+    print("  ✓ A pause whose response was lost is still released")
+
+
+def test_control_keeps_its_record_through_a_transient_status():
+    """Updating, Error or Unknown between pause and release does not make Predbat forget the charger."""
+    for transient in (166, 14, 999):
+        component = _control_component({0: PLAN_OUTSIDE})
+        run_async(component.control_tick(CONTROL_NOW))
+        component.transport.statuses[101] = _status(status_id=transient, power=0)
+        _load_chargers(component)
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.paused_by_predbat == {"101"}, transient
+
+        component.transport.statuses[101] = _status(status_id=178, power=0)
+        _load_chargers(component)
+        component.base.args["set_read_only"] = True
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)], (transient, component.transport.calls)
+    print("  ✓ A transient status does not lose the paused record")
+
+
+def test_control_state_load_is_retried():
+    """A storage read that fails on the first run is tried again, so the paused list is not lost."""
+    storage = _Storage()
+    storage.data[("wallbox", "control_state")] = {"control_enabled": True, "paused": ["101"]}
+    real_load = storage.load
+    failures = [RuntimeError("storage not ready")]
+
+    async def flaky_load(module, filename):
+        """Fail once, then behave."""
+        if failures:
+            raise failures.pop()
+        return await real_load(module, filename)
+
+    storage.load = flaky_load
+    component = _make_component({101: _status(status_id=178, power=0)}, wallbox_control=False)
+    component.base.components = _Components(storage)
+    run_async(component.run(0, True))
+    assert component.paused_by_predbat == set() and component.transport.count("resume") == 0
+    run_async(component.run(120, False))
+    assert component.transport.count("resume") == 1, "The stored charger was released once the state could be read"
+    print("  ✓ A failed control state read is retried")
 
 
 def test_wallbox(my_predbat=None):
@@ -1136,5 +1248,12 @@ def test_wallbox(my_predbat=None):
     test_control_switch_is_published_only_when_available()
     test_control_without_storage_still_works()
     test_control_failure_does_not_fail_the_cycle()
+    test_car_order_is_numeric_and_survives_a_first_poll_failure()
+    test_car_order_appends_a_charger_added_later()
+    test_control_follows_the_car_order()
+    test_bad_event_does_not_wedge_the_queue()
+    test_control_records_a_pause_whose_response_was_lost()
+    test_control_keeps_its_record_through_a_transient_status()
+    test_control_state_load_is_retried()
     print("=" * 70)
     return False

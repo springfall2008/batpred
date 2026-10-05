@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import base64
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -106,6 +107,8 @@ WALLBOX_STATUS = {
     210: ("Locked, car connected", True),
 }
 CHARGING_STATUS_IDS = (193, 194, 195)
+# No car is plugged in: Disconnected, Ready, and Locked with no car
+UNPLUGGED_STATUS_IDS = (0, 161, 162, 163, 165, 209)
 PAUSED_STATUS_IDS = (178, 182)
 
 ECO_SMART_OFF = "off"
@@ -114,19 +117,27 @@ ECO_SMART_FULL_SOLAR = "full_solar"
 ECO_SMART_OPTIONS = [ECO_SMART_OFF, ECO_SMART_ECO, ECO_SMART_FULL_SOLAR]
 
 
+def charger_sort_key(charger_id):
+    """Sort key putting numeric charger ids in numeric order, ahead of any that are not numbers."""
+    text = str(charger_id)
+    return (0, int(text), "") if text.isdigit() else (1, 0, text)
+
+
 def _to_float(value, default=0.0):
     """Convert a value to float, returning the default when it is missing or not a number."""
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
         return default
+    # JSON may carry Infinity or NaN, which would otherwise be published as a reading
+    return result if math.isfinite(result) else default
 
 
 def _to_int(value, default=0):
     """Convert a value to int, returning the default when it is missing or not a number."""
     try:
         return int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -424,7 +435,9 @@ class WallboxAPI(ComponentBase):
         self.skip_cycles = 0
         self.backoff_cycles = 0
         self.permission_warned = False
-        self._auto_configured = False
+        # Charger ids in car order: entry N is car N. Append-only, so a car never changes number while Predbat runs
+        self.car_order = []
+        self._auto_configured_order = None
         self.control_active = False
         self.paused_by_predbat = set()
         self.control_windows = {}
@@ -442,9 +455,21 @@ class WallboxAPI(ComponentBase):
         """Return the entity name prefix for a charger, e.g. predbat_wallbox_12345."""
         return "{}_wallbox_{}".format(self.prefix, charger.charger_id)
 
+    def update_car_order(self, listed_ids):
+        """Give every listed charger a car number, keeping the numbers already handed out.
+
+        The order comes from the account's charger list rather than from the chargers that
+        happened to answer, so a status failure cannot shift it. New chargers are appended
+        in numeric id order; a charger added later becomes the next car and the existing
+        cars keep their numbers.
+        """
+        for charger_id in sorted((str(listed_id) for listed_id in listed_ids), key=charger_sort_key):
+            if charger_id not in self.car_order:
+                self.car_order.append(charger_id)
+
     def ordered_chargers(self):
-        """The chargers in id order. This order is what makes charger N the same thing as car N."""
-        return [self.chargers[charger_id] for charger_id in sorted(self.chargers)]
+        """The chargers that have been read, in car order."""
+        return [self.chargers[charger_id] for charger_id in self.car_order if charger_id in self.chargers]
 
     def warn_permission(self):
         """Say once that the account cannot control the charger."""
@@ -462,12 +487,12 @@ class WallboxAPI(ComponentBase):
         already copes with. car_charging_soc is not set: a Type 2 connector cannot
         report the car's state of charge.
         """
-        chargers = self.ordered_chargers()
-        if not chargers:
+        if not self.car_order:
             return
-        energy_entities = ["sensor.{}_session_energy".format(self.entity_prefix(charger)) for charger in chargers]
-        planned_entities = ["binary_sensor.{}_connected".format(self.entity_prefix(charger)) for charger in chargers]
-        power_entities = ["sensor.{}_power".format(self.entity_prefix(charger)) for charger in chargers]
+        prefixes = ["{}_wallbox_{}".format(self.prefix, charger_id) for charger_id in self.car_order]
+        energy_entities = ["sensor.{}_session_energy".format(prefix) for prefix in prefixes]
+        planned_entities = ["binary_sensor.{}_connected".format(prefix) for prefix in prefixes]
+        power_entities = ["sensor.{}_power".format(prefix) for prefix in prefixes]
 
         self.log("Info: wallbox: setting car_charging_energy to {}".format(energy_entities))
         self.set_arg_auto("car_charging_energy", energy_entities)
@@ -476,16 +501,17 @@ class WallboxAPI(ComponentBase):
         self.log("Info: wallbox: setting car_charging_power and car_charging_now to {}".format(power_entities))
         self.set_arg_auto("car_charging_power", power_entities)
         self.set_arg_auto("car_charging_now", power_entities, overwrite=False)
-        if _to_int(self.get_arg("num_cars", 0), 0) < len(chargers):
-            self.log("Info: wallbox: setting num_cars to {}".format(len(chargers)))
-            self.set_arg("num_cars", len(chargers))
+        if _to_int(self.get_arg("num_cars", 0), 0) < len(self.car_order):
+            self.log("Info: wallbox: setting num_cars to {}".format(len(self.car_order)))
+            self.set_arg("num_cars", len(self.car_order))
 
     async def run(self, seconds, first):
         """Process queued control events, then poll and publish."""
         if not self.transport:
             return False
+        # Every cycle until it succeeds: a read that failed at start-up must not lose the paused list
+        await self.load_control_state()
         if first:
-            await self.load_control_state()
             self.enable_control()
             self.skip_cycles = 0
         if self.skip_cycles > 0:
@@ -522,7 +548,8 @@ class WallboxAPI(ComponentBase):
                 raise
             except WallboxPermissionError:
                 self.warn_permission()
-            except WallboxError as exc:
+            except Exception as exc:
+                # Anything else is dropped too: an event left on the queue would stop every later poll
                 self.log("Warn: wallbox: control failed: {}".format(exc))
             self.queued_events.pop(0)
             refresh = True
@@ -531,7 +558,8 @@ class WallboxAPI(ComponentBase):
     async def poll(self, seconds, first):
         """Read every charger, publish, and run automatic configuration and control."""
         if first or not self.charger_ids or (seconds % CHARGER_LIST_SECONDS) == 0:
-            self.charger_ids = sorted(await self.transport.list_chargers(), key=str)
+            self.charger_ids = sorted(await self.transport.list_chargers(), key=charger_sort_key)
+            self.update_car_order(self.charger_ids)
         if not self.charger_ids:
             if first:
                 self.log("Warn: wallbox: signed in but no chargers were found on the account")
@@ -556,9 +584,10 @@ class WallboxAPI(ComponentBase):
         self.chargers = chargers
         self.stale_ids = stale_ids
         await self.publish_data()
-        if self.automatic and not self._auto_configured:
+        if self.automatic and self._auto_configured_order != self.car_order:
+            # Once per car order: at start-up, and again only when a charger is added
             self.automatic_config()
-            self._auto_configured = True
+            self._auto_configured_order = list(self.car_order)
         try:
             await self.control_tick(self.now_utc_exact)
         except WallboxPermissionError:
@@ -655,7 +684,7 @@ class WallboxAPI(ComponentBase):
             return
         try:
             amps = int(float(value))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             self.log("Warn: wallbox: ignoring charging current '{}' for {}".format(value, charger.name))
             return
         upper = charger.max_available_current if charger.max_available_current >= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
@@ -733,7 +762,7 @@ class WallboxAPI(ComponentBase):
         Returns True once at least one car's plan has been read.
         """
         windows = {}
-        for car_n in range(len(self.chargers)):
+        for car_n in range(len(self.car_order)):
             postfix = "" if car_n == 0 else "_{}".format(car_n)
             planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
             if planned is None:
@@ -792,12 +821,16 @@ class WallboxAPI(ComponentBase):
             return
         before = set(self.paused_by_predbat)
         try:
-            for car_n, charger in enumerate(self.ordered_chargers()):
-                if car_n not in self.control_windows or charger.charger_id in self.stale_ids:
+            for car_n, charger_id in enumerate(self.car_order):
+                charger = self.chargers.get(charger_id)
+                if charger is None or car_n not in self.control_windows or charger_id in self.stale_ids:
                     continue
                 wanted = in_car_plan_window(self.control_windows[car_n], now)
-                if not charger.connected:
+                if charger.status_id in UNPLUGGED_STATUS_IDS:
                     self.paused_by_predbat.discard(charger.charger_id)
+                    continue
+                if not charger.connected:
+                    # Updating, Error or Unknown: say nothing, and keep the record until the charger reports again
                     continue
                 if wanted and charger.locked:
                     if charger.charger_id not in self.lock_warned:
@@ -811,8 +844,10 @@ class WallboxAPI(ComponentBase):
                     self.paused_by_predbat.discard(charger.charger_id)
                 elif not wanted and charger.charging:
                     self.log("Info: wallbox: pausing {} for car {}".format(charger.name, car_n))
-                    await self.transport.pause(self.api_id(charger))
+                    # Recorded first: a pause whose reply is lost may still have been applied,
+                    # and release ignores a recorded charger that turns out not to be paused
                     self.paused_by_predbat.add(charger.charger_id)
+                    await self.transport.pause(self.api_id(charger))
         finally:
             if self.paused_by_predbat != before:
                 await self.save_control_state()

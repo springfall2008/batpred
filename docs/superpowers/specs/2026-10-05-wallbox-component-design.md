@@ -170,8 +170,10 @@ available (section 7).
 
 ## 6. Automatic configuration
 
-Runs once, after the first successful poll, when `wallbox_automatic` is on. Chargers are
-sorted by id, so charger N is car N. All through `set_arg_auto`:
+Runs after the first successful poll when `wallbox_automatic` is on, and again only when a
+charger is added to the account. Car order comes from the account's charger list in numeric
+id order and is append-only while Predbat runs, so charger N is car N even when a status
+read fails, and a charger added later becomes the next car. All through `set_arg_auto`:
 
 | Argument | Value |
 |---|---|
