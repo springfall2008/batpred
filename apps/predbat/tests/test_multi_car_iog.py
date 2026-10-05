@@ -737,6 +737,7 @@ def run_iog_consider_full_predict_test(testname, my_predbat):
         "rate_export",
         "rate_min",
         "rate_max",
+        "rate_import_tariff_max",
         "rate_min_base",
         "rate_max_base",
         "rate_export_min",
