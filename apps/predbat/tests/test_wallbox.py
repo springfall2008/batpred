@@ -76,6 +76,33 @@ def _auth_payload(token="jwt-1", refresh="refresh-1", life=3600, refresh_life=86
 
 MOCK_GROUPS = {"result": {"groups": [{"chargers": [{"id": 202}, {"id": 101}]}, {"chargers": []}]}}
 
+# Status payloads in the shape of the Home Assistant wallbox integration's own test
+# fixture (tests/components/wallbox/const.py). These stand in for payloads captured from a
+# real charger with `python3 wallbox.py --raw`, and should be replaced by such captures.
+MOCK_STATUS_CHARGING = {
+    "charging_power": 7.2,
+    "status_id": 193,
+    "max_available_power": 25.0,
+    "charging_speed": 32,
+    "added_range": 150,
+    "added_energy": 44.697,
+    "name": "Garage",
+    "config_data": {
+        "max_charging_current": 24,
+        "energy_price": 0.4,
+        "locked": False,
+        "serial_number": "900001",
+        "part_number": "PLP1-0-2-4-9-002-E",
+        "software": {"currentVersion": "5.5.10"},
+        "currency": {"code": "EUR/kWh"},
+        "icp_max_current": 20,
+        "plan": {"features": ["POWER_BOOST"]},
+        "ecosmart": {"enabled": False, "mode": 0},
+    },
+}
+MOCK_STATUS_READY = dict(MOCK_STATUS_CHARGING, charging_power=0, status_id=161, charging_speed=0, added_range=0, added_energy=0)
+MOCK_STATUS_PAUSED = dict(MOCK_STATUS_CHARGING, charging_power=0, status_id=178, charging_speed=0)
+
 
 def test_basic_auth_header():
     """The Basic header is UTF-8, so a colon or accented character in the password survives."""

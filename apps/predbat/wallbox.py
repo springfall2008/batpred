@@ -20,8 +20,10 @@ inputs, exposes pause/resume, lock, charging current and Eco-Smart controls, and
 pause and resume each charger from Predbat's own car charging plan.
 """
 
+import argparse
 import asyncio
 import base64
+import json
 import time
 
 import aiohttp
@@ -200,3 +202,33 @@ class WallboxTransport:
     async def get_status(self, charger_id):
         """Return the raw status payload of one charger."""
         return await self._api("GET", "chargers/status/{}".format(charger_id))
+
+
+async def run_wallbox_cli(args):  # pragma: no cover
+    """Sign in, list the chargers and print each one's status against the live API."""
+    transport = WallboxTransport(print, args.username, args.password)
+    charger_ids = await transport.list_chargers()
+    if not charger_ids:
+        print("No chargers found on this account")
+        return
+    print("Chargers: {}".format(charger_ids))
+    for charger_id in charger_ids:
+        payload = await transport.get_status(charger_id)
+        if args.raw:
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        else:
+            print("{}: status_id={} power={}kW added_energy={}kWh".format(charger_id, payload.get("status_id"), payload.get("charging_power"), payload.get("added_energy")))
+
+
+def main():  # pragma: no cover
+    """Main function for command line execution."""
+    parser = argparse.ArgumentParser(description="Test the Wallbox API")
+    parser.add_argument("--username", required=True, help="Wallbox account email address")
+    parser.add_argument("--password", required=True, help="Wallbox account password")
+    parser.add_argument("--raw", action="store_true", help="Print each charger's full status payload as JSON")
+    args = parser.parse_args()
+    asyncio.run(run_wallbox_cli(args))
+
+
+if __name__ == "__main__":
+    main()
