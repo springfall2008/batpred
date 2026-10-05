@@ -1083,10 +1083,10 @@ If you previously pointed **car_charging_energy**, **car_charging_planned** or *
 You can check your credentials and see exactly what Predbat would publish without changing your configuration. From the `apps/predbat` directory:
 
 ```bash
-python3 wallbox.py --username you@example.com --password your-wallbox-password
+python3 wallbox.py --username you@example.com
 ```
 
-This signs in, runs one cycle and prints every entity, the **car_charging_** settings it would make, and a summary line per charger. Add `--raw` to print each charger's full status as Wallbox sends it, which is the most useful thing to attach to a bug report; remove serial numbers and names first.
+It asks for your Wallbox password, so the password never appears in your shell history. For a script you can pass `--password` instead. It then signs in, runs one cycle and prints every entity, the **car_charging_** settings it would make, and a summary line per charger. Add `--raw` to print each charger's full status as Wallbox sends it, which is the most useful thing to attach to a bug report; remove serial numbers and names first.
 
 To try a control by hand, add one of `--pause`, `--resume`, `--resume-schedule`, `--lock`, `--unlock`, `--max-current <amps>` or `--eco-smart <off|eco_mode|full_solar>`, with `--charger <id>` to choose a charger other than the first. The charger's state is printed again a few seconds later so you can see whether it took effect.
 

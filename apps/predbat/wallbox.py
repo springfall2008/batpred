@@ -23,6 +23,7 @@ pause and resume each charger from Predbat's own car charging plan.
 import argparse
 import asyncio
 import base64
+import getpass
 import json
 import math
 import time
@@ -73,6 +74,8 @@ DEFAULT_MAX_CHARGING_CURRENT = 32
 
 WALLBOX_STORAGE_MODULE = "wallbox"
 WALLBOX_CONTROL_STATE = "control_state"
+# How many cycles an empty answer from Storage is retried before the saved state is taken to be absent
+CONTROL_STATE_LOAD_ATTEMPTS = 5
 
 # Status id to (text, car connected). The text is the Home Assistant wallbox integration's
 # wording, so states match what existing users already see. A None status id means the
@@ -490,6 +493,11 @@ class WallboxAPI(ComponentBase):
         self.lock_warned = set()
         self.ocpp_warned = set()
         self.control_state_loaded = False
+        self.control_state_load_attempts = 0
+        self.control_state_dirty = False
+        # Chargers Predbat has resumed on release but not yet handed back to their own schedule
+        self.schedule_pending = set()
+        self.release_announced = False
         self.control_enabled = True
         self.transport = None
 
@@ -829,35 +837,57 @@ class WallboxAPI(ComponentBase):
         self.log("Info: wallbox: Predbat-led charge control enabled")
 
     async def load_control_state(self):
-        """Restore the control switch and the list of chargers Predbat paused.
+        """Restore the control switch and the chargers Predbat still owes a release.
 
-        The paused list is what lets a restart with control turned off still release a
-        charger an earlier session left paused. Fails soft with no Storage component.
+        The saved lists are what let a restart with control turned off still release a
+        charger an earlier session left paused. Storage answers None for a failed read as
+        well as for a file that is not there, so a None is tried again on the next few
+        cycles rather than taken as "nothing saved"; after that the file is taken to be
+        absent. What is read is merged into what this session already knows, never
+        replacing it. Fails soft with no Storage component.
         """
-        if self.control_state_loaded or self.storage is None:
+        if self.control_state_loaded or self.storage is None or self.control_state_load_attempts >= CONTROL_STATE_LOAD_ATTEMPTS:
             return
+        self.control_state_load_attempts += 1
         try:
             saved = await self.storage.load(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE)
         except Exception as exc:
             self.log("Warn: wallbox: could not read the saved charge control state: {}".format(exc))
             return
-        self.control_state_loaded = True
         if not isinstance(saved, dict):
             return
+        self.control_state_loaded = True
         if "control_enabled" in saved:
             self.control_enabled = bool(saved["control_enabled"])
-        paused = saved.get("paused")
-        if isinstance(paused, list):
-            self.paused_by_predbat = {str(charger_id) for charger_id in paused}
+        for key, target in (("paused", self.paused_by_predbat), ("schedule", self.schedule_pending)):
+            values = saved.get(key)
+            if isinstance(values, list):
+                target.update(str(charger_id) for charger_id in values)
 
     async def save_control_state(self):
-        """Persist the control switch and the list of chargers Predbat paused."""
+        """Persist the control switch and the chargers Predbat still owes a release.
+
+        Returns True when the state is safely stored, or there is nowhere to store it. A
+        failed write leaves control_state_dirty set, so the next cycle tries again rather
+        than trusting a record that only exists in memory.
+        """
         if self.storage is None:
-            return
+            self.control_state_dirty = False
+            return True
+        state = {"control_enabled": self.control_enabled, "paused": sorted(self.paused_by_predbat), "schedule": sorted(self.schedule_pending)}
         try:
-            await self.storage.save(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE, {"control_enabled": self.control_enabled, "paused": sorted(self.paused_by_predbat)})
+            saved = await self.storage.save(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE, state)
         except Exception as exc:
+            saved = False
             self.log("Warn: wallbox: could not save the charge control state: {}".format(exc))
+        else:
+            if saved is False:
+                self.log("Warn: wallbox: could not save the charge control state, will try again")
+        self.control_state_dirty = saved is False
+        if not self.control_state_dirty:
+            # What is on disk is now this session's state, so there is nothing older left to read
+            self.control_state_loaded = True
+        return not self.control_state_dirty
 
     def control_read_only_now(self):
         """Is Predbat in read only mode - the live attribute first, then the config argument."""
@@ -888,6 +918,8 @@ class WallboxAPI(ComponentBase):
         Called on every poll whether or not control is available, because a charger a
         previous session paused must be released even when control has since been turned off.
         """
+        if self.control_state_dirty:
+            await self.save_control_state()
         reason = None
         if not self.control_active:
             reason = "charge control is not enabled"
@@ -896,34 +928,85 @@ class WallboxAPI(ComponentBase):
         elif not self.control_enabled:
             reason = "the charge control switch is off"
         if reason:
-            if self.paused_by_predbat:
-                self.log("Info: wallbox: releasing the chargers because {}".format(reason))
+            if self.paused_by_predbat or self.schedule_pending:
+                if not self.release_announced:
+                    self.log("Info: wallbox: releasing the chargers because {}".format(reason))
+                    self.release_announced = True
                 await self.release_chargers()
             return
+        self.release_announced = False
+        if self.schedule_pending:
+            # Predbat is in charge again, so there is no schedule to hand back
+            self.schedule_pending.clear()
+            self.control_state_dirty = True
         await self.control_charge(now)
+
+    async def per_charger(self, charger, action):
+        """Run one charger's control step so that its failure cannot stop the other chargers.
+
+        A refusal or an API error belongs to this charger: it is logged and whatever was
+        owed stays owed. A rate limit or a sign in failure belongs to the whole account
+        and is left to reach run().
+        """
+        try:
+            await action
+        except WallboxRefusedError as exc:
+            self.warn_refused_once(exc)
+        except WallboxApiError as exc:
+            self.log("Warn: wallbox: charge control failed for {}: {}".format(charger.name, exc))
 
     async def release_chargers(self):
         """Resume every charger Predbat paused and hand each back to its own schedule.
 
-        A charger that is no longer paused - resumed by hand, or unplugged - is only
-        forgotten. The record is saved even if a call fails part way, so what was
-        released stays released and the rest is retried on the next poll.
+        A charger stays on the list until a fresh status either lets it be released or
+        shows there is nothing left to do. One that cannot be read, or reports Updating,
+        Error, Unknown or locked with a car, is neither: it is kept for the next poll.
         """
         try:
-            for charger_id in sorted(self.paused_by_predbat):
+            for charger_id in sorted(self.paused_by_predbat | self.schedule_pending):
                 charger = self.chargers.get(charger_id)
-                if charger and charger_id in self.stale_ids:
+                if charger is None or charger_id in self.stale_ids:
                     continue
-                if charger and charger.paused and self.held_by_lock(charger, once=True):
-                    # Cannot be resumed until it is unlocked, so it stays on the list
-                    continue
-                if charger and charger.paused:
-                    self.log("Info: wallbox: releasing {}".format(charger.name))
-                    await self.transport.resume(self.api_id(charger))
-                    await self.transport.resume_schedule(self.api_id(charger))
-                self.paused_by_predbat.discard(charger_id)
+                await self.per_charger(charger, self.release_one(charger))
         finally:
-            await self.save_control_state()
+            if self.control_state_dirty:
+                await self.save_control_state()
+
+    async def release_one(self, charger):
+        """Release one charger: resume it if it is still paused, then restore its schedule.
+
+        The schedule step is tracked on its own, because a resume that worked followed by
+        a schedule call that failed leaves a charger that reports Charging and would
+        otherwise never be handed back.
+        """
+        charger_id = charger.charger_id
+        api_id = self.api_id(charger)
+        if charger.status_id in UNPLUGGED_STATUS_IDS:
+            if charger_id in self.paused_by_predbat or charger_id in self.schedule_pending:
+                self.paused_by_predbat.discard(charger_id)
+                self.schedule_pending.discard(charger_id)
+                self.control_state_dirty = True
+            return
+        if charger_id in self.paused_by_predbat:
+            if charger.paused:
+                if self.held_by_lock(charger, once=True):
+                    # Cannot be resumed until it is unlocked, so it stays on the list
+                    return
+                self.log("Info: wallbox: releasing {}".format(charger.name))
+                self.schedule_pending.add(charger_id)
+                self.control_state_dirty = True
+                await self.transport.resume(api_id)
+                self.paused_by_predbat.discard(charger_id)
+            elif charger.connected and not charger.locked:
+                # Charging, Scheduled or Waiting: it is no longer paused, so nothing is owed
+                self.paused_by_predbat.discard(charger_id)
+                self.control_state_dirty = True
+            else:
+                return
+        if charger_id in self.schedule_pending:
+            await self.transport.resume_schedule(api_id)
+            self.schedule_pending.discard(charger_id)
+            self.control_state_dirty = True
 
     async def control_charge(self, now):
         """Drive each charger from its car's plan: resume a paused one inside a window, pause a charging one outside.
@@ -933,37 +1016,47 @@ class WallboxAPI(ComponentBase):
         """
         if not self.refresh_car_windows(now):
             return
-        before = set(self.paused_by_predbat)
         try:
             for car_n, charger_id in enumerate(self.car_order):
                 charger = self.chargers.get(charger_id)
                 if charger is None or car_n not in self.control_windows or charger_id in self.stale_ids:
                     continue
                 wanted = in_car_plan_window(self.control_windows[car_n], now)
-                if charger.status_id in UNPLUGGED_STATUS_IDS:
-                    self.paused_by_predbat.discard(charger.charger_id)
-                    continue
-                if self.held_by_ocpp(charger):
-                    continue
-                if not charger.connected:
-                    # Updating, Error or Unknown: say nothing, and keep the record until the charger reports again
-                    continue
-                if self.held_by_lock(charger, once=True):
-                    continue
-                if wanted and charger.paused:
-                    self.log("Info: wallbox: resuming {} for car {}".format(charger.name, car_n))
-                    await self.transport.resume(self.api_id(charger))
-                    self.paused_by_predbat.discard(charger.charger_id)
-                elif not wanted and charger.charging:
-                    self.log("Info: wallbox: pausing {} for car {}".format(charger.name, car_n))
-                    # Recorded first: a pause whose reply is lost may still have been applied,
-                    # and release ignores a recorded charger that turns out not to be paused
-                    self.paused_by_predbat.add(charger.charger_id)
-                    await self.transport.pause(self.api_id(charger))
+                await self.per_charger(charger, self.control_one(car_n, charger, wanted))
         finally:
-            if self.paused_by_predbat != before:
+            if self.control_state_dirty:
                 await self.save_control_state()
 
+    async def control_one(self, car_n, charger, wanted):
+        """Apply the plan to one charger."""
+        charger_id = charger.charger_id
+        if charger.status_id in UNPLUGGED_STATUS_IDS:
+            if charger_id in self.paused_by_predbat:
+                self.paused_by_predbat.discard(charger_id)
+                self.control_state_dirty = True
+            return
+        if self.held_by_ocpp(charger):
+            return
+        if not charger.connected:
+            # Updating, Error or Unknown: say nothing, and keep the record until the charger reports again
+            return
+        if self.held_by_lock(charger, once=True):
+            return
+        if wanted and charger.paused:
+            self.log("Info: wallbox: resuming {} for car {}".format(charger.name, car_n))
+            await self.transport.resume(self.api_id(charger))
+            if charger_id in self.paused_by_predbat:
+                self.paused_by_predbat.discard(charger_id)
+                self.control_state_dirty = True
+        elif not wanted and charger.charging:
+            self.log("Info: wallbox: pausing {} for car {}".format(charger.name, car_n))
+            # Recorded and stored before it is sent: a pause whose reply is lost, or one
+            # followed by a crash, may still have been applied, and release ignores a
+            # recorded charger that turns out not to be paused
+            if charger_id not in self.paused_by_predbat:
+                self.paused_by_predbat.add(charger_id)
+                await self.save_control_state()
+            await self.transport.pause(self.api_id(charger))
 
 def print_charger_table(chargers):  # pragma: no cover
     """Print the charger summary table, for the poll and for a command read-back alike."""
@@ -1059,7 +1152,7 @@ def main():  # pragma: no cover
     """Main function for command line execution."""
     parser = argparse.ArgumentParser(description="Test the Wallbox API")
     parser.add_argument("--username", required=True, help="Wallbox account email address")
-    parser.add_argument("--password", required=True, help="Wallbox account password")
+    parser.add_argument("--password", default=None, help="Wallbox account password. Leave it out to be asked for it, which keeps it out of your shell history and the process list")
     parser.add_argument("--raw", action="store_true", help="Print each charger's full status payload as JSON")
     parser.add_argument("--get", default=None, help="Read-only: GET this API path, e.g. v3/chargers/<id>/ocpp-configuration, and print the reply. For exploring the API")
     parser.add_argument("--no-automatic", action="store_true", help="Skip the automatic configuration of car_charging_energy, car_charging_planned, car_charging_power and car_charging_now")
@@ -1073,6 +1166,8 @@ def main():  # pragma: no cover
     group.add_argument("--max-current", type=int, default=None, help="Set the maximum charging current in amps")
     group.add_argument("--eco-smart", choices=ECO_SMART_OPTIONS, default=None, help="Set the Eco-Smart mode")
     args = parser.parse_args()
+    if args.password is None:
+        args.password = getpass.getpass("Wallbox password: ")
     try:
         asyncio.run(run_wallbox_cli(args))
     except WallboxError as exc:

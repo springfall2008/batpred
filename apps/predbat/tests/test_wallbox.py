@@ -1149,7 +1149,7 @@ def test_control_state_survives_a_restart():
     storage = _Storage()
     component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
     run_async(component.control_tick(CONTROL_NOW))
-    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "paused": ["101"]}
+    assert storage.data[("wallbox", "control_state")] == {"control_enabled": True, "paused": ["101"], "schedule": []}
 
     restarted = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
     assert restarted.control_active is False and restarted.paused_by_predbat == {"101"}
@@ -1262,12 +1262,8 @@ def test_control_records_a_pause_whose_response_was_lost():
     """A pause that fails after Wallbox applied it is still Predbat's to release."""
     component = _control_component({0: PLAN_OUTSIDE})
     component.transport.errors[("pause", 101)] = WallboxApiError("timed out")
-    try:
-        run_async(component.control_tick(CONTROL_NOW))
-        raise AssertionError("Expected WallboxApiError")
-    except WallboxApiError:
-        pass
-    assert component.paused_by_predbat == {"101"}
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.paused_by_predbat == {"101"} and _logged(component, "charge control failed")
 
     component.transport.statuses[101] = _status(status_id=178, power=0)
     _load_chargers(component)
@@ -1540,6 +1536,176 @@ def test_software_versions_are_read_and_published():
     print("  ✓ Firmware versions and update availability are read and published")
 
 
+def _restarted_with_control_off(storage, statuses):
+    """A fresh component, control not configured, sharing storage with an earlier session."""
+    return _control_component({0: PLAN_OUTSIDE}, statuses, storage=storage, wallbox_control=False)
+
+
+def _storage_with_paused(*charger_ids):
+    """Storage as an earlier session that paused these chargers would have left it."""
+    storage = _Storage()
+    storage.data[("wallbox", "control_state")] = {"control_enabled": True, "paused": list(charger_ids), "schedule": []}
+    return storage
+
+
+def test_release_keeps_a_charger_it_could_not_read():
+    """After a restart, a paused charger whose status read failed stays on the list until it can be read."""
+    storage = _storage_with_paused("101")
+    component = _restarted_with_control_off(storage, {202: _status(status_id=161, power=0)})
+    component.update_car_order([101, 202])
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [] and component.paused_by_predbat == {"101"}
+
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)]
+    assert component.paused_by_predbat == set()
+    print("  ✓ Release keeps a charger it could not read")
+
+
+def test_release_keeps_an_indeterminate_charger_and_forgets_a_settled_one():
+    """Updating, Error, Unknown and locked-with-car stay pending on release; charging, waiting and unplugged are forgotten."""
+    for status_id, locked in ((166, False), (14, False), (999, False), (210, 1)):
+        component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=status_id, power=0, locked=locked)})
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [] and component.paused_by_predbat == {"101"}, status_id
+    for status_id in (193, 177, 180, 161, 0):
+        component = _restarted_with_control_off(_storage_with_paused("101"), {101: _status(status_id=status_id, power=0)})
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [] and component.paused_by_predbat == set(), status_id
+    print("  ✓ Release keeps an indeterminate charger and forgets a settled one")
+
+
+def test_one_chargers_failure_does_not_block_the_next():
+    """A refused or failed command on the first charger still lets the second follow its plan and be released."""
+    for error in (WallboxApiError("HTTP 500"), WallboxRefusedError("Wallbox refused the control (HTTP 403)")):
+        statuses = {101: _status(status_id=193), 202: _status(status_id=193)}
+        component = _control_component({0: PLAN_OUTSIDE, 1: PLAN_OUTSIDE}, statuses)
+        component.transport.errors[("pause", 101)] = error
+        run_async(component.control_tick(CONTROL_NOW))
+        assert ("pause", 202) in component.transport.calls, component.transport.calls
+
+    statuses = {101: _status(status_id=178, power=0), 202: _status(status_id=178, power=0)}
+    component = _restarted_with_control_off(_storage_with_paused("101", "202"), statuses)
+    component.transport.errors[("resume", 101)] = WallboxApiError("HTTP 500")
+    run_async(component.control_tick(CONTROL_NOW))
+    assert ("resume", 202) in component.transport.calls and ("resume_schedule", 202) in component.transport.calls
+    assert component.paused_by_predbat == {"101"}, "The charger whose resume failed is still owed a release"
+    print("  ✓ One charger's failure does not block the next")
+
+
+def test_account_wide_errors_still_stop_the_control_loop():
+    """A rate limit is the whole account's problem, so it still reaches run() and starts the back-off."""
+    component = _control_component({0: PLAN_OUTSIDE})
+    component.transport.errors[("pause", 101)] = WallboxRateLimitError("429")
+    try:
+        run_async(component.control_tick(CONTROL_NOW))
+        raise AssertionError("Expected WallboxRateLimitError")
+    except WallboxRateLimitError:
+        pass
+    print("  ✓ A rate limit still stops the control loop")
+
+
+def test_pause_is_persisted_before_it_is_sent():
+    """The charger id is in storage before the pause leaves, so a crash in between cannot strand it."""
+    storage = _Storage()
+    component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
+    seen = []
+    real_pause = component.transport.pause
+
+    async def recording_pause(charger_id):
+        """Note what storage held at the moment the pause was sent."""
+        seen.append(list((storage.data.get(("wallbox", "control_state")) or {}).get("paused", [])))
+        return await real_pause(charger_id)
+
+    component.transport.pause = recording_pause
+    run_async(component.control_tick(CONTROL_NOW))
+    assert seen == [["101"]], seen
+    print("  ✓ A pause is persisted before it is sent")
+
+
+def test_failed_control_state_save_is_retried():
+    """A save that reports failure is not taken as done: it is tried again on the next cycle."""
+    storage = _Storage()
+    results = [False, False]
+    real_save = storage.save
+
+    async def flaky_save(module, filename, data, **kwargs):
+        """Report failure without storing, twice, then behave."""
+        if results:
+            return results.pop()
+        await real_save(module, filename, data, **kwargs)
+        return True
+
+    storage.save = flaky_save
+    component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert ("wallbox", "control_state") not in storage.data and _logged(component, "could not save")
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert storage.data[("wallbox", "control_state")]["paused"] == ["101"]
+    print("  ✓ A failed control state save is retried")
+
+
+def test_control_state_load_returning_nothing_is_retried_then_given_up():
+    """Storage returns None for a failed read as well as a missing file, so a None is retried a few times."""
+    storage = _storage_with_paused("101")
+    real_load = storage.load
+    answers = [None]
+    calls = []
+
+    async def flaky_load(module, filename):
+        """Return None once, as a failed read does, then the real data."""
+        calls.append(filename)
+        if answers:
+            return answers.pop()
+        return await real_load(module, filename)
+
+    storage.load = flaky_load
+    component = _make_component({101: _status(status_id=178, power=0)}, wallbox_control=False)
+    component.base.components = _Components(storage)
+    run_async(component.run(0, True))
+    assert component.transport.count("resume") == 0
+    run_async(component.run(120, False))
+    assert component.transport.count("resume") == 1, "The saved charger was released once the read worked"
+
+    empty = _Storage()
+    empty_calls = []
+
+    async def counting_load(module, filename):
+        """Always empty, counting the reads."""
+        empty_calls.append(filename)
+        return None
+
+    empty.load = counting_load
+    component = _make_component()
+    component.base.components = _Components(empty)
+    for cycle in range(12):
+        run_async(component.run(cycle * 60, cycle == 0))
+    assert 1 < len(empty_calls) <= 5, "A file that is simply absent is not read forever: {}".format(len(empty_calls))
+    print("  ✓ An empty control state read is retried a few times, then left")
+
+
+def test_schedule_restoration_is_retried_after_a_failure():
+    """If resume works but handing back the schedule fails, that step is retried even once the charger is charging."""
+    storage = _storage_with_paused("101")
+    component = _restarted_with_control_off(storage, {101: _status(status_id=178, power=0)})
+    component.transport.errors[("resume_schedule", 101)] = WallboxApiError("HTTP 500")
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume", 101), ("resume_schedule", 101)]
+    assert component.paused_by_predbat == set() and component.schedule_pending == {"101"}
+    assert storage.data[("wallbox", "control_state")]["schedule"] == ["101"], "The pending step survives a restart"
+
+    component.transport.statuses[101] = _status(status_id=193)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [("resume_schedule", 101)], component.transport.calls
+    assert component.schedule_pending == set() and storage.data[("wallbox", "control_state")]["schedule"] == []
+    print("  ✓ Schedule restoration is retried after a failure")
+
+
 def test_wallbox(my_predbat=None):
     """Run every Wallbox test."""
     print("=" * 70)
@@ -1626,5 +1792,13 @@ def test_wallbox(my_predbat=None):
     test_lock_warning_names_ocpp_when_it_holds_the_lock()
     test_location_and_timezone_are_read_and_published()
     test_software_versions_are_read_and_published()
+    test_release_keeps_a_charger_it_could_not_read()
+    test_release_keeps_an_indeterminate_charger_and_forgets_a_settled_one()
+    test_one_chargers_failure_does_not_block_the_next()
+    test_account_wide_errors_still_stop_the_control_loop()
+    test_pause_is_persisted_before_it_is_sent()
+    test_failed_control_state_save_is_retried()
+    test_control_state_load_returning_nothing_is_retried_then_given_up()
+    test_schedule_restoration_is_retried_after_a_failure()
     print("=" * 70)
     return False
