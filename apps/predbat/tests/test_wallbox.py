@@ -1649,43 +1649,23 @@ def test_failed_control_state_save_is_retried():
     print("  ✓ A failed control state save is retried")
 
 
-def test_control_state_load_returning_nothing_is_retried_then_given_up():
-    """Storage returns None for a failed read as well as a missing file, so a None is retried a few times."""
-    storage = _storage_with_paused("101")
-    real_load = storage.load
-    answers = [None]
+def test_control_state_with_nothing_saved_is_read_once():
+    """An empty answer from Storage means nothing is saved: it is read once, as the other components do."""
+    storage = _Storage()
     calls = []
-
-    async def flaky_load(module, filename):
-        """Return None once, as a failed read does, then the real data."""
-        calls.append(filename)
-        if answers:
-            return answers.pop()
-        return await real_load(module, filename)
-
-    storage.load = flaky_load
-    component = _make_component({101: _status(status_id=178, power=0)}, wallbox_control=False)
-    component.base.components = _Components(storage)
-    run_async(component.run(0, True))
-    assert component.transport.count("resume") == 0
-    run_async(component.run(120, False))
-    assert component.transport.count("resume") == 1, "The saved charger was released once the read worked"
-
-    empty = _Storage()
-    empty_calls = []
 
     async def counting_load(module, filename):
         """Always empty, counting the reads."""
-        empty_calls.append(filename)
+        calls.append(filename)
         return None
 
-    empty.load = counting_load
+    storage.load = counting_load
     component = _make_component()
-    component.base.components = _Components(empty)
-    for cycle in range(12):
+    component.base.components = _Components(storage)
+    for cycle in range(6):
         run_async(component.run(cycle * 60, cycle == 0))
-    assert 1 < len(empty_calls) <= 5, "A file that is simply absent is not read forever: {}".format(len(empty_calls))
-    print("  ✓ An empty control state read is retried a few times, then left")
+    assert len(calls) == 1, "Read once, not on every cycle: {}".format(len(calls))
+    print("  ✓ With nothing saved, the control state is read once")
 
 
 def test_schedule_restoration_is_retried_after_a_failure():
@@ -1798,7 +1778,7 @@ def test_wallbox(my_predbat=None):
     test_account_wide_errors_still_stop_the_control_loop()
     test_pause_is_persisted_before_it_is_sent()
     test_failed_control_state_save_is_retried()
-    test_control_state_load_returning_nothing_is_retried_then_given_up()
+    test_control_state_with_nothing_saved_is_read_once()
     test_schedule_restoration_is_retried_after_a_failure()
     print("=" * 70)
     return False

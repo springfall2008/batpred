@@ -74,8 +74,6 @@ DEFAULT_MAX_CHARGING_CURRENT = 32
 
 WALLBOX_STORAGE_MODULE = "wallbox"
 WALLBOX_CONTROL_STATE = "control_state"
-# How many cycles an empty answer from Storage is retried before the saved state is taken to be absent
-CONTROL_STATE_LOAD_ATTEMPTS = 5
 
 # Status id to (text, car connected). The text is the Home Assistant wallbox integration's
 # wording, so states match what existing users already see. A None status id means the
@@ -493,7 +491,6 @@ class WallboxAPI(ComponentBase):
         self.lock_warned = set()
         self.ocpp_warned = set()
         self.control_state_loaded = False
-        self.control_state_load_attempts = 0
         self.control_state_dirty = False
         # Chargers Predbat has resumed on release but not yet handed back to their own schedule
         self.schedule_pending = set()
@@ -840,23 +837,21 @@ class WallboxAPI(ComponentBase):
         """Restore the control switch and the chargers Predbat still owes a release.
 
         The saved lists are what let a restart with control turned off still release a
-        charger an earlier session left paused. Storage answers None for a failed read as
-        well as for a file that is not there, so a None is tried again on the next few
-        cycles rather than taken as "nothing saved"; after that the file is taken to be
-        absent. What is read is merged into what this session already knows, never
+        charger an earlier session left paused. A read that raises is tried again on the
+        next cycle, as Sunsynk's cache restore does; an empty answer is taken as nothing
+        saved. What is read is merged into what this session already knows, never
         replacing it. Fails soft with no Storage component.
         """
-        if self.control_state_loaded or self.storage is None or self.control_state_load_attempts >= CONTROL_STATE_LOAD_ATTEMPTS:
+        if self.control_state_loaded or self.storage is None:
             return
-        self.control_state_load_attempts += 1
         try:
             saved = await self.storage.load(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE)
         except Exception as exc:
             self.log("Warn: wallbox: could not read the saved charge control state: {}".format(exc))
             return
+        self.control_state_loaded = True
         if not isinstance(saved, dict):
             return
-        self.control_state_loaded = True
         if "control_enabled" in saved:
             self.control_enabled = bool(saved["control_enabled"])
         for key, target in (("paused", self.paused_by_predbat), ("schedule", self.schedule_pending)):
