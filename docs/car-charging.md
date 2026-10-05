@@ -540,7 +540,8 @@ It does not add an Intelligent slot or its cheap rate for a charge the Intellige
 - The switch **switch.predbat_octopus_intelligent_consider_full** (*expert mode*)
 (default is Off) when turned On will cause Predbat to predict when your car battery is full and assume no further charging will occur.
 This can be useful if Octopus does not know your car battery's state of charge but you have a sensor setup in Predbat (**car_charging_soc**) which does know the current charge level.
-Predbat will still assume all Octopus charging slots are low rates even if some are not used by your car.
+Slots your car won't need are also not trusted as low rate for the house battery: Octopus only bills a slot at the low rate when the car charges in it, so once Predbat expects the car to be full, the rest of that dispatch and any later daytime slots are planned at the normal rate.
+The half hour in which the car is expected to finish stays low rate, as does any slot another car still needs and the overnight 23:30-05:30 rate, which is part of the tariff.
 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in

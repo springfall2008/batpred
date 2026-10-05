@@ -3742,6 +3742,14 @@ class Octopus:
                 # Emission is future-only, so dispatch_billed_off_peak()'s completed-dispatch exemption
                 # (#4946) can never apply here - a plain location test is equivalent and is kept as-is.
                 if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
+                    if octopus_intelligent_consider_full and start_minutes < self.minutes_now:
+                        # A dispatch in progress: only its remaining span and energy are still to come, so cap the
+                        # car's need from now, not from the dispatch's original start. The Octopus API component
+                        # already trims a running dispatch (trim_started_dispatch()); octopus_intelligent_slot doesn't.
+                        # Done after the slot-cap chunking above, which counts the dispatch from its real start.
+                        kwh = kwh * (end_minutes - self.minutes_now) / (end_minutes - start_minutes)
+                        kwh_original = kwh
+                        start_minutes = self.minutes_now
                     kwh_expected = kwh * self.car_charging_loss
                     if octopus_intelligent_consider_full:
                         kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
@@ -3854,6 +3862,9 @@ class Octopus:
                         if strip_from is not None and minute >= strip_from:
                             continue  # Car is not charging, its dispatch is not trusted as cheap
 
+                        if minute in self.octopus_surplus:
+                            continue  # No car needs this dispatch minute, see octopus_surplus_minutes()
+
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
                         else:
@@ -3915,6 +3926,74 @@ class Octopus:
 
         return rates
 
+    def in_iog_fixed_window(self, minute):
+        """
+        Whether minute falls in the fixed 23:30-05:30 Intelligent Go window, cheap by tariff rather than by
+        dispatch, so no dispatch decision ever changes its rate.
+        """
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        window_start = window["start"][0] * 60 + window["start"][1]
+        window_end = window["end"][0] * 60 + window["end"][1]
+        minute_of_day = minute % (24 * 60)
+        return minute_of_day >= window_start or minute_of_day < window_end
+
+    def octopus_surplus_from(self):
+        """
+        The first minute the car-need gate can withhold: the half hour after the current one, as the car may
+        already have charged in the current one, making the whole period cheap.
+        """
+        return (self.minutes_now // 30 + 1) * 30
+
+    def octopus_surplus_changed(self, previous):
+        """
+        Whether this cycle's surplus differs from the previous cycle's, so the plan must be recomputed. Only the
+        part of the previous surplus still ahead is compared, so time passing alone isn't a change.
+        """
+        start = self.octopus_surplus_from()
+        return {minute for minute in previous if minute >= start} != self.octopus_surplus
+
+    def octopus_surplus_minutes(self):
+        """
+        Future Octopus Intelligent dispatch minutes no car can use, when octopus_intelligent_consider_full is on.
+
+        load_octopus_slots() already ends each car's slots where the car reaches its limit, so a dispatch
+        minute no car still needs is one no car will draw in, and Octopus only bills a dispatch cheap when
+        the car charges in it (#4482). Its cheap rate is withheld from the house battery's plan the same way
+        a cancelled car's is (see dynamic_load_car_strip_feed_rates()).
+
+        Decided per car, then shared, as the rates are shared: a minute stays cheap if any car can still use
+        it before the point that car's own cheap rate ends (dynamic_load_car_strip_from()). A car can use
+        - its needed slots - with kWh left, or kWh kept in kwh_cancelled for a cancelled car. A dispatch in
+          progress is capped from now (see load_octopus_slots()), so this holds mid-dispatch too;
+        - every dispatch, for a car not modelled from its Octopus slots this cycle (e.g. ignored while unplugged).
+
+        Rounded out to whole 30 minute rate periods, from the half hour after the current one (the car may have
+        charged earlier in it, making the whole period cheap) and outside the fixed window.
+        """
+        if not self.octopus_intelligent_consider_full:
+            return set()
+        dispatch_minutes = set()
+        usable_minutes = set()
+        next_period = self.octopus_surplus_from()
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            car_slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
+            modelled = any(slot.get("octopus", False) for slot in car_slots)
+            strip_from = self.dynamic_load_car_strip_from(car_n)
+            usable_until = strip_from if strip_from is not None else float("inf")
+            for slot in self.octopus_slots[car_n]:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
+                dispatch_minutes.update(range(max(start_minutes, next_period), end_minutes))
+                if not modelled:
+                    usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
+            for slot in car_slots:
+                if slot.get("kwh", 0) > 0 or slot.get("kwh_cancelled", 0) > 0:
+                    start_minutes, end_minutes = round_out_to_period(slot["start"], slot["end"])
+                    usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
+        return {minute for minute in dispatch_minutes - usable_minutes if not self.in_iog_fixed_window(minute)}
+
     def dynamic_load_car_strip_feed_rates(self, rates):
         """
         Remove an Octopus Intelligent discount the rate feed itself delivered for a dispatch of a car that
@@ -3932,7 +4011,7 @@ class Octopus:
         (see dynamic_load_car_strip_from()), whatever another cancelled car's dispatch covers.
         """
         cancelled_cars = [car_n for car_n in range(self.num_cars) if self.dynamic_load_car_effective.get(car_n, False)]
-        if not cancelled_cars or not self.io_adjusted:
+        if (not cancelled_cars and not self.octopus_surplus) or not self.io_adjusted:
             self.dynamic_load_car_stripped = 0
             return rates
 
@@ -3954,23 +4033,22 @@ class Octopus:
                     trusted_minutes.update(range(start_minutes, min(end_minutes, strip_from)))
                     cancelled_minutes.update(range(max(start_minutes, strip_from), end_minutes))
 
-        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
-        window_start = window["start"][0] * 60 + window["start"][1]
-        window_end = window["end"][0] * 60 + window["end"][1]
         stripped = 0
-        for minute in sorted(cancelled_minutes - trusted_minutes):
+        stripped_surplus = 0
+        for minute in sorted((cancelled_minutes - trusted_minutes) | self.octopus_surplus):
             if not self.io_adjusted.get(minute, False):
                 continue
-            minute_of_day = minute % (24 * 60)
-            if minute_of_day >= window_start or minute_of_day < window_end:
+            if self.in_iog_fixed_window(minute):
                 continue
             rates[minute] = self.rate_max_base
             del self.io_adjusted[minute]
             stripped += 1
+            if minute in self.octopus_surplus:
+                stripped_surplus += 1
         # The feed is re-read every cycle, so the same minutes are stripped again each time - log only
         # when that changes, not every 5 minutes for the length of a cancellation
         if stripped and stripped != self.dynamic_load_car_stripped:
-            self.log("Octopus Intelligent: removed the dispatch rate from {} minutes of cars {} which are not charging".format(stripped, cancelled_cars))
+            self.log("Octopus Intelligent: removed the dispatch rate from {} minutes - {} of cars {} which are not charging, {} no car needs".format(stripped, stripped - stripped_surplus, cancelled_cars, stripped_surplus))
         self.dynamic_load_car_stripped = stripped
         return rates
 
