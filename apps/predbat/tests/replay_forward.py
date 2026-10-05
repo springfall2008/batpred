@@ -23,7 +23,8 @@ in-day load adjustment, the load divergence, the cost so far today and the inver
 the one in the yaml - the log records only its total.
 
 Newer Predbat versions also write "Replay input:" lines carrying what the human-readable lines round or leave out:
-the load and PV forecasts, the plan's starting state at full precision, and the rates whenever they change. Where a
+the load and PV forecasts, the plan's starting state at full precision, and the rates and car state whenever
+they change. Where a
 run has them they take precedence.
 
 The replay carries on across midnight (roll_over_midnight), so a late-evening yaml replays the whole next day.
@@ -61,6 +62,8 @@ RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
 RATES_ATTRIBUTES = {"import": "rate_import", "export": "rate_export", "import_base": "rate_import_base", "export_base": "rate_export_base"}
 # The PV forecast per minute from now to the end of the plan, exactly, as runs of [kWh per minute, minutes]
 PV_EXACT_RE = re.compile(r"Replay input: PV forecast changed, per-minute kWh runs from (\d\d):(\d\d) p50 (\[.*?\]\]) p10 (\[.*?\]\]) p90 (\[.*?\]\])$")
+# The car state the plan reads, logged only when it changes, as a dict that reads back with ast.literal_eval
+CARS_INPUT_RE = re.compile(r"Replay input: cars changed (\{.*\})$")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 # Logged for every recompute, whatever triggered it (a sensor change too), despite its wording
@@ -196,6 +199,7 @@ def parse_log(path):
                 (PV_EXACT_RE, "pv_exact"),
                 (STATE_INPUT_RE, "state"),
                 (RATES_INPUT_RE, "rates"),
+                (CARS_INPUT_RE, "cars"),
                 (FILTERED_RE, "filtered"),
                 (FORCE_RE, "force"),
             ):
@@ -208,17 +212,21 @@ def parse_log(path):
                         run[store] = parse_state(found.group(1))
                     elif store == "rates":
                         run[store] = parse_rates(found.groups())
+                    elif store == "cars":
+                        run[store] = ast.literal_eval(found.group(1))
                     else:
                         run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "load_exact", "pv_input", "pv_exact") else found.group(1)
     kept = []
-    rates = None
+    pending = {}
     for run in runs:
-        # Rates are logged only when they change, so a change logged by a dropped run still holds for the runs after it
-        rates = run.get("rates") or rates
+        # Rates and cars are logged only when they change, so a change logged by a dropped run still holds for the runs after it
+        for store in ("rates", "cars"):
+            pending[store] = run.get(store) or pending.get(store)
         if run.get("soc"):
-            if rates and not run.get("rates"):
-                run["rates"] = rates
-            rates = None
+            for store in ("rates", "cars"):
+                if pending.get(store) and not run.get(store):
+                    run[store] = pending[store]
+            pending = {}
             kept.append(run)
     return kept
 
@@ -441,6 +449,8 @@ def apply_run(my_predbat, prev, run):
         my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now = (float(value) for value in now_today)
     if run.get("rates"):
         apply_logged_rates(my_predbat, run["rates"])
+    for name, value in (run.get("cars") or {}).items():
+        setattr(my_predbat, name, value)
     if run.get("pv_exact"):
         apply_logged_pv_exact(my_predbat, run["pv_exact"])
     elif run.get("pv_input"):
