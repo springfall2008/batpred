@@ -570,21 +570,37 @@ def test_octopus_rule_waits_for_kraken():
 
 
 def test_octopus_rule_discovery_wait_is_bounded():
-    """A Kraken component whose first run never succeeds (a failed login, say) does not leave the charger alone for good."""
-    component = _octopus_component(None, wired=False)
+    """A Kraken component whose first run never succeeds (a failed login, say) is not waited on for good:
+    once the wait is over Predbat cannot tell, warns, and hands back a charger it holds - never driving it,
+    as Kraken may be the one driving it."""
+    component = _octopus_component(wired=False)
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+    # Kraken restarts: the charger Predbat stopped is left as it is, and still held
     component.base.components = FakeComponents(None, FakeKraken(started=False))
     run_async(component.charger_control_tick(_now()))
-    assert component.commands == [], component.commands
+    assert component.commands == [("a", "off", 0)], "Nothing sent while discovery is under way: {}".format(component.commands)
+    assert component.charger_control_state == {"a": False}, component.charger_control_state
     assert any("waiting for the Octopus or Kraken component" in line for line in component.logs), component.logs
+    assert not any(line.startswith("Warn") for line in component.logs), component.logs
+
+    # It never comes back
     component.charger_control_discovery_since = datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)
-    assert component.charger_control_octopus_drives_charger(0) is False
+    assert component.charger_control_octopus_drives_charger(0) is None, "Still cannot tell, so Predbat does not take it over"
     run_async(component.charger_control_tick(_now()))
-    assert component.commands == [("a", "off", 0)], "Predbat drives the charger once the wait is over: {}".format(component.commands)
+    assert component.commands == [("a", "off", 0), ("a", "release", False)], "The stop is undone rather than left: {}".format(component.commands)
+    assert component.charger_control_state == {}
+    assert sum(line.startswith("Warn") and "has not found its devices" in line for line in component.logs) == 1, component.logs
+    run_async(component.charger_control_tick(_now()))
+    assert len(component.commands) == 2 and sum(line.startswith("Warn") for line in component.logs) == 1, "Left alone, and warned once: {}".format(component.logs)
 
     # Discovery that finishes resets the wait, so a later restart of the component waits afresh
     component.base.components = FakeComponents(None, FakeKraken(started=True))
     component.charger_control_octopus_discovering()
     assert component.charger_control_discovery_since is None
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0), "Predbat drives it again once discovery has wired nothing for it: {}".format(component.commands)
 
 
 def test_octopus_rule_cannot_tell_releases_a_held_charger():
