@@ -626,6 +626,7 @@ startswith
 startt
 stdlib
 stepline
+stevekirtley
 Storion
 Stromligning
 strptime
