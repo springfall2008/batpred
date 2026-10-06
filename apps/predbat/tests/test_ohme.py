@@ -2463,7 +2463,7 @@ def _test_ohme_follows_car_switch(my_predbat=None):
     api.args["octopus_intelligent_charger_follows_car"] = True
     _ohme_run_poll(api, seconds=120)
     assert api.charger_control_active is True, f"Expected control on to follow the car, got {api.log_messages}"
-    assert any("octopus_intelligent_charger_follows_car turned on" in msg for msg in api.log_messages), api.log_messages
+    assert any("Predbat now drives the charger" in msg for msg in api.log_messages), api.log_messages
     assert not any("Octopus Intelligent is" in msg for msg in api.log_messages), f"Expected no tariff change logged, got {api.log_messages}"
     assert api.slot_mode is None, f"Expected the car slots left to the Octopus component, got {api.slot_mode}"
 
@@ -2485,6 +2485,16 @@ def _test_ohme_follows_car_switch(my_predbat=None):
     _ohme_run_poll(api, seconds=240)
     assert api.charger_control_active is False and not api.charger_control_state, f"Expected control off and the charger released, got {api.charger_control_state}"
     assert "resume" in released, f"Expected the charger handed back, got {released}"
+
+    # Octopus Intelligent charging off in Predbat: Predbat plans the car itself, so it drives the charger
+    api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
+    api.ohme_automatic = True
+    api.ohme_control = True
+    _ohme_run_poll(api, first=True)
+    assert api.charger_control_active is False, "Expected control off while Octopus drives the car"
+    api.args["octopus_intelligent_charging"] = False
+    _ohme_run_poll(api, seconds=120)
+    assert api.charger_control_active is True, f"Expected control on with Intelligent charging off, got {api.log_messages}"
 
     # Away from Octopus Intelligent the switch changes nothing, and says nothing about Octopus
     api = MockOhmeAPI()
