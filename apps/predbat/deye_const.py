@@ -54,6 +54,7 @@ DEYE_TTL_LIVE = 1  # device/latest — telemetry and energy counters
 # battery silently diverges from the plan. A redundant write is cheap; a skipped one is
 # not. Bounded so quick restarts keep the benefit and any longer outage forces a rewrite.
 DEYE_RESTORE_MAX_CONTROL = 15
+DEYE_RESTORE_MAX_CONTROL_ACTIVE = 8 * 60
 
 # Cache file names under DEYE_STORAGE_MODULE. One file per tier so storage.age() gives each
 # an independent clock; a single blob would need hand-rolled per-section timestamps, and
@@ -61,7 +62,8 @@ DEYE_RESTORE_MAX_CONTROL = 15
 DEYE_CACHE_STATIC = "static"  # station_ids, device_list
 DEYE_CACHE_CONFIG = "config"  # device_battery_config
 DEYE_CACHE_RATINGS = "ratings"  # device_capacity, device_pack_voltage, device_rated_power
-DEYE_CACHE_CONTROL = "control"  # applied_payload, pending_orders, order_poll_count
+DEYE_CACHE_CONTROL = "control"  # control_active ownership cache for reconciliation
+DEYE_CACHE_APPLIED_PAYLOAD = "applied_payload"  # last-applied payload cache for change detection
 DEYE_CACHE_TOU = "tou"  # device_tou_config, the programme the inverter already holds
 
 # Telemetry and the energy counters are deliberately NOT cached. The live tier polls every

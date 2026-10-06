@@ -16,6 +16,7 @@ class CapReader(Octopus):
         self.rate_max_base = 10.0
         self.rate_min = 5.0
         self.io_adjusted = {}
+        self.octopus_surplus = set()
         self.cancelled = False
         self.car_charging_slots = [{"start": 600, "end": 660}]
 
@@ -51,7 +52,7 @@ class CapReader(Octopus):
 def run_io_cap_history_tests(my_predbat=None):
     """Run reservation tests without mutating a shared Predbat fixture."""
     failed = 0
-    for check in (test_reserved_cap_survives_withdrawal, test_confirmed_tail_survives_cancellation, test_unique_reservations_and_allocations, test_original_bucket_and_car_isolation):
+    for check in (test_reserved_cap_survives_withdrawal, test_confirmed_tail_survives_cancellation, test_unique_reservations_and_allocations, test_original_bucket_and_car_isolation, test_exact_rate_and_surplus_compatibility):
         try:
             check()
             print("PASS:", check.__name__)
@@ -107,6 +108,27 @@ def test_unique_reservations_and_allocations():
     reader.rate_add_io_slots(0, rates, [{"start": 630, "end": 690}], history_allocations=allocations)
     assert rates[630] == 5.0 and rates[660] == 10.0
     assert allocations == {630: {"day_offset": -1, "rate": 5.0}}
+
+
+def test_exact_rate_and_surplus_compatibility():
+    """Reservations keep the exact price winner and don't trust surplus forecasts."""
+    reader = CapReader(cap=2)
+    reader.rate_min_base = 5.23
+    rates = dict.fromkeys(range(600, 690), 5.2314)
+    allocations = {}
+    reader.rate_add_io_slots(0, rates, [{"start": 600, "end": 630}], history_allocations=allocations)
+    assert rates[600] == allocations[600]["rate"] == 5.2314
+    assert not reader.io_adjusted
+    reader.rate_add_io_slots(0, rates, [], history_reservations=[dict(allocations[600], slot_start=600)])
+    assert all(rates[minute] == 5.2314 for minute in range(600, 630))
+    reader = CapReader(cap=2)
+    reader.octopus_surplus = set(range(600, 690))
+    rates = dict.fromkeys(range(600, 690), 10.0)
+    allocations = {}
+    reader.rate_add_io_slots(0, rates, [{"start": 600, "end": 690}], history_reservations=[{"slot_start": 600, "day_offset": -1, "rate": 5.0}], history_allocations=allocations)
+    assert all(rates[minute] == 5.0 for minute in range(600, 630))
+    assert all(rates[minute] == 10.0 for minute in range(630, 690))
+    assert set(allocations) == {600}
 
 
 def test_original_bucket_and_car_isolation():

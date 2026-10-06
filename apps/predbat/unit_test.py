@@ -235,6 +235,7 @@ from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
+from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
 from tests.test_iog_early_slot_flat_battery import run_iog_early_slot_flat_battery_tests
 from tests.test_multi_car_load import run_multi_car_load_tests
@@ -276,6 +277,7 @@ from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
 from tests.test_myenergi import test_myenergi
+from tests.test_wallbox import test_wallbox
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -576,6 +578,7 @@ def main():
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
+        ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
         ("iog_early_slot_flat_battery", run_iog_early_slot_flat_battery_tests, "IOG bonus dispatch before the night window with a flat battery", False),
         ("multi_car_load", run_multi_car_load_tests, "Cars charging at once each add their own energy to the load", False),
@@ -719,6 +722,7 @@ def main():
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
+        ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),

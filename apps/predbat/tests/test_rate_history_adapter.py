@@ -405,6 +405,51 @@ def test_live_iog_withdrawal():
         assert base.rate_import[640] == 20.0, "Withdrawn confirmed dispatch still consumes its cheap-slot allowance"
 
 
+def test_live_iog_exact_fixed_rate():
+    """Real charging confirmation cannot re-round a fixed off-peak tariff."""
+    from unittest.mock import patch
+
+    base = _live_base()
+    base.num_cars = 1
+    base.now_utc = base.now_utc_real = _time(1, 5)
+    base.minutes_now = 65
+    base.args["octopus_intelligent_slot"] = ["binary_sensor.octopus_iog"]
+    base.args["octopus_slot_max"] = 1
+    base.args["rates_import"] = [{"rate": 20.0}, {"start": "00:00", "end": "05:30", "rate": 5.2314}]
+    base.dynamic_load_car_sensors = {0: "sensor.car_power"}
+    dispatches = [{"start": _time(1, 0).isoformat(), "end": _time(1, 30).isoformat(), "charge_in_kwh": 1.0, "source": "smart-charge", "location": "AT_HOME"}]
+    state = {"state": "3200", "last_changed": _time(1, 3).isoformat()}
+    original_state = base.get_state_wrapper
+
+    def read_state(entity_id=None, raw=False, **kwargs):
+        """Supply actual telemetry for this test's eligible dispatch."""
+        if entity_id == "sensor.car_power":
+            return dict(state) if raw else state["state"]
+        return original_state(entity_id=entity_id, raw=raw, **kwargs)
+
+    def fetch_cars(**kwargs):
+        """Return only currently published slots, never persisted commands."""
+        base.octopus_slots = [list(dispatches)]
+        base.car_charging_slots = [[]]
+
+    base.get_state_wrapper = read_state
+    base.fetch_sensor_data_cars = fetch_cars
+    with patch("fetch.FutureRate") as future:
+        future.return_value.futurerate_analysis.return_value = ({}, {})
+        base.fetch_sensor_data()
+        assert base.rate_import[60] == base.rate_history_iog_allocations[0][60]["rate"] == 5.2314
+        assert record_iog_confirmation(base, 0, _time(1, 30), _time(1, 5))
+        assert base.rate_history.lookup("import", _time(1, 0), _time(1, 30))[0]["rate"] == 5.2314
+        dispatches.clear()
+        state.update(state="0", last_changed=_time(1, 15).isoformat())
+        base.now_utc = base.now_utc_real = _time(1, 15)
+        base.minutes_now = 75
+        base.fetch_sensor_data()
+        assert all(base.rate_import[minute] == base.rate_history_import[minute] == 5.2314 for minute in range(60, 90))
+        assert not any(minute in base.io_adjusted for minute in range(60, 90))
+        assert set(base.rate_history_iog_allocations[0]) == {60}
+
+
 def run_rate_history_adapter_tests(my_predbat=None):
     """Run adapter regression groups through the repository test harness."""
     failed = False
@@ -423,6 +468,7 @@ def run_rate_history_adapter_tests(my_predbat=None):
         test_live_fetch_closing,
         test_live_api_override_bounds,
         test_live_iog_withdrawal,
+        test_live_iog_exact_fixed_rate,
     ):
         try:
             test()
