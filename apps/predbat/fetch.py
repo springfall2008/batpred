@@ -1188,6 +1188,7 @@ class Fetch:
         # Dynamic load: cancel the Octopus Intelligent slots of a car that is in one but not charging -
         # before the rates are built, so a cancelled dispatch never gets its cheap rate
         dynamic_load_car_changed = self.dynamic_load_car_check(save=save)
+        octopus_surplus_changed = False
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -1241,6 +1242,12 @@ class Fetch:
         if import_rates:
             self.rate_scan(import_rates, print=False)
             self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            previous_surplus = self.octopus_surplus
+            self.octopus_surplus = self.octopus_surplus_minutes()
+            # The rates can move without the slots moving (the car's SoC changes how many half hours it needs)
+            if save and self.octopus_surplus_changed(previous_surplus):
+                self.log("Octopus Intelligent: dispatch minutes no car needs changed to {}".format(len(self.octopus_surplus)))
+                octopus_surplus_changed = True
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
@@ -1258,6 +1265,8 @@ class Fetch:
             self.record_status(message="Error: No import rate data provided", had_errors=True)
         # Atomic publish: readers (e.g. async components) never see a half-built or transiently-empty rate_import during rebuild.
         self.rate_import = import_rates
+        # A charger's own schedule is costed at the tariff, which the car slots were built too early to know
+        self.reprice_charger_schedule_slots()
 
         # Replicate and scan export rates
         if export_rates:
@@ -1372,7 +1381,7 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
-        force_replan = dynamic_load_car_changed
+        force_replan = dynamic_load_car_changed or octopus_surplus_changed
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
         # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
         # force a replan every cycle while a slot is active - only genuine slot changes do

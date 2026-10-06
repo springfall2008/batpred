@@ -238,6 +238,8 @@ pred_bat:
   teslemetry_key: !secret teslemetry_key  # Teslemetry token (if using Teslemetry)
   ohme_login: !secret ohme_login  # Ohme account e-mail (if using Ohme direct)
   ohme_password: !secret ohme_password  # Ohme account password (if using Ohme direct)
+  wallbox_username: !secret wallbox_username  # Wallbox account e-mail (if using Wallbox direct)
+  wallbox_password: !secret wallbox_password  # Wallbox account password (if using Wallbox direct)
 ```
 
 If a credential-like value (matching a key name containing `_key`, `password`, `secret` or `token`) is found written directly in `apps.yaml` instead of via `!secret`, Predbat logs a warning and lists the affected item(s) on the [web interface](web-interface.md) apps.yaml page. This is a warning rather than a validation error - the configuration still works, but moving the value into `secrets.yaml` keeps it out of `apps.yaml`, which is more likely to end up shared, backed up or attached to a bug report.
@@ -2119,6 +2121,11 @@ whether you are within an Octopus Energy "smart charge" slot
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account
+- **wallbox_username** - Wallbox EV charger account email address
+- **wallbox_password** - Password for the above Wallbox account
+- **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
+- **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
+- **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
 
 ## myenergi Integration
 

@@ -42,13 +42,13 @@ def run_rate_add_io_slots_test(testname, my_predbat, slots, octopus_slot_low_rat
     return failed
 
 
-def run_rate_add_io_flag_case(testname, my_predbat, slots, octopus_slot_low_rate, octopus_slot_max, flagged, unflagged, night=None, car_cancelled=False, feed_flags=None):
+def run_rate_add_io_flag_case(testname, my_predbat, slots, octopus_slot_low_rate, octopus_slot_max, flagged, unflagged, night=None, car_cancelled=False, feed_flags=None, night_rate=None):
     """
     Run rate_add_io_slots over a 10p day with an optional fixed off-peak window at rate_min_base, and
     check which minutes end up in io_adjusted.
 
-    night is a (start, end) minute range already priced at rate_min_base by the tariff; feed_flags
-    are io_adjusted markers the rate feed set before the overlay ran.
+    night is a (start, end) minute range already priced at rate_min_base by the tariff (or at
+    night_rate when given); feed_flags are io_adjusted markers the rate feed set before the overlay ran.
     """
     print("**** Running Test: rate_add_io_slots io_adjusted {} ****".format(testname))
     failed = False
@@ -60,7 +60,7 @@ def run_rate_add_io_flag_case(testname, my_predbat, slots, octopus_slot_low_rate
         rates[minute] = 10.0
     if night:
         for minute in range(night[0], night[1]):
-            rates[minute] = my_predbat.rate_min_base
+            rates[minute] = my_predbat.rate_min_base if night_rate is None else night_rate
 
     my_predbat.io_adjusted = dict(feed_flags or {})
     my_predbat.dynamic_load_car_effective = {0: car_cancelled}
@@ -74,6 +74,13 @@ def run_rate_add_io_flag_case(testname, my_predbat, slots, octopus_slot_low_rate
         if my_predbat.io_adjusted.get(minute, False):
             print("ERROR: {}: minute {} should not be flagged io_adjusted but is".format(testname, minute))
             failed = True
+    if night_rate is not None:
+        # An off-peak minute the dispatch did not lower keeps its own tariff rate, neither rounded nor raised
+        for minute in range(night[0], night[1]):
+            if rates[minute] != night_rate:
+                print("ERROR: {}: off-peak minute {} should keep its tariff rate {} but is {}".format(testname, minute, night_rate, rates[minute]))
+                failed = True
+                break
     return failed
 
 
@@ -95,6 +102,16 @@ def run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, time_format):
         end = midnight_utc + timedelta(hours=25)
         slots = [{"start": start.strftime(time_format), "end": end.strftime(time_format), "charge_in_kwh": 20.0, "source": "smart-charge", "location": "AT_HOME"}]
         failed |= run_rate_add_io_flag_case("flag_dispatch_only_minutes", my_predbat, slots, True, 12, flagged=range(1290, 1410), unflagged=range(1410, 1500), night=(1410, 1770))
+
+        # The tariff feed is not rounded but rate_min_base is (5.2314p vs 5.23p): the fixed window is
+        # still off-peak by tariff, not lowered by the dispatch, so it stays unmarked (#5392)
+        failed |= run_rate_add_io_flag_case("flag_unrounded_night_unmarked", my_predbat, slots, True, 12, flagged=range(1290, 1410), unflagged=range(1410, 1500), night=(1410, 1770), night_rate=my_predbat.rate_min_base + 0.0014)
+
+        # The same either side of a half-penny boundary, where rounding both sides would still differ
+        failed |= run_rate_add_io_flag_case("flag_half_penny_night_unmarked", my_predbat, slots, True, 12, flagged=range(1290, 1410), unflagged=range(1410, 1500), night=(1410, 1770), night_rate=my_predbat.rate_min_base + 0.0051)
+
+        # A tariff rate just below rate_min_base (its minimum rounded up) is not raised to it
+        failed |= run_rate_add_io_flag_case("flag_rounded_up_night_not_raised", my_predbat, slots, True, 12, flagged=range(1290, 1410), unflagged=range(1410, 1500), night=(1410, 1770), night_rate=my_predbat.rate_min_base - 0.0036)
 
         # Rate feed markers set before the overlay are kept
         failed |= run_rate_add_io_flag_case("flag_keeps_feed_markers", my_predbat, slots, True, 12, flagged=[3000, 3001], unflagged=[], night=(1410, 1770), feed_flags={3000: True, 3001: True})

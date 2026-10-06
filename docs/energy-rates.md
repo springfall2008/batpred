@@ -161,6 +161,14 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
   octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
 ```
 
+The Octopus Integration Power Down event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_down_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
+
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_saving_session_events` to `..._octoplus_power_down_events`. The above pattern matches either name, so existing configurations keep working unchanged.
 The old sensor is retained by the integration until **January 2027**, after which only the Power Down naming will exist. The new sensor ships disabled by default in Home Assistant
 (`entity_registry_enabled_default: False`) - if Predbat's Octopus entity list does not show a Power Down sensor, [enable it in the entity registry first](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them), otherwise Predbat will keep silently using the old sensor with no visible warning.
@@ -211,6 +219,14 @@ all the free events.
 ```yaml
   octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 ```
+
+The Octopus Integration Power Up event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_up_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
 
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_free_electricity_session_events` to `..._octoplus_power_up_events`. The above pattern matches either name, so existing
 configurations keep working unchanged. The old sensor is retained by the integration until **January 2027**, after which only the Power Up naming will exist.
