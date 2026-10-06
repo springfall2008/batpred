@@ -36,7 +36,7 @@ import re
 from datetime import date, timedelta
 
 from const import PREDICT_STEP, EXPORT_MODE_TARGET
-from utils import MinuteArray, pack_export_limit
+from utils import MinuteArray, pack_export_limit, calc_percent_limit
 from prediction import Prediction
 from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows, apply_overrides
 
@@ -72,6 +72,8 @@ INVERTER_INPUT_RE = re.compile(r"Replay input: inverter changed (\{.*\})$")
 CARS_INPUT_RE = re.compile(r"Replay input: cars changed (\{.*\})$")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
+# Logged just before it, as percent limits: the charge windows in force
+IN_FORCE_CHARGE_RE = re.compile(r"Best charge window (\[.*\])")
 # Logged for every recompute, whatever triggered it (a sensor change too), despite its wording
 RECOMPUTE_RE = re.compile(r"Will recompute the plan as it is invalid")
 # Logged by calculate_plan only when the plan really is invalid, so the new plan is adopted without comparing it to the old
@@ -167,7 +169,7 @@ def parse_log(path):
         for line in handle:
             marker = RUN_RE.search(line)
             if marker:
-                run = {"time": marker.group(1), "minutes_now": int(marker.group(2)), "filtered": None, "force": None, "in_force": None}
+                run = {"time": marker.group(1), "minutes_now": int(marker.group(2)), "filtered": None, "force": None, "in_force": None, "in_force_charge": None}
                 runs.append(run)
                 continue
             if run is None or run.get("comparing"):
@@ -186,6 +188,11 @@ def parse_log(path):
                 continue
             # The first "Best export window" of a run is the plan in force when it starts - the one the previous
             # run adopted. Later ones in the same run are the re-plan's working lists.
+            if run["in_force"] is None and run["in_force_charge"] is None and not run.get("recompute"):
+                found = IN_FORCE_CHARGE_RE.search(line)
+                if found:
+                    run["in_force_charge"] = found.group(1)
+                    continue
             if run["in_force"] is None and not run.get("recompute"):
                 found = IN_FORCE_RE.search(line)
                 if found:
@@ -637,6 +644,11 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             "replanned": run["filtered"] is not None,
             "logged": None,
             "replayed": None,
+            "logged_charge": None,
+            "replayed_charge": None,
+            # The plan's car slots and the reserve, for the plan timeline (minutes from the yaml day's midnight)
+            "car_slots": car_slots_now(my_predbat, run["minute"] - run["minutes_now"]),
+            "reserve_percent": my_predbat.reserve_percent,
             "logged_candidate": parse_windows(run["filtered"], plan_day) if run["filtered"] else None,
             "replayed_candidate": None,
             "after_version_change": change_index is not None and index >= change_index,
@@ -661,6 +673,10 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             if next_run and next_run["in_force"] is not None:
                 row["logged"] = parse_windows(next_run["in_force"], plan_day)
                 row["replayed"] = [window for window in adopted if window[1] > next_run["minute"]]
+                if next_run.get("in_force_charge") is not None:
+                    adopted_charge = parse_windows(my_predbat.window_as_text(my_predbat.charge_window_best, calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)), plan_day)
+                    row["logged_charge"] = parse_windows(next_run["in_force_charge"], plan_day)
+                    row["replayed_charge"] = [window for window in adopted_charge if window[1] > next_run["minute"]]
         rows.append(row)
         prev = run
         if not quiet and row["replanned"]:
@@ -908,50 +924,86 @@ def format_row(row):
     return "{} adopted: logged {:<26} replay {:<26} {}   candidate {}".format(row["time"], first_window(row["logged"]), first_window(row["replayed"]), adopted, candidate)
 
 
-def export_mode_now(windows, minutes_now):
-    """Return 'export', 'freeze' or None for the plan's instruction at minutes_now.
+def car_slots_now(my_predbat, offset):
+    """The first car's planned charging slots as (start, end) minutes from the yaml day's midnight."""
+    slots = (my_predbat.car_charging_slots or [[]])[0] if my_predbat.num_cars else []
+    return [(slot["start"] + offset, slot["end"] + offset) for slot in slots or []]
 
-    A window's percent is its target SoC for a forced export, 99 for Freeze Export and 100 for idle, as
-    window_as_text prints them.
+
+# The web plan's state for a slot, and its colour there (output.py), plus the car hold
+PLAN_STATES = {
+    "Chrg": "#3AEE85",
+    "HoldChrg": "#34DBEB",
+    "FrzChrg": "#C8C8C8",
+    "Exp": "#FFD000",
+    "HoldExp": "#FFF09A",
+    "FrzExp": "#8C8C8C",
+    "Car": "#B48CE6",
+}
+
+
+def plan_state_now(charge_windows, export_windows, minutes_now, soc_percent, reserve_percent, car_slots):
+    """The plan's state at minutes_now, by the web plan's rules: an export instruction wins, then a charge
+    instruction, then a car slot (the battery is held while the car charges); None for plain demand.
+
+    Window percents are as window_as_text logs them: an export window's target (99 = Freeze Export, 100 =
+    idle), a charge window's limit (0 = off, the reserve = Freeze Charge, at or below the SoC = hold).
     """
-    for start, end, _rate, percent in windows or []:
+    for start, end, _rate, percent in export_windows or []:
+        if start <= minutes_now < end and percent < 100:
+            if percent >= 99:
+                return "FrzExp"
+            return "HoldExp" if percent > soc_percent else "Exp"
+    for start, end, _rate, percent in charge_windows or []:
+        if start <= minutes_now < end and percent > 0:
+            if percent == reserve_percent:
+                return "FrzChrg"
+            return "HoldChrg" if percent <= soc_percent else "Chrg"
+    for start, end in car_slots or []:
         if start <= minutes_now < end:
-            if percent >= 100:
-                return None
-            return "freeze" if percent >= 99 else "export"
+            return "Car"
     return None
 
 
 def chart_replay(rows, filename, title="Replay"):
-    """Chart a replay as a PNG: actual SoC against each plan's export target, and what each plan was doing.
+    """Chart a replay as a PNG: actual SoC against each plan's export target, and a timeline of what each plan said.
 
     The live plan (from the log) and the replayed plan are each carried forward between re-plans, so every run
     shows the plan in force at that moment. The target is the SoC the first forced-export window aims for,
-    on the same % scale as the SoC itself. Uses the Agg backend so it never opens a window.
+    on the same % scale as the SoC itself. The timeline gives each plan's state at each run in the web plan's
+    terms (charge, hold, freeze, export, car), and the car's planned charging. Uses the Agg backend so it never
+    opens a window.
     """
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
     colours = {"Live (log)": "#2a78d6", "Replay": "#eb6834"}
     ink, muted, grid = "#0b0b0b", "#52514e", "#e6e5e1"
     times = [row["minutes_now"] / 60.0 for row in rows]
+    # Each run's state lasts until the next run
+    widths = [later - now for now, later in zip(times, times[1:])] + [(times[1] - times[0]) if len(times) > 1 else 5 / 60.0]
 
     # Carry each plan forward from its last re-plan
-    carried = {"Live (log)": None, "Replay": None}
-    modes = {name: [] for name in carried}
-    targets = {name: [] for name in carried}
+    carried = {name: (None, None) for name in colours}
+    states = {name: [] for name in colours}
+    targets = {name: [] for name in colours}
     for row in rows:
         if row["replanned"] and row["logged"] is not None:
-            carried["Live (log)"] = row["logged"]
-            carried["Replay"] = row["replayed"]
-        for name in carried:
-            modes[name].append(export_mode_now(carried[name], row["minutes_now"]))
-            forced = [window for window in carried[name] or [] if window[3] < 99]
+            carried["Live (log)"] = (row["logged"], row.get("logged_charge"))
+            carried["Replay"] = (row["replayed"], row.get("replayed_charge"))
+        for name in colours:
+            export_windows, charge_windows = carried[name]
+            soc = row["soc_percent"]
+            if name == "Replay" and row.get("soc_sim_percent") is not None:
+                soc = row["soc_sim_percent"]
+            states[name].append(plan_state_now(charge_windows, export_windows, row["minutes_now"], soc, row.get("reserve_percent"), row.get("car_slots")))
+            forced = [window for window in export_windows or [] if window[3] < 99]
             targets[name].append(forced[0][3] if forced else None)
 
-    fig, (ax_soc, ax_mode) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True, gridspec_kw={"height_ratios": [3, 1.1]})
+    fig, (ax_soc, ax_mode) = plt.subplots(2, 1, figsize=(11, 7), sharex=True, gridspec_kw={"height_ratios": [3, 1.3]})
     fig.suptitle(title, color=ink, fontsize=13, x=0.06, ha="left")
 
     ax_soc.plot(times, [row["soc_percent"] for row in rows], color=ink, linewidth=2, label="Actual SoC (log)")
@@ -963,19 +1015,21 @@ def chart_replay(rows, filename, title="Replay"):
     ax_soc.set_ylim(0, 105)
     ax_soc.legend(frameon=False, loc="lower left")
 
-    # One lane per plan: solid for forced export, hatched for Freeze Export
-    step = (times[1] - times[0]) if len(times) > 1 else 5 / 60.0
-    for lane, name in enumerate(colours):
-        for hour, mode in zip(times, modes[name]):
-            if mode:
-                ax_mode.add_patch(plt.Rectangle((hour, lane + 0.15), step, 0.7, facecolor=colours[name] if mode == "export" else "none", edgecolor=colours[name], hatch=None if mode == "export" else "////", linewidth=0))
-    ax_mode.set_yticks([0.5, 1.5], list(colours))
-    ax_mode.set_ylim(0, 2)
-    ax_mode.set_ylabel("Plan says\nexport now", color=muted)
+    # One lane per plan, plus the car's planned charging (the same logged input for both)
+    lanes = [("Car slot", ["Car" if any(start <= row["minutes_now"] < end for start, end in row.get("car_slots") or []) else None for row in rows])]
+    lanes += [(name, states[name]) for name in reversed(list(colours))]
+    for lane, (_name, lane_states) in enumerate(lanes):
+        for hour, width, state in zip(times, widths, lane_states):
+            if state:
+                ax_mode.add_patch(plt.Rectangle((hour, lane + 0.15), width, 0.7, facecolor=PLAN_STATES[state], edgecolor="none"))
+    ax_mode.set_yticks([lane + 0.5 for lane in range(len(lanes))], [name for name, _states in lanes])
+    ax_mode.set_ylim(0, len(lanes))
+    ax_mode.set_ylabel("Plan says", color=muted)
     ax_mode.set_xlabel("Time of day (hour)", color=muted)
     # Hours count on from the yaml day's midnight, so a replay that crosses midnight wraps back to 0
     ax_mode.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda hour, _position: "{:g}".format(hour % 24)))
-    ax_mode.text(1.0, 1.02, "solid = forced export, hatched = freeze", transform=ax_mode.transAxes, ha="right", va="bottom", color=muted, fontsize=8)
+    used = [state for state in PLAN_STATES if any(state in lane_states for _name, lane_states in lanes)]
+    ax_mode.legend(handles=[Patch(facecolor=PLAN_STATES[state], label=state) for state in used] + [Patch(facecolor="white", edgecolor=grid, label="Demand")], frameon=False, ncol=len(used) + 1, loc="upper center", bbox_to_anchor=(0.5, -0.32), fontsize=8)
 
     changes = [hour for row, hour in zip(rows, times) if row.get("after_version_change")]
     if changes:
