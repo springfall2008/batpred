@@ -685,6 +685,39 @@ def test_cars_input():
     return 0
 
 
+def test_inverter_input():
+    """A logged inverter state carries past a dropped run and replaces the reconstructed export window; the exact
+    divergence and the rates in force are applied too."""
+    lines = """2026-10-05 23:31:30.000000: --------------- PredBat - update at 2026-10-05 23:30:00+01:00 with clock skew 0 minutes, minutes now 1410
+2026-10-05 23:31:31.000000: Replay input: inverter changed {'charge_window': [{'start': 1410, 'end': 1440, 'average': 0}], 'charge_limit': [18.08], 'isCharging': True, 'reserve': 0.723}
+2026-10-05 23:32:00.000000: --------------- PredBat - update at 2026-10-05 23:30:00+01:00 with clock skew 0 minutes, minutes now 1410
+2026-10-05 23:32:01.000000: Inverter 0 SoC: 4.67kWh 26%, current charge rate 5500W, current discharge rate 5500W, current battery power 0W
+2026-10-05 23:32:01.100000: Replay input: state soc_kw 4.665 soc_max 18.08 inday 0.95 cost_today -744.68 load_today 7.65 import_today 18.2 export_today 22.98 pv_today None charge_rate_now 0.0625 discharge_rate_now 0.09166666666666666
+2026-10-05 23:32:01.200000: Load divergence over 2.0 hours mean 300W, min 100W, max 900W, std dev 95W, divergence 31.6%
+2026-10-05 23:32:01.300000: Replay input: load divergence 0.31
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(lines)
+        runs = parse_log(path)
+    if len(runs) != 1 or runs[0].get("inverter", {}).get("charge_window") != [{"start": 1410, "end": 1440, "average": 0}]:
+        print("ERROR: the dropped run's inverter state should carry to the next run: {}".format(runs))
+        return 1
+    bat = SimpleNamespace(minutes_now=1400, now_utc=datetime(2026, 10, 5, 22, 20, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, charge_window=[], isCharging=False, replay_inverter_logged=True)
+    apply_run(bat, {"today": None, "force": None, "time": "2026-10-05 23:20:00+01:00"}, runs[0])
+    if bat.charge_window != [{"start": 1410, "end": 1440, "average": 0}] or bat.isCharging is not True or bat.reserve != 0.723:
+        print("ERROR: inverter state not applied: {}".format(vars(bat)))
+        return 1
+    if bat.charge_rate_now != 0.0625 or bat.discharge_rate_now != 0.09166666666666666:
+        print("ERROR: the logged rates in force should be applied: {}".format(vars(bat)))
+        return 1
+    if bat.replay_load_divergence != 0.31:
+        print("ERROR: the exact divergence should win over the rounded percentage: {}".format(bat.replay_load_divergence))
+        return 1
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -715,4 +748,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_load_exact()
     failed += test_pv_exact()
     failed += test_cars_input()
+    failed += test_inverter_input()
     return failed
