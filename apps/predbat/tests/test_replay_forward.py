@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, export_mode_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -156,18 +156,31 @@ def test_summarise():
     return 0
 
 
-def test_export_mode_now():
-    """The plan's instruction at a minute: forced export below 99%, freeze at 99%, nothing at 100% or outside a window."""
-    windows = [(540, 600, 18.5, 40.0), (600, 660, 18.5, 99.0), (660, 720, 18.5, 100.0), (1410, 1440, 18.5, 10.0), (1800, 1860, 18.5, 30.0)]
-    # The last window is tomorrow at 06:00, so it must not count at 06:00 today
-    cases = [(9 * 60, "export"), (10 * 60 + 30, "freeze"), (11 * 60 + 30, None), (8 * 60, None), (23 * 60 + 45, "export"), (6 * 60, None)]
+def test_plan_state_now():
+    """The plan's state at a minute, by the web plan's rules: export instructions first, then charge, then a car slot."""
+    exports = [(540, 600, 18.5, 40.0), (600, 660, 18.5, 99.0), (660, 720, 18.5, 100.0), (720, 780, 18.5, 90.0), (1800, 1860, 18.5, 30.0)]
+    charges = [(0, 60, 7.6, 100.0), (60, 120, 7.6, 4.0), (120, 180, 7.6, 50.0), (180, 240, 7.6, 0.0), (660, 690, 7.6, 100.0)]
+    car = [(240, 300)]
+    # SoC 60%, reserve 4%; the last export window is tomorrow at 06:00, so it must not count at 06:00 today
+    cases = [
+        (30, "Chrg"),
+        (90, "FrzChrg"),
+        (150, "HoldChrg"),
+        (200, None),
+        (250, "Car"),
+        (9 * 60, "Exp"),
+        (10 * 60 + 30, "FrzExp"),
+        (11 * 60 + 10, "Chrg"),
+        (12 * 60 + 30, "HoldExp"),
+        (6 * 60, None),
+    ]
     for minute, expected in cases:
-        got = export_mode_now(windows, minute)
+        got = plan_state_now(charges, exports, minute, 60, 4, car)
         if got != expected:
-            print("ERROR: export_mode_now at minute {} gave {} expected {}".format(minute, got, expected))
+            print("ERROR: plan_state_now at minute {} gave {} expected {}".format(minute, got, expected))
             return 1
-    if export_mode_now(None, 600) is not None:
-        print("ERROR: no plan should mean no export")
+    if plan_state_now(None, None, 600, 60, 4, None) is not None:
+        print("ERROR: no plan should mean plain demand")
         return 1
     return 0
 
@@ -175,8 +188,8 @@ def test_export_mode_now():
 def test_chart_replay():
     """A replay chart renders to a PNG without needing a display."""
     rows = [
-        {"minutes_now": 540, "soc_percent": 80, "replanned": True, "logged": [(540, 600, 18.5, 40.0)], "replayed": [(570, 600, 18.5, 50.0)]},
-        {"minutes_now": 545, "soc_percent": 78, "replanned": False, "logged": None, "replayed": None},
+        {"minutes_now": 540, "soc_percent": 80, "replanned": True, "logged": [(540, 600, 18.5, 40.0)], "replayed": [(570, 600, 18.5, 50.0)], "logged_charge": [], "replayed_charge": [(540, 570, 7.6, 100.0)], "reserve_percent": 4, "car_slots": [(540, 560)]},
+        {"minutes_now": 545, "soc_percent": 78, "replanned": False, "logged": None, "replayed": None, "car_slots": [(540, 560)]},
         {"minutes_now": 550, "soc_percent": 75, "replanned": True, "logged": [(600, 660, 18.5, 99.0)], "replayed": [], "after_version_change": True},
     ]
     with tempfile.TemporaryDirectory() as folder:
@@ -747,7 +760,7 @@ def run_replay_forward_tests(my_predbat):
     failed += test_shift_counter()
     failed += test_set_export_window()
     failed += test_summarise()
-    failed += test_export_mode_now()
+    failed += test_plan_state_now()
     failed += test_chart_replay()
     failed += test_simulate_soc(my_predbat)
     failed += test_logged_load_divergence(my_predbat)

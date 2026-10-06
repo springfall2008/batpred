@@ -429,6 +429,7 @@ nanstd
 nattribute
 nbytes
 ncalls
+ncol
 nearr
 nemotron
 NESO
