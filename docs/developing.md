@@ -47,7 +47,7 @@ cd coverage
 
 For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
 
-Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far and the day counters) at full precision, and the rates whenever they change. Without them, the replay drifts from the live plans as the day goes on.
+Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far, the day counters, the charge and discharge rates in force and the battery temperature) at full precision, the exact load divergence, and, whenever they change, the rates, the car state and the inverter's programmed state. Without them, the replay drifts from the live plans as the day goes on.
 
 There are two modes:
 
@@ -56,7 +56,7 @@ There are two modes:
 
 `--override name=value` (repeatable) changes a setting after the yaml is restored, for what-if replays - for example `--override pv_metric90_weight=0.25`. It works for a plain `--debug_file` replay as well.
 
-`--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and shows when each plan says to export.
+`--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and a timeline of what each plan says at every run in the web plan's terms (Chrg, HoldChrg, FrzChrg, Exp, HoldExp, FrzExp, car), with a lane for the car's planned charging.
 
 In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
 
