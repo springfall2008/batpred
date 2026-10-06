@@ -187,6 +187,66 @@ def _test_yesterday(pb):
         pb.__dict__.update(original)
 
 
+def _test_partial_yesterday_today_curve(pb):
+    """Missing yesterday evidence cannot hide today's cheap-slot cost deltas."""
+    original = pb.__dict__.copy()
+    try:
+        now = _setup_base(pb, minutes_now=21 * 60)
+        _apply_mocks(pb, now, cost_value=999)
+        horizon = 1440 + pb.minutes_now
+        pb.import_today = {index: (horizon - index) * 0.1 for index in range(horizon + 1)}
+        pb.export_today = {index: 0.0 for index in range(horizon + 1)}
+        pb.load_minutes = dict(pb.import_today)
+        pb.rate_history_accounting_enabled = True
+        pb.rate_history_calendar_day_minutes = 1440
+        pb.rate_history_calendar_origin_valid = True
+        pb.rate_history_import = {minute: 5.62 for minute in range(-1440, pb.minutes_now)}
+        pb.rate_history_export = {minute: 12.0 for minute in pb.rate_history_import}
+        pb.rate_history_no_io = {minute: 28.39 for minute in pb.rate_history_import}
+        pb.rate_history_coverage_import = set(range(0, pb.minutes_now))
+        pb.rate_history_coverage_export = set(range(0, pb.minutes_now))
+        pb.rate_history_standing_charge = {0: 50}
+        pb.num_cars = 1
+        pb.car_charging_slots = [[]]
+        pb.car_charging_soc = [0]
+        pb.car_charging_limit = [0]
+        pb.car_charging_energy = {}
+        pb.rate_history_car_premium_present = {0: False}
+        curves = []
+
+        def capture_plan(*args, **kwargs):
+            """Capture the actual History endpoint curve, not a mocked cost result."""
+            curves.append(dict(pb.predict_metric_best))
+            return "", "{}"
+
+        pb.publish_html_plan = capture_plan
+        pb.calculate_yesterday()
+        curve = curves[-1]
+        assert pb.savings_today_actual == 999, "Incomplete yesterday keeps its existing fallback"
+        assert curve[1440] == 999
+        assert abs(curve[horizon] - (999 + 50 + pb.minutes_now * 0.1 * 5.62)) < 1e-7
+        for minute in (20 * 60, 20 * 60 + 30):
+            assert abs(curve[1440 + minute + 30] - curve[1440 + minute] - 3 * 5.62) < 1e-7
+        assert abs(curve[1441] - curve[1440] - (50 + 0.1 * 5.62)) < 1e-7
+        # Today's fallback remains conservative when any of its own evidence is missing.
+        pb.rate_history_coverage_import.remove(1201)
+        pb.savings_last_updated = None
+        pb.calculate_yesterday()
+        assert abs(curves[-1][2670] - curves[-1][2640]) < 1e-7
+        pb.rate_history_coverage_import.add(1201)
+        pb.rate_history_car_premium_present[0] = True
+        pb.savings_last_updated = None
+        pb.calculate_yesterday()
+        assert abs(curves[-1][2670] - curves[-1][2640]) < 1e-7
+        pb.rate_history_car_premium_present = {}
+        pb.savings_last_updated = None
+        pb.calculate_yesterday()
+        assert abs(curves[-1][2670] - curves[-1][2640]) < 1e-7
+    finally:
+        pb.__dict__.clear()
+        pb.__dict__.update(original)
+
+
 def _test_calendar_guard(pb):
     """Full archives on actual DST days cannot justify partial 1440-minute costs.
 
@@ -234,7 +294,13 @@ def _test_calendar_guard(pb):
 def run_rate_history_accounting_tests(my_predbat):
     """Run the accounting regressions using the project's Predbat fixture."""
     failed = False
-    for name, test in (("endpoints", _test_endpoints), ("today", _test_today), ("yesterday", lambda: _test_yesterday(my_predbat)), ("calendar_guard", lambda: _test_calendar_guard(my_predbat))):
+    for name, test in (
+        ("endpoints", _test_endpoints),
+        ("today", _test_today),
+        ("yesterday", lambda: _test_yesterday(my_predbat)),
+        ("partial_yesterday_today", lambda: _test_partial_yesterday_today_curve(my_predbat)),
+        ("calendar_guard", lambda: _test_calendar_guard(my_predbat)),
+    ):
         try:
             test()
             print("rate_history_accounting: {} passed".format(name))
