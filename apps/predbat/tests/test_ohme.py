@@ -286,6 +286,7 @@ def test_ohme(my_predbat=None):
         ("iog_device_decides", _test_ohme_iog_device_decides, "the Intelligent device decides whose slots are used"),
         ("run_iog_device_car", _test_ohme_run_iog_device_is_car, "OhmeAPI run leaves the slots to Octopus when the car is the device"),
         ("run_iog_device_changes", _test_ohme_run_iog_device_changes, "OhmeAPI run follows a change of Intelligent device"),
+        ("follows_car_switch", _test_ohme_follows_car_switch, "octopus_intelligent_charger_follows_car lets ohme_control follow the car"),
         ("charger_slots_rules", _test_ohme_charger_slots_wanted_rules, "when Ohme's own schedule is the car plan"),
         ("charger_slots_wiring", _test_ohme_charger_slots_wiring, "charger schedule wiring leaves the car slots unclaimed"),
         ("charger_slots_published", _test_ohme_charger_slots_published_source, "charger schedule slots carry their source"),
@@ -1643,6 +1644,7 @@ class MockOhmeAPI(OhmeAPI):
         self.charger_control_setup("Ohme API", "charger", switch_prefix="ohme")
         self.octopus_intelligent = None
         self.octopus_other_device = False
+        self.follows_car = False
         self.slot_mode = None
         self.slot_mode_applied = None
         self.charger_slots = False
@@ -2444,6 +2446,52 @@ def _test_ohme_run_iog_device_changes(my_predbat=None):
     assert api.slot_mode == "charger_schedule" and api.base.car_slot_owner is None, f"Expected charger schedule mode unclaimed, got {api.slot_mode} owner {api.base.car_slot_owner}"
 
     print("PASS: a change of Intelligent device was followed")
+    return 0
+
+
+def _test_ohme_follows_car_switch(my_predbat=None):
+    """Test octopus_intelligent_charger_follows_car lets ohme_control run while Octopus drives the car, and back"""
+    print("**** Running test_ohme_follows_car_switch ****")
+
+    api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
+    api.ohme_automatic = True
+    api.ohme_control = True
+    _ohme_run_poll(api, first=True)
+    assert api.octopus_other_device is True and api.charger_control_active is False, "Expected control off while Octopus drives the car"
+
+    # Switched on at runtime: picked up on the next poll, without any change of device
+    api.args["octopus_intelligent_charger_follows_car"] = True
+    _ohme_run_poll(api, seconds=120)
+    assert api.charger_control_active is True, f"Expected control on to follow the car, got {api.log_messages}"
+    assert api.slot_mode is None, f"Expected the car slots left to the Octopus component, got {api.slot_mode}"
+
+    # And off again: control stands down, and a charger Predbat holds is handed back
+    api.charger_control_state = {api.charger_control_chargers()[0][0]: False}
+    released = []
+
+    async def mock_resume():
+        """Record the resume"""
+        released.append("resume")
+
+    async def mock_max_charge(state=True):
+        """Record the max charge change"""
+        released.append(("max_charge", state))
+
+    api.client.async_resume_charge = mock_resume
+    api.client.async_max_charge = mock_max_charge
+    api.args["octopus_intelligent_charger_follows_car"] = False
+    _ohme_run_poll(api, seconds=240)
+    assert api.charger_control_active is False and not api.charger_control_state, f"Expected control off and the charger released, got {api.charger_control_state}"
+    assert "resume" in released, f"Expected the charger handed back, got {released}"
+
+    # Without ohme_control: true the switch alone does not turn control on
+    api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
+    api.ohme_automatic = True
+    api.args["octopus_intelligent_charger_follows_car"] = True
+    _ohme_run_poll(api, first=True)
+    assert api.charger_control_active is False, "Expected the switch alone not to turn control on"
+
+    print("PASS: the follows-car switch was followed")
     return 0
 
 
