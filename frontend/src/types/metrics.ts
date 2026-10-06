@@ -20,6 +20,7 @@ export type DashboardMetrics = {
   last_update_timestamp: number
   config_valid: number
   config_warnings: number
+  config_errors: Record<string, string>
   plan_valid: number
   plan_age_minutes: number
   battery_soc_percent: number

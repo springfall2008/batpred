@@ -91,6 +91,17 @@ export default function MetricsPanel({ lastStarted }: { lastStarted: string | nu
           <MetricCard label="Errors" value={errors.toFixed(0)} tone={errors ? 'warning' : 'good'} />
           <MetricCard label="Load history" value={`${metrics.data_age_days.toFixed(1)} days`} detail={`${metrics.data_age_required_days.toFixed(0)} days required`} tone={metrics.data_age_days >= metrics.data_age_required_days ? 'good' : 'warning'} />
         </div>
+        {Object.keys(metrics.config_errors ?? {}).length > 0 && (
+          <div className="metrics-config-errors" role="alert">
+            <strong>Configuration errors</strong>
+            <ul>
+              {Object.entries(metrics.config_errors).map(([name, message]) => (
+                <li key={name}><b>{name}</b>: {message}</li>
+              ))}
+            </ul>
+            <a href="./config">Review configuration</a>
+          </div>
+        )}
       </div>
 
       <MetricsCharts metrics={metrics} />

@@ -119,6 +119,22 @@
   margin-top: 0.15rem;
 }
 
+.metrics-config-errors {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+}
+
+.metrics-config-errors > strong { color: var(--color-danger); }
+.metrics-config-errors ul { margin: 0.45rem 0; padding-left: 1.2rem; }
+.metrics-config-errors li + li { margin-top: 0.25rem; }
+.metrics-config-errors b { color: var(--color-text); }
+.metrics-config-errors a { color: var(--color-current); font-weight: 700; }
+
 .metrics-card .is-good {
   color: var(--color-success);
 }

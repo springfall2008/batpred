@@ -768,6 +768,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Config validity
         m.config_valid.set(0 if self.arg_errors else 1)
         m.config_warnings.set(len(self.arg_errors) if self.arg_errors else 0)
+        m.config_errors = dict(self.arg_errors)
 
         # Errors
         if self.had_errors:

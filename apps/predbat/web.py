@@ -6586,7 +6586,7 @@ chart.render();
                     "options": options,
                 }
             )
-        return web.json_response({"items": items})
+        return web.json_response({"items": items, "errors": dict(self.base.arg_errors)})
 
     async def html_components(self, request):
         """

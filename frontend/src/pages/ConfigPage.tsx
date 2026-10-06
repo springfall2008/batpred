@@ -31,6 +31,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState('')
   const [error, setError] = useState('')
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [tariff, setTariff] = useState<TariffAnalysis | null>(null)
   const [tariffError, setTariffError] = useState('')
   const [tariffSelection, setTariffSelection] = useState<Set<string>>(new Set())
@@ -40,8 +41,9 @@ export default function ConfigPage() {
     try {
       const response = await fetch('./api/config', { cache: 'no-store' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const data = await response.json() as { items: ConfigItem[] }
+      const data = await response.json() as { items: ConfigItem[], errors?: Record<string, string> }
       setItems(data.items)
+      setValidationErrors(data.errors ?? {})
       setError('')
 
       try {
@@ -165,6 +167,15 @@ export default function ConfigPage() {
       </section>
 
       {error && <div className="config-error" role="alert">Unable to update configuration: {error}</div>}
+      {Object.keys(validationErrors).length > 0 && (
+        <div className="config-validation-errors" role="alert">
+          <strong>Predbat found {Object.keys(validationErrors).length} {Object.keys(validationErrors).length === 1 ? 'error' : 'errors'} in apps.yaml</strong>
+          <ul>
+            {Object.entries(validationErrors).map(([name, message]) => <li key={name}><b>{name}</b>: {message}</li>)}
+          </ul>
+          <a href="./apps">Open apps.yaml settings</a>
+        </div>
+      )}
       {loading ? <div className="config-empty">Loading configuration…</div> : (
         <div className="config-groups">
           {groupedItems.map(({ group, items: groupItems }) => <section className="config-group" key={group}>
@@ -176,8 +187,8 @@ export default function ConfigPage() {
                 const changed = String(item.value) !== String(item.default)
                 const disabled = saving === item.entity || saving === 'tariff-helper'
                 return (
-                  <tr key={item.entity}>
-                    <td><div className="config-setting-name"><strong>{item.friendly_name}</strong><span className="config-help" tabIndex={0} aria-label={item.description} data-tooltip={item.description}><FontAwesomeIcon icon={faCircleInfo} /></span></div><small>{item.entity}</small></td>
+                  <tr key={item.entity} className={validationErrors[item.name] ? 'has-error' : ''}>
+                    <td><div className="config-setting-name"><strong>{item.friendly_name}</strong><span className="config-help" tabIndex={0} aria-label={item.description} data-tooltip={item.description}><FontAwesomeIcon icon={faCircleInfo} /></span></div><small>{item.entity}</small>{validationErrors[item.name] && <span className="config-item-error">{validationErrors[item.name]}</span>}</td>
                     <td className={changed ? 'is-changed' : ''}>{String(item.value)} {item.unit}</td>
                     <td>{String(item.default)} {item.unit}</td>
                     <td>

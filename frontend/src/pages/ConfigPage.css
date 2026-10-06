@@ -15,7 +15,7 @@
   border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface);
   color: var(--color-text); font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer;
 }
-.config-toolbar, .config-group, .config-error, .config-empty {
+.config-toolbar, .config-group, .config-error, .config-validation-errors, .config-empty {
   border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface);
 }
 .config-toolbar { padding: 0.75rem; }
@@ -138,6 +138,21 @@
 }
 .config-error, .config-empty { padding: 1rem; color: var(--color-text-secondary); font-size: 0.8rem; }
 .config-error { border-color: var(--color-danger); }
+.config-validation-errors {
+  padding: 1rem;
+  border-color: color-mix(in srgb, var(--color-danger) 60%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+.config-validation-errors > strong { color: var(--color-danger); }
+.config-validation-errors ul { margin: 0.55rem 0; padding-left: 1.25rem; }
+.config-validation-errors li + li { margin-top: 0.3rem; }
+.config-validation-errors b { color: var(--color-text); }
+.config-validation-errors a { color: var(--color-current); font-weight: 700; }
+.config-table tr.has-error td { background: color-mix(in srgb, var(--color-danger) 7%, var(--color-surface)); }
+.config-table tr.has-error td:first-child { box-shadow: inset 3px 0 var(--color-danger); }
+.config-item-error { display: block; margin-top: 0.3rem; color: var(--color-danger); font-size: 0.8rem; font-weight: 700; }
 
 @media (max-width: 650px) {
   .config-page-header, .config-toolbar { align-items: flex-start; flex-direction: column; }
