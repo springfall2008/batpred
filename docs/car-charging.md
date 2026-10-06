@@ -689,6 +689,10 @@ minute buckets and floored at zero in each, so a bright half hour is not cancell
 rate would put demand in the forecast that the sun cannot meet, making the battery look like it had to cover the difference and skewing every charge and
 export decision that follows.
 
+    When grid slots cost the same, Predbat charges the car in the ones without sun. A car charging while there is surplus is
+load your inverter feeds from that surplus before it charges the house battery, so a "grid" slot at midday takes the
+battery's solar while the same price at midnight takes nothing.
+
     Surplus goes to the house battery first, and the car is offered solar once the battery is predicted to be full. A kWh in the battery
 displaces your evening peak, while one in a car that has been promised nothing displaces at most a cheap overnight top-up, so the battery is
 the better home for it. Two things put the car first instead, for exactly as much sun as it needs: a level promised by a time

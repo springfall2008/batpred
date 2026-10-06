@@ -6002,6 +6002,23 @@ class Plan:
             total += surplus * overlap / step
         return total
 
+    def car_slot_has_sun(self, start, end, load_step):
+        """
+        Whether forecast solar exceeds the house load anywhere in a slot
+
+        A car charging in such a slot is load the inverter feeds from that surplus before it charges the
+        battery, so even a slot Predbat buys from the grid takes the battery's sun.
+
+        Args:
+        - start, end: absolute plan minutes
+        - load_step: house load forecast, as for car_solar_surplus_kwh()
+
+        Returns:
+        - bool: True when there is surplus to lose
+        """
+        start = max(start, self.minutes_now)
+        return end > start and self.car_solar_surplus_kwh(start, end, load_step) > 0.05
+
     def car_solar_reserved_for_car(self, load_step, car_n=0):
         """
         Surplus the car has first claim on ahead of the house battery, in kWh
@@ -6289,6 +6306,15 @@ class Plan:
         load_step = self.car_solar_load_forecast() if self.car_charging_solar else {}
         solar_windows = self.plan_car_charging_solar_windows(load_step)
         bought_windows = [low_rates[window_n] for window_n in price_sorted]
+
+        # A car charging while the sun is up is load the inverter feeds from the surplus before it charges the
+        # battery, so a "bought" slot in the sun takes the battery's solar too. With equal import prices that makes
+        # a sunny slot the worse choice - reported from a live system buying at 14:00 in full sun when midnight cost
+        # the same - so among equally priced slots the sunless ones go first. Only reorders ties, so it cannot make
+        # a plan dearer.
+        if load_step and self.car_charging_plan_smart[car_n]:
+            sunny = {id(window): self.car_slot_has_sun(window["start"], window["end"], load_step) for window in bought_windows}
+            bought_windows.sort(key=lambda window: (window["average"], sunny[id(window)]))
 
         # Energy that must be there by the ready time, whatever the weather. Bought slots stop here;
         # solar carries on to the full limit, which is how "minimum from any source, the rest from sun"
