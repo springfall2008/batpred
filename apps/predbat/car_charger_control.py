@@ -134,7 +134,7 @@ class CarChargerControl:
         # charger key -> True/False, the state Predbat last set. Only chargers Predbat has moved are here.
         self.charger_control_state = {}
         self.charger_control_setting = control_setting
-        # car_n -> why that car's charger is left alone ("octopus", "discovering", "discovery_failed" or "unknown"), so
+        # car_n -> why that car's charger is left alone ("octopus", "car", "discovering", "discovery_failed" or "unknown"), so
         # each reason is logged once rather than every cycle, and again only when it changes
         self.charger_control_octopus_cars = {}
         # When the wait for Octopus or Kraken discovery began, None while not waiting
@@ -175,9 +175,8 @@ class CarChargerControl:
         would fight - whatever octopus_intelligent_charging says, as that switch only changes
         Predbat's own planning and Octopus goes on driving the charger regardless. False: there
         is no Octopus Intelligent car here, or Octopus drives the car rather than the charger -
-        Predbat then drives the charger, from the dispatches or, with octopus_intelligent_charging
-        off, from its own plan. None: the car is on Octopus Intelligent but which device Octopus
-        drives cannot be told, or not yet.
+        see charger_control_octopus_drives_car() for what Predbat does then. None: the car is on
+        Octopus Intelligent but which device Octopus drives cannot be told, or not yet.
 
         Read from the car's own wired dispatch sensor rather than from any one component:
         the Octopus and Kraken components both publish the device's is_charger on it, and
@@ -196,6 +195,22 @@ class CarChargerControl:
             # Not published yet, or a sensor that does not say (the Octopus Energy HA integration)
             return None
         return parse_control_setting(is_charger)
+
+    def charger_control_octopus_drives_car(self, car_n):
+        """Does Octopus Intelligent deliver this car's dispatches by driving the car itself?
+
+        The car is the Intelligent device (a BMW or Volkswagen linked to Octopus, say), so the car
+        starts and stops its own charge and the charger only supplies it. Predbat then leaves the
+        charger alone unless switch.predbat_octopus_intelligent_charger_follows_car is on, in which
+        case it drives the charger to the dispatches so the car cannot also charge on its own timers.
+        """
+        slot = self.charger_control_dispatch_sensor(car_n)
+        if not slot:
+            return False
+        owner = getattr(self.base, "car_slot_owner", None)
+        if owner and owner != "octopus":
+            return False
+        return parse_control_setting(self.get_state_wrapper(slot, attribute="is_charger")) is False
 
     def charger_control_octopus_discovering(self):
         """Is the Octopus or Kraken component still to wire its Intelligent devices into the car slots?
@@ -239,6 +254,8 @@ class CarChargerControl:
         noun = self.charger_control_noun
         if why == "octopus":
             self.log("Info: {}: Octopus Intelligent drives car {}'s {}, leaving it to Octopus".format(name, car_n, noun))
+        elif why == "car":
+            self.log("Info: {}: Octopus Intelligent drives car {} itself, leaving its {} alone - turn on switch.{}_octopus_intelligent_charger_follows_car for Predbat to drive the {} to the dispatches".format(name, car_n, noun, self.prefix, noun))
         elif why == "discovering":
             self.log("Info: {}: waiting for the Octopus or Kraken component to find its devices before controlling car {}'s {}".format(name, car_n, noun))
         elif why == "discovery_failed":
@@ -540,11 +557,16 @@ class CarChargerControl:
         if drives is not None:
             # Known either way, so a later wait for discovery starts its clock afresh
             self.charger_control_discovery_since = None
+        # Octopus drives the car itself: the charger is left alone too, unless the user has asked
+        # Predbat to drive it to the dispatches
+        car_driven = drives is False and not self.get_arg("octopus_intelligent_charger_follows_car", False) and self.charger_control_octopus_drives_car(car_n)
         # An explicit control: true is the user saying their charger is not the Octopus
         # device, so it overrides "cannot tell" - but never a known charge point
-        if drives is True or (drives is None and self.charger_control_config is not True):
+        if drives is True or car_driven or (drives is None and self.charger_control_config is not True):
             if drives:
                 why = "octopus"
+            elif car_driven:
+                why = "car"
             elif self.charger_control_octopus_discovering():
                 why = "discovery_failed" if self.charger_control_discovery_overdue() else "discovering"
             else:
@@ -553,7 +575,7 @@ class CarChargerControl:
                 self.charger_control_log_left_alone(car_n, why)
                 self.charger_control_octopus_cars[car_n] = why
             if key in self.charger_control_state:
-                if why == "octopus":
+                if why in ("octopus", "car"):
                     # Handed over before it is forgotten, so a failed command is retried next cycle
                     await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
                     del self.charger_control_state[key]

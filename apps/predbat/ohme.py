@@ -247,6 +247,8 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
         # lost to a failed poll is still owed, and made on the next one
         self.slot_mode_applied = None
+        # Whether octopus_intelligent_charger_follows_car was on when control was last decided
+        self.follows_car = False
         # Ohme's own schedule is Predbat's car charging plan, as load only - see charger_slots_wanted()
         self.charger_slots = False
         # The reason charger_slots_wanted() last stood down, so it is only logged when it changes
@@ -516,7 +518,8 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         was_other_device = self.octopus_other_device
         octopus_intelligent = self.octopus_intelligent_wanted()
-        if octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device:
+        follows_car = bool(self.get_arg("octopus_intelligent_charger_follows_car", False))
+        if octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device or follows_car != self.follows_car:
             if octopus_intelligent:
                 self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
             elif self.octopus_other_device:
@@ -524,9 +527,11 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             elif self.octopus_intelligent is not None:
                 self.log("Info: Ohme API: Octopus Intelligent is no longer in use, the Ohme slots no longer carry the Intelligent rate")
             self.octopus_intelligent = octopus_intelligent
+            self.follows_car = follows_car
             # Predbat-led control is ruled out wherever Octopus schedules the charge, whichever device
-            # it does that through, so it follows the same change
-            self.enable_control(octopus_intelligent or self.octopus_other_device)
+            # it does that through, so it follows the same change - unless Octopus drives the car and
+            # the user has asked for the charger to be driven to the car's dispatches
+            self.enable_control(octopus_intelligent or (self.octopus_other_device and not follows_car))
 
         # Predbat has stood down but is still holding the charger: hand it back. Checked on every
         # poll rather than only on the change, as charger_control_release() forgets the charger last -

@@ -418,11 +418,35 @@ def test_octopus_rule_without_octopus_drives():
 
 
 def test_octopus_rule_car_integrated_drives():
-    """Octopus drives the car, not the charger - Predbat drives the charger to match the dispatches."""
+    """Octopus drives the car, not the charger - Predbat drives the charger to match the dispatches,
+    but only with octopus_intelligent_charger_follows_car on."""
     component = _octopus_component(FakeOctopus(), is_charger=False)
+    component.args["octopus_intelligent_charger_follows_car"] = True
     assert component.charger_control_octopus_drives_charger(0) is False
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], component.commands
+
+
+def test_octopus_rule_car_integrated_left_alone_by_default():
+    """Octopus drives the car - with octopus_intelligent_charger_follows_car off (the default) the charger
+    is left alone, and one Predbat held stopped is handed over without starting a charge."""
+    component = _octopus_component(FakeOctopus(), wired=False)
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {"is_charger": False, "state": "on"}
+    run_async(component.charger_control_tick(_now()))
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], "Not started, not driven: {}".format(component.commands)
+    assert component.charger_control_state == {}
+    assert sum("drives car 0 itself" in line and "octopus_intelligent_charger_follows_car" in line for line in component.logs) == 1, component.logs
+
+    # Turned on: Predbat drives the charger to the running dispatch
+    component.args["octopus_intelligent_charger_follows_car"] = True
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "on", 0), component.commands
+    assert any("no longer left to Octopus" in line for line in component.logs), component.logs
 
 
 def test_octopus_rule_charge_point_hands_off_without_starting():
@@ -446,7 +470,8 @@ def test_octopus_rule_charge_point_hands_off_without_starting():
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], component.commands
 
-    # The charger stops being the Octopus device - Predbat takes it back
+    # The charger stops being the Octopus device, and the user has Predbat follow the car - Predbat takes it back
+    component.args["octopus_intelligent_charger_follows_car"] = True
     component.sensors[DISPATCH] = {"is_charger": False}
     run_async(component.charger_control_tick(_now()))
     assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 2, component.commands
@@ -469,6 +494,7 @@ def test_octopus_rule_charge_point_releases_a_running_charger():
 def test_octopus_rule_car_integrated_follows_the_dispatch_sensor():
     """Octopus drives the car - the charger runs while a dispatch is on, even before the plan shows it."""
     component = _octopus_component(FakeOctopus(), is_charger=False)
+    component.args["octopus_intelligent_charger_follows_car"] = True
     component.sensors[DISPATCH]["state"] = "on"
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "on", 0)], component.commands
@@ -658,6 +684,7 @@ def test_octopus_rule_per_car():
         "binary_sensor.predbat_kraken_intelligent_dispatch_z": {"is_charger": True},
         "binary_sensor.predbat_kraken_intelligent_dispatch_a": {"is_charger": False},
     }
+    component.args["octopus_intelligent_charger_follows_car"] = True
     _plan(component, 0, [])
     _plan(component, 1, [])
     run_async(component.charger_control_tick(_now()))
@@ -766,6 +793,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_parse_control_setting()
     test_octopus_rule_without_octopus_drives()
     test_octopus_rule_car_integrated_drives()
+    test_octopus_rule_car_integrated_left_alone_by_default()
     test_octopus_rule_charge_point_hands_off_without_starting()
     test_octopus_rule_charge_point_releases_a_running_charger()
     test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
