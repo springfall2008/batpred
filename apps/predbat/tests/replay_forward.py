@@ -45,6 +45,8 @@ SOC_RE = re.compile(r"Inverter 0 SoC: ([\d.]+)kWh (\d+)%.*current battery power 
 TODAY_RE = re.compile(r"Current data so far today: load ([\d.]+)kWh, import ([\d.]+)kWh, export ([\d.]+)kWh, PV ([\d.]+)kWh")
 INDAY_RE = re.compile(r"in-day adjustment ([\d.]+)%")
 DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
+# The divergence fraction exactly as get_load_divergence() returns it, which the rounded percentage above can miss
+DIVERGENCE_EXACT_RE = re.compile(r"Replay input: load divergence ([\d.e+-]+)$")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
 NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), (\w+), ([\d.]+)\)")
 VERSION_RE = re.compile(r"version (\S+) currently running")
@@ -62,6 +64,8 @@ RATES_SERIES_RE = re.compile(r"(\w+) (\[\]|\[\[.*?\]\]) (\d+)")
 RATES_ATTRIBUTES = {"import": "rate_import", "export": "rate_export", "import_base": "rate_import_base", "export_base": "rate_export_base"}
 # The PV forecast per minute from now to the end of the plan, exactly, as runs of [kWh per minute, minutes]
 PV_EXACT_RE = re.compile(r"Replay input: PV forecast changed, per-minute kWh runs from (\d\d):(\d\d) p50 (\[.*?\]\]) p10 (\[.*?\]\]) p90 (\[.*?\]\])$")
+# The inverter's programmed state, logged only when it changes, as a dict that reads back with ast.literal_eval
+INVERTER_INPUT_RE = re.compile(r"Replay input: inverter changed (\{.*\})$")
 # The car state the plan reads, logged only when it changes, as a dict that reads back with ast.literal_eval
 CARS_INPUT_RE = re.compile(r"Replay input: cars changed (\{.*\})$")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
@@ -190,6 +194,7 @@ def parse_log(path):
                 (TODAY_RE, "today"),
                 (INDAY_RE, "inday"),
                 (DIVERGENCE_RE, "divergence"),
+                (DIVERGENCE_EXACT_RE, "divergence_exact"),
                 (COST_RE, "cost"),
                 (NEXT_LIMIT_RE, "next_limit"),
                 (VERSION_RE, "version"),
@@ -200,6 +205,7 @@ def parse_log(path):
                 (STATE_INPUT_RE, "state"),
                 (RATES_INPUT_RE, "rates"),
                 (CARS_INPUT_RE, "cars"),
+                (INVERTER_INPUT_RE, "inverter"),
                 (FILTERED_RE, "filtered"),
                 (FORCE_RE, "force"),
             ):
@@ -212,7 +218,7 @@ def parse_log(path):
                         run[store] = parse_state(found.group(1))
                     elif store == "rates":
                         run[store] = parse_rates(found.groups())
-                    elif store == "cars":
+                    elif store in ("cars", "inverter"):
                         run[store] = ast.literal_eval(found.group(1))
                     else:
                         run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "load_exact", "pv_input", "pv_exact") else found.group(1)
@@ -220,10 +226,10 @@ def parse_log(path):
     pending = {}
     for run in runs:
         # Rates and cars are logged only when they change, so a change logged by a dropped run still holds for the runs after it
-        for store in ("rates", "cars"):
+        for store in ("rates", "cars", "inverter"):
             pending[store] = run.get(store) or pending.get(store)
         if run.get("soc"):
-            for store in ("rates", "cars"):
+            for store in ("rates", "cars", "inverter"):
                 if pending.get(store) and not run.get(store):
                     run[store] = pending[store]
             pending = {}
@@ -463,11 +469,18 @@ def apply_run(my_predbat, prev, run):
     # calculate_plan recomputes the load divergence from the load history, which the replay can only rebuild
     # at the log's 5-minute resolution - smoother than the live 1-minute history, so it comes out different.
     # Use the logged value instead; it is rounded to 2 dp of the fraction exactly as get_load_divergence returns it.
-    if run.get("divergence"):
+    if run.get("divergence_exact"):
+        my_predbat.replay_load_divergence = float(run["divergence_exact"])
+    elif run.get("divergence"):
         my_predbat.replay_load_divergence = round(float(run["divergence"]) / 100.0, 2)
     apply_logged_state(my_predbat, run.get("state"))
-    # The window the inverter is holding is the one the previous run programmed
-    set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now, prev.get("next_limit"))
+    # The window the inverter is holding is the one the previous run programmed; a log that records the inverter's
+    # state exactly supersedes this reconstruction from the previous run's lines
+    if getattr(my_predbat, "replay_inverter_logged", False):
+        # Logged only on a change, so between changes the state stays as the yaml or the last line left it
+        apply_logged_inverter(my_predbat, run.get("inverter"))
+    else:
+        set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now, prev.get("next_limit"))
 
 
 def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, simulate=False, overrides=None):
@@ -507,10 +520,13 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     # The yaml's own day counters stand in for the run before the first one
     yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
     install_logged_load_divergence(my_predbat)
+    # A log that records the inverter's state replaces the reconstruction of it from other lines
+    my_predbat.replay_inverter_logged = any(run.get("inverter") for run in runs)
     try:
         rows = replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet)
     finally:
         remove_logged_load_divergence(my_predbat)
+        my_predbat.__dict__.pop("replay_inverter_logged", None)
     return rows
 
 
@@ -760,6 +776,12 @@ def apply_logged_pv_forecast(my_predbat, pv_input):
         setattr(my_predbat, name, series)
 
 
+def apply_logged_inverter(my_predbat, inverter):
+    """Set the inverter's programmed state from a run's "Replay input: inverter changed" line, when it has one."""
+    for name, value in (inverter or {}).items():
+        setattr(my_predbat, name, value)
+
+
 def apply_logged_state(my_predbat, state):
     """Set the plan's starting values from a run's "Replay input: state" line, which the other lines round.
 
@@ -777,6 +799,10 @@ def apply_logged_state(my_predbat, state):
         my_predbat.load_inday_adjustment = state["inday"]
     if state.get("cost_today") is not None:
         my_predbat.cost_today_sofar = state["cost_today"]
+    # The rates the inverter is running at now, which the prediction starts from (Predbat may have throttled them)
+    for name in ("charge_rate_now", "discharge_rate_now"):
+        if state.get(name) is not None:
+            setattr(my_predbat, name, state[name])
 
 
 def apply_logged_rates(my_predbat, rates_input):
