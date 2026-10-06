@@ -493,6 +493,18 @@ def apply_run(my_predbat, prev, run):
         set_export_window(my_predbat, prev.get("force"), my_predbat.minutes_now, prev.get("next_limit"))
 
 
+def model_car_charging_now(my_predbat):
+    """Model a car charging now outside its plan, as dynamic_load() does every live cycle.
+
+    The live plan holds the battery for such a car (car_charging_now_slots, read through car_charging_slots_model),
+    so without this a replay plans a battery charge the live run did not. Derived by the live code itself from the
+    car state, which the log carries.
+    """
+    my_predbat.car_charging_now_slots = [[] for _car_n in range(my_predbat.num_cars)]
+    minutes_end_slot = int((my_predbat.minutes_now + my_predbat.plan_interval_minutes) / my_predbat.plan_interval_minutes) * my_predbat.plan_interval_minutes
+    my_predbat.dynamic_load_car_charging_now(minutes_end_slot)
+
+
 def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, simulate=False, overrides=None):
     """Restore debug_file, then step through log_file re-planning where the log did; return the comparison rows.
 
@@ -627,6 +639,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             rebuild_load_pv_models(my_predbat)
             sim_soc = simulate_soc(my_predbat, sim_soc, run["minutes_now"] - my_predbat.minutes_now, pv_kwh, load_kwh)
         apply_run(my_predbat, prev, run)
+        model_car_charging_now(my_predbat)
         # Live rebuilds the load forecast every run, re-plan or not, so the instance holds what live held at each run
         refresh_load_forecast(my_predbat, run)
         if simulate:

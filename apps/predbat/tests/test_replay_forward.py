@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -752,6 +752,32 @@ def test_inverter_input():
     return 0
 
 
+def test_model_car_charging_now(my_predbat):
+    """A car reporting charging now with no slot covering it is modelled to the end of the slot, as dynamic_load() does live."""
+    saved = {name: getattr(my_predbat, name) for name in ("num_cars", "car_charging_now", "car_charging_slots", "car_charging_rate", "car_charging_now_slots", "minutes_now")}
+    try:
+        my_predbat.num_cars = 1
+        my_predbat.car_charging_now = [True]
+        my_predbat.car_charging_slots = [[{"start": 8 * 60, "end": 9 * 60, "kwh": 7.0, "octopus": True}]]
+        my_predbat.car_charging_rate = [7.4]
+        my_predbat.minutes_now = 5
+        model_car_charging_now(my_predbat)
+        slots = my_predbat.car_charging_now_slots
+        if len(slots) != 1 or len(slots[0]) != 1 or slots[0][0]["start"] != 5 or slots[0][0]["end"] != my_predbat.plan_interval_minutes:
+            print("ERROR: a car charging outside its plan should be modelled to the end of the slot, got {}".format(slots))
+            return 1
+        # Covered by a planned slot, or not charging: nothing modelled, and last run's slot is cleared
+        my_predbat.minutes_now = 8 * 60 + 5
+        model_car_charging_now(my_predbat)
+        if my_predbat.car_charging_now_slots != [[]]:
+            print("ERROR: a car inside its planned slot should not be modelled again, got {}".format(my_predbat.car_charging_now_slots))
+            return 1
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -784,4 +810,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_pv_exact()
     failed += test_cars_input()
     failed += test_inverter_input()
+    failed += test_model_car_charging_now(my_predbat)
     return failed
