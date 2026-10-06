@@ -247,7 +247,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
         # lost to a failed poll is still owed, and made on the next one
         self.slot_mode_applied = None
-        # Whether octopus_intelligent_charger_follows_car was on when control was last decided
+        # Whether Predbat drives the charger while Octopus drives the car, as last decided - see update_slot_mode()
         self.follows_car = False
         # Ohme's own schedule is Predbat's car charging plan, as load only - see charger_slots_wanted()
         self.charger_slots = False
@@ -518,14 +518,16 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         was_other_device = self.octopus_other_device
         octopus_intelligent = self.octopus_intelligent_wanted()
-        follows_car = bool(self.get_arg("octopus_intelligent_charger_follows_car", False))
+        # While Octopus drives the car, Predbat drives the charger only when asked to follow the car's
+        # dispatches - or when Intelligent charging is off in Predbat, which then plans the car itself
+        follows_car = bool(self.get_arg("octopus_intelligent_charger_follows_car", False)) or not self.get_arg("octopus_intelligent_charging", True)
         octopus_changed = octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device
         # The switch only matters while Octopus drives the car, so a change elsewhere is not a decision to remake
         follows_changed = follows_car != self.follows_car and self.octopus_other_device
         self.follows_car = follows_car
         if octopus_changed or follows_changed:
             if not octopus_changed:
-                self.log("Info: Ohme API: octopus_intelligent_charger_follows_car turned {}".format("on" if follows_car else "off"))
+                self.log("Info: Ohme API: Octopus Intelligent drives the car, and Predbat {} the charger".format("now drives" if follows_car else "no longer drives"))
             elif octopus_intelligent:
                 self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
             elif self.octopus_other_device:
