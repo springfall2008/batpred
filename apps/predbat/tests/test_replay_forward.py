@@ -640,6 +640,27 @@ def test_load_exact():
     return 0
 
 
+def test_load_compact():
+    """The compact load line rebuilds each step's start and minute-after value exactly, in tenths of a Wh."""
+    lines = """2026-10-06 10:00:00.000000: --------------- PredBat - update at 2026-10-06 10:00:00+01:00 with clock skew 0 minutes, minutes now 600
+2026-10-06 10:00:01.000000: Inverter 0 SoC: 10.0kWh 60%, current charge rate 9200W, current discharge rate 9660W, current battery power 0W
+2026-10-06 10:00:01.200000: Replay input: load from 10:00 base 12345.6 Wh, Wh/5min [48.1/9.6, 47.9/9.5, -0.2/0.0]
+"""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(lines)
+        run = parse_log(path)[0]
+    bat = SimpleNamespace(load_forecast={minute: 1.0 for minute in range(590, 620)})
+    apply_logged_load_exact(bat, run["load_exact"])
+    expected = {600: 12.3456, 601: 12.3552, 605: 12.3937, 606: 12.4032, 610: 12.4416, 611: 12.4416, 602: 1.0}
+    got = {minute: bat.load_forecast.get(minute) for minute in expected}
+    if got != expected:
+        print("ERROR: compact load forecast applied wrongly: {}".format(got))
+        return 1
+    return 0
+
+
 def test_pv_exact():
     """The exact PV line sets each minute it covers from its runs, removes minutes logged None, and leaves the rest alone."""
     lines = """2026-10-04 19:30:00.000000: --------------- PredBat - update at 2026-10-04 19:30:00+01:00 with clock skew 0 minutes, minutes now 1170
@@ -692,7 +713,7 @@ def test_inverter_input():
 2026-10-05 23:31:31.000000: Replay input: inverter changed {'charge_window': [{'start': 1410, 'end': 1440, 'average': 0}], 'charge_limit': [18.08], 'isCharging': True, 'reserve': 0.723}
 2026-10-05 23:32:00.000000: --------------- PredBat - update at 2026-10-05 23:30:00+01:00 with clock skew 0 minutes, minutes now 1410
 2026-10-05 23:32:01.000000: Inverter 0 SoC: 4.67kWh 26%, current charge rate 5500W, current discharge rate 5500W, current battery power 0W
-2026-10-05 23:32:01.100000: Replay input: state soc_kw 4.665 soc_max 18.08 inday 0.95 cost_today -744.68 load_today 7.65 import_today 18.2 export_today 22.98 pv_today None charge_rate_now 0.0625 discharge_rate_now 0.09166666666666666
+2026-10-05 23:32:01.100000: Replay input: state soc_kw 4.665 soc_max 18.08 inday 0.95 cost_today -744.68 load_today 7.65 import_today 18.2 export_today 22.98 pv_today None charge_rate_now 0.0625 discharge_rate_now 0.09166666666666666 battery_temperature 23.0
 2026-10-05 23:32:01.200000: Load divergence over 2.0 hours mean 300W, min 100W, max 900W, std dev 95W, divergence 31.6%
 2026-10-05 23:32:01.300000: Replay input: load divergence 0.31
 """
@@ -709,7 +730,7 @@ def test_inverter_input():
     if bat.charge_window != [{"start": 1410, "end": 1440, "average": 0}] or bat.isCharging is not True or bat.reserve != 0.723:
         print("ERROR: inverter state not applied: {}".format(vars(bat)))
         return 1
-    if bat.charge_rate_now != 0.0625 or bat.discharge_rate_now != 0.09166666666666666:
+    if bat.charge_rate_now != 0.0625 or bat.discharge_rate_now != 0.09166666666666666 or bat.battery_temperature != 23 or not isinstance(bat.battery_temperature, int):
         print("ERROR: the logged rates in force should be applied: {}".format(vars(bat)))
         return 1
     if bat.replay_load_divergence != 0.31:
@@ -746,6 +767,7 @@ def run_replay_forward_tests(my_predbat):
     failed += test_replay_state_and_rates()
     failed += test_apply_logged_rates_from_before_midnight()
     failed += test_load_exact()
+    failed += test_load_compact()
     failed += test_pv_exact()
     failed += test_cars_input()
     failed += test_inverter_input()

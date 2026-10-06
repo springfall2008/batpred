@@ -54,6 +54,8 @@ VERSION_RE = re.compile(r"version (\S+) currently running")
 LOAD_INPUT_RE = re.compile(r"Replay input: load forecast, 5-minute Wh from (\d\d):(\d\d) \[([^\]]*)\]")
 # The cumulative load forecast at each 5-minute step the plan builds and the minute after, exactly as the plan reads it
 LOAD_EXACT_RE = re.compile(r"Replay input: load forecast, cumulative kWh at each 5-minute step and the minute after from (\d\d):(\d\d) (\[.*\])$")
+# The same forecast in whole tenths of a Wh: the cumulative value at the first step, then "Wh in the step/Wh in its first minute"
+LOAD_COMPACT_RE = re.compile(r"Replay input: load from (\d\d):(\d\d) base (-?[\d.]+) Wh, Wh/5min \[(.*)\]$")
 PV_INPUT_RE = re.compile(r"Replay input: PV forecast changed, 30-minute kWh from (\d\d):(\d\d) p50 \[([^\]]*)\] p10 \[([^\]]*)\] p90 \[([^\]]*)\]")
 # The plan's starting state, each value written so it reads back as the same float (or None)
 STATE_INPUT_RE = re.compile(r"Replay input: state (.*)$")
@@ -200,6 +202,7 @@ def parse_log(path):
                 (VERSION_RE, "version"),
                 (LOAD_INPUT_RE, "load_input"),
                 (LOAD_EXACT_RE, "load_exact"),
+                (LOAD_COMPACT_RE, "load_exact"),
                 (PV_INPUT_RE, "pv_input"),
                 (PV_EXACT_RE, "pv_exact"),
                 (STATE_INPUT_RE, "state"),
@@ -737,17 +740,37 @@ def apply_logged_load_forecast(my_predbat, load_input):
     my_predbat.load_forecast = rebuilt
 
 
+def expand_compact_load(base, text):
+    """Rebuild the [step start, minute after] cumulative kWh pairs from a compact "Replay input: load from" line.
+
+    Every value is counted in whole tenths of a Wh and divided by 10000 only at the end, which gives exactly the
+    dp4 float the live forecast held.
+    """
+    tenths = round(float(base) * 10)
+    pairs = []
+    for part in text.split(", "):
+        step, first = (round(float(value) * 10) for value in part.split("/"))
+        pairs.append([tenths / 10000, (tenths + first) / 10000])
+        tenths += step
+    return pairs
+
+
 def apply_logged_load_exact(my_predbat, load_exact):
-    """Set the load forecast from the run's logged "Replay input: load forecast, cumulative kWh" line.
+    """Set the load forecast from the run's logged load forecast line, compact ("load from") or full ("load forecast, cumulative kWh").
 
     The line gives, for each 5-minute step from the logged start, load_forecast at the step's start and the minute
     after - the two values step_data_history() reads - so those are set exactly, and removed where the log gave
     None. Other minutes keep their values; the plan does not read them.
     """
-    hours, minutes, text = load_exact
+    if len(load_exact) == 4:
+        hours, minutes, base, text = load_exact
+        pairs = expand_compact_load(base, text)
+    else:
+        hours, minutes, text = load_exact
+        pairs = ast.literal_eval(text)
     start = int(hours) * 60 + int(minutes)
     forecast = dict(my_predbat.load_forecast or {})
-    for index, values in enumerate(ast.literal_eval(text)):
+    for index, values in enumerate(pairs):
         for offset, value in enumerate(values):
             minute = start + index * PREDICT_STEP + offset
             if value is None:
@@ -803,6 +826,9 @@ def apply_logged_state(my_predbat, state):
     for name in ("charge_rate_now", "discharge_rate_now"):
         if state.get(name) is not None:
             setattr(my_predbat, name, state[name])
+    # Moved here from the inverter line so a one-degree change does not re-log the whole inverter; an int live
+    if state.get("battery_temperature") is not None:
+        my_predbat.battery_temperature = int(state["battery_temperature"])
 
 
 def apply_logged_rates(my_predbat, rates_input):
