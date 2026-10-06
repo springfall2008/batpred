@@ -422,7 +422,7 @@ A few things to know about this mode:
 
 ### Predbat-led Ohme charging
 
-**ohme_control** lets Predbat start and stop the charger itself, according to its own car charging plan. Left unset it turns on with `ohme_automatic` once `car_charging_battery_size` and `car_charging_limit` are set (see [Predbat starting and stopping your charger](#predbat-starting-and-stopping-your-charger)); set it to `false` to keep it off:
+**ohme_control** lets Predbat start and stop the charger itself, according to its own car charging plan. Unlike the GivEnergy and myenergi chargers, it is only on when you set it to `true` (see [Predbat starting and stopping your charger](#predbat-starting-and-stopping-your-charger)); otherwise the Ohme keeps to its own schedule, which becomes Predbat's car plan. Set `car_charging_battery_size` and `car_charging_limit` too, as Predbat sets the charger to max charge, which overrides the target in the Ohme app:
 
 ```yaml
   ohme_login: !secret ohme_login
@@ -518,21 +518,21 @@ When `gateway_evc_control` is enabled, Predbat checks once per minute whether th
 
 Predbat can start and stop a GivEnergy EV charger, an Ohme charger or a myenergi Zappi itself, following its own car charging plan. Each charger follows its own car: charger N follows car N.
 
-Each has a control setting. Left out of `apps.yaml`, control turns on with the automatic setup that maps the charger to its car:
+Each has a control setting. Left out of `apps.yaml`, control turns on with the automatic setup that maps the charger to its car, except for the Ohme:
 
 | Charger | Setting | Left unset, control is on when |
 |---------|---------|--------------------------------|
 | GivEnergy EV charger | `ge_cloud_evc_control` | `ge_cloud_automatic_evc` is `true` |
-| Ohme | `ohme_control` | `ohme_automatic` is `true`, and `car_charging_battery_size` and `car_charging_limit` are set in `apps.yaml` |
+| Ohme | `ohme_control` | never - set it to `true`; left unset, Ohme's own schedule is the car plan |
 | myenergi Zappi | `myenergi_zappi_control` | you have written `myenergi_automatic` or `myenergi_automatic_zappi` into `apps.yaml` yourself |
 
 Set the control setting to `false` to keep Predbat's hands off the charger, or to `true` to ask for control explicitly - Predbat then also logs a warning if something it needs is missing.
 
-The Ohme needs the car's battery size and charge limit because Predbat sets it to max charge, which overrides the target in the Ohme app - left at their defaults (100 kWh, 100%) the car would be charged to full.
+The Ohme stays opt-in because, without control, Predbat already follows it: the charger's own schedule is taken as the car charging plan. Predbat control sets it to max charge, which overrides the target in the Ohme app, so with `ohme_control: true` also set the car's battery size and charge limit - left at their defaults (100 kWh, 100%) the car would be charged to full.
 
 The Zappi rule is narrower because `myenergi_automatic` and `myenergi_automatic_zappi` both default on: following their values alone would put every Zappi under Predbat's control. A Zappi Predbat controls is Stopped outside a planned window, so it no longer diverts surplus solar to the car - set `myenergi_zappi_control: false` if you would rather keep solar diversion.
 
-**Upgrading:** if you already had `ge_cloud_automatic_evc` on, `ohme_automatic` on with the car's size and limit set, or wrote `myenergi_automatic` into `apps.yaml`, Predbat now starts and stops that charger unless you set its control setting to `false`.
+**Upgrading:** if you already had `ge_cloud_automatic_evc` on, or wrote `myenergi_automatic` into `apps.yaml`, Predbat now starts and stops that charger unless you set its control setting to `false`. Ohme users see no change.
 
 The GivEnergy Gateway's `gateway_evc_control` (above) is unchanged and stays opt-in.
 

@@ -225,7 +225,7 @@ class ChargerPower:
 class OhmeAPI(ComponentBase, CarChargerControl):
     """Ohme API component for EV charger integration."""
 
-    def initialize(self, email, password, ohme_automatic=False, ohme_automatic_octopus_intelligent=None, ohme_control=None):
+    def initialize(self, email, password, ohme_automatic=False, ohme_automatic_octopus_intelligent=None, ohme_control=False):
         """Initialise the Ohme API component"""
         self.email = email
         self.password = password
@@ -337,34 +337,19 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         Decide whether Predbat-led charge control should run, and say why when it will not.
 
-        ohme_control left unset turns control on with ohme_automatic, since setting that is the
-        user asking Predbat to plan for the car - but only once car_charging_battery_size and
-        car_charging_limit are in apps.yaml, as the Ohme cannot report either. False keeps it
-        off. Only an explicit true is worth a warning when it cannot run - unset just follows
-        the other settings.
+        Only an explicit ohme_control: true turns it on. Left unset, the Ohme keeps to its own
+        schedule and that schedule is Predbat's car plan (see charger_slots_wanted()): the user
+        may have set it up deliberately, and max charge would override the target set in the
+        Ohme app.
         """
         self.charger_control_active = False
-        if self.ohme_control is False:
+        if not self.ohme_control:
             return
         if not self.ohme_automatic:
-            if self.ohme_control:
-                self.log("Warn: Ohme API: ohme_control needs ohme_automatic set to register the car, charge control is disabled")
+            self.log("Warn: Ohme API: ohme_control needs ohme_automatic set to register the car, charge control is disabled")
             return
-        if self.ohme_control is None:
-            # Max charge overrides the Ohme's own target, so the car's size and limit are all that
-            # stop a charge - their defaults (100 kWh, 100%) would charge to full. Only turn on by
-            # default for a user who has set them; an explicit ohme_control: true is their call.
-            raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
-            missing = [arg for arg in ("car_charging_battery_size", "car_charging_limit") if raw_args.get(arg) is None]
-            if missing:
-                self.log("Info: Ohme API: charge control stays off until {} is set in apps.yaml, or set ohme_control: true".format(" and ".join(missing)))
-                return
         if octopus_intelligent:
-            # Octopus schedules the charge, so Predbat stays out of it however ohme_control is set
-            if self.ohme_control:
-                self.log("Warn: Ohme API: ohme_control is ignored on Octopus Intelligent - Octopus already schedules the charge")
-            else:
-                self.log("Info: Ohme API: Octopus Intelligent schedules the charge, so Predbat leaves the charger alone")
+            self.log("Warn: Ohme API: ohme_control is ignored on Octopus Intelligent - Octopus already schedules the charge")
             return
         self.charger_control_active = True
         self.log("Info: Ohme API: Predbat-led charge control enabled")

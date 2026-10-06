@@ -1637,8 +1637,7 @@ class MockOhmeAPI(OhmeAPI):
         self.queued_events = []
         self.ohme_automatic = False
         self.ohme_automatic_octopus_intelligent = None
-        # Unset, as components.py leaves it when apps.yaml does not mention it
-        self.ohme_control = None
+        self.ohme_control = False
         self.charger_control_setup("Ohme API", "charger", switch_prefix="ohme")
         self.octopus_intelligent = None
         self.octopus_other_device = False
@@ -1731,48 +1730,17 @@ def _test_ohme_control_enable_rules(my_predbat=None):
     """Test when Predbat-led charge control is allowed to run"""
     print("**** Running test_ohme_control_enable_rules ****")
 
-    # Unset control follows ohme_automatic: off without it, and without a warning
-    api = MockOhmeAPI()
-    api.enable_control(False)
-    assert api.charger_control_active is False, "Expected unset control off without ohme_automatic"
-    assert not any("Warn" in msg for msg in api.log_messages), f"Unset control is not a request, got {api.log_messages}"
+    # Unset control stays off, even with ohme_automatic and the car's size and limit set: the Ohme
+    # keeps to its own schedule, which becomes the car plan - and saying so is not a warning
+    for automatic in (False, True):
+        api = MockOhmeAPI()
+        api.ohme_automatic = automatic
+        api.base.args_from_apps_yaml = {"car_charging_battery_size": 77, "car_charging_limit": 80}
+        api.enable_control(False)
+        assert api.charger_control_active is False, f"Expected unset control off (ohme_automatic {automatic})"
+        assert not any("Warn" in msg for msg in api.log_messages), f"Unset control is not a request, got {api.log_messages}"
 
-    # ... but not while the car's size and limit are left at their 100 kWh / 100% defaults, since
-    # max charge overrides the Ohme's own target and would charge to full
-    api = MockOhmeAPI()
-    api.ohme_automatic = True
-    api.enable_control(False)
-    assert api.charger_control_active is False, "Expected unset control to wait for the car's size and limit"
-    assert any("car_charging_battery_size and car_charging_limit" in msg for msg in api.log_messages), api.log_messages
-    assert not any("Warn" in msg for msg in api.log_messages), api.log_messages
-    api = MockOhmeAPI()
-    api.ohme_automatic = True
-    api.base.args_from_apps_yaml = {"car_charging_battery_size": 77}
-    api.enable_control(False)
-    assert api.charger_control_active is False, "Expected unset control to wait for car_charging_limit too"
-
-    # ... on with it once both are set
-    api = MockOhmeAPI()
-    api.ohme_automatic = True
-    api.base.args_from_apps_yaml = {"car_charging_battery_size": 77, "car_charging_limit": 80}
-    api.enable_control(False)
-    assert api.charger_control_active is True, "Expected unset control to turn on with ohme_automatic"
-
-    # An explicit true is the user's call, and does not need them
-    api = MockOhmeAPI()
-    api.ohme_control = True
-    api.ohme_automatic = True
-    api.enable_control(False)
-    assert api.charger_control_active is True, "Expected ohme_control: true to turn on without the size and limit"
-
-    # ... but left to Octopus when the Intelligent slots come from the Ohme, again without a warning
-    api = MockOhmeAPI()
-    api.ohme_automatic = True
-    api.enable_control(True)
-    assert api.charger_control_active is False, "Expected unset control to leave an Octopus-driven Ohme alone"
-    assert not any("Warn" in msg for msg in api.log_messages), f"Expected an Info, not a warning, got {api.log_messages}"
-
-    # An explicit false keeps it off even with ohme_automatic
+    # An explicit false keeps it off
     api = MockOhmeAPI()
     api.ohme_control = False
     api.ohme_automatic = True
@@ -2397,8 +2365,6 @@ def _test_ohme_run_iog_device_changes(my_predbat=None):
     # Started before Octopus had any device: the fallback, Ohme claims the slots
     api = _ohme_api_with_octopus(IOG_TARIFF, {})
     api.ohme_automatic = True
-    # Predbat not controlling the charger, which ohme_automatic would otherwise turn on
-    api.ohme_control = False
     octopus = api.base.components.components["octopus"]
     assert _ohme_run_poll(api, first=True) == [False], "Expected plain dispatches on Intelligent"
     assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Ohme to claim the slots, got {api.slot_mode} owner {api.base.car_slot_owner}"
@@ -3283,8 +3249,6 @@ def _test_ohme_run_first_with_charger_slots(my_predbat=None):
     # publish so the very first set of slots Predbat reads is already labelled as not cheap
     api = MockOhmeAPI()
     api.ohme_automatic = True
-    # Predbat not controlling the charger, which ohme_automatic would otherwise turn on
-    api.ohme_control = False
     published, wired = _ohme_run_first(api)
     assert published == [True], f"Expected the first publish to be labelled as a charger schedule, got {published}"
     assert wired == ["charger_slots"], f"Expected the charger schedule wiring, got {wired}"
@@ -3364,8 +3328,6 @@ def _test_ohme_run_tariff_change_to_intelligent(my_predbat=None):
 
     api = _ohme_api_with_octopus("E-1R-COSY-22-12-08-A")
     api.ohme_automatic = True
-    # Predbat not controlling the charger, which ohme_automatic would otherwise turn on
-    api.ohme_control = False
     assert _ohme_run_poll(api, first=True) == [True], "Expected the charger schedule to start with"
     assert api.slot_mode == "charger_schedule" and api.base.car_slot_owner is None, f"Expected charger schedule mode, got {api.slot_mode} owner {api.base.car_slot_owner}"
 
@@ -3399,8 +3361,6 @@ def _test_ohme_run_tariff_change_from_intelligent(my_predbat=None):
 
     api = _ohme_api_with_octopus("E-1R-INTELLI-VAR-22-10-14-A")
     api.ohme_automatic = True
-    # Predbat not controlling the charger, which ohme_automatic would otherwise turn on
-    api.ohme_control = False
     assert _ohme_run_poll(api, first=True) == [False], "Expected plain dispatches on Intelligent"
     assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Intelligent mode, got {api.slot_mode} owner {api.base.car_slot_owner}"
 
@@ -3431,8 +3391,6 @@ def _test_ohme_run_tariff_gap_keeps_mode(my_predbat=None):
 
     api = _ohme_api_with_octopus("E-1R-INTELLI-VAR-22-10-14-A")
     api.ohme_automatic = True
-    # Predbat not controlling the charger, which ohme_automatic would otherwise turn on
-    api.ohme_control = False
     assert _ohme_run_poll(api, first=True) == [False], "Expected plain dispatches on Intelligent"
 
     # No tariff known, then no Octopus component at all (it is restarting): the last answer stands
@@ -3446,7 +3404,6 @@ def _test_ohme_run_tariff_gap_keeps_mode(my_predbat=None):
     # And the other way: a tariff that turns up late is acted on as soon as it is known
     api = _ohme_api_with_octopus("E-1R-INTELLI-VAR-22-10-14-A")
     api.ohme_automatic = True
-    api.ohme_control = False
     _ohme_set_tariff(api, None)
     assert _ohme_run_poll(api, first=True) == [True], "Expected the charger schedule while the tariff is unknown"
     _ohme_set_tariff(api, "E-1R-INTELLI-VAR-22-10-14-A")
@@ -3513,8 +3470,6 @@ def _test_ohme_run_wiring_retried_after_failed_poll(my_predbat=None):
 
     api = MockOhmeAPI()
     api.ohme_automatic = True
-    # Predbat not controlling the charger, which ohme_automatic would otherwise turn on
-    api.ohme_control = False
     api.client.serial = "TEST-SERIAL-123"
     fail = [True]
 
