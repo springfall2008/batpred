@@ -519,15 +519,20 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         was_other_device = self.octopus_other_device
         octopus_intelligent = self.octopus_intelligent_wanted()
         follows_car = bool(self.get_arg("octopus_intelligent_charger_follows_car", False))
-        if octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device or follows_car != self.follows_car:
-            if octopus_intelligent:
+        octopus_changed = octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device
+        # The switch only matters while Octopus drives the car, so a change elsewhere is not a decision to remake
+        follows_changed = follows_car != self.follows_car and self.octopus_other_device
+        self.follows_car = follows_car
+        if octopus_changed or follows_changed:
+            if not octopus_changed:
+                self.log("Info: Ohme API: octopus_intelligent_charger_follows_car turned {}".format("on" if follows_car else "off"))
+            elif octopus_intelligent:
                 self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
             elif self.octopus_other_device:
                 self.log("Info: Ohme API: Octopus Intelligent is driving another device, not this charger - leaving the car slots to Octopus")
             elif self.octopus_intelligent is not None:
                 self.log("Info: Ohme API: Octopus Intelligent is no longer in use, the Ohme slots no longer carry the Intelligent rate")
             self.octopus_intelligent = octopus_intelligent
-            self.follows_car = follows_car
             # Predbat-led control is ruled out wherever Octopus schedules the charge, whichever device
             # it does that through, so it follows the same change - unless Octopus drives the car and
             # the user has asked for the charger to be driven to the car's dispatches

@@ -97,8 +97,10 @@ class CarChargerControl:
 
     A car whose Octopus Intelligent dispatches are delivered by Octopus driving the charger
     itself is left to Octopus - see charger_control_octopus_drives_charger(). Where Octopus
-    instead drives the car, Predbat still drives the charger, from the slot sensor that then
-    carries the Octopus dispatches, so the car cannot charge outside them on its own timers.
+    instead drives the car, the charger is left alone too, unless the user turns on
+    octopus_intelligent_charger_follows_car - Predbat then drives the charger from the slot
+    sensor that carries the Octopus dispatches, so the car cannot charge outside them on its
+    own timers. See charger_control_octopus_drives_car().
 
     send and release_one must raise when the charger refuses, so nothing is recorded as
     done and the next cycle tries again; the component catches it in its run loop.
@@ -255,7 +257,11 @@ class CarChargerControl:
         if why == "octopus":
             self.log("Info: {}: Octopus Intelligent drives car {}'s {}, leaving it to Octopus".format(name, car_n, noun))
         elif why == "car":
-            self.log("Info: {}: Octopus Intelligent drives car {} itself, leaving its {} alone - turn on switch.{}_octopus_intelligent_charger_follows_car for Predbat to drive the {} to the dispatches".format(name, car_n, noun, self.prefix, noun))
+            self.log(
+                "Info: {}: Octopus Intelligent drives car {} itself, leaving its {} alone - in expert mode, turn on switch.{}_octopus_intelligent_charger_follows_car for Predbat to drive the {} to the dispatches".format(
+                    name, car_n, noun, self.prefix, noun
+                )
+            )
         elif why == "discovering":
             self.log("Info: {}: waiting for the Octopus or Kraken component to find its devices before controlling car {}'s {}".format(name, car_n, noun))
         elif why == "discovery_failed":
@@ -558,8 +564,9 @@ class CarChargerControl:
             # Known either way, so a later wait for discovery starts its clock afresh
             self.charger_control_discovery_since = None
         # Octopus drives the car itself: the charger is left alone too, unless the user has asked
-        # Predbat to drive it to the dispatches
-        car_driven = drives is False and not self.get_arg("octopus_intelligent_charger_follows_car", False) and self.charger_control_octopus_drives_car(car_n)
+        # Predbat to drive it to the dispatches - or has turned Octopus Intelligent charging off in
+        # Predbat, which then plans the car itself and drives the charger to that plan
+        car_driven = drives is False and self.get_arg("octopus_intelligent_charging", True) and not self.get_arg("octopus_intelligent_charger_follows_car", False) and self.charger_control_octopus_drives_car(car_n)
         # An explicit control: true is the user saying their charger is not the Octopus
         # device, so it overrides "cannot tell" - but never a known charge point
         if drives is True or car_driven or (drives is None and self.charger_control_config is not True):
@@ -575,12 +582,13 @@ class CarChargerControl:
                 self.charger_control_log_left_alone(car_n, why)
                 self.charger_control_octopus_cars[car_n] = why
             if key in self.charger_control_state:
-                if why in ("octopus", "car"):
+                if why == "octopus":
                     # Handed over before it is forgotten, so a failed command is retried next cycle
                     await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
                     del self.charger_control_state[key]
                 elif why != "discovering":
-                    # Nobody is known to be taking it over, so a stop is undone rather than left in place
+                    # Nobody is known to be taking it over - with Octopus driving the car, nobody drives the
+                    # charger - so a stop is undone rather than left in place
                     await self.charger_control_release_held(key, handle)
                 # While discovery is under way the charger stays as it is, and held, so it is settled
                 # either way once discovery has finished - releasing would start a charge Predbat had stopped

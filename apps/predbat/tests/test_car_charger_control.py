@@ -429,7 +429,7 @@ def test_octopus_rule_car_integrated_drives():
 
 def test_octopus_rule_car_integrated_left_alone_by_default():
     """Octopus drives the car - with octopus_intelligent_charger_follows_car off (the default) the charger
-    is left alone, and one Predbat held stopped is handed over without starting a charge."""
+    is left alone, and one Predbat held stopped is released as usual: nobody else drives the charger."""
     component = _octopus_component(FakeOctopus(), wired=False)
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0)], component.commands
@@ -438,9 +438,16 @@ def test_octopus_rule_car_integrated_left_alone_by_default():
     component.sensors[DISPATCH] = {"is_charger": False, "state": "on"}
     run_async(component.charger_control_tick(_now()))
     run_async(component.charger_control_tick(_now()))
-    assert component.commands == [("a", "off", 0)], "Not started, not driven: {}".format(component.commands)
+    assert component.commands == [("a", "off", 0), ("a", "release", False)], "Released once, then left alone: {}".format(component.commands)
     assert component.charger_control_state == {}
     assert sum("drives car 0 itself" in line and "octopus_intelligent_charger_follows_car" in line for line in component.logs) == 1, component.logs
+
+    # With Octopus Intelligent charging off in Predbat, Predbat plans the car and drives the charger to that plan
+    component.args["octopus_intelligent_charging"] = False
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("a", "off", 0) and len(component.commands) == 3, component.commands
+    del component.args["octopus_intelligent_charging"]
+    component.charger_control_state = {}
 
     # Turned on: Predbat drives the charger to the running dispatch
     component.args["octopus_intelligent_charger_follows_car"] = True
