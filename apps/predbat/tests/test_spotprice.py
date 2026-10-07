@@ -727,7 +727,7 @@ def test_spotprice_zones_and_registry(my_predbat=None):
     assert entry["args"]["entsoe_token"]["secret"] and entry["args"]["tibber_token"]["secret"]
     # provider defaults to energycharts, so the component must be gated on a zone or a Tibber token
     assert "default" not in entry["args"]["provider"] and not entry["args"]["provider"]["required"]
-    assert entry["required_or"] == ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret"]
+    assert entry["required_or"] == ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret", "octopus_de_api_key"]
     assert SpotPriceAPI(FakeBase(), zone="NL").provider == "energycharts"
 
 
@@ -1614,6 +1614,253 @@ def test_spotprice_ostrom_provider_inference(my_predbat=None):
     assert half.provider == "ostrom" and "spotprice_ostrom_client_secret" in half.config_error and half.sources_needed() == []
 
 
+# ---------------------------------------------------------------------------
+# Octopus Energy Germany
+# ---------------------------------------------------------------------------
+
+
+def make_jwt(exp):
+    """An unsigned JWT whose payload carries the given exp (an aware datetime)."""
+    import base64
+    import json
+
+    def encode(obj):
+        """Base64url without padding."""
+        return base64.urlsafe_b64encode(json.dumps(obj).encode("utf-8")).decode("ascii").rstrip("=")
+
+    return "{}.{}.sig".format(encode({"alg": "HS256", "typ": "JWT"}), encode({"exp": int(exp.timestamp())}))
+
+
+def octopus_de_agreement(forecast=None, info=None, active=True, valid_from="2025-01-01T00:00:00+01:00", valid_to=None):
+    """An agreements response holding one market location with one agreement."""
+    agreement = {
+        "id": "4711",
+        "isActive": active,
+        "validFrom": valid_from,
+        "validTo": valid_to,
+        "product": {"code": "DYNAMIC-OCTOPUS"},
+        "unitRateInformation": info or {"__typename": "SimpleProductUnitRateInformation", "latestGrossUnitRateCentsPerKwh": "31.5"},
+        "unitRateForecast": forecast or [],
+    }
+    return {"data": {"account": {"properties": [{"electricityMalos": [{"maloNumber": "50000000001", "agreements": [agreement]}]}]}}}
+
+
+def octopus_de_forecast(start="2025-05-01T22:00:00+00:00", count=8, minutes=15, base=20.0):
+    """unitRateForecast entries, one per slot, with gross rates as strings (as Kraken sends them)."""
+    first = dt(start)
+    return [
+        {
+            "validFrom": (first + timedelta(minutes=minutes * i)).isoformat(),
+            "validTo": (first + timedelta(minutes=minutes * (i + 1))).isoformat(),
+            "unitRateInformation": {"__typename": "TimeOfUseProductUnitRateInformation", "rates": [{"latestGrossUnitRateCentsPerKwh": "{:.2f}".format(base + i)}]},
+        }
+        for i in range(count)
+    ]
+
+
+class FakeKraken:
+    """Answers http_post_json for the token mutation, the accounts lookup and the agreements query."""
+
+    def __init__(self, agreements=None, accounts=("A-1234ABCD",)):
+        """Set the replies; queued (status, body) tuples per operation override them."""
+        self.calls = []
+        self.queued = {"token": [], "accounts": [], "agreements": []}
+        self.agreements = agreements or octopus_de_agreement(forecast=octopus_de_forecast())
+        self.accounts = list(accounts)
+        self.issued = 0
+        self.token_exp = dt("2025-05-02T09:00Z")
+
+    async def __call__(self, url, payload, headers):
+        """Route by the GraphQL operation."""
+        query = payload["query"]
+        operation = "token" if "obtainKrakenToken" in query else ("accounts" if "viewer" in query else "agreements")
+        self.calls.append((operation, url, payload, headers))
+        if self.queued[operation]:
+            return self.queued[operation].pop(0)
+        if operation == "token":
+            self.issued += 1
+            return 200, {"data": {"obtainKrakenToken": {"token": make_jwt(self.token_exp)}}}
+        if operation == "accounts":
+            return 200, {"data": {"viewer": {"accounts": [{"number": number} for number in self.accounts]}}}
+        return 200, self.agreements
+
+    def count(self, operation):
+        """How many requests of one operation were made."""
+        return sum(1 for call in self.calls if call[0] == operation)
+
+
+def make_octopus_de(**kwargs):
+    """An octopus_de-provider component with a FakeKraken behind http_post_json."""
+    config = {"provider": "octopus_de", "entsoe_token": None, "zone": None, "octopus_de_api_key": "sk_live_test"}
+    config.update(kwargs)
+    api = make_api(**config)
+    fake = FakeKraken()
+    api.http_post_json = fake
+    return api, fake
+
+
+def kraken_error(code, description="error"):
+    """A Kraken GraphQL error reply (HTTP 200)."""
+    return 200, {"errors": [{"message": description, "extensions": {"errorCode": code, "errorDescription": description}}], "data": None}
+
+
+def test_spotprice_octopus_de_dynamic(my_predbat=None):
+    """The API key is exchanged for a JWT sent without Bearer; the account is looked up once; dynamic forecast slots are used as-is with no markup or VAT."""
+    from spotprice import OCTOPUS_DE_URL
+
+    api, fake = make_octopus_de(markup=15, vat=0.19, charge_zones=[{"from": "00:00", "to": "00:00", "charge": 9}])
+    assert api.sources_needed() == ["supplier"]
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True
+    operation, url, payload, headers = fake.calls[0]
+    assert operation == "token" and url == OCTOPUS_DE_URL and payload["variables"] == {"input": {"APIKey": "sk_live_test"}} and "Authorization" not in headers
+    assert [call[0] for call in fake.calls] == ["token", "accounts", "agreements"]
+    token = fake.calls[1][3]["Authorization"]
+    assert token == make_jwt(fake.token_exp) and not token.startswith("Bearer")
+    assert fake.calls[2][2]["variables"] == {"accountNumber": "A-1234ABCD"}
+    rates = api.build_import_rates()
+    assert [rate for _s, _e, rate in rates] == [20.0 + i for i in range(8)], rates
+    assert rates[0][:2] == (dt("2025-05-01T22:00Z"), dt("2025-05-01T22:15Z"))
+    # Second refresh: the token is still valid and the account is known
+    pin_now(api, now + timedelta(minutes=30))
+    run(api.refresh(now + timedelta(minutes=30)))
+    assert fake.count("token") == 1 and fake.count("accounts") == 1 and fake.count("agreements") == 2
+    # An explicit account skips the lookup
+    explicit, explicit_fake = make_octopus_de(octopus_de_account=" A-9999 ")
+    pin_now(explicit, now)
+    run(explicit.fetch_supplier(now))
+    assert explicit_fake.count("accounts") == 0 and explicit_fake.calls[-1][2]["variables"] == {"accountNumber": "A-9999"}
+
+
+def test_spotprice_octopus_de_fixed_and_time_of_use(my_predbat=None):
+    """Without a forecast, a fixed rate spans the window (clipped to the agreement) and a time-of-use table repeats daily in local time, wrapping past midnight and across DST."""
+    from spotprice import parse_octopus_de_agreement
+
+    start, end = dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z")
+    fixed = octopus_de_agreement(valid_to="2025-05-03T00:00:00+02:00")["data"]["account"]["properties"][0]["electricityMalos"][0]["agreements"][0]
+    assert parse_octopus_de_agreement(fixed, start, end, BERLIN) == [(start, dt("2025-05-02T22:00Z"), 31.5)]
+
+    tou_info = {
+        "__typename": "TimeOfUseProductUnitRateInformation",
+        "rates": [
+            {"latestGrossUnitRateCentsPerKwh": "22.0", "timeslotActivationRules": [{"activeFromTime": "22:00:00", "activeToTime": "06:00:00"}]},
+            {"latestGrossUnitRateCentsPerKwh": "35.0", "timeslotActivationRules": [{"activeFromTime": "06:00:00", "activeToTime": "22:00:00"}]},
+        ],
+    }
+    tou = octopus_de_agreement(info=tou_info)["data"]["account"]["properties"][0]["electricityMalos"][0]["agreements"][0]
+    intervals = parse_octopus_de_agreement(tou, start, end, BERLIN)
+    # 00:00-06:00 local (the tail of the previous evening's slot), then 06-22 and 22-06 alternating
+    assert intervals[0] == (dt("2025-05-01T22:00Z"), dt("2025-05-02T04:00Z"), 22.0), intervals[0]
+    assert intervals[1] == (dt("2025-05-02T04:00Z"), dt("2025-05-02T20:00Z"), 35.0)
+    assert intervals[2] == (dt("2025-05-02T20:00Z"), dt("2025-05-03T04:00Z"), 22.0)
+    assert intervals[-1][1] == end and len(intervals) == 5, intervals
+    # Every minute of the window is covered exactly once
+    assert all(intervals[i][1] == intervals[i + 1][0] for i in range(len(intervals) - 1))
+    # Autumn DST: the night slot 22:00-06:00 local is 9 hours long that night
+    dst = parse_octopus_de_agreement(tou, dt("2025-10-25T22:00Z"), dt("2025-10-26T23:00Z"), BERLIN)
+    assert (dt("2025-10-25T20:00Z"), dt("2025-10-26T05:00Z")) not in [(s_, e) for s_, e, _v in dst]
+    assert dst[0] == (dt("2025-10-25T22:00Z"), dt("2025-10-26T05:00Z"), 22.0), dst[0]
+    assert dst[1] == (dt("2025-10-26T05:00Z"), dt("2025-10-26T21:00Z"), 35.0), dst[1]
+
+    # An agreement that has ended before the window, or one with no rate at all
+    ended = dict(fixed, validTo="2025-04-01T00:00:00+02:00")
+    assert parse_octopus_de_agreement(ended, start, end, BERLIN) == []
+    for bad in (
+        dict(fixed, unitRateInformation={"__typename": "SimpleProductUnitRateInformation", "latestGrossUnitRateCentsPerKwh": None}),
+        dict(tou, unitRateInformation={"__typename": "TimeOfUseProductUnitRateInformation", "rates": []}),
+        dict(fixed, validFrom=12345),
+    ):
+        try:
+            parse_octopus_de_agreement(bad, start, end, BERLIN)
+        except SpotPriceError:
+            continue
+        raise AssertionError("expected SpotPriceError for {}".format(bad))
+
+
+def test_spotprice_octopus_de_auth_and_errors(my_predbat=None):
+    """The JWT is reused until shortly before its exp; a rejected token is replaced once; a bad key, rate limit, HTTP failure, several accounts or no active agreement are SpotPriceErrors with their category."""
+    import spotprice as spotprice_module
+
+    recorded = []
+    original = spotprice_module.record_api_call
+    spotprice_module.record_api_call = lambda service, success=True, reason=None: recorded.append((service, success, reason))
+    try:
+        now = dt("2025-05-02T08:00Z")
+        api, fake = make_octopus_de()
+        pin_now(api, now)
+        run(api.fetch_supplier(now))
+        pin_now(api, dt("2025-05-02T08:58Z"))
+        run(api.fetch_supplier(dt("2025-05-02T08:58Z")))
+        assert fake.count("token") == 1
+        pin_now(api, dt("2025-05-02T08:59:30Z"))  # inside the 60 second margin before exp
+        run(api.fetch_supplier(dt("2025-05-02T08:59:30Z")))
+        assert fake.count("token") == 2
+
+        # A token the API no longer accepts is replaced and the query retried once
+        pin_now(api, now)
+        fake.queued["agreements"] = [kraken_error("KT-CT-1124", "Token has expired.")]
+        assert len(run(api.fetch_supplier(now))) == 8 and fake.count("token") == 3
+        fake.queued["agreements"] = [kraken_error("KT-CT-1124"), kraken_error("KT-CT-1124", "Token has expired.")]
+        recorded.clear()
+        try:
+            run(api.fetch_supplier(now))
+            raise AssertionError("repeated token error should raise")
+        except SpotPriceError as e:
+            assert "Token has expired" in str(e)
+        assert recorded[-1] == ("octopus_de", False, "auth_error")
+
+        cases = [
+            ("token", kraken_error("KT-CT-1139", "Authentication failed."), "rejected the API key", "auth_error"),
+            ("token", kraken_error("KT-CT-1199", "Too many requests."), "rate limit", "rate_limit"),
+            ("token", (502, None), "HTTP 502", "server_error"),
+            ("token", (200, {"data": {"obtainKrakenToken": None}}), "did not issue a token", "decode_error"),
+            ("agreements", kraken_error("KT-CT-4123", "Unauthorized."), "agreements query failed", "client_error"),
+            ("agreements", (200, octopus_de_agreement(active=False)), "no active electricity agreement", "client_error"),
+            ("agreements", (200, {"data": {"account": None}}), "account not found", "client_error"),
+        ]
+        for operation, reply, phrase, reason in cases:
+            api, fake = make_octopus_de(octopus_de_api_key="sk_live_secret")
+            pin_now(api, now)
+            fake.queued[operation] = [reply]
+            recorded.clear()
+            try:
+                run(api.fetch_supplier(now))
+                raise AssertionError("expected an error for {}".format(phrase))
+            except SpotPriceError as e:
+                assert phrase in str(e) and "sk_live_secret" not in str(e), (phrase, str(e))
+            assert recorded[-1] == ("octopus_de", False, reason), (phrase, recorded)
+
+        several, several_fake = make_octopus_de()
+        several_fake.accounts = ["A-1", "A-2"]
+        pin_now(several, now)
+        try:
+            run(several.fetch_supplier(now))
+            raise AssertionError("several accounts should raise")
+        except SpotPriceError as e:
+            assert "A-1, A-2" in str(e) and "spotprice_octopus_de_account" in str(e)
+
+        # A refresh failure backs off the supplier source like any other
+        failing, failing_fake = make_octopus_de()
+        failing_fake.queued["token"] = [kraken_error("KT-CT-1139", "Authentication failed.")]
+        assert run(failing.refresh(now)) is False and failing.source_failures["supplier"] == 1 and "rejected the API key" in failing.last_error
+    finally:
+        spotprice_module.record_api_call = original
+
+
+def test_spotprice_octopus_de_inference_and_config(my_predbat=None):
+    """An Octopus Energy Germany API key alone selects octopus_de; with another supplier's credentials the provider must be set; the provider without a key is a config error."""
+    from spotprice import jwt_expiry
+
+    assert make_api(provider=None, entsoe_token=None, zone=None, octopus_de_api_key="k").provider == "octopus_de"
+    both = make_api(provider=None, entsoe_token=None, zone=None, octopus_de_api_key="k", tibber_token="t")
+    assert "tibber, octopus_de" in both.config_error
+    assert make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k", tibber_token="t").config_error is None
+    assert make_api(provider="octopus_de", entsoe_token=None, zone=None).config_error == "spotprice_octopus_de_api_key is required for provider octopus_de"
+    assert jwt_expiry(make_jwt(dt("2025-05-02T09:00Z"))) == dt("2025-05-02T09:00Z")
+    assert jwt_expiry("not-a-jwt") is None
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1663,6 +1910,10 @@ SPOTPRICE_TESTS = [
     test_spotprice_ostrom_auth_errors,
     test_spotprice_ostrom_all_in_and_refresh,
     test_spotprice_ostrom_provider_inference,
+    test_spotprice_octopus_de_dynamic,
+    test_spotprice_octopus_de_fixed_and_time_of_use,
+    test_spotprice_octopus_de_auth_and_errors,
+    test_spotprice_octopus_de_inference_and_config,
 ]
 
 

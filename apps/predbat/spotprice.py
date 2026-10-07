@@ -30,11 +30,14 @@ Price sources, chosen by spotprice_provider:
   - ostrom:       Ostrom's end-user price for the contract's postcode (spot plus taxes, levies and
                   variable grid fees, VAT included), read with a client ID and secret from Ostrom's
                   developer portal. Used as-is, like Tibber.
+  - octopus_de:   Octopus Energy Germany's unit rates for the account's active agreement (dynamic
+                  forecast, time-of-use or fixed; VAT included), read from its Kraken GraphQL API
+                  with an API key. Used as-is, like Tibber.
 
 Export is either a fixed feed-in tariff or spot-linked (spot + export markup, no VAT), with an
 optional rule that pays nothing in any interval where the spot price is negative (Germany's
 Solarspitzengesetz). Spot data for the export side is fetched from ENTSO-E/Energy-Charts even when
-a supplier (Tibber, Ostrom) supplies the import price.
+a supplier (Tibber, Ostrom, Octopus Energy Germany) supplies the import price.
 
 Rates are published in the same shape as the Octopus/Kraken rate sensors (value_inc_vat,
 valid_from, valid_to) and wired in through metric_octopus_import / metric_octopus_export, so the
@@ -46,6 +49,7 @@ import asyncio
 import base64
 import functools
 import hashlib
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -59,12 +63,12 @@ from const import TIME_FORMAT_HA
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
-SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom")
+SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom", "octopus_de")
 # Providers whose import price is the market spot price plus the configured markup, charge zones and VAT
 SPOT_PROVIDERS = ("entsoe", "energycharts")
 # Suppliers read through the generic "supplier" source: their API gives the end-user price in minor
 # units per kWh with markup, grid fees, levies and VAT already in, so it is used as-is
-SUPPLIER_PROVIDERS = ("ostrom",)
+SUPPLIER_PROVIDERS = ("ostrom", "octopus_de")
 # Every provider whose import price comes from the supplier rather than from spot + markup
 ALL_IN_PROVIDERS = ("tibber",) + SUPPLIER_PROVIDERS
 SPOTPRICE_EXPORT_MODES = ("none", "fixed", "spot")
@@ -75,6 +79,12 @@ TIBBER_URL = "https://api.tibber.com/v1-beta/gql"
 OSTROM_AUTH_URL = "https://auth.production.ostrom-api.io/oauth2/token"
 OSTROM_API_URL = "https://production.ostrom-api.io"
 # Ostrom also runs a sandbox (auth.sandbox.ostrom-api.io / sandbox.ostrom-api.io) with test data only
+OCTOPUS_DE_URL = "https://api.oeg-kraken.energy/v1/graphql/"
+# Kraken error codes: a token the API no longer accepts (refresh it and retry once), credentials it
+# rejects outright, and its GraphQL rate limit
+KRAKEN_TOKEN_ERROR_CODES = ("KT-CT-1111", "KT-CT-1124", "KT-CT-1139", "KT-CT-1143")
+KRAKEN_CREDENTIAL_ERROR_CODES = ("KT-CT-1138", "KT-CT-1139")
+KRAKEN_RATE_LIMIT_CODE = "KT-CT-1199"
 # Seconds before an OAuth2 access token's stated expiry at which it is renewed
 TOKEN_EXPIRY_MARGIN_SECONDS = 60
 
@@ -538,6 +548,154 @@ def parse_ostrom_json(data):
     return intervals_from_starts(pairs, HOUR)
 
 
+# Octopus Energy Germany (Kraken). The API key is exchanged for a JWT; the account's agreements live
+# under properties -> electricityMalos (German market locations). Every query here has been checked
+# against the live schema: Kraken validates a query before it looks at the Authorization header.
+OCTOPUS_DE_TOKEN_MUTATION = "mutation ObtainToken($input: ObtainJSONWebTokenInput!) { obtainKrakenToken(input: $input) { token } }"
+OCTOPUS_DE_ACCOUNTS_QUERY = "query { viewer { accounts { number } } }"
+OCTOPUS_DE_RATE_FIELDS = (
+    "__typename " "... on SimpleProductUnitRateInformation { latestGrossUnitRateCentsPerKwh } " "... on TimeOfUseProductUnitRateInformation { rates { latestGrossUnitRateCentsPerKwh timeslotActivationRules { activeFromTime activeToTime } } }"
+)
+OCTOPUS_DE_AGREEMENTS_QUERY = (
+    "query Agreements($accountNumber: String!) { account(accountNumber: $accountNumber) { properties { electricityMalos { maloNumber agreements { "
+    "id isActive validFrom validTo product { code } "
+    "unitRateInformation { " + OCTOPUS_DE_RATE_FIELDS + " } "
+    "unitRateForecast { validFrom validTo unitRateInformation { " + OCTOPUS_DE_RATE_FIELDS + " } } "
+    "} } } } }"
+)
+
+
+def kraken_error_codes(body):
+    """The errorCode of every GraphQL error in a Kraken response."""
+    if not isinstance(body, dict):
+        return []
+    return [((error.get("extensions") or {}).get("errorCode") if isinstance(error, dict) else None) for error in body.get("errors") or []]
+
+
+def kraken_error_text(body):
+    """A short description of the GraphQL errors in a Kraken response."""
+    parts = []
+    for error in body.get("errors") or [] if isinstance(body, dict) else []:
+        if isinstance(error, dict):
+            extensions = error.get("extensions") or {}
+            parts.append("{}{}".format(extensions.get("errorDescription") or error.get("message") or "error", " ({})".format(extensions["errorCode"]) if extensions.get("errorCode") else ""))
+        else:
+            parts.append(str(error))
+    return "; ".join(parts) or "unknown error"
+
+
+def jwt_expiry(token):
+    """The exp claim of a JWT as an aware UTC datetime, or None when it cannot be read. The signature is not checked."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return datetime.fromtimestamp(int(claims["exp"]), tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def select_octopus_de_agreement(data):
+    """Pick the active electricity agreement from an Octopus Energy Germany agreements response.
+
+    The first agreement marked isActive across the account's properties and market locations wins.
+    Returns the agreement dict; raises SpotPriceError when there is none.
+    """
+    if not isinstance(data, dict):
+        raise SpotPriceError("Octopus Energy Germany returned an unexpected agreements response")
+    account = (data.get("data") or {}).get("account")
+    if not isinstance(account, dict):
+        raise SpotPriceError("Octopus Energy Germany account not found")
+    for prop in account.get("properties") or []:
+        for malo in (prop or {}).get("electricityMalos") or []:
+            for agreement in (malo or {}).get("agreements") or []:
+                if isinstance(agreement, dict) and agreement.get("isActive"):
+                    return agreement
+    raise SpotPriceError("Octopus Energy Germany account has no active electricity agreement")
+
+
+def _gross_rate(info):
+    """The gross (VAT included) cents per kWh of a Simple rate, or of the first rate of a time-of-use one."""
+    if info.get("__typename") == "TimeOfUseProductUnitRateInformation" or "rates" in info:
+        rates = info.get("rates") or []
+        if not rates:
+            return None
+        info = rates[0]
+    value = info.get("latestGrossUnitRateCentsPerKwh")
+    return None if value in (None, "") else float(value)
+
+
+def _parse_time_of_day(text):
+    """Parse a Kraken HH:MM[:SS] time of day into minutes after midnight."""
+    minutes = parse_hhmm(text)
+    if minutes is None:
+        raise SpotPriceError("Octopus Energy Germany returned an unreadable time of day {}".format(text))
+    return minutes
+
+
+@parse_errors_as("Octopus Energy Germany")
+def parse_octopus_de_agreement(agreement, start, end, tz):
+    """Turn an Octopus Energy Germany agreement into (start, end, cents per kWh incl. VAT) UTC intervals over [start, end).
+
+    A dynamic agreement carries unitRateForecast, one entry per price interval, and those are used
+    as they are. Otherwise the agreement's unitRateInformation is expanded over the window: a Simple
+    (fixed) rate becomes one interval, and a time-of-use rate repeats its timeslot activation rules
+    (local times, tz) every day - an end at or before the start wraps past midnight, so 00:00 is the
+    end of the day. The window is clipped to the agreement's own validity.
+    """
+    valid_from = parse_utc(agreement["validFrom"]) if agreement.get("validFrom") else None
+    valid_to = parse_utc(agreement["validTo"]) if agreement.get("validTo") else None
+    if valid_from and valid_from > start:
+        start = valid_from
+    if valid_to and valid_to < end:
+        end = valid_to
+    if start >= end:
+        return []
+
+    forecast = agreement.get("unitRateForecast") or []
+    intervals = []
+    for entry in forecast:
+        rate = _gross_rate(entry.get("unitRateInformation") or {})
+        slot_start = parse_utc(entry["validFrom"])
+        slot_end = parse_utc(entry["validTo"])
+        if rate is None or slot_end <= start or slot_start >= end or slot_end <= slot_start:
+            continue
+        intervals.append((slot_start, slot_end, round(rate, 4)))
+    if intervals:
+        return sorted(intervals, key=lambda item: item[0])
+
+    info = agreement.get("unitRateInformation") or {}
+    if info.get("__typename") != "TimeOfUseProductUnitRateInformation" and "rates" not in info:
+        rate = _gross_rate(info)
+        if rate is None:
+            raise SpotPriceError("Octopus Energy Germany agreement {} has no unit rate".format(agreement.get("id")))
+        return [(start, end, round(rate, 4))]
+
+    slots = []
+    for slot in info.get("rates") or []:
+        value = slot.get("latestGrossUnitRateCentsPerKwh")
+        if value in (None, ""):
+            continue
+        for rule in slot.get("timeslotActivationRules") or []:
+            slots.append((_parse_time_of_day(rule.get("activeFromTime")), _parse_time_of_day(rule.get("activeToTime")), float(value)))
+    if not slots:
+        raise SpotPriceError("Octopus Energy Germany agreement {} has a time-of-use tariff with no timeslots".format(agreement.get("id")))
+    day = start.astimezone(tz).date() - timedelta(days=1)
+    last_day = end.astimezone(tz).date()
+    while day <= last_day:
+        for from_minute, to_minute, rate in slots:
+            span = (to_minute - from_minute) % (24 * 60) or 24 * 60
+            local_start = datetime(day.year, day.month, day.day) + timedelta(minutes=from_minute)
+            local_end = local_start + timedelta(minutes=span)
+            slot_start = (tz.localize(local_start) if hasattr(tz, "localize") else local_start.replace(tzinfo=tz)).astimezone(timezone.utc)
+            slot_end = (tz.localize(local_end) if hasattr(tz, "localize") else local_end.replace(tzinfo=tz)).astimezone(timezone.utc)
+            slot_start, slot_end = max(slot_start, start), min(slot_end, end)
+            if slot_start < slot_end:
+                intervals.append((slot_start, slot_end, round(rate, 4)))
+        day += timedelta(days=1)
+    return sorted(intervals, key=lambda item: item[0])
+
+
 def parse_hhmm(text):
     """Parse HH:MM or HH:MM:SS into minutes after midnight (24:00 allowed), or None."""
     if text is None:
@@ -697,6 +855,8 @@ class SpotPriceAPI(ComponentBase):
         ostrom_client_id=None,
         ostrom_client_secret=None,
         ostrom_contract_id=None,
+        octopus_de_api_key=None,
+        octopus_de_account=None,
         markup=0.0,
         vat=0.0,
         charge_zones=None,
@@ -711,6 +871,7 @@ class SpotPriceAPI(ComponentBase):
         self.tibber_token = tibber_token
         self.ostrom_client_id = ostrom_client_id
         self.ostrom_client_secret = ostrom_client_secret
+        self.octopus_de_api_key = octopus_de_api_key
         ambiguous = None
         if not provider:
             # Unset: the one supplier whose credentials are present - even when a zone is also set,
@@ -730,6 +891,7 @@ class SpotPriceAPI(ComponentBase):
         # The configured home, kept apart from one picked at run time, so the cache name is stable
         self.tibber_home_id_configured = tibber_home_id
         self.ostrom_contract_id = ostrom_contract_id
+        self.octopus_de_account = str(octopus_de_account).strip() if octopus_de_account else None
         self.markup = self.to_float(markup, "spotprice_markup")
         self.vat = self.to_float(vat, "spotprice_vat")
         if self.vat >= 1:
@@ -807,6 +969,8 @@ class SpotPriceAPI(ComponentBase):
         self.ostrom_access_token = None
         self.ostrom_token_expiry = None
         self.ostrom_contract = None
+        self.octopus_de_token = None
+        self.octopus_de_token_expiry = None
         self.last_error = None
         self.import_rates = []
         self.export_rates = []
@@ -819,6 +983,7 @@ class SpotPriceAPI(ComponentBase):
         present = {
             "tibber": bool(self.tibber_token),
             "ostrom": bool(self.ostrom_client_id or self.ostrom_client_secret),
+            "octopus_de": bool(self.octopus_de_api_key),
         }
         return [name for name in SPOTPRICE_PROVIDERS if present.get(name)]
 
@@ -826,6 +991,8 @@ class SpotPriceAPI(ComponentBase):
         """A configuration problem that stops the chosen supplier from ever fetching, or None."""
         if self.provider == "ostrom" and not (self.ostrom_client_id and self.ostrom_client_secret):
             return "spotprice_ostrom_client_id and spotprice_ostrom_client_secret are both required for provider ostrom"
+        if self.provider == "octopus_de" and not self.octopus_de_api_key:
+            return "spotprice_octopus_de_api_key is required for provider octopus_de"
         return None
 
     def to_float(self, value, name, default=0.0):
@@ -1032,7 +1199,7 @@ class SpotPriceAPI(ComponentBase):
         has already warned once if not) and then Energy-Charts. Provider energycharts uses Energy-Charts
         only, even if a token is present. Provider tibber, whose spot prices only feed the export side,
         behaves like entsoe when a token is set and like energycharts otherwise, as do the other
-        suppliers (ostrom). Returns (intervals, source).
+        suppliers (ostrom, octopus_de). Returns (intervals, source).
         """
         sources = []
         if self.entsoe_token and (self.provider == "entsoe" or self.provider in ALL_IN_PROVIDERS):
@@ -1207,11 +1374,104 @@ class SpotPriceAPI(ComponentBase):
         record_api_call("ostrom")
         return intervals
 
+    async def octopus_de_post(self, query, variables, token=None):
+        """POST one GraphQL request to Octopus Energy Germany. Returns the parsed body; HTTP and rate-limit failures raise SpotPriceError."""
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if token:
+            # Kraken takes the JWT on its own, without a Bearer prefix
+            headers["Authorization"] = token
+        try:
+            status, body = await self.http_post_json(OCTOPUS_DE_URL, {"query": query, "variables": variables}, headers)
+        except NETWORK_ERRORS as e:
+            record_api_call("octopus_de", False, "connection_error")
+            raise SpotPriceError("Octopus Energy Germany request failed: {}".format(e))
+        except Exception as e:
+            record_api_call("octopus_de", False, "decode_error")
+            raise SpotPriceError("Octopus Energy Germany response could not be read ({}: {})".format(type(e).__name__, e))
+        if KRAKEN_RATE_LIMIT_CODE in kraken_error_codes(body):
+            record_api_call("octopus_de", False, "rate_limit")
+            raise SpotPriceError("Octopus Energy Germany rate limit hit ({})".format(KRAKEN_RATE_LIMIT_CODE))
+        if status != 200 and not (isinstance(body, dict) and body.get("errors")):
+            self.supplier_status_error("octopus_de", "Octopus Energy Germany", status, body, what="API key")
+        if not isinstance(body, dict):
+            record_api_call("octopus_de", False, "decode_error")
+            raise SpotPriceError("Octopus Energy Germany returned an unexpected response")
+        return body
+
+    async def octopus_de_auth_token(self):
+        """Return a Kraken JWT for the API key, obtaining a new one when none is held or it is about to expire."""
+        now = self.now()
+        if self.octopus_de_token and self.octopus_de_token_expiry and now < self.octopus_de_token_expiry:
+            return self.octopus_de_token
+        body = await self.octopus_de_post(OCTOPUS_DE_TOKEN_MUTATION, {"input": {"APIKey": self.octopus_de_api_key}})
+        token = ((body.get("data") or {}).get("obtainKrakenToken") or {}).get("token")
+        if not token:
+            codes = kraken_error_codes(body)
+            if any(code in KRAKEN_CREDENTIAL_ERROR_CODES for code in codes):
+                record_api_call("octopus_de", False, "auth_error")
+                raise SpotPriceError("Octopus Energy Germany rejected the API key ({})".format(kraken_error_text(body)))
+            record_api_call("octopus_de", False, "client_error" if codes else "decode_error")
+            raise SpotPriceError("Octopus Energy Germany did not issue a token ({})".format(kraken_error_text(body)))
+        expiry = jwt_expiry(token) or now + timedelta(hours=1)
+        self.octopus_de_token = token
+        self.octopus_de_token_expiry = expiry - timedelta(seconds=TOKEN_EXPIRY_MARGIN_SECONDS)
+        return token
+
+    async def octopus_de_query(self, query, variables, what):
+        """Run an authenticated query. A token Kraken no longer accepts is replaced once; any other GraphQL error raises SpotPriceError."""
+        for attempt in (1, 2):
+            token = await self.octopus_de_auth_token()
+            body = await self.octopus_de_post(query, variables, token)
+            codes = kraken_error_codes(body)
+            if not codes:
+                return body
+            if attempt == 1 and any(code in KRAKEN_TOKEN_ERROR_CODES for code in codes):
+                self.octopus_de_token = None
+                self.octopus_de_token_expiry = None
+                continue
+            auth = any(code in KRAKEN_TOKEN_ERROR_CODES for code in codes)
+            record_api_call("octopus_de", False, "auth_error" if auth else "client_error")
+            raise SpotPriceError("Octopus Energy Germany {} failed: {}".format(what, kraken_error_text(body)))
+        return None  # pragma: no cover - the loop always returns or raises
+
+    async def fetch_octopus_de(self, start, end):
+        """Fetch the unit rates of the account's active agreement for [start, end). Returns intervals in cents per kWh, VAT included."""
+        if not self.octopus_de_api_key:
+            raise SpotPriceError("Octopus Energy Germany API key is not configured (spotprice_octopus_de_api_key)")
+        if not self.octopus_de_account:
+            body = await self.octopus_de_query(OCTOPUS_DE_ACCOUNTS_QUERY, {}, "account lookup")
+            accounts = [account.get("number") for account in ((body.get("data") or {}).get("viewer") or {}).get("accounts") or [] if isinstance(account, dict) and account.get("number")]
+            if len(accounts) != 1:
+                record_api_call("octopus_de", False, "client_error")
+                if not accounts:
+                    raise SpotPriceError("Octopus Energy Germany API key has no accounts")
+                raise SpotPriceError("Octopus Energy Germany API key has several accounts ({}), set spotprice_octopus_de_account".format(", ".join(accounts)))
+            self.octopus_de_account = accounts[0]
+        body = await self.octopus_de_query(OCTOPUS_DE_AGREEMENTS_QUERY, {"accountNumber": self.octopus_de_account}, "agreements query")
+        try:
+            agreement = select_octopus_de_agreement(body)
+        except SpotPriceError:
+            record_api_call("octopus_de", False, "client_error")
+            raise
+        tz = self.local_tz if self.local_tz is not None and not isinstance(self.local_tz, str) else MARKET_TIMEZONE
+        try:
+            intervals = parse_octopus_de_agreement(agreement, start, end, tz)
+        except SpotPriceError:
+            record_api_call("octopus_de", False, "decode_error")
+            raise
+        if not intervals:
+            record_api_call("octopus_de", False, "client_error")
+            raise SpotPriceError("Octopus Energy Germany agreement has no rates for this period")
+        record_api_call("octopus_de")
+        return intervals
+
     async def fetch_supplier(self, now):
         """Fetch the configured supplier's end-user prices over the fetch window."""
         start, end = self.fetch_window(now)
         if self.provider == "ostrom":
             return await self.fetch_ostrom(start, end)
+        if self.provider == "octopus_de":
+            return await self.fetch_octopus_de(start, end)
         raise SpotPriceError("provider {} has no supplier price source".format(self.provider))
 
     # ------------------------------------------------------------------
@@ -1638,6 +1898,8 @@ async def test_spotprice_api(args):  # pragma: no cover
         ostrom_client_id=args.ostrom_client_id,
         ostrom_client_secret=args.ostrom_client_secret,
         ostrom_contract_id=args.ostrom_contract_id,
+        octopus_de_api_key=args.octopus_de_api_key,
+        octopus_de_account=args.octopus_de_account,
         markup=args.markup,
         vat=args.vat,
         export_mode=args.export_mode,
@@ -1670,6 +1932,8 @@ def main():  # pragma: no cover
     parser.add_argument("--ostrom-client-id", dest="ostrom_client_id")
     parser.add_argument("--ostrom-client-secret", dest="ostrom_client_secret")
     parser.add_argument("--ostrom-contract-id", dest="ostrom_contract_id")
+    parser.add_argument("--octopus-de-api-key", dest="octopus_de_api_key")
+    parser.add_argument("--octopus-de-account", dest="octopus_de_account")
     parser.add_argument("--markup", type=float, default=0.0)
     parser.add_argument("--vat", type=float, default=0.0, help="VAT as a fraction, e.g. 0.19")
     parser.add_argument("--export-mode", dest="export_mode", default="none", choices=SPOTPRICE_EXPORT_MODES)
