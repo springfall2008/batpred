@@ -27,6 +27,8 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
     failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
     failed += test_intelligent_dispatch_change_requests_replan(my_predbat)
+    failed += test_car_slots_rewired_when_owner_changes(my_predbat)
+    failed += test_car_slots_not_taken_without_a_device_to_wire(my_predbat)
     return failed
 
 
@@ -1297,6 +1299,157 @@ def _stub_run_dependencies(api):
     api.async_update_intelligent_devices = _async_none
     api.async_intelligent_update_sensor = _async_none
     api.save_octopus_cache = _async_none
+
+
+def test_car_slots_rewired_when_owner_changes(my_predbat):
+    """
+    Issue #5402: the Ohme component claims the car slots when it takes the Intelligent slots itself,
+    and gives the claim up again once it finds Octopus Intelligent is driving the car and not the
+    charger. The device set has not moved when that happens, so run() has to re-wire the slots on the
+    change of owner alone - otherwise they are left pointing at nothing until the next restart.
+    """
+    print("\n**** Running Octopus car slot owner change test ****")
+    failed = 0
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+
+    api = _make_discovery_api(my_predbat, "owner-change")
+    device_id = "smart-flex-vehicle-7001"
+    api.intelligent_devices = {device_id: {"suspended": False, "is_charger": False, "provider": "BMW"}}
+    api.tariffs = {"import": {"tariffCode": "E-1R-INTELLI-VAR-22-10-14-A", "productCode": "INTELLI-VAR-22-10-14", "deviceID": "meter-1"}}
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    api.report_discovery = lambda report: None
+    own_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix(device_id))
+
+    # Ohme holds the car slots on the first cycle, so Octopus leaves them alone
+    my_predbat.car_slot_owner = "ohme"
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    asyncio.run(api.run(seconds=0, first=True))
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
+        print(f"ERROR: expected the Ohme wiring left alone while claimed, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Ohme lets go and clears its wiring. Nothing about the devices has changed...
+    my_predbat.car_slot_owner = None
+    my_predbat.args["octopus_intelligent_slot"] = []
+    # ...and a cycle that does not refresh the sensors does not wire entities it may not have published
+    asyncio.run(api.run(seconds=60, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != []:
+        print(f"ERROR: expected no re-wire off a sensor refresh, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+    # The next sensor refresh wires the car's own dispatch entity
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=120, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_entity]:
+        print(f"ERROR: expected the car slots wired to {own_entity} once released, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # And with the owner settled it is not done again: the user's later change is left alone
+    my_predbat.args["octopus_intelligent_slot"] = ["binary_sensor.set_by_hand"]
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=240, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != ["binary_sensor.set_by_hand"]:
+        print(f"ERROR: expected no repeat re-wire with the owner unchanged, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+    if failed == 0:
+        print("PASS: the car slots were re-wired when their owner changed")
+    return failed
+
+
+def test_car_slots_not_taken_without_a_device_to_wire(my_predbat):
+    """
+    PR #5405 review: the Ohme component also gives up its claim on the car slots when there are no
+    dispatches to be had from anyone - the Intelligent device suspended, or the tariff no longer
+    Intelligent - and then wires them to the charger's own schedule. The Octopus component must
+    not clear or overwrite that: it has nothing to wire them to. It still clears wiring of its own
+    when its last device goes (issue #4648).
+    """
+    print("\n**** Running Octopus car slots left alone test ****")
+    failed = 0
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+    ohme_entity = "binary_sensor.predbat_ohme_slot_active"
+    iog_tariff = {"import": {"tariffCode": "E-1R-INTELLI-VAR-22-10-14-A", "productCode": "INTELLI-VAR-22-10-14", "deviceID": "meter-1"}}
+    cosy_tariff = {"import": {"tariffCode": "E-1R-COSY-22-12-08-A", "productCode": "COSY-22-12-08", "deviceID": "meter-1"}}
+    device_id = "smart-flex-charger-8001"
+
+    def make_api(account_id, tariffs, suspended):
+        """An OctopusAPI with one Ohme Intelligent device, started while the Ohme component holds the car slots"""
+        api = _make_discovery_api(my_predbat, account_id)
+        api.intelligent_devices = {device_id: {"suspended": suspended, "is_charger": True, "provider": "Ohme"}}
+        api.tariffs = tariffs
+        _publish_car_entities(my_predbat, api, device_id)
+        _stub_run_dependencies(api)
+        api.report_discovery = lambda report: None
+        my_predbat.car_slot_owner = "ohme"
+        my_predbat.args["octopus_intelligent_slot"] = ohme_entity
+        asyncio.run(api.run(seconds=0, first=True))
+        return api
+
+    def release_and_run(api, cycles=2):
+        """The Ohme component lets go, keeping the slots on its own entity, then sensor refreshes follow"""
+        my_predbat.car_slot_owner = None
+        for cycle in range(cycles):
+            api.sensor_updated_at = None
+            asyncio.run(api.run(seconds=120 * (cycle + 1), first=False))
+
+    # The Ohme is suspended in the Octopus app: Ohme releases the slots and uses its own schedule.
+    # Two refreshes, as the owner and the device set are noticed one at a time
+    api = make_api("left-alone-suspended", iog_tariff, suspended=False)
+    api.intelligent_devices[device_id]["suspended"] = True
+    release_and_run(api)
+    if my_predbat.args.get("octopus_intelligent_slot") != ohme_entity:
+        print(f"ERROR: expected the Ohme schedule wiring kept with every device suspended, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Off the Intelligent tariff: the device is still cached as live, as it is not refreshed off
+    # Intelligent, but its dispatch entities are stale and must not replace the Ohme schedule
+    api = make_api("left-alone-tariff", iog_tariff, suspended=False)
+    api.tariffs = cosy_tariff
+    release_and_run(api)
+    if my_predbat.args.get("octopus_intelligent_slot") != ohme_entity:
+        print(f"ERROR: expected the Ohme schedule wiring kept off an Intelligent tariff, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Started with only a suspended device and someone else's wiring in place: not cleared either
+    api = make_api("left-alone-start", iog_tariff, suspended=True)
+    release_and_run(api, cycles=1)
+    my_predbat.args["octopus_intelligent_slot"] = ohme_entity
+    api.automatic_config(api.tariffs)
+    if my_predbat.args.get("octopus_intelligent_slot") != ohme_entity:
+        print(f"ERROR: expected wiring that is not Octopus's own left alone, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Wiring Octopus made itself is still cleared when its last device is suspended (#4648)
+    my_predbat.car_slot_owner = None
+    my_predbat.args["octopus_intelligent_slot"] = []
+    api = _make_discovery_api(my_predbat, "left-alone-own")
+    api.intelligent_devices = {device_id: {"suspended": False, "is_charger": True, "provider": "Ohme"}}
+    api.tariffs = iog_tariff
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    api.report_discovery = lambda report: None
+    asyncio.run(api.run(seconds=0, first=True))
+    own_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix(device_id))
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_entity]:
+        print(f"ERROR: expected Octopus to wire its own device, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+    api.intelligent_devices[device_id]["suspended"] = True
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=120, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != []:
+        print(f"ERROR: expected Octopus's own wiring cleared once its device is suspended, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+    if failed == 0:
+        print("PASS: the car slots were left alone with no device to wire them to")
+    return failed
 
 
 def test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat):

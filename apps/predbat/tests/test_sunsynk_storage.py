@@ -8,7 +8,7 @@
 
 """Tests for Sunsynk cache save, restore and per-tier age tracking."""
 
-from sunsynk_const import SUNSYNK_CACHE_STATIC, SUNSYNK_CACHE_CONFIG, SUNSYNK_CACHE_RATINGS, SUNSYNK_CACHE_CONTROL, SUNSYNK_RESTORE_MAX_CONTROL, SUNSYNK_TTL_STATIC, SUNSYNK_TTL_LIVE
+from sunsynk_const import SUNSYNK_CACHE_STATIC, SUNSYNK_CACHE_CONFIG, SUNSYNK_CACHE_RATINGS, SUNSYNK_CACHE_CONTROL, SUNSYNK_CACHE_APPLIED_PAYLOAD, SUNSYNK_RESTORE_MAX_CONTROL, SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE, SUNSYNK_TTL_STATIC, SUNSYNK_TTL_LIVE
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_infra import run_async as run_async_local
 
@@ -114,16 +114,13 @@ def test_restore_reinstates_static_and_config():
 
 
 def test_control_cache_restore_is_time_bounded():
-    """A stale applied-payload/control_active cache is discarded so the next write is forced.
+    """A stale applied-payload cache is discarded, but control_active survives the restart.
 
-    It is a change-detection cache with no read-back, so restoring it asserts the inverter
-    still holds what Predbat last wrote. After a long outage that assertion is false, the
-    next write would be wrongly skipped and the battery would silently diverge.
-
-    control_active is bounded alongside applied_payload, not just restored unconditionally:
-    _reconcile_control() gates every write on control_active, so restoring it
-    past the same staleness bound would let a write-skipping restart still claim to be
-    actively controlling an inverter it has not actually confirmed for a long time.
+    The write guard is a local re-arming flag, not a proof the inverter still holds the
+    exact payload Predbat last sent. After a restart, a stale applied_payload must not be
+    trusted and must be cleared so the next write is forced, but control_active must be
+    kept so _reconcile_control() re-applies the current plan instead of waiting for an
+    unrelated entity event to press the write button again.
     """
     failed = False
     fresh = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL - 1})
@@ -140,10 +137,10 @@ def test_control_cache_restore_is_time_bounded():
     stale.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}, "control_active": ["INV1"]}
     run_async_local(stale.restore_state())
     if stale.applied_payload:
-        print(f"ERROR: a stale control cache was restored: {stale.applied_payload}")
+        print(f"ERROR: a stale applied_payload was restored: {stale.applied_payload}")
         failed = True
-    if stale.control_active:
-        print(f"ERROR: a stale control_active was restored: {stale.control_active}")
+    if stale.control_active != {"INV1"}:
+        print(f"ERROR: a stale control_active should survive the restart so re-arming still happens, got {stale.control_active}")
         failed = True
     assert not failed, "test_control_cache_restore_is_time_bounded"
 
@@ -194,8 +191,44 @@ def test_pre_upgrade_control_cache_infers_control_active():
     old_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
     old_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
     run_async_local(old_format.restore_state())
+    if old_format.applied_payload != {"INV1": {"sysWorkMode": "1"}}:
+        print(f"ERROR: a pre-upgrade cache should restore applied_payload, got {old_format.applied_payload}")
+        failed = True
     if old_format.control_active != {"INV1"}:
         print(f"ERROR: a pre-upgrade cache should infer control_active from applied_payload, got {old_format.control_active}")
+        failed = True
+
+    new_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0, SUNSYNK_CACHE_APPLIED_PAYLOAD: 1.0})
+    new_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "legacy"}}, "control_active": ["INV1"]}
+    new_format.storage.files[SUNSYNK_CACHE_APPLIED_PAYLOAD] = {"applied_payload": {"INV1": {"sysWorkMode": "new"}}}
+    run_async_local(new_format.restore_state())
+    if new_format.applied_payload != {"INV1": {"sysWorkMode": "new"}}:
+        print(f"ERROR: the new payload cache should take precedence over the legacy cache, got {new_format.applied_payload}")
+        failed = True
+
+    empty_new_format = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0, SUNSYNK_CACHE_APPLIED_PAYLOAD: 1.0})
+    empty_new_format.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "legacy"}}, "control_active": ["INV1"]}
+    empty_new_format.storage.files[SUNSYNK_CACHE_APPLIED_PAYLOAD] = {"applied_payload": {}}
+    run_async_local(empty_new_format.restore_state())
+    if empty_new_format.applied_payload and empty_new_format.applied_payload != {"INV1": {"sysWorkMode": "legacy"}}:
+        print(f"ERROR: an intentionally empty new payload cache must not restore the legacy payload, got {empty_new_format.applied_payload}")
+        failed = True
+
+    stale_legacy = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL + 1})
+    stale_legacy.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    run_async_local(stale_legacy.restore_state())
+    if stale_legacy.applied_payload:
+        print(f"ERROR: stale legacy applied_payload must be discarded: {stale_legacy.applied_payload}")
+        failed = True
+    if stale_legacy.control_active != {"INV1"}:
+        print(f"ERROR: stale legacy cache should infer control_active within the ownership window, got {stale_legacy.control_active}")
+        failed = True
+
+    expired_legacy = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE + 1})
+    expired_legacy.storage.files[SUNSYNK_CACHE_CONTROL] = {"applied_payload": {"INV1": {"sysWorkMode": "1"}}}
+    run_async_local(expired_legacy.restore_state())
+    if expired_legacy.control_active:
+        print(f"ERROR: legacy control ownership must expire after eight hours, got {expired_legacy.control_active}")
         failed = True
 
     explicit_empty = StoredSunsynk(ages={SUNSYNK_CACHE_CONTROL: 1.0})
