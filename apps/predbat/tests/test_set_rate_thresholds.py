@@ -1065,6 +1065,43 @@ def test_low_rate_sensors_publish_tariff_windows(my_predbat):
     return failed
 
 
+def test_dispatch_gone_priced_at_tariff_max(my_predbat):
+    """The PV10 "dispatch gone" worst case must price at the tariff's own maximum, not an event reward (#5392).
+
+    set_rate_thresholds() keeps rate_import_tariff_max for Prediction, which uses it as its rate_max
+    (the only thing Prediction's rate_max prices). A rescan resets it to the raw maximum until the
+    thresholds are worked out again, so a stale tariff maximum can never undercut the worst case.
+    """
+    print("**** test_dispatch_gone_priced_at_tariff_max ****")
+    failed = False
+
+    from prediction import Prediction
+
+    _setup_two_rate_tariff(my_predbat, event_start=17 * 60, event_end=19 * 60)
+    my_predbat.set_rate_thresholds()
+    if my_predbat.rate_import_tariff_max != 25.95:
+        print("ERROR: rate_import_tariff_max should be the 25.95p day rate, got {}".format(my_predbat.rate_import_tariff_max))
+        failed = True
+    if my_predbat.rate_max != 125.95:
+        print("ERROR: rate_max should keep the event price 125.95 for the dashboards, got {}".format(my_predbat.rate_max))
+        failed = True
+
+    flat = {minute: 0.0 for minute in range(0, my_predbat.forecast_minutes + my_predbat.minutes_now, 5)}
+    pred = Prediction(my_predbat, flat, flat, flat, flat)
+    if pred.rate_max != 25.95:
+        print("ERROR: Prediction should price a vanished dispatch at the tariff max 25.95, got {}".format(pred.rate_max))
+        failed = True
+
+    my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    if my_predbat.rate_import_tariff_max != my_predbat.rate_max:
+        print("ERROR: a rescan should reset rate_import_tariff_max to the raw max {}, got {}".format(my_predbat.rate_max, my_predbat.rate_import_tariff_max))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
 def test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat):
     """A real Axle export event on a flat 20p export tariff must not hide the ordinary windows (#4036, #5221).
 
@@ -1483,6 +1520,7 @@ _SNAPSHOT_FIELDS = (
     "rate_import_cost_threshold",
     "rate_import_pre_event_end",
     "rate_import_pre_event_threshold",
+    "rate_import_tariff_max",
     "rate_export_cost_threshold",
     # test_compare_and_annual_clear_stale_saving_minutes drives the real scan pipeline through
     # annual._apply_rates()/Compare.fetch_rates(), which populate these from its synthetic tariff -
@@ -1545,6 +1583,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_car_plan_uses_tariff_windows(my_predbat)
         failed |= test_no_pre_charge_for_an_event_below_the_import_price(my_predbat)
         failed |= test_low_rate_sensors_publish_tariff_windows(my_predbat)
+        failed |= test_dispatch_gone_priced_at_tariff_max(my_predbat)
         failed |= test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat)
         failed |= test_set_rate_thresholds_keeps_stored_stats_for_an_empty_table(my_predbat)
         failed |= test_rate_minmax_excluding_saving_ignores_overwritten_replicate_tag(my_predbat)

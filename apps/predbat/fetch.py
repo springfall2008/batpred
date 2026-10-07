@@ -2636,7 +2636,9 @@ class Fetch:
         find_event_pre_charge() then finds any saving session or Axle event worth charging ahead of, which
         find_low_rate_windows() uses to give the plan the windows before it (#249).
 
-        self.rate_min/rate_max/rate_average (and the export equivalents) are left untouched, since other consumers (dashboard sensors, graph
+        rate_import_tariff_max is kept for the PV10 "dispatch gone" price in prediction.py, which wants
+        the tariff's worst price rather than an event reward. self.rate_min/rate_max/rate_average (and
+        the export equivalents) are left untouched, since other consumers (dashboard sensors, graph
         scaling, plan.py pricing) want the real boosted price shown.
         """
         curr = self.currency_symbols[1]
@@ -2657,6 +2659,7 @@ class Fetch:
             rate_export_min, rate_export_max, rate_export_average = self.rate_minmax_excluding_saving(self.rate_export, self.rate_export_saving_minutes, self.rate_export_pre_saving)
         else:
             rate_export_min, rate_export_max, rate_export_average = self.rate_export_min, self.rate_export_max, self.rate_export_average
+        self.rate_import_tariff_max = rate_max
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)
@@ -2696,6 +2699,8 @@ class Fetch:
         Scan the rates and work out min/max
         """
         self.rate_min, self.rate_max, self.rate_average, self.rate_min_minute, self.rate_max_minute = self.rate_minmax(rates)
+        # set_rate_thresholds() lowers this to the tariff's own maximum once it knows the event minutes
+        self.rate_import_tariff_max = self.rate_max
         curr = self.currency_symbols[1]
 
         if print:

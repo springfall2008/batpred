@@ -67,8 +67,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     #     fetch rebuilds both every cycle in the product, but the debug harness never calls fetch, and
     #     debug files written before those fields existed carry neither. Their absent-value defaults
     #     send battery_value_rate back to rate_max / rate_export_max, which the debug file does carry.
-    #   - the saving-session minutes and pre-saving snapshots set_rate_thresholds() reads with --redo:
-    #     debug files written before they existed carry none of them. Empty sets and snapshots mean no event.
+    #   - the saving-session minutes and pre-saving snapshots set_rate_thresholds() reads with --redo,
+    #     and rate_import_tariff_max, which prices a vanished IOG dispatch: debug files written before
+    #     they existed carry none of them. Empty sets and snapshots mean no event, and a missing tariff
+    #     maximum falls back to rate_max, as the live code does before thresholds are worked out.
     my_predbat.dynamic_load_baseline = {}
     my_predbat.battery_rate_max_export = 0.0333
     my_predbat.rate_max_base = 0
@@ -77,7 +79,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.rate_export_saving_minutes = set()
     my_predbat.rate_import_pre_saving = {}
     my_predbat.rate_export_pre_saving = {}
+    my_predbat.rate_import_tariff_max = None
     my_predbat.read_debug_yaml(debug_file)
+    if my_predbat.rate_import_tariff_max is None:
+        my_predbat.rate_import_tariff_max = my_predbat.rate_max
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
