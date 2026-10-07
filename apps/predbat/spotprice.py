@@ -583,12 +583,14 @@ def parse_ews_json(data):
 
 
 @parse_errors_as("Ostrom")
-def select_ostrom_contract(data, contract_id=None):
+def select_ostrom_contract(data, contract_id=None, warn=None):
     """Pick the contract to price from an Ostrom /contracts response.
 
     Only ACTIVE contracts are priced - a terminated or pending one is never used as a stand-in.
     contract_id (spotprice_ostrom_contract_id) chooses one explicitly, and must itself be active;
-    otherwise there must be exactly one active contract. The contract must be a
+    otherwise there must be exactly one active contract. The status is matched case-insensitively.
+    Only when no contract carries a status at all is the single dynamic contract used without one,
+    reported through warn(message). The contract must be a
     dynamic product (SIMPLY_DYNAMIC and its successors) with a postcode: the postcode is what makes
     /spot-prices include the local taxes, levies and grid fees. Returns the contract dict.
     """
@@ -598,15 +600,36 @@ def select_ostrom_contract(data, contract_id=None):
     if not contracts:
         raise SpotPriceError("Ostrom account has no contracts")
     ids = ", ".join(str(contract.get("id")) for contract in contracts)
+
+    def is_active(contract):
+        """True for a contract whose status is ACTIVE, in any case."""
+        return str(contract.get("status") or "").strip().upper() == "ACTIVE"
+
+    def is_dynamic(contract):
+        """True for a dynamic product."""
+        return "DYNAMIC" in str(contract.get("productCode") or "").upper()
+
+    status_known = any("status" in contract for contract in contracts)
+    if not status_known:
+        # The status field is missing altogether: fall back to the one dynamic contract, never to a guess among several
+        dynamic = [contract for contract in contracts if is_dynamic(contract)]
+        if contract_id not in (None, ""):
+            dynamic = [contract for contract in dynamic if str(contract.get("id")) == str(contract_id).strip()]
+        if len(dynamic) != 1:
+            raise SpotPriceError("Ostrom contracts carry no status, so the active one cannot be told apart ({})".format(ids))
+        if warn:
+            warn("Ostrom contracts carry no status field - using the only dynamic contract {}".format(dynamic[0].get("id")))
+        contracts = dynamic
+        contract_id = None
     if contract_id not in (None, ""):
         matches = [contract for contract in contracts if str(contract.get("id")) == str(contract_id).strip()]
         if not matches:
             raise SpotPriceError("Ostrom contract {} not found, the account has {}".format(contract_id, ids))
         contract = matches[0]
-        if str(contract.get("status", "")).upper() != "ACTIVE":
+        if not is_active(contract):
             raise SpotPriceError("Ostrom contract {} is {}, not active".format(contract.get("id"), contract.get("status") or "of unknown status"))
     else:
-        active = [contract for contract in contracts if str(contract.get("status", "")).upper() == "ACTIVE"]
+        active = [contract for contract in contracts if is_active(contract) or not status_known]
         if not active:
             raise SpotPriceError("no active Ostrom contract, the account has {}".format(", ".join("{} ({})".format(c.get("id"), c.get("status")) for c in contracts)))
         if len(active) > 1:
@@ -659,7 +682,7 @@ OCTOPUS_DE_RATE_FIELDS = (
 )
 OCTOPUS_DE_AGREEMENTS_QUERY = (
     "query Agreements($accountNumber: String!) { account(accountNumber: $accountNumber) { properties { electricityMalos { maloNumber agreements { "
-    "id isActive isRevoked validFrom validTo product { code } "
+    "id isActive isRevoked validFrom validTo product { code displayName fullName isTimeOfUse termsContractType } "
     "unitRateInformation { " + OCTOPUS_DE_RATE_FIELDS + " } "
     "unitRateForecast { validFrom validTo unitRateInformation { " + OCTOPUS_DE_RATE_FIELDS + " } } "
     "} } } } }"
@@ -702,8 +725,10 @@ def select_octopus_de_agreements(data, malo=None):
     malo (spotprice_octopus_de_malo) chooses a market location explicitly. Otherwise the account
     must have exactly one market location with an active electricity agreement: two (a household
     meter and a heat pump meter, say) are an error naming them, since pricing either could be wrong.
-    The agreements returned are the active one and any not revoked that start after it, so a tariff
-    change inside the fetch window hands over to the next agreement. Raises SpotPriceError.
+    The agreements returned are the active one followed by its successors, each the single
+    non-revoked agreement starting at (or first after) the previous one's end, so a tariff change
+    inside the fetch window hands over and no two agreements ever cover the same instant. Raises
+    SpotPriceError.
     """
     if not isinstance(data, dict):
         raise SpotPriceError("Octopus Energy Germany returned an unexpected agreements response")
@@ -729,16 +754,19 @@ def select_octopus_de_agreements(data, malo=None):
     number, agreements, active = candidates[0]
     if len(active) > 1:
         raise SpotPriceError("Octopus Energy Germany market location {} has several active agreements ({})".format(number, ", ".join(str(a.get("id")) for a in active)))
-    current = active[0]
-    current_end = parse_utc(current["validTo"]) if current.get("validTo") else None
-    chain = [current]
-    if current_end is not None:
-        for agreement in agreements:
-            if agreement is current or agreement.get("isRevoked") or not agreement.get("validFrom"):
-                continue
-            if parse_utc(agreement["validFrom"]) >= current_end:
-                chain.append(agreement)
-    chain.sort(key=lambda agreement: parse_utc(agreement["validFrom"]) if agreement.get("validFrom") else datetime.min.replace(tzinfo=timezone.utc))
+    chain = [active[0]]
+    # At each handover take the one agreement starting at (or first after) the current one's end, so at
+    # most one agreement covers any instant; two claiming the same start cannot be told apart
+    while chain[-1].get("validTo"):
+        current_end = parse_utc(chain[-1]["validTo"])
+        following = [agreement for agreement in agreements if agreement not in chain and not agreement.get("isRevoked") and agreement.get("validFrom") and parse_utc(agreement["validFrom"]) >= current_end]
+        if not following:
+            break
+        first_start = min(parse_utc(agreement["validFrom"]) for agreement in following)
+        next_agreements = [agreement for agreement in following if parse_utc(agreement["validFrom"]) == first_start]
+        if len(next_agreements) > 1:
+            raise SpotPriceError("Octopus Energy Germany market location {} has several agreements starting {} ({})".format(number, first_start.isoformat(), ", ".join(str(a.get("id")) for a in next_agreements)))
+        chain.append(next_agreements[0])
     return number, chain
 
 
@@ -757,8 +785,22 @@ def _rate_value(rate):
 
 
 def _localize(naive, tz):
-    """Attach a timezone to a naive local datetime and convert it to UTC."""
-    return (tz.localize(naive) if hasattr(tz, "localize") else naive.replace(tzinfo=tz)).astimezone(timezone.utc)
+    """Attach a timezone to a naive local datetime and convert it to UTC.
+
+    A wall time the autumn change repeats (02:00-03:00) maps to its first occurrence, so every rule
+    boundary at that time lands on the same instant and a 02:00-03:00 rule takes both repeated hours
+    rather than leaving the first to the rule before it. A wall time spring skips maps to the moment
+    the clocks jump, as if it were still standard time.
+    """
+    if not hasattr(tz, "localize"):
+        return naive.replace(tzinfo=tz).astimezone(timezone.utc)
+    try:
+        local = tz.localize(naive, is_dst=None)
+    except pytz.exceptions.AmbiguousTimeError:
+        local = tz.localize(naive, is_dst=True)
+    except pytz.exceptions.NonExistentTimeError:
+        local = tz.localize(naive, is_dst=False)
+    return local.astimezone(timezone.utc)
 
 
 def _expand_rate_info(info, start, end, tz, what):
@@ -804,8 +846,17 @@ def _expand_rate_info(info, start, end, tz, what):
 
 
 def octopus_de_is_dynamic(agreement):
-    """True for a dynamic (spot-linked) agreement: one that carries a price forecast, or whose product code says DYNAMIC."""
-    return bool(agreement.get("unitRateForecast")) or "DYNAMIC" in str((agreement.get("product") or {}).get("code") or "").upper()
+    """True for a dynamic (spot-linked) agreement.
+
+    The schema has no market-linked flag, so this is the forecast itself or a product described as
+    dynamic in its code, names or contract type. parse_octopus_de_agreement does not rely on this
+    alone: without a forecast it prices only an explicit fixed or time-of-use rate.
+    """
+    if agreement.get("unitRateForecast"):
+        return True
+    product = agreement.get("product") or {}
+    text = " ".join(str(product.get(field) or "") for field in ("code", "displayName", "fullName", "termsContractType")).upper()
+    return "DYNAMIC" in text or "DYNAMISCH" in text
 
 
 @parse_errors_as("Octopus Energy Germany")
@@ -828,7 +879,21 @@ def parse_octopus_de_agreement(agreement, start, end, tz=OCTOPUS_DE_TIMEZONE):
         return []
     what = "agreement {}".format(agreement.get("id"))
     if not octopus_de_is_dynamic(agreement):
-        return sorted(_expand_rate_info(agreement.get("unitRateInformation") or {}, start, end, tz, what), key=lambda item: item[0])
+        info = agreement.get("unitRateInformation") or {}
+        typename = info.get("__typename")
+        is_time_of_use = (agreement.get("product") or {}).get("isTimeOfUse")
+        rates = info.get("rates") or []
+        if typename == "SimpleProductUnitRateInformation" and not is_time_of_use:
+            explicit = True
+        elif typename == "TimeOfUseProductUnitRateInformation":
+            explicit = bool(rates) and all(rate.get("timeslotActivationRules") for rate in rates)
+        else:
+            explicit = False
+        if not explicit:
+            # Without a forecast only an explicit fixed rate or a fully timetabled time-of-use rate is a
+            # price for every interval; anything else may be a dynamic tariff's placeholder
+            raise SpotPriceError("Octopus Energy Germany {} has no price forecast and no explicit fixed or time-of-use rates".format(what))
+        return sorted(_expand_rate_info(info, start, end, tz, what), key=lambda item: item[0])
     intervals = []
     for entry in agreement.get("unitRateForecast") or []:
         slot_start = max(parse_utc(entry["validFrom"]), start)
@@ -1130,12 +1195,36 @@ class SpotPriceAPI(ComponentBase):
         self.ostrom_contract = None
         self.octopus_de_token = None
         self.octopus_de_token_expiry = None
+        # Which contract / market location the supplier prices are for: detected at run time, and as cached
+        self.supplier_identity = None
+        self.cached_supplier_identity = None
+        self.warned = set()
         self.last_error = None
         self.import_rates = []
         self.export_rates = []
         self.entsoe_fallback_logged = False
         self.import_wired = False
         self.export_wired = False
+
+    def warn_once(self, message):
+        """Log a warning the first time it is seen this run."""
+        if message not in self.warned:
+            self.warned.add(message)
+            self.log("Warn: SpotPrice: {}".format(message))
+
+    def note_supplier_identity(self, identity):
+        """Record which contract or market location the supplier prices are for.
+
+        Cached prices carry the identity they were fetched for; when the one detected now differs (a new
+        contract, another account or market location) the restored prices are dropped instead of being
+        published as this one's.
+        """
+        if self.cached_supplier_identity is not None and self.cached_supplier_identity != identity:
+            self.log("Warn: SpotPrice: cached prices were for {}, not {} - discarding them".format(self.cached_supplier_identity, identity))
+            self.supplier_intervals = []
+            self.fetched["supplier"] = None
+        self.cached_supplier_identity = identity
+        self.supplier_identity = identity
 
     def suppliers_with_credentials(self):
         """The suppliers that have any of their credentials set, in SPOTPRICE_PROVIDERS order."""
@@ -1419,9 +1508,6 @@ class SpotPriceAPI(ComponentBase):
                 # Logged once per outage rather than on every refresh while the first source stays down
                 self.log("Warn: SpotPrice: {}, using {} until {} recovers".format("; ".join(errors), name, primary))
                 self.entsoe_fallback_logged = True
-            if self.provider == "awattar" and name != "awattar":
-                # The HOURLY tariff bills each hour at its hourly price: a quarter-hourly stand-in is averaged to match
-                intervals = average_to_hourly(intervals)
             return intervals, name
         raise SpotPriceError("; ".join(errors))
 
@@ -1552,10 +1638,11 @@ class SpotPriceAPI(ComponentBase):
         if self.ostrom_contract is None:
             contracts = await self.ostrom_get("/contracts")
             try:
-                self.ostrom_contract = select_ostrom_contract(contracts, self.ostrom_contract_id)
+                self.ostrom_contract = select_ostrom_contract(contracts, self.ostrom_contract_id, warn=self.warn_once)
             except SpotPriceError:
                 record_api_call("ostrom", False, "client_error")
                 raise
+            self.note_supplier_identity("ostrom:{}".format(self.ostrom_contract.get("id")))
         params = {
             "startDate": start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "endDate": end.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
@@ -1627,11 +1714,12 @@ class SpotPriceAPI(ComponentBase):
             codes = kraken_error_codes(body)
             if not codes:
                 return body
-            if attempt == 1 and any(code in KRAKEN_TOKEN_ERROR_CODES for code in codes):
+            # A rejected key (1138/1139) will not improve with a new token: report it, do not retry
+            if attempt == 1 and any(code in KRAKEN_TOKEN_ERROR_CODES for code in codes) and not any(code in KRAKEN_CREDENTIAL_ERROR_CODES for code in codes):
                 self.octopus_de_token = None
                 self.octopus_de_token_expiry = None
                 continue
-            auth = any(code in KRAKEN_TOKEN_ERROR_CODES for code in codes)
+            auth = any(code in KRAKEN_TOKEN_ERROR_CODES or code in KRAKEN_CREDENTIAL_ERROR_CODES for code in codes)
             record_api_call("octopus_de", False, "auth_error" if auth else "client_error")
             raise SpotPriceError("Octopus Energy Germany {} failed: {}".format(what, kraken_error_text(body)))
         return None  # pragma: no cover - the loop always returns or raises
@@ -1651,10 +1739,11 @@ class SpotPriceAPI(ComponentBase):
             self.octopus_de_account = accounts[0]
         body = await self.octopus_de_query(OCTOPUS_DE_AGREEMENTS_QUERY, {"accountNumber": self.octopus_de_account}, "agreements query")
         try:
-            _malo, chain = select_octopus_de_agreements(body, self.octopus_de_malo)
+            malo, chain = select_octopus_de_agreements(body, self.octopus_de_malo)
         except SpotPriceError:
             record_api_call("octopus_de", False, "client_error")
             raise
+        self.note_supplier_identity("octopus_de:{}:{}".format(self.octopus_de_account, malo))
         intervals = []
         try:
             for agreement in chain:
@@ -1666,6 +1755,11 @@ class SpotPriceAPI(ComponentBase):
             # Never stand a flat rate in for a dynamic tariff: fail (keeping the last prices held) and retry
             record_api_call("octopus_de", False, "client_error")
             raise SpotPriceError("Octopus Energy Germany dynamic agreement {} has no forecast prices yet".format(chain[0].get("id")))
+        intervals.sort(key=lambda item: item[0])
+        if any(intervals[i][1] > intervals[i + 1][0] for i in range(len(intervals) - 1)):
+            # Two rates for one instant: publish neither rather than let one silently win
+            record_api_call("octopus_de", False, "decode_error")
+            raise SpotPriceError("Octopus Energy Germany returned overlapping rates")
         if not intervals:
             record_api_call("octopus_de", False, "client_error")
             raise SpotPriceError("Octopus Energy Germany agreement has no rates for this period")
@@ -1715,8 +1809,13 @@ class SpotPriceAPI(ComponentBase):
         if self.provider in SUPPLIER_PROVIDERS:
             # Already the end-user price in minor units with VAT - markup, charge zones and VAT do not apply
             return list(self.supplier_intervals)
+        spot_intervals = self.spot_intervals
+        if self.provider == "awattar" and self.spot_source not in (None, "awattar"):
+            # The HOURLY tariff bills each hour at its hourly price, so a quarter-hourly stand-in is averaged
+            # for import. Export keeps the native quarter hours: a negative quarter is zeroed or priced on its own.
+            spot_intervals = average_to_hourly(spot_intervals)
         rates = []
-        for start, end, spot in self.spot_intervals:
+        for start, end, spot in spot_intervals:
             zone_charge = charge_zone_rate(self.charge_zones, self.to_local(start)) if self.charge_zones else 0.0
             rates.append((start, end, spot_import_rate(spot, self.markup, zone_charge, self.vat, self.exchange_rate, self.markup_percent)))
         return rates
@@ -1958,6 +2057,7 @@ class SpotPriceAPI(ComponentBase):
         self.tibber_intervals = deserialise_intervals(data.get("tibber_intervals"))
         self.tibber_currency = data.get("tibber_currency")
         self.supplier_intervals = deserialise_intervals(data.get("supplier_intervals"))
+        self.cached_supplier_identity = data.get("supplier_identity")
         for source in ("spot", "tibber", "supplier"):
             stamp = data.get("{}_fetched_at".format(source)) or data.get("fetched_at")
             try:
@@ -1979,6 +2079,7 @@ class SpotPriceAPI(ComponentBase):
             "spot_fetched_at": self.fetched["spot"].isoformat() if self.fetched.get("spot") else None,
             "tibber_fetched_at": self.fetched["tibber"].isoformat() if self.fetched.get("tibber") else None,
             "supplier_intervals": serialise_intervals(self.supplier_intervals),
+            "supplier_identity": self.supplier_identity or self.cached_supplier_identity,
             "supplier_fetched_at": self.fetched["supplier"].isoformat() if self.fetched.get("supplier") else None,
         }
         await self.storage.save("spotprice", self.cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=3))

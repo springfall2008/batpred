@@ -2315,12 +2315,261 @@ def test_spotprice_awattar_fallback_hourly(my_predbat=None):
     api.fetch_awattar = down
     api.fetch_energycharts = quarter_hourly
     assert run(api.refresh(dt("2025-05-02T08:00Z"))) is True
-    assert api.spot_source == "energycharts" and api.spot_intervals == average_to_hourly(quarters)
+    # The quarter hours are held as published; only the import price is averaged
+    assert api.spot_source == "energycharts" and api.spot_intervals == quarters
+    assert [(s_, e) for s_, e, _r in api.build_import_rates()] == [(s_, e) for s_, e, _v in average_to_hourly(quarters)]
+    # With aWATTar itself as the source nothing is averaged
+    api.spot_source = "awattar"
+    assert len(api.build_import_rates()) == 8
     # Other providers keep the quarter hours
     plain = make_api(provider="energycharts", entsoe_token=None)
     plain.fetch_energycharts = quarter_hourly
     run(plain.refresh(dt("2025-05-02T08:00Z")))
-    assert plain.spot_intervals == quarters
+    assert len(plain.build_import_rates()) == 8
+
+
+def test_spotprice_awattar_fallback_export_native(my_predbat=None):
+    """In a -20/-10/40/50 EUR/MWh hour from a quarter-hourly fallback, import is billed at the hourly average while export keeps each quarter: negative ones are zeroed or priced on their own."""
+    base = dt("2025-05-02T10:00Z")
+    quarters = [(base + timedelta(minutes=15 * i), base + timedelta(minutes=15 * (i + 1)), price) for i, price in enumerate((-20.0, -10.0, 40.0, 50.0))]
+    for export_mode, zero, expected in (("spot", True, [0.0, 0.0, 4.0, 5.0]), ("spot", False, [-2.0, -1.0, 4.0, 5.0]), ("fixed", True, [0.0, 0.0, 8.0, 8.0])):
+        api = make_api(provider="awattar", entsoe_token=None, zone="DE-LU", markup=0, vat=0, markup_percent=0, export_mode=export_mode, export_rate=8.0, export_zero_on_negative=zero)
+        api.spot_intervals = quarters
+        api.spot_source = "energycharts"
+        # Import: one hour at the average 15 EUR/MWh = 1.5 c/kWh
+        assert api.build_import_rates() == [(base, base + timedelta(hours=1), 1.5)], api.build_import_rates()
+        export = api.build_export_rates()
+        assert [rate for _s, _e, rate in export] == expected, (export_mode, zero, export)
+        assert all(end - start == timedelta(minutes=15) for start, end, _r in export)
+
+
+def test_spotprice_octopus_de_handover_single_successor(my_predbat=None):
+    """Each handover takes the one agreement starting at (or first after) the current end; two claiming the same start are an error naming both; agreements that would overlap are never chained."""
+    from spotprice import select_octopus_de_agreements
+
+    def simple(agreement_id, valid_from, valid_to, price, active=False, revoked=False):
+        """A fixed-rate agreement."""
+        return {
+            "id": agreement_id,
+            "isActive": active,
+            "isRevoked": revoked,
+            "validFrom": valid_from,
+            "validTo": valid_to,
+            "product": {"code": "OCTOPUS-FIX"},
+            "unitRateInformation": {"__typename": "SimpleProductUnitRateInformation", "latestGrossUnitRateCentsPerKwh": str(price)},
+            "unitRateForecast": [],
+        }
+
+    def response(*agreements):
+        """One market location holding the agreements."""
+        return {"data": {"account": {"properties": [{"electricityMalos": [{"maloNumber": "1", "agreements": list(agreements)}]}]}}}
+
+    current = simple("A", "2025-01-01T00:00:00+00:00", "2025-05-02T22:00:00+00:00", 30, active=True)
+    second = simple("B", "2025-05-02T22:00:00+00:00", "2025-05-03T10:00:00+00:00", 28)
+    # C starts after B began - it overlaps B and must not be chained after A; D follows B
+    overlapping = simple("C", "2025-05-03T00:00:00+00:00", None, 99)
+    third = simple("D", "2025-05-03T10:00:00+00:00", None, 26)
+    _malo, chain = select_octopus_de_agreements(response(third, overlapping, current, second))
+    assert [a["id"] for a in chain] == ["A", "B", "D"], [a["id"] for a in chain]
+    # A gap is allowed: the next agreement is the first that starts after the end
+    late = simple("E", "2025-05-03T00:00:00+00:00", None, 25)
+    assert [a["id"] for a in select_octopus_de_agreements(response(current, late))[1]] == ["A", "E"]
+    # Two non-revoked agreements claiming the same start
+    twin = simple("B2", "2025-05-02T22:00:00+00:00", None, 27)
+    try:
+        select_octopus_de_agreements(response(current, second, twin))
+        raise AssertionError("two successors should raise")
+    except SpotPriceError as e:
+        assert "(B, B2)" in str(e), str(e)
+    # ...unless one of them is revoked
+    assert [a["id"] for a in select_octopus_de_agreements(response(current, second, dict(twin, isRevoked=True)))[1]] == ["A", "B"]
+
+    api, fake = make_octopus_de()
+    fake.agreements = response(third, overlapping, current, second)
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True
+    assert api.supplier_intervals == [(dt("2025-04-30T22:00Z"), dt("2025-05-02T22:00Z"), 30.0), (dt("2025-05-02T22:00Z"), dt("2025-05-03T10:00Z"), 28.0), (dt("2025-05-03T10:00Z"), dt("2025-05-03T22:00Z"), 26.0)], api.supplier_intervals
+    assert all(api.supplier_intervals[i][1] <= api.supplier_intervals[i + 1][0] for i in range(len(api.supplier_intervals) - 1))
+
+    # Overlapping rates from any source are refused outright
+    import spotprice as spotprice_module
+
+    original = spotprice_module.parse_octopus_de_agreement
+    spotprice_module.parse_octopus_de_agreement = lambda agreement, start, end, tz=None: [(dt("2025-05-02T00:00Z"), dt("2025-05-02T02:00Z"), 1.0), (dt("2025-05-02T01:00Z"), dt("2025-05-02T03:00Z"), 2.0)]
+    try:
+        clash, clash_fake = make_octopus_de()
+        pin_now(clash, now)
+        assert run(clash.refresh(now)) is False and "overlapping rates" in clash.last_error and clash.supplier_intervals == []
+    finally:
+        spotprice_module.parse_octopus_de_agreement = original
+
+
+def test_spotprice_octopus_de_flat_only_when_explicit(my_predbat=None):
+    """Without a forecast a flat price comes only from an explicit fixed rate; a dynamic product (by code, name or contract type), a time-of-use product with a simple rate, or rates without a type are errors."""
+    from spotprice import octopus_de_is_dynamic, parse_octopus_de_agreement
+
+    window = (dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z"))
+    base = agreement_of(octopus_de_agreement())
+    assert parse_octopus_de_agreement(base, *window) == [(window[0], window[1], 31.5)]
+    for product in ({"code": "OCT-24M", "displayName": "Octopus Dynamic"}, {"code": "X", "fullName": "Strom dynamisch"}, {"code": "X", "termsContractType": "DYNAMIC"}):
+        assert octopus_de_is_dynamic(dict(base, product=product)), product
+        assert parse_octopus_de_agreement(dict(base, product=product), *window) == []
+    for bad in (
+        dict(base, product={"code": "X", "isTimeOfUse": True}),
+        dict(base, unitRateInformation={"latestGrossUnitRateCentsPerKwh": "31.5"}),
+        dict(base, unitRateInformation={"__typename": "TimeOfUseProductUnitRateInformation", "rates": [{"latestGrossUnitRateCentsPerKwh": "31.5"}]}),
+        dict(base, unitRateInformation={"rates": TOU_DAY_NIGHT["rates"]}),
+    ):
+        try:
+            parse_octopus_de_agreement(bad, *window)
+            raise AssertionError("expected an error for {}".format(bad))
+        except SpotPriceError as e:
+            assert "no price forecast and no explicit fixed or time-of-use rates" in str(e), str(e)
+    assert len(parse_octopus_de_agreement(dict(base, unitRateInformation=TOU_DAY_NIGHT, product={"code": "X", "isTimeOfUse": True}), *window)) == 5
+
+
+def test_spotprice_octopus_de_autumn_repeated_hour(my_predbat=None):
+    """On the autumn change a 02:00-03:00 rule covers both 02:00-03:00 hours (00:00Z-02:00Z), the first included, with no gap or overlap."""
+    from spotprice import parse_octopus_de_agreement
+
+    info = {
+        "__typename": "TimeOfUseProductUnitRateInformation",
+        "rates": [
+            {"latestGrossUnitRateCentsPerKwh": "50.0", "timeslotActivationRules": [{"activeFromTime": "02:00:00", "activeToTime": "03:00:00"}]},
+            {"latestGrossUnitRateCentsPerKwh": "20.0", "timeslotActivationRules": [{"activeFromTime": "03:00:00", "activeToTime": "02:00:00"}]},
+        ],
+    }
+    agreement = agreement_of(octopus_de_agreement(info=info))
+    intervals = parse_octopus_de_agreement(agreement, dt("2025-10-25T22:00Z"), dt("2025-10-26T23:00Z"))
+    assert intervals[:3] == [(dt("2025-10-25T22:00Z"), dt("2025-10-26T00:00Z"), 20.0), (dt("2025-10-26T00:00Z"), dt("2025-10-26T02:00Z"), 50.0), (dt("2025-10-26T02:00Z"), dt("2025-10-26T23:00Z"), 20.0)], intervals
+    # Spring: 02:00-03:00 does not exist, so that rule has no time and the day is contiguous
+    spring = parse_octopus_de_agreement(agreement, dt("2026-03-28T23:00Z"), dt("2026-03-29T22:00Z"))
+    assert all(spring[i][1] == spring[i + 1][0] for i in range(len(spring) - 1)), spring
+    assert spring[0][0] == dt("2026-03-28T23:00Z") and spring[-1][1] == dt("2026-03-29T22:00Z")
+    assert all(rate == 20.0 for _s, _e, rate in spring), spring
+
+
+def test_spotprice_octopus_de_error_codes(my_predbat=None):
+    """KT-CT-1125 (token keys rotated) gets a new token and one retry; KT-CT-1139 on a query is an auth_error at once, with no retry."""
+    import spotprice as spotprice_module
+
+    recorded = []
+    original = spotprice_module.record_api_call
+    spotprice_module.record_api_call = lambda service, success=True, reason=None: recorded.append((service, success, reason))
+    try:
+        now = dt("2025-05-02T08:00Z")
+        api, fake = make_octopus_de()
+        pin_now(api, now)
+        fake.queued["agreements"] = [kraken_error("KT-CT-1125", "Token keys have rotated.")]
+        assert len(run(api.fetch_supplier(now))) == 8 and fake.count("token") == 2 and fake.count("agreements") == 2
+
+        api, fake = make_octopus_de()
+        pin_now(api, now)
+        fake.queued["agreements"] = [kraken_error("KT-CT-1139", "Authentication failed.")]
+        recorded.clear()
+        try:
+            run(api.fetch_supplier(now))
+            raise AssertionError("1139 should raise")
+        except SpotPriceError as e:
+            assert "Authentication failed" in str(e)
+        assert fake.count("token") == 1 and fake.count("agreements") == 1, fake.calls
+        assert recorded[-1] == ("octopus_de", False, "auth_error"), recorded
+
+        # Even alongside a token code, a rejected key is not retried with a new token
+        api, fake = make_octopus_de()
+        pin_now(api, now)
+        both = kraken_error("KT-CT-1139", "Authentication failed.")
+        both[1]["errors"].append({"message": "expired", "extensions": {"errorCode": "KT-CT-1124"}})
+        fake.queued["agreements"] = [both]
+        try:
+            run(api.fetch_supplier(now))
+            raise AssertionError("1139 with 1124 should raise")
+        except SpotPriceError:
+            pass
+        assert fake.count("token") == 1 and fake.count("agreements") == 1, fake.calls
+    finally:
+        spotprice_module.record_api_call = original
+
+
+def test_spotprice_supplier_cache_identity(my_predbat=None):
+    """Cached supplier prices remember the contract or market location they were for, and are dropped when the one detected now differs."""
+    storage = FakeStorage()
+    now = dt("2025-05-02T08:00Z")
+    first, _fake = make_ostrom(storage=storage)
+    pin_now(first, now)
+    assert run(first.refresh(now)) is True
+    cached = storage.data[("spotprice", first.cache_filename())]
+    assert cached["supplier_identity"] == "ostrom:100523456"
+
+    # Same contract detected after a restart: the cache stands
+    same, same_fake = make_ostrom(storage=storage)
+    run(same.load_cache())
+    assert same.supplier_intervals and same.cached_supplier_identity == "ostrom:100523456"
+    same.note_supplier_identity("ostrom:100523456")
+    assert same.supplier_intervals
+
+    # The account now has a different active contract: the restored prices are discarded on detection
+    moved, moved_fake = make_ostrom(storage=storage)
+    run(moved.load_cache())
+    assert moved.supplier_intervals
+    moved_fake.contracts = {"data": [dict(OSTROM_CONTRACTS["data"][0], id=200000001)]}
+    moved_fake.api_replies["/spot-prices"] = [(503, None)]
+    pin_now(moved, now)
+    assert run(moved.refresh(now)) is False
+    assert moved.supplier_intervals == [] and any("discarding" in line for line in moved.base.logs), moved.base.logs
+
+    # Octopus: account and market location form the identity
+    octo, octo_fake = make_octopus_de()
+    octo.cached_supplier_identity = "octopus_de:A-1234ABCD:50000000009"
+    octo.supplier_intervals = [(now, now + timedelta(hours=1), 99.0)]
+    pin_now(octo, now)
+    run(octo.fetch_supplier(now))
+    assert octo.supplier_identity == "octopus_de:A-1234ABCD:50000000001" and any("discarding" in line for line in octo.base.logs)
+
+
+def test_spotprice_ostrom_status_handling(my_predbat=None):
+    """ACTIVE matches in any case; when no contract has a status field at all the single dynamic contract is used with one warning; otherwise a missing status is not active."""
+    from spotprice import select_ostrom_contract
+
+    lower = {"data": [dict(OSTROM_CONTRACTS["data"][0], status=" active "), OSTROM_CONTRACTS["data"][1]]}
+    assert select_ostrom_contract(lower)["id"] == 100523456
+    assert select_ostrom_contract(lower, "100523456")["id"] == 100523456
+
+    def without_status(contract, **changes):
+        """A copy of contract with no status key."""
+        copy = {key: value for key, value in contract.items() if key != "status"}
+        copy.update(changes)
+        return copy
+
+    warnings = []
+    no_status = {"data": [without_status(OSTROM_CONTRACTS["data"][0]), without_status(OSTROM_CONTRACTS["data"][1])]}
+    assert select_ostrom_contract(no_status, warn=warnings.append)["id"] == 100523456
+    assert len(warnings) == 1 and "no status field" in warnings[0]
+    assert select_ostrom_contract(no_status, 100523456, warn=warnings.append)["id"] == 100523456
+    for data, contract_id in (({"data": [without_status(OSTROM_CONTRACTS["data"][0]), without_status(OSTROM_CONTRACTS["data"][0], id=5)]}, None), (no_status, 100523999)):
+        try:
+            select_ostrom_contract(data, contract_id)
+            raise AssertionError("expected an error")
+        except SpotPriceError as e:
+            assert "carry no status" in str(e), str(e)
+    # One contract with a status makes the others' missing status count as not active
+    mixed = {"data": [without_status(OSTROM_CONTRACTS["data"][0]), OSTROM_CONTRACTS["data"][1]]}
+    try:
+        select_ostrom_contract(mixed)
+        raise AssertionError("expected no active contract")
+    except SpotPriceError as e:
+        assert "no active Ostrom contract" in str(e), str(e)
+
+    # Through the component the warning is logged once however often contracts are read
+    api, fake = make_ostrom()
+    fake.contracts = no_status
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True
+    api.ostrom_contract = None
+    run(api.fetch_supplier(now))
+    assert sum("no status field" in line for line in api.base.logs) == 1, api.base.logs
 
 
 SPOTPRICE_TESTS = [
@@ -2388,6 +2637,13 @@ SPOTPRICE_TESTS = [
     test_spotprice_octopus_de_berlin_time_and_dst,
     test_spotprice_supplier_cache_key,
     test_spotprice_awattar_fallback_hourly,
+    test_spotprice_awattar_fallback_export_native,
+    test_spotprice_octopus_de_handover_single_successor,
+    test_spotprice_octopus_de_flat_only_when_explicit,
+    test_spotprice_octopus_de_autumn_repeated_hour,
+    test_spotprice_octopus_de_error_codes,
+    test_spotprice_supplier_cache_identity,
+    test_spotprice_ostrom_status_handling,
 ]
 
 
