@@ -630,7 +630,7 @@ Copy the template [hanchu_ble.yaml](https://raw.githubusercontent.com/springfall
 
 ### Hanchu iESS (Local BLE) Prerequisites
 
-Install the [hanchu-ess-ble](https://github.com/upton68/hanchu-ess-ble) integration via HACS and configure it — this requires a Bluetooth proxy within range of the inverter (see the integration's own README for hardware recommendations; an ESPHome-based proxy such as the M5Stack Atom Lite has been confirmed reliable). Confirm that inverter sensors are appearing in Home Assistant, and that you can control the inverter's number/select/time entities manually via the integration's Confirm Write button, before proceeding.
+Install the [hanchu-ess-ble](https://github.com/upton68/hanchu-ess-ble) integration (**v1.4.1 or later**) via HACS and configure it — this requires a Bluetooth proxy within range of the inverter (see the integration's own README for hardware recommendations; an ESPHome-based proxy such as the M5Stack Atom Lite has been confirmed reliable). Confirm that inverter sensors are appearing in Home Assistant, and that you can control the inverter's number/select/time entities manually via the integration's Confirm Write button, before proceeding.
 
 ### Hanchu BLE Step 1 — Create helpers
 
@@ -650,6 +650,15 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 | `input_text.hanchu_ble_last_mode_action` | Hanchu BLE Last Mode Action |
 
 `input_text.hanchu_ble_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant write when Predbat reasserts a state that is already active.
+
+**Number helpers** (number type, min 0, max your inverter's rated power in W, step 1, unit W, initial value your inverter's rated power):
+
+| Entity ID | Name |
+| --------- | ---- |
+| `input_number.predbat_ble_charge_rate` | Predbat BLE Charge Rate |
+| `input_number.predbat_ble_discharge_rate` | Predbat BLE Discharge Rate |
+
+These are placeholders for Predbat's `charge_rate`/`discharge_rate` — see the note on charge and discharge rates under [Hanchu BLE Notes](#hanchu-ble-notes).
 
 ### Hanchu BLE Step 2 — Create the bridge script
 
@@ -941,6 +950,8 @@ Repeat steps 1-3 for Load Power and PV Power (referencing `sensor.YOURDEVICE_loa
 - **Skipping redundant calls:** as with the cloud integration, `input_text.hanchu_ble_last_mode_action` skips the write entirely when the requested mode is already the last one successfully applied, tracked only after a confirmed successful write.
 - **No charge/discharge enable toggle:** as with the cloud integration, Hanchu has no explicit enable/disable for charge or discharge — the slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
 - **Mid-window time updates:** handled by the automation in Step 3, the same purpose as the equivalent cloud automation.
+- **Charge and discharge rates:** `charge_rate`/`discharge_rate` point at the placeholder helpers from Step 1, not at the integration's charge/discharge power limit entities, so the inverter's power limits stay at whatever you set them to. Predbat writes these rates directly rather than through the bridge script (for example, setting the discharge rate to 0 for "Hold for car"). On BLE such a write is only staged, and the next `confirm_write` from the bridge script flushes everything staged — so mapping them to the real entities makes the result depend on timing, and can leave the inverter's discharge limit stuck at 0. The trade-off is that features which rely on rate control (car charging hold, low-power charge/export) have no effect on the inverter.
+- **Integration version:** v1.4.1 or later is required. Earlier versions could report a `confirm_write` as successful without writing it when two flushes overlapped (for example at a charge/discharge handover), leaving a slot unapplied.
 - **Not device-level atomic:** each staged register is still written as its own request within the single BLE connection `confirm_write` opens, one after another — see the [hanchu-ess-ble README](https://github.com/upton68/hanchu-ess-ble#known-limitations) for the full detail on this and other known limitations.
 
 ## Hanchu iESS Cloud

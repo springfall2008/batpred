@@ -102,10 +102,15 @@ pred_bat:
       data:
         mode_action: discharge_stop
   # ─── Hanchu iESS BLE sensor entities (read) ───────────────────────────────
+  # charge_rate/discharge_rate deliberately point at placeholder helpers, NOT the
+  # integration's charge/discharge power limit entities. Predbat writes these
+  # directly (outside the bridge script), and on BLE a direct write is only
+  # staged - it then gets flushed to the inverter by whichever confirm_write
+  # runs next, so its effect would depend on timing. See "Hanchu BLE Notes".
   charge_rate:
-    - number.YOURDEVICE_charge_power_limit
+    - input_number.predbat_ble_charge_rate
   discharge_rate:
-    - number.YOURDEVICE_discharge_power_limit
+    - input_number.predbat_ble_discharge_rate
   battery_power:
     - sensor.YOURDEVICE_battery_power
   battery_power_invert:
