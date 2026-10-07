@@ -1446,11 +1446,17 @@ def test_spotprice_ostrom_contract_selection(my_predbat=None):
     assert select_ostrom_contract(OSTROM_CONTRACTS)["id"] == 100523456
     assert select_ostrom_contract(OSTROM_CONTRACTS, 100523456)["id"] == 100523456
     assert select_ostrom_contract(OSTROM_CONTRACTS, "100523456")["id"] == 100523456
-    v2 = {"data": [{"id": 1, "productCode": "SimplyDynamic_V2", "address": {"zip": "80331"}}]}
+    v2 = {"data": [{"id": 1, "productCode": "SimplyDynamic_V2", "status": "ACTIVE", "address": {"zip": "80331"}}]}
     assert select_ostrom_contract(v2)["id"] == 1
     two_active = {"data": [dict(OSTROM_CONTRACTS["data"][0]), dict(OSTROM_CONTRACTS["data"][0], id=7)]}
+    fixed_active = {"data": [dict(OSTROM_CONTRACTS["data"][1], status="ACTIVE")]}
+    # Only active contracts are priced: a terminated or pending one is never a stand-in, even when it is the only one
+    only_inactive = {"data": [dict(OSTROM_CONTRACTS["data"][0], status="TERMINATED"), dict(OSTROM_CONTRACTS["data"][0], id=8, status="PENDING")]}
     cases = [
-        ((OSTROM_CONTRACTS, 100523999), "not a dynamic tariff"),
+        ((fixed_active, None), "not a dynamic tariff"),
+        ((OSTROM_CONTRACTS, 100523999), "100523999 is TERMINATED, not active"),
+        ((only_inactive, None), "no active Ostrom contract"),
+        (({"data": [dict(OSTROM_CONTRACTS["data"][0], status=None)]}, None), "no active Ostrom contract"),
         ((OSTROM_CONTRACTS, 42), "not found"),
         ((two_active, None), "spotprice_ostrom_contract_id"),
         (({"data": [dict(OSTROM_CONTRACTS["data"][0], address={})]}, None), "no postcode"),
@@ -1631,14 +1637,15 @@ def make_jwt(exp):
     return "{}.{}.sig".format(encode({"alg": "HS256", "typ": "JWT"}), encode({"exp": int(exp.timestamp())}))
 
 
-def octopus_de_agreement(forecast=None, info=None, active=True, valid_from="2025-01-01T00:00:00+01:00", valid_to=None):
-    """An agreements response holding one market location with one agreement."""
+def octopus_de_agreement(forecast=None, info=None, active=True, valid_from="2025-01-01T00:00:00+01:00", valid_to=None, product=None):
+    """An agreements response holding one market location with one agreement (dynamic product when a forecast is given)."""
     agreement = {
         "id": "4711",
         "isActive": active,
+        "isRevoked": False,
         "validFrom": valid_from,
         "validTo": valid_to,
-        "product": {"code": "DYNAMIC-OCTOPUS"},
+        "product": {"code": product or ("DYNAMIC-OCTOPUS" if forecast else "OCTOPUS-FIX-12M")},
         "unitRateInformation": info or {"__typename": "SimpleProductUnitRateInformation", "latestGrossUnitRateCentsPerKwh": "31.5"},
         "unitRateForecast": forecast or [],
     }
@@ -2102,6 +2109,220 @@ def test_spotprice_ews_inference_and_config(my_predbat=None):
     assert "spotprice_ews_api_key is required" in missing.config_error and missing.sources_needed() == []
 
 
+def agreement_of(response, index=0):
+    """The index-th agreement of the first market location of an agreements response."""
+    return response["data"]["account"]["properties"][0]["electricityMalos"][0]["agreements"][index]
+
+
+TOU_DAY_NIGHT = {
+    "__typename": "TimeOfUseProductUnitRateInformation",
+    "rates": [
+        {"latestGrossUnitRateCentsPerKwh": "22.0", "timeslotActivationRules": [{"activeFromTime": "22:00:00", "activeToTime": "06:00:00"}]},
+        {"latestGrossUnitRateCentsPerKwh": "35.0", "timeslotActivationRules": [{"activeFromTime": "06:00:00", "activeToTime": "22:00:00"}]},
+    ],
+}
+
+
+def test_spotprice_octopus_de_forecast_time_of_use(my_predbat=None):
+    """A forecast entry carrying several time-of-use rates is expanded by their rules over that entry's period, never collapsed to one rate; forecast slots are clipped to the agreement's validity."""
+    from spotprice import parse_octopus_de_agreement
+
+    # One forecast entry for the whole of 2 May (Berlin) holding a night and a day rate
+    entry = {"validFrom": "2025-05-02T00:00:00+02:00", "validTo": "2025-05-03T00:00:00+02:00", "unitRateInformation": TOU_DAY_NIGHT}
+    agreement = agreement_of(octopus_de_agreement(forecast=[entry]))
+    intervals = parse_octopus_de_agreement(agreement, dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z"))
+    assert intervals == [
+        (dt("2025-05-01T22:00Z"), dt("2025-05-02T04:00Z"), 22.0),
+        (dt("2025-05-02T04:00Z"), dt("2025-05-02T20:00Z"), 35.0),
+        (dt("2025-05-02T20:00Z"), dt("2025-05-02T22:00Z"), 22.0),
+    ], intervals
+    # A single rate without rules covers its whole entry
+    single = {"validFrom": "2025-05-02T00:00:00+02:00", "validTo": "2025-05-02T00:15:00+02:00", "unitRateInformation": {"__typename": "TimeOfUseProductUnitRateInformation", "rates": [{"latestGrossUnitRateCentsPerKwh": "27.5"}]}}
+    assert parse_octopus_de_agreement(agreement_of(octopus_de_agreement(forecast=[single])), dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z")) == [(dt("2025-05-01T22:00Z"), dt("2025-05-01T22:15Z"), 27.5)]
+    # Several rates where one cannot be placed in time are an error, not a guess
+    no_timeslot = dict(entry, unitRateInformation={"__typename": "TimeOfUseProductUnitRateInformation", "rates": [{"latestGrossUnitRateCentsPerKwh": "22.0"}, TOU_DAY_NIGHT["rates"][1]]})
+    try:
+        parse_octopus_de_agreement(agreement_of(octopus_de_agreement(forecast=[no_timeslot])), dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z"))
+        raise AssertionError("rates without timeslots should raise")
+    except SpotPriceError as e:
+        assert "without a price or timeslot" in str(e), str(e)
+
+    # 30 minute forecast slots across an agreement that starts at 22:15 and ends at 22:45
+    slots = octopus_de_forecast(start="2025-05-01T22:00:00+00:00", count=2, minutes=30)
+    clipped = agreement_of(octopus_de_agreement(forecast=slots, valid_from="2025-05-01T22:15:00+00:00", valid_to="2025-05-01T22:45:00+00:00"))
+    assert parse_octopus_de_agreement(clipped, dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z")) == [
+        (dt("2025-05-01T22:15Z"), dt("2025-05-01T22:30Z"), 20.0),
+        (dt("2025-05-01T22:30Z"), dt("2025-05-01T22:45Z"), 21.0),
+    ]
+
+
+def test_spotprice_octopus_de_dynamic_without_forecast(my_predbat=None):
+    """A dynamic agreement with no forecast publishes nothing - never its flat unitRateInformation - and keeps re-polling with an error."""
+    from spotprice import octopus_de_is_dynamic, parse_octopus_de_agreement
+
+    dynamic = octopus_de_agreement(product="DYNAMIC-OCTOPUS-24M")
+    assert octopus_de_is_dynamic(agreement_of(dynamic)) and not octopus_de_is_dynamic(agreement_of(octopus_de_agreement()))
+    assert octopus_de_is_dynamic(agreement_of(octopus_de_agreement(forecast=octopus_de_forecast(), product="SOMETHING-ELSE")))
+    assert parse_octopus_de_agreement(agreement_of(dynamic), dt("2025-05-01T22:00Z"), dt("2025-05-03T22:00Z")) == []
+    api, fake = make_octopus_de()
+    fake.agreements = dynamic
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is False
+    assert "has no forecast prices yet" in api.last_error and api.supplier_intervals == []
+    api.publish(now)
+    assert "sensor.predbat_spotprice_import_rates" not in api.base.entities
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "error"
+    assert api.source_next_attempt["supplier"] == now + timedelta(minutes=5)
+    # Once the forecast appears the next poll publishes it
+    fake.agreements = octopus_de_agreement(forecast=octopus_de_forecast(start="2025-05-02T08:00:00+00:00"), product="DYNAMIC-OCTOPUS-24M")
+    later = api.source_next_attempt["supplier"]
+    pin_now(api, later)
+    assert run(api.refresh(later)) is True and len(api.supplier_intervals) == 8
+
+
+def test_spotprice_octopus_de_market_location_selection(my_predbat=None):
+    """Active agreements on several market locations need spotprice_octopus_de_malo; the chosen location hands over to its next agreement inside the window; revoked agreements are skipped."""
+    from spotprice import select_octopus_de_agreements
+
+    fixed = agreement_of(octopus_de_agreement(valid_to="2025-05-03T00:00:00+02:00"))
+    following = dict(fixed, id="4712", isActive=False, validFrom="2025-05-03T00:00:00+02:00", validTo=None, unitRateInformation={"__typename": "SimpleProductUnitRateInformation", "latestGrossUnitRateCentsPerKwh": "28.0"})
+    revoked = dict(following, id="4713", isRevoked=True, unitRateInformation={"__typename": "SimpleProductUnitRateInformation", "latestGrossUnitRateCentsPerKwh": "99.0"})
+    expired = dict(fixed, id="4700", isActive=False, validFrom="2024-01-01T00:00:00+01:00", validTo="2025-01-01T00:00:00+01:00")
+    heat_pump = dict(fixed, id="5001", validTo=None, unitRateInformation=TOU_DAY_NIGHT)
+    response = {
+        "data": {
+            "account": {
+                "properties": [
+                    {"electricityMalos": [{"maloNumber": "50000000001", "agreements": [expired, revoked, following, fixed]}]},
+                    {"electricityMalos": [{"maloNumber": "50000000002", "agreements": [heat_pump]}]},
+                ]
+            }
+        }
+    }
+    try:
+        select_octopus_de_agreements(response)
+        raise AssertionError("two market locations should raise")
+    except SpotPriceError as e:
+        assert "50000000001, 50000000002" in str(e) and "spotprice_octopus_de_malo" in str(e), str(e)
+    malo, chain = select_octopus_de_agreements(response, "50000000001")
+    assert malo == "50000000001" and [a["id"] for a in chain] == ["4711", "4712"], chain
+    for bad, phrase in ((("50000000009",), "50000000009 has no active agreement"),):
+        try:
+            select_octopus_de_agreements(response, *bad)
+            raise AssertionError(phrase)
+        except SpotPriceError as e:
+            assert phrase in str(e), str(e)
+    two_active = {"data": {"account": {"properties": [{"electricityMalos": [{"maloNumber": "1", "agreements": [fixed, dict(fixed, id="9")]}]}]}}}
+    try:
+        select_octopus_de_agreements(two_active)
+        raise AssertionError("two active agreements on one location should raise")
+    except SpotPriceError as e:
+        assert "several active agreements (4711, 9)" in str(e), str(e)
+
+    api, fake = make_octopus_de(octopus_de_malo=50000000001)
+    fake.agreements = response
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True
+    # The fixed agreement up to its end, then the following one; the revoked 99.0 never appears
+    assert api.supplier_intervals == [(dt("2025-04-30T22:00Z"), dt("2025-05-02T22:00Z"), 31.5), (dt("2025-05-02T22:00Z"), dt("2025-05-03T22:00Z"), 28.0)], api.supplier_intervals
+    unset, unset_fake = make_octopus_de()
+    unset_fake.agreements = response
+    pin_now(unset, now)
+    assert run(unset.refresh(now)) is False and "set spotprice_octopus_de_malo" in unset.last_error
+
+
+def test_spotprice_octopus_de_berlin_time_and_dst(my_predbat=None):
+    """Timeslot rules are German local time whatever the Home Assistant timezone, through both DST changes."""
+    from spotprice import parse_octopus_de_agreement
+
+    tou = agreement_of(octopus_de_agreement(info=TOU_DAY_NIGHT))
+    api, fake = make_octopus_de(local_tz=pytz.timezone("Europe/London"))
+    fake.agreements = octopus_de_agreement(info=TOU_DAY_NIGHT)
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True
+    # 06:00 and 22:00 Berlin (CEST) are 04:00Z and 20:00Z - not London's 05:00Z and 21:00Z
+    boundaries = {start for start, _e, _v in api.supplier_intervals}
+    assert dt("2025-05-02T04:00Z") in boundaries and dt("2025-05-02T20:00Z") in boundaries and dt("2025-05-02T05:00Z") not in boundaries, sorted(boundaries)
+    # Spring forward: 22:00 CET on 28 March to 06:00 CEST on 29 March is 7 hours
+    spring = parse_octopus_de_agreement(tou, dt("2026-03-28T20:00Z"), dt("2026-03-29T22:00Z"))
+    assert (dt("2026-03-28T21:00Z"), dt("2026-03-29T04:00Z"), 22.0) in spring, spring
+    assert (dt("2026-03-29T04:00Z"), dt("2026-03-29T20:00Z"), 35.0) in spring, spring
+    # Fall back: 22:00 CEST on 25 October to 06:00 CET on 26 October is 9 hours
+    autumn = parse_octopus_de_agreement(tou, dt("2025-10-25T19:00Z"), dt("2025-10-26T23:00Z"))
+    assert (dt("2025-10-25T20:00Z"), dt("2025-10-26T05:00Z"), 22.0) in autumn, autumn
+    assert all(autumn[i][1] == autumn[i + 1][0] for i in range(len(autumn) - 1))
+
+
+def test_spotprice_supplier_cache_key(my_predbat=None):
+    """The cache name carries a digest of the configured Ostrom contract or Octopus Energy Germany account and market location, so changing them never restores another contract's prices."""
+    names = {
+        "plain": make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s").cache_filename(),
+        "contract_a": make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s", ostrom_contract_id=1).cache_filename(),
+        "contract_b": make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s", ostrom_contract_id=2).cache_filename(),
+        "octo": make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k").cache_filename(),
+        "octo_account": make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k", octopus_de_account="A-1").cache_filename(),
+        "octo_malo": make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k", octopus_de_account="A-1", octopus_de_malo="5").cache_filename(),
+    }
+    assert names["plain"] == "ostrom_none" and names["octo"] == "octopus_de_none", names
+    assert len(set(names.values())) == len(names), names
+    assert make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s", ostrom_contract_id=1).cache_filename() == names["contract_a"]
+    assert make_api(provider="energycharts", entsoe_token=None, ostrom_contract_id=1).cache_filename() == "energycharts_de_lu"
+
+    # A looked-up account does not change the name mid-run
+    api, _fake = make_octopus_de()
+    before = api.cache_filename()
+    pin_now(api, dt("2025-05-02T08:00Z"))
+    run(api.fetch_supplier(dt("2025-05-02T08:00Z")))
+    assert api.octopus_de_account == "A-1234ABCD" and api.cache_filename() == before
+
+    storage = FakeStorage()
+    saved = make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s", ostrom_contract_id=1, storage=storage)
+    saved.supplier_intervals = [(dt("2025-05-02T08:00Z"), dt("2025-05-02T09:00Z"), 30.0)]
+    saved.fetched["supplier"] = dt("2025-05-02T08:00Z")
+    run(saved.save_cache())
+    other = make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s", ostrom_contract_id=2, storage=storage)
+    run(other.load_cache())
+    assert other.supplier_intervals == []
+
+
+def test_spotprice_awattar_fallback_hourly(my_predbat=None):
+    """When aWATTar falls back, quarter-hourly spot prices are averaged to the hours the HOURLY tariff bills; part-covered hours are left out; aWATTar's own hours pass through."""
+    from spotprice import average_to_hourly
+
+    base = dt("2025-05-02T10:00Z")
+    quarters = [(base + timedelta(minutes=15 * i), base + timedelta(minutes=15 * (i + 1)), float(10 * (i + 1))) for i in range(8)]
+    assert average_to_hourly(quarters) == [(base, base + timedelta(hours=1), 25.0), (base + timedelta(hours=1), base + timedelta(hours=2), 65.0)]
+    assert average_to_hourly(quarters[:7]) == [(base, base + timedelta(hours=1), 25.0)]
+    # Time-weighted: a 30 minute interval counts twice a quarter hour
+    mixed = [(base, base + timedelta(minutes=30), 10.0), (base + timedelta(minutes=30), base + timedelta(minutes=45), 40.0), (base + timedelta(minutes=45), base + timedelta(hours=1), 40.0)]
+    assert average_to_hourly(mixed) == [(base, base + timedelta(hours=1), 25.0)], average_to_hourly(mixed)
+    hourly = [(base, base + timedelta(hours=1), 5.0)]
+    assert average_to_hourly(hourly) == hourly
+
+    api = make_api(provider="awattar", entsoe_token=None, zone="DE-LU")
+
+    async def down(start, end):
+        """aWATTar outage."""
+        raise SpotPriceError("aWATTar returned HTTP 503")
+
+    async def quarter_hourly(start, end):
+        """Energy-Charts quarter hours."""
+        return quarters
+
+    api.fetch_awattar = down
+    api.fetch_energycharts = quarter_hourly
+    assert run(api.refresh(dt("2025-05-02T08:00Z"))) is True
+    assert api.spot_source == "energycharts" and api.spot_intervals == average_to_hourly(quarters)
+    # Other providers keep the quarter hours
+    plain = make_api(provider="energycharts", entsoe_token=None)
+    plain.fetch_energycharts = quarter_hourly
+    run(plain.refresh(dt("2025-05-02T08:00Z")))
+    assert plain.spot_intervals == quarters
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -2161,6 +2382,12 @@ SPOTPRICE_TESTS = [
     test_spotprice_ews_parse,
     test_spotprice_ews_fetch,
     test_spotprice_ews_inference_and_config,
+    test_spotprice_octopus_de_forecast_time_of_use,
+    test_spotprice_octopus_de_dynamic_without_forecast,
+    test_spotprice_octopus_de_market_location_selection,
+    test_spotprice_octopus_de_berlin_time_and_dst,
+    test_spotprice_supplier_cache_key,
+    test_spotprice_awattar_fallback_hourly,
 ]
 
 

@@ -2875,6 +2875,7 @@ APPS_SCHEMA = {
     "spotprice_ostrom_contract_id": {"type": "string|integer", "empty": False},
     "spotprice_octopus_de_api_key": {"type": "string", "empty": False},
     "spotprice_octopus_de_account": {"type": "string", "empty": False},
+    "spotprice_octopus_de_malo": {"type": "string|integer", "empty": False},
     "spotprice_ews_api_key": {"type": "string", "empty": False},
     "spotprice_markup": {"type": "float"},
     "spotprice_markup_percent": {"type": "float"},

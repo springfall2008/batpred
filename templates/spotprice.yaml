@@ -31,6 +31,7 @@ pred_bat:
   # spotprice_ostrom_contract_id: 100523456  # only if the account has more than one active contract
   # spotprice_octopus_de_api_key: !secret octopus_de_api_key
   # spotprice_octopus_de_account: A-1234ABCD  # only if the API key can see more than one account
+  # spotprice_octopus_de_malo: "50000000001"  # only if the account has active agreements on several market locations
   # spotprice_ews_api_key: !secret ews_api_key
 
   # Supplier markup plus any flat grid fees and levies, per kWh, excluding VAT

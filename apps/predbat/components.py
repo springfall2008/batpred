@@ -581,6 +581,7 @@ COMPONENT_LIST = {
             "ostrom_contract_id": {"required": False, "secret": True, "config": "spotprice_ostrom_contract_id"},
             "octopus_de_api_key": {"required": False, "secret": True, "config": "spotprice_octopus_de_api_key"},
             "octopus_de_account": {"required": False, "secret": True, "config": "spotprice_octopus_de_account"},
+            "octopus_de_malo": {"required": False, "secret": True, "config": "spotprice_octopus_de_malo"},
             "ews_api_key": {"required": False, "secret": True, "config": "spotprice_ews_api_key"},
             "markup": {"required": False, "config": "spotprice_markup", "default": 0.0},
             # No registry default: when unset, initialize() uses the provider's published percentage (3 for awattar), else 0
