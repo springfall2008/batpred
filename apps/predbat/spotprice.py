@@ -41,6 +41,7 @@ rest of Predbat consumes them unchanged. Intervals keep their native length (15,
 import argparse
 import asyncio
 import functools
+import hashlib
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -123,6 +124,8 @@ SPOTPRICE_STALE_HORIZON_HOURS = 12
 # SEM and the Iberian MIBEL, whose day is 23:00-23:00 in Irish/Portuguese local time - so "tomorrow's
 # prices are in" and the fetch window are judged on this clock, not the user's.
 MARKET_TIMEZONE = pytz.timezone("Europe/Brussels")
+# Salt for the one-way digest of the Tibber credential in cache filenames
+CACHE_DIGEST_SALT = "predbat-spotprice-cache-v1|"
 # Granularity used to detect overlapping intervals between series of different resolutions.
 OVERLAP_TICK_MINUTES = 5
 
@@ -636,6 +639,8 @@ class SpotPriceAPI(ComponentBase):
         self.entsoe_token = entsoe_token
         self.tibber_token = tibber_token
         self.tibber_home_id = tibber_home_id
+        # The configured home, kept apart from one picked at run time, so the cache name is stable
+        self.tibber_home_id_configured = tibber_home_id
         self.markup = self.to_float(markup, "spotprice_markup")
         self.vat = self.to_float(vat, "spotprice_vat")
         if self.vat >= 1:
@@ -1181,8 +1186,17 @@ class SpotPriceAPI(ComponentBase):
     # ------------------------------------------------------------------
 
     def cache_filename(self):
-        """Storage filename for this provider/zone pair."""
-        return "{}_{}".format(self.provider, (self.zone or self.zone_eic or "none").replace("-", "_").lower())
+        """Storage filename for this provider/zone pair, plus a digest of the Tibber token and home for tibber.
+
+        Changing the Tibber token or spotprice_tibber_home_id changes the name, so one home's cached
+        prices are never restored - and published as fresh - for another. Only a salted, truncated
+        SHA-256 of these values is used; the values themselves are never written.
+        """
+        name = "{}_{}".format(self.provider, (self.zone or self.zone_eic or "none").replace("-", "_").lower())
+        if self.provider == "tibber" and (self.tibber_token or self.tibber_home_id_configured):
+            material = CACHE_DIGEST_SALT + "|".join(str(item or "") for item in (self.tibber_token, self.tibber_home_id_configured))
+            name = "{}_{}".format(name, hashlib.sha256(material.encode("utf-8")).hexdigest()[:12])
+        return name
 
     async def load_cache(self):
         """Restore prices from storage so the sensors are populated straight after a restart."""

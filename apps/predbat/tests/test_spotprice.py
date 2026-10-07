@@ -1311,6 +1311,46 @@ def test_spotprice_omitted_timestamps(my_predbat=None):
     assert spans(run(api2.fetch_tibber())) == [(0, 15), (60, 75)]
 
 
+def test_spotprice_tibber_cache_key(my_predbat=None):
+    """The tibber cache name carries a salted digest of the token and configured home: changing either never restores the old home's prices, and neither value is written."""
+    import hashlib
+
+    from spotprice import CACHE_DIGEST_SALT
+
+    now = dt("2025-05-02T08:00Z")
+    storage = FakeStorage()
+
+    def tibber(**kwargs):
+        """A tibber component on the shared storage."""
+        config = {"provider": "tibber", "entsoe_token": None, "zone": None, "tibber_token": "token-old", "storage": storage}
+        config.update(kwargs)
+        return make_api(**config)
+
+    old = tibber(tibber_home_id="home-a")
+    expected = hashlib.sha256((CACHE_DIGEST_SALT + "token-old|home-a").encode("utf-8")).hexdigest()[:12]
+    assert old.cache_filename() == "tibber_none_{}".format(expected), old.cache_filename()
+    old.tibber_intervals = [(now, now + timedelta(hours=1), 0.3)]
+    old.fetched["tibber"] = now
+    run(old.save_cache())
+    for changed in (tibber(tibber_home_id="home-b"), tibber(tibber_token="token-new", tibber_home_id="home-a"), tibber()):
+        assert changed.cache_filename() != old.cache_filename()
+        run(changed.load_cache())
+        assert changed.tibber_intervals == [] and changed.fetched_at is None and changed.refresh_due(now)
+    same = tibber(tibber_home_id="home-a")
+    run(same.load_cache())
+    assert same.tibber_intervals == old.tibber_intervals
+    for (_module, filename), blob in storage.data.items():
+        for secret in ("token-old", "home-a"):
+            assert secret not in filename and secret not in repr(blob), filename
+    # A home picked at run time does not move the cache mid-run
+    picked = tibber()
+    before = picked.cache_filename()
+    picked.tibber_home_id = "home-found"
+    assert picked.cache_filename() == before
+    # Other providers keep the plain name
+    assert make_api(provider="energycharts", entsoe_token=None, tibber_token="t").cache_filename() == "energycharts_de_lu"
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1353,6 +1393,7 @@ SPOTPRICE_TESTS = [
     test_spotprice_config_error_ignores_cache,
     test_spotprice_refresh_all_blocked,
     test_spotprice_omitted_timestamps,
+    test_spotprice_tibber_cache_key,
 ]
 
 
