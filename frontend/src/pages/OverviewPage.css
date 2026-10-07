@@ -46,6 +46,17 @@
   margin: 0 0 0.75rem;
 }
 
+.overview-page-header .date-time-display {
+  font-size: 0.75rem;
+  opacity: 0.9;
+  text-align: right;
+  line-height: 1.25;
+}
+
+.overview-page-header .date-time-display .time {
+  font-size: 1.25rem;
+}
+
 .overview-weather-toggle {
   display: inline-flex;
   align-items: center;
@@ -126,10 +137,10 @@
    * uses the house image's 1500 x 1200 coordinates. These can be edited
    * directly in browser DevTools and remain attached when the image resizes.
    */
-  --overview-card-grid-x: 1295px;
-  --overview-card-grid-y: 840px;
-  --overview-card-solar-x: 915px;
-  --overview-card-solar-y: 360px;
+  --overview-card-grid-x: 1450px;
+  --overview-card-grid-y: 720px;
+  --overview-card-solar-x: 920px;
+  --overview-card-solar-y: 355px;
   --overview-card-home-x: 765px;
   --overview-card-home-y: 690px;
   --overview-card-battery-x: 1188px;
@@ -138,13 +149,14 @@
   --overview-card-car-y: 705px;
   --overview-card-heat-pump-x: 1125px;
   --overview-card-heat-pump-y: 760px;
-  --overview-card-connector-bend: 140px;
+  --overview-card-connector-bend: 98px;
   --overview-flow-solar-path: path("M 920 355 L 1180 500 L 1180 663");
   --overview-flow-battery-to-home-path: path("M 1180 690 L 1026 515 L 775 680");
-  --overview-flow-battery-to-grid-path: path("M 1190 730 L 1196 738 L 1295 840");
-  --overview-flow-grid-to-battery-path: path("M 1295 840 L 1196 738 L 1190 730");
-  --overview-grid-point-x: 1295px;
-  --overview-grid-point-y: 840px;
+  --overview-flow-battery-to-grid-path: path("M 1450 720 L 1196 720 L 1450 720");
+  --overview-flow-grid-to-battery-path: path("M 1450 720 L 1196 720 L 1190 720");
+  --overview-flow-car-path: path("M 1180 690 L 792 705 L 792 810");
+  --overview-grid-point-x: 1450px;
+  --overview-grid-point-y: 720px;
 
   position: relative;
   display: grid;
@@ -624,6 +636,10 @@
 
 .overview-flow-grid {
   stroke: var(--color-text-secondary);
+}
+
+.overview-flow-car {
+  stroke: var(--color-flow-battery)
 }
 
 .overview-flow-grid.is-import {
