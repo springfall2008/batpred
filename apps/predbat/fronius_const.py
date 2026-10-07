@@ -143,13 +143,15 @@ FRONIUS_PARAM_MAX_W = "MaxW"
 FRONIUS_PARAM_EXPORT_LIMIT_W = "ExportLimitW"
 
 # The documentation describes dispatchParameters in two incompatible ways: the object tables say
-# "array of objects with name and value", while every JSON example shows a plain object keyed by
-# parameter name. The table is the formal definition, so it is tried first; if the API rejects
-# the schedule as malformed the component retries ONCE with the other shape and remembers
-# whichever was accepted (see fronius.py put_schedule).
+# "array of objects with name and value", while every JSON example (request and query response
+# alike) shows a plain object keyed by parameter name. The examples are what the wire actually
+# carries, so the object form is sent first. If the API rejects a schedule as malformed the
+# component retries ONCE with the array form, and the first accepted schedule is read back to
+# confirm its parameters really stuck, because a silently ignored shape would otherwise look like
+# success (see fronius.py put_schedule / verify_schedule).
 FRONIUS_PARAMS_LIST = "list"
 FRONIUS_PARAMS_OBJECT = "object"
-FRONIUS_PARAMS_DEFAULT = FRONIUS_PARAMS_LIST
+FRONIUS_PARAMS_DEFAULT = FRONIUS_PARAMS_OBJECT
 
 # Commands Predbat builds, in planner terms. IDLE is "send nothing for this period", which leaves
 # the inverter in its own normal self-consumption operation.
@@ -316,6 +318,35 @@ def predbat_load_power(load):
     return None if value is None else abs(value)
 
 
+def null_channels(channels):
+    """Return the names of the channels a Fronius channels array reported as NULL (or unparseable).
+
+    A NULL means Solar.web could not fetch that value this time. The previous value is then stale
+    and must be dropped rather than kept, or a frozen SoC would go on driving target checks.
+    """
+    names = set()
+    for entry in channels or []:
+        if isinstance(entry, dict) and entry.get("channelName") and as_float(entry.get("value")) is None:
+            names.add(entry["channelName"])
+    return names
+
+
+def normalise_params(params):
+    """Return dispatchParameters as {name: int} whichever documented shape it arrived in."""
+    result = {}
+    if isinstance(params, dict):
+        items = params.items()
+    elif isinstance(params, list):
+        items = [(entry.get("name"), entry.get("value")) for entry in params if isinstance(entry, dict)]
+    else:
+        items = []
+    for name, value in items:
+        number = as_float(value)
+        if name and number is not None:
+            result[str(name)] = int(number)
+    return result
+
+
 def channel_values(channels):
     """Turn a Fronius channels array into {channelName: float}, omitting NULL values.
 
@@ -420,7 +451,7 @@ def hms_to_minutes(value):
     return hours * 60 + minutes
 
 
-def local_wall_to_utc(day, minutes, tz):
+def local_wall_to_utc(day, minutes, tz, second=False):
     """Convert a local wall-clock time (a date plus minutes past its midnight) to aware UTC.
 
     The minutes may be negative or exceed a day; the arithmetic is done on the naive wall clock
@@ -430,17 +461,22 @@ def local_wall_to_utc(day, minutes, tz):
     Two DST edge cases are resolved deliberately, the same way for pytz and zoneinfo zones:
     - a time that does not exist (inside the spring-forward gap) is read with the pre-transition
       offset, so it lands just after the gap;
-    - a time that occurs twice (the autumn fall-back hour) is read as its first occurrence.
+    - a time that occurs twice (the autumn fall-back hour) is read as its first occurrence, or as
+      its second when second=True (window_to_utc picks whichever is current or upcoming).
     """
     naive = datetime(day.year, day.month, day.day) + timedelta(minutes=minutes)
     if hasattr(tz, "localize"):
         try:
             aware = tz.localize(naive, is_dst=None)
         except Exception as error:  # pytz raises AmbiguousTimeError / NonExistentTimeError
-            name = type(error).__name__
-            aware = tz.localize(naive, is_dst=(name == "AmbiguousTimeError"))
+            ambiguous = type(error).__name__ == "AmbiguousTimeError"
+            aware = tz.localize(naive, is_dst=(ambiguous and not second))
     else:
-        aware = naive.replace(tzinfo=tz, fold=0)
+        first = naive.replace(tzinfo=tz, fold=0)
+        later = naive.replace(tzinfo=tz, fold=1)
+        # zoneinfo: a wall time is ambiguous when both folds round-trip to it; in a gap they do not.
+        ambiguous = first.utcoffset() != later.utcoffset() and all(item.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None) == naive for item in (first, later))
+        aware = later if (ambiguous and second) else first
     return aware.astimezone(timezone.utc)
 
 
@@ -450,6 +486,10 @@ def window_to_utc(start_hms, end_hms, now_utc, tz):
     Mirrors utils.compute_window_minutes, which is how inverter.py itself reads these entities:
     a window that spans midnight is anchored around now, and a window that has already ended
     today is taken to be tomorrow's. An empty window (start == end) is None.
+
+    In the repeated autumn hour an edge can mean two instants. The first occurrence is used unless
+    the window would then already have ended while its second-occurrence reading is still current,
+    so a window such as 01:00-01:30 is not skipped when the clock is in the second 01:xx.
     """
     start = hms_to_minutes(start_hms)
     end = hms_to_minutes(end_hms)
@@ -466,7 +506,14 @@ def window_to_utc(start_hms, end_hms, now_utc, tz):
         start += 24 * 60
         end += 24 * 60
     day = now_local.date()
-    return local_wall_to_utc(day, start, tz), local_wall_to_utc(day, end, tz)
+    start_utc, end_utc = local_wall_to_utc(day, start, tz), local_wall_to_utc(day, end, tz)
+    if end_utc <= now_utc:
+        late_end = local_wall_to_utc(day, end, tz, second=True)
+        if late_end > now_utc:
+            late_start = local_wall_to_utc(day, start, tz, second=True)
+            start_utc = late_start if late_start < late_end else start_utc
+            end_utc = late_end
+    return start_utc, end_utc
 
 
 def ceil_minute(moment):

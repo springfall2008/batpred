@@ -9,12 +9,14 @@
 """Tests for how the Fronius component turns Predbat's control entities into a dated schedule."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fronius_const import ACTION_CHARGE, ACTION_HOLD, FRONIUS_CACHE_CONTROL, FRONIUS_STORAGE_MODULE
 from tests.test_infra import run_async
 from tests.test_fronius_api import ENERGY, DEVICES, FLOW, PV_ID, SHORT_ID, FakeResponse, FakeStorage, MockFronius, http, logged
 
 ACCEPTED = {"dispatchId": "52dd9d36-ec43-406a-9038-8bc317ac9366"}
+# A hold: no discharge, no grid import, solar may still charge up to the battery's rate (5632 W).
+HOLD = {"MaxW": 5632, "MinW": 0}
 
 
 def entity(domain, leaf):
@@ -41,6 +43,8 @@ def controlled_client(now=None, tz="Europe/London", soc=55, **kwargs):
         run_async(client.refresh_energy())
     client.flow["BattSOC"] = soc
     client.control_active = True
+    # The shape read-back is exercised by its own tests; everywhere else the object form is known.
+    client.params_shape_confirmed = True
     set_window(client, "charge")
     set_window(client, "export")
     return client
@@ -76,7 +80,7 @@ def test_fronius_charge_window_becomes_charge_battery():
             "dispatchType": "ChargeBattery",
             "dispatchDateTime": "2026-06-15T12:00:00Z",
             "dispatchDuration": 3600,
-            "dispatchParameters": [{"name": "MaxW", "value": 3000}, {"name": "MinW", "value": 3000}],
+            "dispatchParameters": {"MaxW": 3000, "MinW": 3000},
             "dispatchPayload": commands[0]["dispatchPayload"],
         }
     ], commands
@@ -103,7 +107,7 @@ def test_fronius_unchanged_schedule_is_not_resent():
 
 
 def test_fronius_target_reached_switches_to_hold():
-    """ChargeBattery has no target, so reaching it is turned into MaxW=0 for the rest of the window."""
+    """ChargeBattery has no target, so reaching it is turned into a hold (no discharge, no import) for the rest of the window."""
     client = controlled_client(soc=80)
     set_window(client, "charge", "13:00:00", "14:30:00", soc=90, power=3000, enable=True)
     apply(client, FakeResponse(200, ACCEPTED))
@@ -112,12 +116,136 @@ def test_fronius_target_reached_switches_to_hold():
     ok, calls = apply(client, FakeResponse(200, ACCEPTED))
     assert ok and len(calls) == 1, calls
     commands = body(calls[0])
-    assert commands[0]["dispatchType"] == "ChargeBattery" and commands[0]["dispatchParameters"] == [{"name": "MaxW", "value": 0}, {"name": "MinW", "value": 0}], commands
+    assert commands[0]["dispatchType"] == "ChargeBattery" and commands[0]["dispatchParameters"] == HOLD, commands
     assert client.sent_segments[0]["action"] == ACTION_HOLD
     # Holding is now the plan, so it is not re-sent either.
     client.advance(minutes=1)
     ok, calls = apply(client)
     assert ok and calls == []
+
+
+def test_fronius_freeze_charge_in_window_never_imports():
+    """Freeze charge keeps the window, writes target = rounded SoC and zeroes the discharge rate: never a grid charge."""
+    client = controlled_client(soc=55.6)
+    set_window(client, "charge", "13:00:00", "14:00:00", soc=56, power=3000, enable=True)
+    set_window(client, "export", power=0)
+    client.get_schedule_settings_ha()
+    segments, _, _ = client.build_segments(client.utc_now())
+    assert segments[0]["action"] == ACTION_HOLD and segments[0]["params"] == HOLD, segments
+    # The same fractional SoC with no hold signal has still reached the target the way Predbat counts it.
+    set_window(client, "export", power=3000)
+    client.get_schedule_settings_ha()
+    segments, _, _ = client.build_segments(client.utc_now())
+    assert segments[0]["action"] == ACTION_HOLD, segments
+    # Genuinely short of the target it charges.
+    client.flow["BattSOC"] = 54.4
+    segments, _, _ = client.build_segments(client.utc_now())
+    assert segments[0]["action"] == ACTION_CHARGE, segments
+
+
+def test_fronius_stale_soc_does_not_drive_targets():
+    """A SoC that Solar.web has not refreshed for over three power-flow periods is not used for a target check."""
+    client = controlled_client(soc=95)
+    set_window(client, "charge", "13:00:00", "14:30:00", soc=90, power=3000, enable=True)
+    client.get_schedule_settings_ha()
+    assert client.build_segments(client.utc_now())[0][0]["action"] == ACTION_HOLD
+    client.flow_seen["BattSOC"] = client._epoch() - 16 * 60
+    assert client.control_soc() is None
+    assert client.build_segments(client.utc_now())[0][0]["action"] == ACTION_CHARGE
+
+
+def test_fronius_window_in_the_repeated_autumn_hour():
+    """In the second 01:xx of the London fall-back night a 01:00-01:30 window is current, not skipped."""
+    client = controlled_client(now=datetime(2026, 10, 25, 1, 10, tzinfo=timezone.utc))
+    set_window(client, "charge", "01:00:00", "01:30:00", soc=90, power=3000, enable=True)
+    client.get_schedule_settings_ha()
+    segments, _, _ = client.build_segments(client.utc_now())
+    assert segments[0]["action"] == ACTION_CHARGE and segments[0]["end"] == datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc), segments
+
+
+def test_fronius_restart_keeps_renewing_a_steady_plan():
+    """After a restart with a steady plan (no entity writes), the restored schedule is still renewed."""
+    storage = FakeStorage()
+    client = controlled_client(storage=storage)
+    set_window(client, "export", "13:00:00", "15:00:00", soc=4, power=3000, enable=True)
+    client.flow["BattSOC"] = 80
+    apply(client, FakeResponse(200, ACCEPTED))
+    restarted = MockFronius(storage=storage)
+    restarted.battery_info = dict(client.battery_info)
+    restarted.flow = dict(client.flow)
+    restarted.state = dict(client.state)
+    run_async(restarted.restore_state())
+    assert restarted.control_active, "control_active was not restored"
+    restarted._now = client._now + timedelta(minutes=31)
+    restarted.flow_seen["BattSOC"] = restarted._epoch()
+    restarted.get_schedule_settings_ha()
+    transport, patcher = http(FakeResponse(200, ACCEPTED))
+    with patcher:
+        run_async(restarted._reconcile_control())
+    assert len(transport.calls) == 1 and transport.calls[0]["method"] == "PUT", transport.calls
+
+
+def test_fronius_reply_without_dispatch_id_is_not_mistaken():
+    """A PUT reply without a dispatchId drops the superseded id; a later cancel then cannot claim success."""
+    client = controlled_client()
+    set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=3000, enable=True)
+    apply(client, FakeResponse(200, ACCEPTED))
+    set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=2000, enable=True)
+    client.advance(minutes=2)
+    ok, calls = apply(client, FakeResponse(200, {}))
+    assert ok and client.dispatch_id is None and logged(client, "no dispatchId")
+    # Going idle: no id to DELETE, so an empty replacement is tried; refused, the state is kept.
+    set_window(client, "charge")
+    client.advance(minutes=2)
+    ok, calls = apply(client, FakeResponse(400, {"responseError": 10401, "responseMessage": "Cannot process request due to incorrect or empty parameters."}))
+    assert not ok and [call["method"] for call in calls] == ["PUT"] and calls[0]["json"] == [], calls
+    assert client.sent_segments, "a live forced schedule must not be reported as cancelled"
+    assert logged(client, "cannot cancel")
+    # Not retried every tick while it runs out.
+    client.advance(minutes=2)
+    ok, calls = apply(client)
+    assert not ok and calls == []
+    # Once it has run out, the state clears without a call.
+    client.advance(minutes=60)
+    ok, calls = apply(client)
+    assert ok and calls == [] and client.sent_segments == []
+
+
+def test_fronius_empty_replacement_cancels_when_permitted():
+    """With no dispatch id, an accepted empty schedule is the cancel."""
+    client = controlled_client()
+    set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=3000, enable=True)
+    apply(client, FakeResponse(200, {}))
+    set_window(client, "charge")
+    client.advance(minutes=2)
+    ok, calls = apply(client, FakeResponse(200, {"dispatchId": "empty-1"}))
+    assert ok and calls[0]["json"] == [] and client.sent_segments == []
+
+
+def test_fronius_parked_control_scope_is_quiet():
+    """After a control 403 the held change is reported once per backoff, not warned and saved every tick."""
+    storage = FakeStorage()
+    client = controlled_client(storage=storage)
+    set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=3000, enable=True)
+    apply(client, FakeResponse(403, {"responseError": 10106, "responseMessage": "User not authorized."}))
+    saves = []
+    original = storage.save
+
+    async def counting_save(module, name, data):
+        """Count saves."""
+        saves.append(name)
+        await original(module, name, data)
+
+    storage.save = counting_save
+    before = len(client.log_messages)
+    for _ in range(5):
+        client.advance(minutes=1)
+        ok, calls = apply(client)
+        assert not ok and calls == []
+    new_logs = client.log_messages[before:]
+    assert len([message for message in new_logs if "paused" in message]) == 1, new_logs
+    assert not any(message.startswith("Warn:") for message in new_logs), new_logs
+    assert saves == [], saves
 
 
 def test_fronius_export_window_becomes_discharge_battery():
@@ -131,29 +259,45 @@ def test_fronius_export_window_becomes_discharge_battery():
             "dispatchType": "DischargeBattery",
             "dispatchDateTime": "2026-06-15T12:00:00Z",
             "dispatchDuration": 1800,
-            "dispatchParameters": [{"name": "MaxW", "value": 2500}, {"name": "MinW", "value": 2500}],
+            "dispatchParameters": {"MaxW": 2500, "MinW": 2500},
             "dispatchPayload": commands[0]["dispatchPayload"],
         }
     ], commands
 
 
 def test_fronius_export_stops_at_its_target():
-    """At or below the export target nothing is forced out; with nothing sent, nothing is called."""
-    client = controlled_client(soc=20)
-    set_window(client, "export", "13:00:00", "13:30:00", soc=20, power=2500, enable=True)
+    """The export target is the one Predbat really writes: charge_limit, not discharge_target_soc.
+
+    With target_soc_used_for_discharge Predbat puts the export target in charge_limit (the charge SoC
+    entity) and only the reserve in discharge_target_soc (the export SoC entity). At SoC 40% with a
+    50% export target and a 4% reserve nothing may be forced out.
+    """
+    client = controlled_client(soc=40)
+    set_window(client, "charge", soc=50, power=3000, enable=False)
+    set_window(client, "export", "13:00:00", "14:00:00", soc=4, power=5000, enable=True)
     ok, calls = apply(client)
     assert ok and calls == [], calls
+    # Above the target it exports.
+    client.flow["BattSOC"] = 60
+    ok, calls = apply(client, FakeResponse(200, ACCEPTED))
+    assert ok and body(calls[0])[0]["dispatchType"] == "DischargeBattery", calls
 
 
 def test_fronius_freeze_charge_holds_the_battery():
-    """A zero discharge rate outside any window is Predbat's hold: ChargeBattery MaxW=0 until the horizon."""
+    """A zero discharge rate outside any window is Predbat's hold: no discharge, no import, solar may charge."""
     client = controlled_client()
     set_window(client, "export", power=0)
     ok, calls = apply(client, FakeResponse(200, ACCEPTED))
     commands = body(calls[0])
     assert len(commands) == 1 and commands[0]["dispatchType"] == "ChargeBattery", commands
-    assert commands[0]["dispatchParameters"] == [{"name": "MaxW", "value": 0}, {"name": "MinW", "value": 0}]
+    assert commands[0]["dispatchParameters"] == HOLD, commands
     assert commands[0]["dispatchDuration"] == 3600
+    # With the charge rate also zero there is nothing to allow: Fronius's "keep the level".
+    both = controlled_client()
+    set_window(both, "charge", power=0)
+    set_window(both, "export", power=0)
+    ok, calls = apply(both, FakeResponse(200, ACCEPTED))
+    assert body(calls[0])[0]["dispatchParameters"] == {"MaxW": 0, "MinW": 0}
 
 
 def test_fronius_freeze_export_blocks_charging_only():
@@ -164,7 +308,7 @@ def test_fronius_freeze_export_blocks_charging_only():
     ok, calls = apply(client, FakeResponse(200, ACCEPTED))
     commands = body(calls[0])
     assert commands[0]["dispatchType"] == "DischargeBattery", commands
-    assert commands[0]["dispatchParameters"] == [{"name": "MaxW", "value": 4000}, {"name": "MinW", "value": 0}], commands
+    assert commands[0]["dispatchParameters"] == {"MaxW": 4000, "MinW": 0}, commands
 
 
 def test_fronius_upcoming_window_is_sent_ahead():
@@ -237,7 +381,7 @@ def test_fronius_reconcile_waits_for_predbat_to_drive():
     transport, patcher = http(FakeResponse(200, ACCEPTED))
     with patcher:
         run_async(held._reconcile_control())
-    assert len(transport.calls) == 1 and transport.calls[0]["json"][0]["dispatchParameters"] == [{"name": "MaxW", "value": 0}, {"name": "MinW", "value": 0}]
+    assert len(transport.calls) == 1 and transport.calls[0]["json"][0]["dispatchParameters"] == HOLD
 
 
 def test_fronius_writes_are_paced():
@@ -250,23 +394,41 @@ def test_fronius_writes_are_paced():
     assert not ok and calls == [] and logged(client, "held")
     client.advance(seconds=61)
     ok, calls = apply(client, FakeResponse(200, ACCEPTED))
-    assert ok and len(calls) == 1 and body(calls[0])[0]["dispatchParameters"][0]["value"] == 2000
+    assert ok and len(calls) == 1 and body(calls[0])[0]["dispatchParameters"]["MaxW"] == 2000
 
 
 def test_fronius_parameter_shape_falls_back_once():
-    """A malformed-request rejection retries once with object-keyed parameters, which then sticks."""
+    """The object form (every JSON example) goes first; a malformed-request rejection retries once as an array."""
     client = controlled_client()
+    client.params_shape_confirmed = False
     set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=3000, enable=True)
-    ok, calls = apply(client, FakeResponse(400, {"responseError": 10303, "responseMessage": "Unexpected parameters for dispatch type."}), FakeResponse(200, ACCEPTED))
-    assert ok and len(calls) == 2, calls
-    assert isinstance(calls[0]["json"][0]["dispatchParameters"], list)
-    assert calls[1]["json"][0]["dispatchParameters"] == {"MaxW": 3000, "MinW": 3000}
-    assert client.params_shape == "object" and client.params_shape_confirmed
-    # Once a shape has been accepted there is no second guess on a later failure.
+    readback = {"commands": [{"dispatchId": ACCEPTED["dispatchId"], "dispatchType": "ChargeBattery", "dispatchParameters": [{"name": "MinW", "value": 3000}, {"name": "MaxW", "value": 3000}], "dispatchStatus": "Pending"}]}
+    ok, calls = apply(client, FakeResponse(400, {"responseError": 10303, "responseMessage": "Unexpected parameters for dispatch type."}), FakeResponse(200, ACCEPTED), FakeResponse(200, readback))
+    assert ok and [call["method"] for call in calls] == ["PUT", "PUT", "GET"], calls
+    assert calls[0]["json"][0]["dispatchParameters"] == {"MaxW": 3000, "MinW": 3000}
+    assert calls[1]["json"][0]["dispatchParameters"] == [{"name": "MaxW", "value": 3000}, {"name": "MinW", "value": 3000}]
+    assert calls[2]["url"].endswith("/schedules/{}".format(ACCEPTED["dispatchId"]))
+    assert client.params_shape == "list" and client.params_shape_confirmed
+    # Once a shape has been confirmed there is no second guess on a later failure.
     set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=2000, enable=True)
     client.advance(minutes=2)
     ok, calls = apply(client, FakeResponse(400, {"responseError": 10303}))
     assert not ok and len(calls) == 1
+
+
+def test_fronius_silently_ignored_shape_is_caught_by_readback():
+    """An accepted schedule whose read-back has no parameters was ignored: re-send in the other shape."""
+    client = controlled_client()
+    client.params_shape_confirmed = False
+    set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=3000, enable=True)
+    empty = {"commands": [{"dispatchId": ACCEPTED["dispatchId"], "dispatchType": "ChargeBattery", "dispatchStatus": "Pending"}]}
+    ok, calls = apply(client, FakeResponse(200, ACCEPTED), FakeResponse(200, empty))
+    assert not ok and [call["method"] for call in calls] == ["PUT", "GET"], calls
+    assert client.params_shape == "list" and not client.params_shape_confirmed and client.sent_segments == []
+    client.advance(minutes=2)
+    good = {"commands": [{"dispatchType": "ChargeBattery", "dispatchParameters": [{"name": "MaxW", "value": 3000}, {"name": "MinW", "value": 3000}]}]}
+    ok, calls = apply(client, FakeResponse(200, ACCEPTED), FakeResponse(200, good))
+    assert ok and isinstance(calls[0]["json"][0]["dispatchParameters"], list) and client.params_shape_confirmed
 
 
 def test_fronius_unsupported_system_stops_control():
@@ -287,7 +449,7 @@ def test_fronius_power_is_clamped_to_the_battery_limit():
     client = controlled_client()
     set_window(client, "charge", "13:00:00", "14:00:00", soc=90, power=9000, enable=True)
     ok, calls = apply(client, FakeResponse(200, ACCEPTED))
-    assert body(calls[0])[0]["dispatchParameters"] == [{"name": "MaxW", "value": 5632}, {"name": "MinW", "value": 5632}]
+    assert body(calls[0])[0]["dispatchParameters"] == {"MaxW": 5632, "MinW": 5632}
 
 
 def test_fronius_grid_export_limit_fills_idle_periods():
@@ -298,7 +460,7 @@ def test_fronius_grid_export_limit_fills_idle_periods():
     commands = body(calls[0])
     assert [command["dispatchType"] for command in commands] == ["ChargeBattery", "SetGridExportLimit"], commands
     assert commands[1]["dispatchDateTime"] == "2026-06-15T12:30:00Z"
-    assert commands[1]["dispatchParameters"] == [{"name": "ExportLimitW", "value": 3680}]
+    assert commands[1]["dispatchParameters"] == {"ExportLimitW": 3680}
 
 
 def test_fronius_vienna_window_is_sent_in_utc():
@@ -323,6 +485,13 @@ def test_fronius_dst_day_window_has_its_real_length():
     client.advance(minutes=1)
     ok, calls = apply(client, FakeResponse(200, ACCEPTED))
     assert body(calls[0])[0]["dispatchDateTime"] == "2026-03-29T00:30:00Z"
+    # The window ends at 04:30 BST = 03:30Z: three real hours, not four.
+    client._now = datetime(2026, 3, 29, 3, 0, tzinfo=timezone.utc)
+    client.flow_seen["BattSOC"] = client._epoch()
+    segments, start, end = client.build_segments(client.utc_now())
+    charge = [segment for segment in segments if segment["action"] == ACTION_CHARGE]
+    assert len(charge) == 1 and charge[0]["end"] == datetime(2026, 3, 29, 3, 30, tzinfo=timezone.utc), segments
+    assert any(segment["action"] == "idle" and segment["start"] == charge[0]["end"] for segment in segments), segments
 
 
 def test_fronius_restart_does_not_resend_the_same_schedule():
@@ -369,6 +538,14 @@ def run_fronius_control_tests(my_predbat):
         ("charge_window", test_fronius_charge_window_becomes_charge_battery),
         ("unchanged_not_resent", test_fronius_unchanged_schedule_is_not_resent),
         ("target_reached_hold", test_fronius_target_reached_switches_to_hold),
+        ("freeze_in_window", test_fronius_freeze_charge_in_window_never_imports),
+        ("stale_soc", test_fronius_stale_soc_does_not_drive_targets),
+        ("autumn_repeated_hour", test_fronius_window_in_the_repeated_autumn_hour),
+        ("restart_keeps_renewing", test_fronius_restart_keeps_renewing_a_steady_plan),
+        ("reply_without_dispatch_id", test_fronius_reply_without_dispatch_id_is_not_mistaken),
+        ("empty_replacement_cancel", test_fronius_empty_replacement_cancels_when_permitted),
+        ("parked_control_quiet", test_fronius_parked_control_scope_is_quiet),
+        ("readback_catches_ignored_shape", test_fronius_silently_ignored_shape_is_caught_by_readback),
         ("export_window", test_fronius_export_window_becomes_discharge_battery),
         ("export_target", test_fronius_export_stops_at_its_target),
         ("freeze_charge", test_fronius_freeze_charge_holds_the_battery),

@@ -435,6 +435,18 @@ def test_fronius_power_flow_nulls_are_a_failed_read():
     assert client.tier_expired("power", 5)
 
 
+def test_fronius_null_channel_drops_the_stale_value():
+    """A channel answered as NULL drops its previous value instead of keeping it as if current."""
+    client = telemetry_client()
+    client.advance(minutes=6)
+    partial = {"pvSystemId": PV_ID, "status": {"isOnline": True}, "data": {"logDateTime": "2026-06-15T12:05:00Z", "channels": [{"channelName": "BattSOC", "value": None}, {"channelName": "PowerPV", "value": 3000}]}}
+    transport, patcher = http(FakeResponse(200, partial))
+    with patcher:
+        assert run_async(client.refresh_power())
+    assert client.telemetry("soc") is None and client.control_soc() is None, client.flow
+    assert client.telemetry("pv_power") == 3000
+
+
 def test_fronius_energy_request_and_parse():
     """Daily energy asks for today's local date and only the channels used, and sums the grid legs."""
     client = MockFronius()
@@ -509,6 +521,7 @@ def run_fronius_api_tests(my_predbat):
         ("odd_bodies", test_fronius_tolerates_empty_and_non_json_bodies),
         ("flow_signs", test_fronius_power_flow_signs_match_predbat),
         ("flow_nulls", test_fronius_power_flow_nulls_are_a_failed_read),
+        ("null_channel_drops_value", test_fronius_null_channel_drops_the_stale_value),
         ("energy_parse", test_fronius_energy_request_and_parse),
         ("energy_local_date", test_fronius_energy_uses_the_local_date),
         ("static_metadata", test_fronius_static_reads_battery_and_inverter_metadata),

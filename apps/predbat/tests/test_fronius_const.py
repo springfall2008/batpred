@@ -28,6 +28,8 @@ from fronius_const import (
     local_wall_to_utc,
     make_segment,
     merge_segments,
+    normalise_params,
+    null_channels,
     parse_error_body,
     parse_zulu,
     predbat_battery_power,
@@ -116,6 +118,35 @@ def test_fronius_local_wall_to_utc_zoneinfo():
     assert local_wall_to_utc(date(2026, 6, 15), 120, london) == utc(2026, 6, 15, 1, 0)
     assert local_wall_to_utc(date(2026, 3, 29), 90, london) == utc(2026, 3, 29, 1, 30)
     assert local_wall_to_utc(date(2026, 10, 25), 90, london) == utc(2026, 10, 25, 0, 30)
+
+
+def test_fronius_repeated_hour_picks_the_current_occurrence():
+    """In the fall-back hour an edge is read as its first occurrence unless only the second is still current."""
+    assert local_wall_to_utc(date(2026, 10, 25), 90, LONDON, second=True) == utc(2026, 10, 25, 1, 30)
+    assert local_wall_to_utc(date(2026, 10, 25), 150, VIENNA, second=True) == utc(2026, 10, 25, 1, 30)
+    # Unambiguous times are the same either way.
+    assert local_wall_to_utc(date(2026, 6, 15), 90, LONDON, second=True) == utc(2026, 6, 15, 0, 30)
+    # First pass (00:10Z = 01:10 BST): the first occurrence is current.
+    assert window_to_utc("01:00:00", "01:30:00", utc(2026, 10, 25, 0, 10), LONDON) == (utc(2026, 10, 25, 0, 0), utc(2026, 10, 25, 0, 30))
+    # Second pass (01:10Z = 01:10 GMT): the first occurrence has ended, the second is current.
+    assert window_to_utc("01:00:00", "01:30:00", utc(2026, 10, 25, 1, 10), LONDON) == (utc(2026, 10, 25, 1, 0), utc(2026, 10, 25, 1, 30))
+    # Vienna second pass (01:10Z = 02:10 CET).
+    assert window_to_utc("02:00:00", "02:30:00", utc(2026, 10, 25, 1, 10), VIENNA) == (utc(2026, 10, 25, 1, 0), utc(2026, 10, 25, 1, 30))
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return
+    london = ZoneInfo("Europe/London")
+    assert local_wall_to_utc(date(2026, 10, 25), 90, london, second=True) == utc(2026, 10, 25, 1, 30)
+    assert local_wall_to_utc(date(2026, 3, 29), 90, london, second=True) == utc(2026, 3, 29, 1, 30)
+
+
+def test_fronius_params_and_null_helpers():
+    """Both documented parameter shapes normalise to one dict; NULL channels are named."""
+    assert normalise_params([{"name": "MinW", "value": 0}, {"name": "MaxW", "value": "5000"}]) == {"MinW": 0, "MaxW": 5000}
+    assert normalise_params({"ExportLimitW": 2500}) == {"ExportLimitW": 2500}
+    assert normalise_params(None) == {} and normalise_params([{"value": 1}]) == {}
+    assert null_channels([{"channelName": "BattSOC", "value": None}, {"channelName": "PowerPV", "value": 10}, "junk"]) == {"BattSOC"}
 
 
 def test_fronius_window_to_utc_follows_compute_window_minutes():
@@ -262,6 +293,8 @@ def run_fronius_const_tests(my_predbat):
         ("wall_to_utc_spring", test_fronius_local_wall_to_utc_spring_forward),
         ("wall_to_utc_fall", test_fronius_local_wall_to_utc_fall_back),
         ("wall_to_utc_zoneinfo", test_fronius_local_wall_to_utc_zoneinfo),
+        ("repeated_hour", test_fronius_repeated_hour_picks_the_current_occurrence),
+        ("params_and_nulls", test_fronius_params_and_null_helpers),
         ("window_to_utc", test_fronius_window_to_utc_follows_compute_window_minutes),
         ("window_to_utc_dst", test_fronius_window_to_utc_on_dst_days),
         ("ceil_and_horizon", test_fronius_ceil_minute_and_horizon),

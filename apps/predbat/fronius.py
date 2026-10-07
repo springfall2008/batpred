@@ -26,13 +26,16 @@ The mapping, per period:
 
 - charge window active  -> ChargeBattery MinW = MaxW = charge rate (an exact rate; grid fills any
                            shortfall in PV, and discharging is blocked);
-- charge target reached -> ChargeBattery MaxW = 0, Fronius's documented "hold the current level";
-                           ChargeBattery has no target-SoC parameter, so reaching the target is
-                           detected here from the telemetry SoC and turned into a schedule change;
+- charge target reached -> hold (below). ChargeBattery has no target-SoC parameter, so reaching the
+                           target - rounded the way Predbat writes it - is detected here from the
+                           telemetry SoC and turned into a schedule change;
+- freeze charge / hold  -> hold: ChargeBattery MinW = 0, MaxW = battery rate, meaning no discharge,
+                           no grid import, solar may still charge. Predbat signals it by setting the
+                           discharge rate to zero, and that signal wins inside a charge window too;
+                           if the charge rate is also zero, MaxW = 0 (Fronius's "keep the level");
 - export window active  -> DischargeBattery MinW = MaxW = export rate (surplus goes to the grid,
-                           and charging is blocked);
-- freeze charge / hold  -> ChargeBattery MaxW = 0 (Predbat signals a hold by setting the discharge
-                           rate to zero, as on every other cloud inverter without a pause control);
+                           and charging is blocked), until the export target Predbat writes to the
+                           charge SoC entity (target_soc_used_for_discharge) is reached;
 - freeze export         -> DischargeBattery MinW = 0, MaxW = discharge rate (the battery may cover
                            house load but cannot charge, and nothing is forced out to the grid);
 - otherwise             -> no command at all, i.e. the inverter's own self-consumption.
@@ -49,8 +52,8 @@ SoC to stop it - see the charge-target bullet above).
 LATENCY. Fronius accept a schedule within seconds but may take up to two minutes to deliver it to
 the inverter. Predbat publishes the next window well ahead of its start (set_window_minutes), and
 a change is sent as soon as it is within FRONIUS_LOOKAHEAD_MINUTES (30) of now, so upcoming
-windows reach the inverter long before they begin. A change to the CURRENT period (a target reached, a freeze starting) necessarily lands
-up to two minutes late.
+windows reach the inverter long before they begin. A change to the CURRENT period (a target
+reached, a freeze starting) necessarily lands up to two minutes late.
 
 COST. Query reads are billed per data point. One power-flow read is one data point and carries
 every channel Predbat uses, so it is read once per Predbat cycle. Daily energy is one data point
@@ -62,11 +65,13 @@ contract. Every request and response is traced to the log while api_debug is on.
 readings this component relies on, each a judgement where the documentation is ambiguous, are:
 
 - power-flow signs follow "positive towards the inverter" (fronius_const.py, FRONIUS_FLOW_*);
-- dispatchParameters is sent as a name/value array first, with a single fallback to the
-  object-keyed form the documentation's JSON examples use (FRONIUS_PARAMS_*);
+- dispatchParameters is sent in the object-keyed form every JSON example uses, with a single
+  fallback to the name/value array the object tables describe, and the first accepted schedule is
+  read back to confirm its parameters stuck (FRONIUS_PARAMS_*);
 - the single-system schedule body is a bare JSON array of commands, as in its example;
-- DischargeBattery with MinW = 0 covers load without forcing export, and ChargeBattery with
-  MaxW = 0 holds the level, both as described in the dispatch-type notes;
+- ChargeBattery's grid import serves MinW only, so MinW = 0 never imports and PV fills up to MaxW
+  (see _hold_params - the notes do not say this outright); DischargeBattery with MinW = 0 covers
+  load without forcing export;
 - daily energy for "today" is requested by the Predbat timezone's local date.
 """
 
@@ -135,6 +140,8 @@ from fronius_const import (
     describe_error,
     horizon_end,
     make_segment,
+    normalise_params,
+    null_channels,
     merge_segments,
     parse_error_body,
     parse_zulu,
@@ -146,8 +153,10 @@ from fronius_const import (
     segments_from_json,
     segments_to_commands,
     segments_to_json,
+    segment_dispatch_type,
     short_system_id,
     window_to_utc,
+    zulu,
 )
 
 # The behaviour a FroniusCloud inverter has, stated for the discovery record's capabilities. A
@@ -219,6 +228,9 @@ class FroniusCloud(ComponentBase):
 
         # Telemetry
         self.flow = {}
+        # When each power-flow channel was last reported with a real value, so a value Solar.web has
+        # since returned as NULL - or simply not refreshed - is not mistaken for a current one.
+        self.flow_seen = {}
         self.flow_time = None
         self.is_online = None
         self.last_flow_ok = None
@@ -235,13 +247,21 @@ class FroniusCloud(ComponentBase):
         self.last_write_time = None
         self.params_shape = FRONIUS_PARAMS_DEFAULT
         self.params_shape_confirmed = False
-        # Whether Predbat has written any control entity this session. The reconcile loop only
-        # applies once it has, so a startup tick can never take control of the battery from
-        # entities Predbat has not yet set.
+        # Whether Predbat has written any control entity (this session, or before a restart - it is
+        # persisted). The reconcile loop only applies once it has, so a first-ever startup tick can
+        # never take control of the battery from entities Predbat has not yet set.
         self.control_active = False
         # Set when the API says this PV system cannot be battery-controlled at all (no battery, a
         # pre-GEN24 inverter, a multi-inverter site). Monitoring continues; writes stop.
         self.control_unsupported = None
+        # When a forced schedule cannot be cancelled (no dispatch id, empty replacement refused),
+        # nothing more can be done until it runs out at this epoch; until then the idle plan is not
+        # retried every tick.
+        self._cancel_blocked_until = None
+        # The control scope's backoff deadline already reported, so a parked scope logs once.
+        self._parked_reported = None
+        # Read-back verifications of the parameter shape that found the parameters missing.
+        self._shape_verify_failures = 0
 
         # API health
         self._backoff_until = {}
@@ -481,7 +501,8 @@ class FroniusCloud(ComponentBase):
         """Read the real-time power flow - one call, one data point, every channel Predbat uses.
 
         Solar.web answers NULL for every channel when it timed out reading the inverter itself; that
-        is treated as a failed read and retried later rather than published as zeros.
+        is treated as a failed read and retried later rather than published as zeros. A NULL for one
+        channel drops that channel's previous value, so a stale SoC never drives a target check.
         """
         res = await self._request(FRONIUS_SCOPE_QUERY, "GET", self._path("flowdata"))
         if not res["ok"]:
@@ -493,13 +514,20 @@ class FroniusCloud(ComponentBase):
         status = data.get("status") or {}
         body = data.get("data") or {}
         values = channel_values(body.get("channels"))
+        nulls = null_channels(body.get("channels"))
         if isinstance(status, dict) and "isOnline" in status:
             self.is_online = bool(status.get("isOnline"))
         if not values:
             self.log("Info: Fronius power flow returned no values (Solar.web could not reach the inverter{}); will retry".format("" if self.is_online is not False else ", which is reported offline"))
             self.mark_retry("power", FRONIUS_TTL_POWER)
             return False
+        now = self._epoch()
+        for name in nulls:
+            self.flow.pop(name, None)
+            self.flow_seen.pop(name, None)
         self.flow.update(values)
+        for name in values:
+            self.flow_seen[name] = now
         if FRONIUS_FLOW_PV in values:
             self.pv_seen = True
         self.flow_time = body.get("logDateTime")
@@ -813,7 +841,11 @@ class FroniusCloud(ComponentBase):
         """
         if not self._owns_entity(entity_id):
             return
-        self.control_active = True
+        if not self.control_active:
+            self.control_active = True
+            # Persisted so a restart keeps renewing the schedule even if Predbat's plan is steady
+            # and it writes nothing new for a while.
+            await self.save_control()
         if str(entity_id).endswith("battery_schedule_charge_write"):
             if self._to_bool(value):
                 await self.apply_schedule()
@@ -833,6 +865,46 @@ class FroniusCloud(ComponentBase):
             value = min(value, int(rate_max))
         return value
 
+    def control_soc(self):
+        """Return the SoC to make control decisions on, or None when it is not fresh.
+
+        Fresh means reported within three power-flow periods. An older figure would let a target
+        check act on a battery level that has since moved by an unknown amount.
+        """
+        seen = self.flow_seen.get(FRONIUS_FLOW_SOC)
+        if seen is None or (self._epoch() - seen) > 3 * FRONIUS_TTL_POWER * 60:
+            return None
+        return self.flow.get(FRONIUS_FLOW_SOC)
+
+    @staticmethod
+    def target_reached(soc, target):
+        """Return whether SoC has reached a target the way Predbat counts it.
+
+        Predbat writes targets as whole percentages rounded from kWh (calc_percent_limit), so a
+        freeze at 55.6% is written as a target of 56. Comparing the raw float would read that as
+        "0.4% short" and charge from the grid; rounding first matches what Predbat meant.
+        """
+        return soc is not None and target > 0 and int(soc + 0.5) >= target
+
+    def _hold_params(self, charge_power):
+        """Return ChargeBattery parameters for "no discharge, no grid import, solar may charge".
+
+        MinW = 0 with MaxW at the battery's rate. The Flexibility API notes for ChargeBattery say any
+        parameter combination prevents discharging, that grid energy is imported when PV produces
+        less than is "necessary to charge the batteries", and that "if the minimum charge rate can be
+        exceeded by the PV energy, the charge rate will increase up to the maximum requested level".
+        The import is read as covering the MINIMUM only - with MinW = 0 nothing is necessary - and
+        PV fills up to MaxW. The notes never say outright which bound the import serves, so this is
+        the one reading here that has to be confirmed on hardware.
+
+        When Predbat has also set the charge rate to zero there is nothing to allow, so MaxW is 0:
+        Fronius's documented "keep the current level".
+        """
+        if charge_power is not None and charge_power <= 0:
+            return {FRONIUS_PARAM_MIN_W: 0, FRONIUS_PARAM_MAX_W: 0}
+        rate = self.battery_rate_max() or as_float(charge_power, 0.0) or FRONIUS_DEFAULT_POWER_W
+        return {FRONIUS_PARAM_MIN_W: 0, FRONIUS_PARAM_MAX_W: self._clamp_power(rate)}
+
     def decide_action(self, moment, current, charge_window, export_window):
         """Return (action, params) for the period starting at moment.
 
@@ -845,12 +917,18 @@ class FroniusCloud(ComponentBase):
         """
         charge = self.local_schedule.get("charge", {})
         export = self.local_schedule.get("export", {})
-        soc = self.telemetry("soc")
+        soc = self.control_soc()
         charge_power = charge.get("power")
         export_power = export.get("power")
+        # A discharge rate of zero is how Predbat signals freeze charge, hold charging and every other
+        # "do not discharge" hold on an inverter without a pause control.
+        discharge_held = export_power is not None and export_power <= 0
 
         if export_window and export_window[0] <= moment < export_window[1] and as_float(export_power, 0.0) > 0:
-            target = as_float(export.get("soc"), 0.0)
+            # With target_soc_used_for_discharge, Predbat writes the export target to charge_limit
+            # (this component's charge SoC entity); discharge_target_soc only ever carries the reserve
+            # (inverter.adjust_force_export). The higher of the two is the floor to stop at.
+            target = max(as_float(charge.get("soc"), 0.0), as_float(export.get("soc"), 0.0))
             # Stop forcing export once the target is reached. Predbat itself then drops to Demand
             # for the rest of the window; until its next cycle this period falls through below.
             if not (current and soc is not None and soc <= target):
@@ -859,20 +937,23 @@ class FroniusCloud(ComponentBase):
 
         if charge_window and charge_window[0] <= moment < charge_window[1]:
             target = as_float(charge.get("soc"), 0.0)
+            # Freeze charge and hold charging both keep the window enabled, set the target to the
+            # current level and zero the discharge rate. That hold signal wins inside the window, so
+            # a freeze can never become a grid charge on a fractional SoC.
+            if current and discharge_held:
+                return ACTION_HOLD, self._hold_params(charge_power)
             # ChargeBattery has no target SoC, so reaching it is detected here and turned into a
             # hold for the rest of the window rather than charging on towards 100%.
-            if current and soc is not None and target > 0 and soc >= target:
-                return ACTION_HOLD, {FRONIUS_PARAM_MIN_W: 0, FRONIUS_PARAM_MAX_W: 0}
+            if current and self.target_reached(soc, target):
+                return ACTION_HOLD, self._hold_params(charge_power)
             if as_float(charge_power, 0.0) > 0:
                 power = self._clamp_power(charge_power)
                 return ACTION_CHARGE, {FRONIUS_PARAM_MIN_W: power, FRONIUS_PARAM_MAX_W: power}
-            return ACTION_HOLD, {FRONIUS_PARAM_MIN_W: 0, FRONIUS_PARAM_MAX_W: 0}
+            return ACTION_HOLD, self._hold_params(charge_power)
 
         if current:
-            # A discharge rate of zero is how Predbat signals freeze charge, hold charging and every
-            # other "do not discharge" hold on an inverter without a pause control.
-            if export_power is not None and export_power <= 0:
-                return ACTION_HOLD, {FRONIUS_PARAM_MIN_W: 0, FRONIUS_PARAM_MAX_W: 0}
+            if discharge_held:
+                return ACTION_HOLD, self._hold_params(charge_power)
             # A charge rate of zero is how it signals freeze export: cover the load from the
             # battery if needed, but never charge it, so surplus solar goes to the grid.
             if charge_power is not None and charge_power <= 0 and as_float(export_power, 0.0) > 0:
@@ -925,27 +1006,37 @@ class FroniusCloud(ComponentBase):
         """Return True when Predbat is in read-only mode and must not write to the inverter."""
         return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
 
+    def _other_shape(self, shape):
+        """Return the other documented dispatchParameters shape."""
+        return FRONIUS_PARAMS_LIST if shape == FRONIUS_PARAMS_OBJECT else FRONIUS_PARAMS_OBJECT
+
     async def put_schedule(self, segments):
         """Send a schedule, replacing every earlier one for this PV system. True when accepted.
 
-        Tries the configured dispatchParameters shape first and, until one has been accepted, retries
-        once with the other shape when the API rejects the request as malformed (see
-        FRONIUS_PARAMS_* in fronius_const.py for why both exist).
+        Tries the current dispatchParameters shape first and, until one has been confirmed, retries
+        once with the other shape when the API rejects the request as malformed. The first accepted
+        schedule is read back (verify_schedule) because an API that silently ignored a shape would
+        otherwise look exactly like success. See FRONIUS_PARAMS_* in fronius_const.py.
         """
         prefix = "predbat-{}".format(schedule_hash(segments))
         shapes = [self.params_shape]
         if not self.params_shape_confirmed:
-            shapes.append(FRONIUS_PARAMS_OBJECT if self.params_shape == FRONIUS_PARAMS_LIST else FRONIUS_PARAMS_LIST)
+            shapes.append(self._other_shape(self.params_shape))
         for attempt, shape in enumerate(shapes):
             commands = segments_to_commands(segments, prefix, shape)
             res = await self._request(FRONIUS_SCOPE_CONTROL, "PUT", self._path("schedules"), body=commands)
             if res["ok"]:
                 data = res["data"] if isinstance(res["data"], dict) else {}
-                self.dispatch_id = data.get("dispatchId") or self.dispatch_id
+                # Every PUT supersedes the previous schedule, so the old id no longer names anything
+                # live. Keeping it would make a later cancel address the wrong schedule.
+                self.dispatch_id = data.get("dispatchId")
+                if not self.dispatch_id:
+                    self.log("Warn: Fronius accepted the schedule but returned no dispatchId; it cannot be cancelled early and will run out at its own end")
                 if shape != self.params_shape:
-                    self.log("Info: Fronius accepted dispatchParameters in the {} form; using it from now on".format(shape))
+                    self.log("Info: Fronius accepted dispatchParameters in the {} form".format(shape))
                 self.params_shape = shape
-                self.params_shape_confirmed = True
+                if not self.params_shape_confirmed:
+                    return await self.verify_schedule(segments, shape)
                 return True
             if res["skipped"]:
                 return False
@@ -959,19 +1050,59 @@ class FroniusCloud(ComponentBase):
             return False
         return False
 
+    async def verify_schedule(self, segments, shape):
+        """Read the first accepted schedule back once to confirm its parameters were taken.
+
+        Returns True when the schedule may be treated as sent. If the read-back shows commands with
+        no parameters, the shape was silently ignored: the other shape is adopted and False returned,
+        so the schedule is re-sent on the next eligible tick. An unreadable answer proves nothing and
+        leaves the shape unconfirmed. After two empty read-backs (one per shape) the read-back itself
+        is presumed not to echo parameters, and the current shape is kept.
+        """
+        if not self.dispatch_id:
+            return True
+        res = await self._request(FRONIUS_SCOPE_CONTROL, "GET", self._path("schedule", dispatch_id=self.dispatch_id))
+        data = res["data"]
+        commands = data.get("commands") if isinstance(data, dict) else data
+        if not res["ok"] or not isinstance(commands, list) or not commands:
+            return True
+        wanted = [segment["params"] for segment in segments if segment_dispatch_type(segment["action"])]
+        got = [normalise_params(command.get("dispatchParameters")) for command in commands if isinstance(command, dict)]
+        if any(got) and (not wanted or wanted[0] in got):
+            self.params_shape_confirmed = True
+            self.log("Info: Fronius confirmed dispatchParameters in the {} form".format(shape))
+            return True
+        self._shape_verify_failures += 1
+        if self._shape_verify_failures >= 2:
+            self.params_shape_confirmed = True
+            self.log("Warn: Fronius schedule read-back never shows parameters in either form; keeping the {} form".format(shape))
+            return True
+        self.params_shape = self._other_shape(shape)
+        self.log("Warn: Fronius accepted the schedule but its read-back has no parameters in the {} form; re-sending in the {} form".format(shape, self.params_shape))
+        return False
+
     async def cancel_schedule(self):
         """Cancel the last schedule so the inverter returns to normal operation. True when done.
 
-        Without a dispatch id there is nothing to address; the schedule then runs out at its own end,
-        which is at most the horizon away.
+        Addressed by dispatch id. Without one, an empty replacement schedule is tried (a new schedule
+        supersedes the old). If the API refuses that too, nothing can stop the forced schedule early:
+        that is logged once and the state kept, and it runs out at its own end (at most the horizon).
         """
-        if not self.dispatch_id:
-            self.log("Info: Fronius has no dispatch id to cancel; the previous schedule will run out by itself")
+        if self.dispatch_id:
+            res = await self._request(FRONIUS_SCOPE_CONTROL, "DELETE", self._path("schedule", dispatch_id=self.dispatch_id))
+            if res["ok"] or res["code"] in FRONIUS_CANCEL_DONE_CODES:
+                self.dispatch_id = None
+                return True
+            return False
+        res = await self._request(FRONIUS_SCOPE_CONTROL, "PUT", self._path("schedules"), body=[])
+        if res["ok"]:
+            data = res["data"] if isinstance(res["data"], dict) else {}
+            self.dispatch_id = data.get("dispatchId")
             return True
-        res = await self._request(FRONIUS_SCOPE_CONTROL, "DELETE", self._path("schedule", dispatch_id=self.dispatch_id))
-        if res["ok"] or res["code"] in FRONIUS_CANCEL_DONE_CODES:
-            self.dispatch_id = None
-            return True
+        if not res["skipped"]:
+            ends = [segment["end"] for segment in self.sent_segments]
+            self._cancel_blocked_until = max(ends).timestamp() if ends else None
+            self.log("Warn: Fronius cannot cancel the running schedule (no dispatch id, and an empty replacement was refused); it will run out by itself at {}".format(zulu(max(ends)) if ends else "its end"))
         return False
 
     async def apply_schedule(self, force=False):
@@ -986,10 +1117,28 @@ class FroniusCloud(ComponentBase):
         segments, start, _ = self.build_segments(now)
         self.planned_segments = segments
         wanted = self.sendable(segments)
+        # A schedule that has fully run out is no longer outstanding, whatever happened to it.
+        if self.sent_segments and not any(segment["end"] > start for segment in self.sent_segments):
+            self.sent_segments = []
+            self._cancel_blocked_until = None
         compare_end = start + timedelta(minutes=FRONIUS_LOOKAHEAD_MINUTES)
         if not force and segments_equivalent(self.sent_segments, wanted, start, compare_end):
             return True
         epoch = now.timestamp()
+        if self._in_backoff(FRONIUS_SCOPE_CONTROL):
+            # Parked after a 403/429/maintenance: _request already said why. Report the held change
+            # once per backoff period rather than warning and re-saving state every tick.
+            until = self._backoff_until.get(FRONIUS_SCOPE_CONTROL)
+            if self._parked_reported != until:
+                self._parked_reported = until
+                self.log("Info: Fronius schedule change held while control calls are paused ({})".format(self._backoff_reason.get(FRONIUS_SCOPE_CONTROL, "backing off")))
+            return False
+        if not wanted and self._cancel_blocked_until is not None:
+            if epoch < self._cancel_blocked_until:
+                return False
+            self._cancel_blocked_until = None
+            self.sent_segments = []
+            return True
         if not force and self.last_write_time is not None and (epoch - self.last_write_time) < FRONIUS_MIN_WRITE_SECONDS:
             self.log("Info: Fronius schedule change held for {}s to pace writes; it will be sent on a later tick".format(FRONIUS_MIN_WRITE_SECONDS))
             return False
@@ -1009,6 +1158,7 @@ class FroniusCloud(ComponentBase):
         ok = await self.put_schedule(wanted)
         if ok:
             self.sent_segments = wanted
+            self._cancel_blocked_until = None
             summary = ", ".join("{} {}-{}".format(seg["action"], seg["start"].strftime("%H:%MZ"), seg["end"].strftime("%H:%MZ")) for seg in wanted)
             self.log("Info: Fronius schedule {} sent (dispatch {}): {}".format(schedule_hash(wanted), self.dispatch_id, summary))
         else:
@@ -1205,6 +1355,7 @@ class FroniusCloud(ComponentBase):
                 "params_shape": self.params_shape,
                 "params_shape_confirmed": self.params_shape_confirmed,
                 "last_write_time": self.last_write_time,
+                "control_active": self.control_active,
             },
         )
 
@@ -1225,6 +1376,9 @@ class FroniusCloud(ComponentBase):
                 self.params_shape = control["params_shape"]
                 self.params_shape_confirmed = bool(control.get("params_shape_confirmed"))
             self.last_write_time = as_float(control.get("last_write_time"))
+            # Predbat was driving this system before the restart. Without this, a steady plan writes
+            # no entity, nothing re-arms the reconcile, and the restored schedule silently lapses.
+            self.control_active = bool(control.get("control_active")) or self.control_active
         self._cache_restored = True
 
     # -------------------------------------------------------------------------
