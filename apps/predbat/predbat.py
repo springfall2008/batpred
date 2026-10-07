@@ -1103,6 +1103,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
             return
         self.check_export_more_solar_effective()
+        self.log_replay_state()
+        self.log_replay_inverter()
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
