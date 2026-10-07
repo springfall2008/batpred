@@ -83,10 +83,14 @@ pred_bat:
       data:
         mode_action: discharge_stop
   # ─── Hanchu iESS sensor entities (read) ───────────────────────────────────
+  # charge_rate/discharge_rate deliberately point at placeholder helpers, NOT the
+  # integration's charge/discharge power limit entities. Predbat writes these
+  # directly (outside the bridge script); the integration only stages such writes,
+  # and they would then be sent by the next Write Settings press. See "Hanchu Cloud Notes".
   charge_rate:
-    - number.hanchuess_YOURSERIAL_charge_power_limit
+    - input_number.predbat_charge_rate
   discharge_rate:
-    - number.hanchuess_YOURSERIAL_discharge_power_limit
+    - input_number.predbat_discharge_rate
   battery_power:
     - sensor.hanchuess_YOURSERIAL_battery_power
   battery_power_invert:

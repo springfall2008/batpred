@@ -983,6 +983,15 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 
 `input_text.hanchu_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant API call when Predbat reasserts a state that is already active.
 
+**Number helpers** (number type, min 0, max your inverter's rated power in W, step 1, unit W, initial value your inverter's rated power):
+
+| Entity ID | Name |
+| --------- | ---- |
+| `input_number.predbat_charge_rate` | Predbat Charge Rate |
+| `input_number.predbat_discharge_rate` | Predbat Discharge Rate |
+
+These are placeholders for Predbat's `charge_rate`/`discharge_rate` — see the note on charge and discharge rates under [Hanchu Cloud Notes](#hanchu-cloud-notes).
+
 ### Hanchu Cloud Step 2 — Create the bridge script
 
 All four of Predbat's service hooks call the same script, `script.hanchu_set_state_queued`, passing a `mode_action` field to indicate which state to apply. The script runs with `mode: queued` so if Predbat fires two calls close together — for example stopping a discharge and starting a charge in the same plan-evaluation cycle — Home Assistant queues the second call behind the first rather than letting both `device_control` calls race each other.
@@ -1206,6 +1215,7 @@ Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total 
 - **Behaviour on Predbat restart:** Whenever Predbat restarts it issues both `charge_stop_service` and `discharge_stop_service` in quick succession to put the inverter into a known neutral state. This is expected behaviour. The queued script handles this cleanly — if one of the calls matches the already-active state it is skipped as redundant; the other runs if it represents a real change. You may see one or both fire immediately after any restart.
 - **Automation latency:** Start/stop commands are occasionally delayed by up to ~2 minutes due to HA scheduling. This has not caused any practical issues in production use.
 - **No charge/discharge enable toggle:** Hanchu has no explicit enable/disable for charge or discharge. The slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
+- **Charge and discharge rates:** `charge_rate`/`discharge_rate` point at the placeholder helpers from Step 1, not at the integration's charge/discharge power limit entities, so the inverter's power limits stay at whatever you set them to. Predbat writes these rates directly rather than through the bridge script (for example, setting the discharge rate to 0 for "Hold for car"). The integration only stages such a write — the bridge script's `device_control` call sends just the time-slot settings — so it is never applied on its own, but stays pending and would be sent by the next press of the Write Settings button, possibly long after Predbat has moved on. The trade-off is that features which rely on rate control (car charging hold, low-power charge/export) have no effect on the inverter.
 - **Min SOC:** Managed via `battery_min_soc` pointing directly to the Hanchu entity — no separate Predbat reserve setting needed.
 - **Mid-window time updates:** Predbat may revise its planned charge or discharge end time mid-window without issuing a new start service call. The mid-window automation above catches these changes and updates the Hanchu time slots accordingly, ensuring the inverter honours Predbat's revised plan rather than the original end time.
 
