@@ -107,6 +107,10 @@ KRAKEN_CREDENTIAL_ERROR_CODES = ("KT-CT-1138", "KT-CT-1139")
 KRAKEN_RATE_LIMIT_CODE = "KT-CT-1199"
 # Seconds before an OAuth2 access token's stated expiry at which it is renewed
 TOKEN_EXPIRY_MARGIN_SECONDS = 60
+# How often the Ostrom contract (and so the postcode priced) is looked up again when no contract is configured
+OSTROM_CONTRACT_RECHECK = timedelta(days=1)
+# /spot-prices replies that can mean the postcode no longer fits the account (a move): look the contract up again
+OSTROM_CONTRACT_CHANGED_STATUSES = (400, 404, 422)
 
 # Bidding zone name -> ENTSO-E EIC area code. Names follow Energy-Charts' bzn codes so one setting
 # drives both sources. IE-SEM is ENTSO-E only (Energy-Charts does not publish it).
@@ -183,7 +187,12 @@ ISO_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?$")
 
 
 class SpotPriceError(Exception):
-    """A price source could not supply prices; the message says why."""
+    """A price source could not supply prices; the message says why. status is the HTTP status when one caused it."""
+
+    def __init__(self, message, status=None):
+        """Store the message and the HTTP status, if any."""
+        super().__init__(message)
+        self.status = status
 
 
 def parse_iso_duration_minutes(text):
@@ -1193,6 +1202,7 @@ class SpotPriceAPI(ComponentBase):
         self.ostrom_access_token = None
         self.ostrom_token_expiry = None
         self.ostrom_contract = None
+        self.ostrom_contract_checked = None
         self.octopus_de_token = None
         self.octopus_de_token_expiry = None
         # Which contract / market location the supplier prices are for: detected at run time, and as cached
@@ -1589,7 +1599,7 @@ class SpotPriceAPI(ComponentBase):
             record_api_call(service, False, "rate_limit")
             raise SpotPriceError("{} rate limit hit (HTTP 429)".format(label))
         record_api_call(service, False, "server_error" if status >= 500 else "client_error")
-        raise SpotPriceError("{} returned HTTP {}{}".format(label, status, detail))
+        raise SpotPriceError("{} returned HTTP {}{}".format(label, status, detail), status=status)
 
     async def ostrom_token(self):
         """Return an Ostrom access token, requesting a new one (client credentials grant) when none is held or it is about to expire."""
@@ -1631,18 +1641,40 @@ class SpotPriceAPI(ComponentBase):
             return body
         return None  # pragma: no cover - the loop always returns or raises
 
+    async def resolve_ostrom_contract(self, now):
+        """Look the Ostrom contract up (again) and remember when.
+
+        A different contract or postcode than before means the prices held are for the wrong place, so
+        they are dropped; so are they when the account no longer has an active contract, in which case
+        the error is raised as usual.
+        """
+        previous = self.ostrom_contract
+        contracts = await self.ostrom_get("/contracts")
+        try:
+            contract = select_ostrom_contract(contracts, self.ostrom_contract_id, warn=self.warn_once)
+        except SpotPriceError:
+            record_api_call("ostrom", False, "client_error")
+            if previous is not None:
+                self.ostrom_contract = None
+                self.supplier_intervals = []
+                self.fetched["supplier"] = None
+            raise
+        self.ostrom_contract_checked = now
+        self.ostrom_contract = contract
+        if previous is not None and (previous.get("id"), str((previous.get("address") or {}).get("zip"))) != (contract.get("id"), str((contract.get("address") or {}).get("zip"))):
+            self.log("Warn: SpotPrice: Ostrom contract changed from {} to {} - discarding the prices held".format(previous.get("id"), contract.get("id")))
+            self.supplier_intervals = []
+            self.fetched["supplier"] = None
+        self.note_supplier_identity("ostrom:{}".format(contract.get("id")))
+
     async def fetch_ostrom(self, start, end):
         """Fetch Ostrom's end-user prices for [start, end). Returns intervals in cents per kWh, VAT included, or raises SpotPriceError."""
         if not (self.ostrom_client_id and self.ostrom_client_secret):
             raise SpotPriceError("Ostrom client ID and secret are not configured (spotprice_ostrom_client_id, spotprice_ostrom_client_secret)")
-        if self.ostrom_contract is None:
-            contracts = await self.ostrom_get("/contracts")
-            try:
-                self.ostrom_contract = select_ostrom_contract(contracts, self.ostrom_contract_id, warn=self.warn_once)
-            except SpotPriceError:
-                record_api_call("ostrom", False, "client_error")
-                raise
-            self.note_supplier_identity("ostrom:{}".format(self.ostrom_contract.get("id")))
+        now = self.now()
+        configured = self.ostrom_contract_id not in (None, "")
+        if self.ostrom_contract is None or (not configured and (self.ostrom_contract_checked is None or now - self.ostrom_contract_checked >= OSTROM_CONTRACT_RECHECK)):
+            await self.resolve_ostrom_contract(now)
         params = {
             "startDate": start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "endDate": end.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
@@ -1650,7 +1682,18 @@ class SpotPriceAPI(ComponentBase):
             "resolution": "HOUR",
             "zip": str(self.ostrom_contract["address"]["zip"]).strip(),
         }
-        body = await self.ostrom_get("/spot-prices", params)
+        try:
+            body = await self.ostrom_get("/spot-prices", params)
+        except SpotPriceError as e:
+            if configured or e.status not in OSTROM_CONTRACT_CHANGED_STATUSES:
+                raise
+            # The postcode may no longer be the account's (a move): look the contract up again and retry once
+            previous = (self.ostrom_contract.get("id"), params["zip"])
+            await self.resolve_ostrom_contract(now)
+            params = dict(params, zip=str(self.ostrom_contract["address"]["zip"]).strip())
+            if (self.ostrom_contract.get("id"), params["zip"]) == previous:
+                raise
+            body = await self.ostrom_get("/spot-prices", params)
         try:
             intervals = parse_ostrom_json(body)
         except SpotPriceError:

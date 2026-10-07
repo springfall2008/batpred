@@ -2623,6 +2623,94 @@ def test_spotprice_octopus_de_bare_jwt(my_predbat=None):
     assert not any(headers["Authorization"].split(" ")[0] in ("JWT", "Bearer") for headers in query_headers)
 
 
+def test_spotprice_ostrom_move_house(my_predbat=None):
+    """Without spotprice_ostrom_contract_id the contract is looked up again daily and straight after a 404/422 on the postcode; a move switches postcode and drops the old prices; no active contract is an error with nothing held."""
+    moved = {"data": [dict(OSTROM_CONTRACTS["data"][0], status="TERMINATED"), dict(OSTROM_CONTRACTS["data"][0], id=200000001, address={"zip": "80331", "city": "Munich"})]}
+    now = dt("2025-05-02T08:00Z")
+
+    # Daily re-check: same day no lookup, next day the new contract and postcode
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True and fake.count("/contracts") == 1
+    pin_now(api, now + timedelta(hours=7))
+    assert run(api.refresh(now + timedelta(hours=7))) is True and fake.count("/contracts") == 1
+    fake.contracts = moved
+    day_later = now + timedelta(days=1)
+    pin_now(api, day_later)
+    assert run(api.refresh(day_later)) is True
+    assert fake.count("/contracts") == 2 and fake.calls[-1][2]["zip"] == "80331", fake.calls[-1]
+    assert api.ostrom_contract["id"] == 200000001 and any("contract changed" in line for line in api.base.logs)
+
+    # A move found while the new postcode's prices cannot be fetched yet: the old postcode's prices are not kept
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    run(api.refresh(now))
+    assert api.supplier_intervals
+    fake.contracts = moved
+    fake.api_replies["/spot-prices"] = [(503, None)]
+    pin_now(api, day_later)
+    assert run(api.refresh(day_later)) is False and api.supplier_intervals == [] and api.ostrom_contract["id"] == 200000001
+    # ...also when the contract keeps its number and only the address changes
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    run(api.refresh(now))
+    fake.contracts = {"data": [dict(OSTROM_CONTRACTS["data"][0], address={"zip": "80331"})]}
+    fake.api_replies["/spot-prices"] = [(503, None)]
+    pin_now(api, day_later)
+    assert run(api.refresh(day_later)) is False and api.supplier_intervals == [] and api.ostrom_contract["address"]["zip"] == "80331"
+
+    # A 404 for the old postcode re-checks at once and retries with the new one in the same fetch
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    run(api.refresh(now))
+    fake.contracts = moved
+    fake.api_replies["/spot-prices"] = [(404, {"detail": "zip not found"})]
+    later = now + timedelta(hours=1)
+    pin_now(api, later)
+    api.fetched["supplier"] = None
+    assert run(api.refresh(later)) is True, api.last_error
+    assert [call[2]["zip"] for call in fake.calls if call[1].endswith("/spot-prices")] == ["10997", "10997", "80331"]
+    assert fake.count("/contracts") == 2
+
+    # A 422 with the contract unchanged is reported, not retried in a loop
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    run(api.refresh(now))
+    fake.api_replies["/spot-prices"] = [(422, {"detail": "bad zip"})]
+    api.fetched["supplier"] = None
+    assert run(api.refresh(later)) is False and "HTTP 422" in api.last_error and fake.count("/contracts") == 2 and fake.count("/spot-prices") == 2
+
+    # Server errors do not trigger a re-check
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    run(api.refresh(now))
+    fake.api_replies["/spot-prices"] = [(503, None)]
+    api.fetched["supplier"] = None
+    assert run(api.refresh(later)) is False and fake.count("/contracts") == 1
+
+    # Moved out with no active contract: an error, and the old postcode's prices are no longer held
+    api, fake = make_ostrom()
+    pin_now(api, now)
+    run(api.refresh(now))
+    assert api.supplier_intervals
+    fake.contracts = {"data": [dict(OSTROM_CONTRACTS["data"][0], status="TERMINATED")]}
+    pin_now(api, day_later)
+    assert run(api.refresh(day_later)) is False and "no active Ostrom contract" in api.last_error
+    assert api.supplier_intervals == [] and api.ostrom_contract is None
+    api.publish(day_later)
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "error"
+
+    # A configured contract is not re-checked daily, nor after a 404
+    fixed, fixed_fake = make_ostrom(ostrom_contract_id=100523456)
+    pin_now(fixed, now)
+    run(fixed.refresh(now))
+    pin_now(fixed, day_later)
+    run(fixed.refresh(day_later))
+    fixed_fake.api_replies["/spot-prices"] = [(404, None)]
+    fixed.fetched["supplier"] = None
+    assert run(fixed.refresh(day_later + timedelta(hours=1))) is False and fixed_fake.count("/contracts") == 1
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -2697,6 +2785,7 @@ SPOTPRICE_TESTS = [
     test_spotprice_ostrom_status_handling,
     test_spotprice_cache_credential_swap,
     test_spotprice_octopus_de_bare_jwt,
+    test_spotprice_ostrom_move_house,
 ]
 
 
