@@ -749,6 +749,12 @@ def test_inverter_input():
     if bat.replay_load_divergence != 0.31:
         print("ERROR: the exact divergence should win over the rounded percentage: {}".format(bat.replay_load_divergence))
         return 1
+    # Divergence off live: the plan used None, whatever the rounded percentage line says
+    off = dict(runs[0], divergence_exact="None")
+    apply_run(bat, {"today": None, "force": None, "time": "2026-10-05 23:30:00+01:00"}, off)
+    if bat.replay_load_divergence is not None:
+        print("ERROR: a logged None divergence should be applied as None, got {}".format(bat.replay_load_divergence))
+        return 1
     return 0
 
 
