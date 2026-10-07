@@ -2266,7 +2266,7 @@ def test_spotprice_supplier_cache_key(my_predbat=None):
         "octo_account": make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k", octopus_de_account="A-1").cache_filename(),
         "octo_malo": make_api(provider="octopus_de", entsoe_token=None, zone=None, octopus_de_api_key="k", octopus_de_account="A-1", octopus_de_malo="5").cache_filename(),
     }
-    assert names["plain"] == "ostrom_none" and names["octo"] == "octopus_de_none", names
+    assert names["plain"].startswith("ostrom_none_") and names["octo"].startswith("octopus_de_none_"), names
     assert len(set(names.values())) == len(names), names
     assert make_api(provider="ostrom", entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s", ostrom_contract_id=1).cache_filename() == names["contract_a"]
     assert make_api(provider="energycharts", entsoe_token=None, ostrom_contract_id=1).cache_filename() == "energycharts_de_lu"
@@ -2572,6 +2572,57 @@ def test_spotprice_ostrom_status_handling(my_predbat=None):
     assert sum("no status field" in line for line in api.base.logs) == 1, api.base.logs
 
 
+def test_spotprice_cache_credential_swap(my_predbat=None):
+    """Swapping a supplier credential with no selector set changes the cache name, so the old account's prices are never restored; only a salted 12-character digest appears, never the credential."""
+    from spotprice import CACHE_DIGEST_SALT
+    import hashlib
+
+    cases = [
+        ("tibber", {"tibber_token": "tibber-old"}, {"tibber_token": "tibber-new"}),
+        ("ostrom", {"ostrom_client_id": "client-old", "ostrom_client_secret": "s"}, {"ostrom_client_id": "client-new", "ostrom_client_secret": "s"}),
+        ("octopus_de", {"octopus_de_api_key": "sk_live_old"}, {"octopus_de_api_key": "sk_live_new"}),
+        ("ews", {"ews_api_key": "pub_dpa_old"}, {"ews_api_key": "pub_dpa_new"}),
+    ]
+    now = dt("2025-05-02T08:00Z")
+    for provider, old, new in cases:
+        storage = FakeStorage()
+        before = make_api(provider=provider, entsoe_token=None, zone=None, storage=storage, **old)
+        after = make_api(provider=provider, entsoe_token=None, zone=None, storage=storage, **new)
+        same = make_api(provider=provider, entsoe_token=None, zone=None, storage=storage, **old)
+        assert before.cache_filename() != after.cache_filename() and before.cache_filename() == same.cache_filename(), provider
+        credential = list(old.values())[0]
+        expected = hashlib.sha256((CACHE_DIGEST_SALT + credential + "|" * {"tibber": 1, "ostrom": 1, "octopus_de": 2}.get(provider, 0)).encode("utf-8")).hexdigest()[:12]
+        assert before.cache_filename() == "{}_none_{}".format(provider, expected), (provider, before.cache_filename())
+        # Prices cached under the old credential are not restored, nor treated as fresh, under the new one
+        intervals = [(now, now + timedelta(hours=1), 0.3 if provider == "tibber" else 30.0)]
+        if provider == "tibber":
+            before.tibber_intervals = intervals
+        else:
+            before.supplier_intervals = intervals
+        before.fetched[before.import_source()] = now
+        run(before.save_cache())
+        run(after.load_cache())
+        assert after.source_intervals() == [] and after.fetched_at is None and after.refresh_due(now), provider
+        run(same.load_cache())
+        assert same.source_intervals() == intervals, provider
+        # The credential itself is written nowhere: not in the name, not in the stored blob
+        for (_module, filename), blob in storage.data.items():
+            assert credential not in filename and credential not in repr(blob), (provider, filename)
+
+
+def test_spotprice_octopus_de_bare_jwt(my_predbat=None):
+    """The Kraken JWT is sent bare - no Bearer or JWT prefix - and the token request carries no Authorization at all."""
+    api, fake = make_octopus_de()
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    run(api.fetch_supplier(now))
+    token_headers = [call[3] for call in fake.calls if call[0] == "token"]
+    query_headers = [call[3] for call in fake.calls if call[0] != "token"]
+    assert all("Authorization" not in headers for headers in token_headers)
+    assert query_headers and all(headers["Authorization"] == make_jwt(fake.token_exp) for headers in query_headers), query_headers
+    assert not any(headers["Authorization"].split(" ")[0] in ("JWT", "Bearer") for headers in query_headers)
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -2644,6 +2695,8 @@ SPOTPRICE_TESTS = [
     test_spotprice_octopus_de_error_codes,
     test_spotprice_supplier_cache_identity,
     test_spotprice_ostrom_status_handling,
+    test_spotprice_cache_credential_swap,
+    test_spotprice_octopus_de_bare_jwt,
 ]
 
 

@@ -170,7 +170,7 @@ SPOTPRICE_STALE_HORIZON_HOURS = 12
 # SEM and the Iberian MIBEL, whose day is 23:00-23:00 in Irish/Portuguese local time - so "tomorrow's
 # prices are in" and the fetch window are judged on this clock, not the user's.
 MARKET_TIMEZONE = pytz.timezone("Europe/Brussels")
-# Salt for the one-way digest of the Tibber credential in cache filenames
+# Salt for the one-way digest of supplier credentials in cache filenames
 CACHE_DIGEST_SALT = "predbat-spotprice-cache-v1|"
 # Granularity used to detect overlapping intervals between series of different resolutions.
 OVERLAP_TICK_MINUTES = 5
@@ -1667,7 +1667,8 @@ class SpotPriceAPI(ComponentBase):
         """POST one GraphQL request to Octopus Energy Germany. Returns the parsed body; HTTP and rate-limit failures raise SpotPriceError."""
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if token:
-            # Kraken takes the JWT on its own, without a Bearer prefix
+            # The bare JWT, with no Bearer or "JWT " prefix, as other open-source Octopus Energy Germany
+            # integrations send it; the live API answers an invalid token the same way with or without one
             headers["Authorization"] = token
         try:
             status, body = await self.http_post_json(OCTOPUS_DE_URL, {"query": query, "variables": variables}, headers)
@@ -2027,18 +2028,20 @@ class SpotPriceAPI(ComponentBase):
     # ------------------------------------------------------------------
 
     def cache_filename(self):
-        """Storage filename for this provider/zone pair, plus a digest of the Tibber credential or the supplier selectors.
+        """Storage filename for this provider/zone pair, plus a digest of the supplier's credential and selectors.
 
-        Changing the Tibber token or spotprice_tibber_home_id, the Ostrom contract, or the Octopus Energy
-        Germany account or market location changes the name, so one home's or contract's cached prices
-        are never restored - and published as fresh - for another. Only a salted, truncated SHA-256 of
-        these values is used; the values themselves are never written.
+        Swapping the credential (Tibber token, Ostrom client ID, Octopus Energy Germany or EWS API key),
+        or changing spotprice_tibber_home_id, the Ostrom contract or the Octopus account or market
+        location, changes the name, so one account's cached prices are never restored - and published
+        as fresh - for another. Only a salted, truncated SHA-256 of these values is used; the values
+        themselves are never written.
         """
         name = "{}_{}".format(self.provider, (self.zone or self.zone_eic or "none").replace("-", "_").lower())
         identity = {
             "tibber": [self.tibber_token, self.tibber_home_id_configured],
-            "ostrom": [self.ostrom_contract_id],
-            "octopus_de": [self.octopus_de_account_configured, self.octopus_de_malo],
+            "ostrom": [self.ostrom_client_id, self.ostrom_contract_id],
+            "octopus_de": [self.octopus_de_api_key, self.octopus_de_account_configured, self.octopus_de_malo],
+            "ews": [self.ews_api_key],
         }.get(self.provider)
         if identity and any(identity):
             material = CACHE_DIGEST_SALT + "|".join(str(item or "") for item in identity)
