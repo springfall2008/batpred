@@ -29,11 +29,11 @@ import sys
 import weakref
 
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
+from utils import net_settlement_seed_from, get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot, export_limit_from_stored
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 7
-KERNEL_PARITY_REVISION = 16
+KERNEL_ABI_VERSION = 8
+KERNEL_PARITY_REVISION = 17
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -137,6 +137,13 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("metric_net_settlement_window", ctypes.c_int32),
+        ("net_seed_window", ctypes.c_int32),
+        ("net_seed_import_kwh", ctypes.c_double),
+        ("net_seed_import_cost", ctypes.c_double),
+        ("net_seed_export_kwh", ctypes.c_double),
+        ("net_seed_export_credit", ctypes.c_double),
+        ("net_seed_applied", ctypes.c_double),
     ]
 
 
@@ -830,6 +837,18 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.metric_net_settlement_window = int(getattr(pred, "metric_net_settlement_window_minutes", 0) or 0)
+        # Current window's already-metered totals (today_cost); the kernel applies the same window check as Python
+        net_seed = net_settlement_seed_from(getattr(pred, "net_settlement_seed", None))
+        if net_seed:
+            ctx.net_seed_window = net_seed.window
+            ctx.net_seed_import_kwh = net_seed.import_kwh
+            ctx.net_seed_import_cost = net_seed.import_cost
+            ctx.net_seed_export_kwh = net_seed.export_kwh
+            ctx.net_seed_export_credit = net_seed.export_credit
+            ctx.net_seed_applied = net_seed.applied
+        else:
+            ctx.net_seed_window = -1
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:

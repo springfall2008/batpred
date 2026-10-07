@@ -50,7 +50,8 @@
 // ABI 7: export limits are packed as PkExportLimit structs (array-of-structs) rather than those
 // three arrays. Same three fields, but one buffer and one stride, with the (99.0, 100.0) gap gone
 // because mode is explicit (GH#4914).
-#define PK_ABI_VERSION 7
+// ABI 8: PkContext gained metric_net_settlement_window and the net_seed_* fields at the end.
+#define PK_ABI_VERSION 8
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -59,7 +60,10 @@
 // by adding it to the grid balance after the battery has acted; the rest of the import pays rate_max.
 // Parity 16: each car charging in a step adds its own energy to the house load, not the running total
 // across cars, which counted the first car once per car (GH#5313).
-#define PK_PARITY_REVISION 16
+// Parity 17: optional net settlement of import/export within wall-clock windows of
+// metric_net_settlement_window minutes (0 = off, unchanged behaviour), mirroring prediction.py. The
+// current window starts from the already-metered net_seed_* totals handed over by today_cost.
+#define PK_PARITY_REVISION 17
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -81,6 +85,15 @@ struct PkExportLimit {
 };
 
 inline bool pk_export_is_idle(int32_t mode) { return mode == PK_EXPORT_MODE_IDLE; }
+
+// Settled cost of one net settlement window - mirror of utils.py net_settlement_value
+inline double pk_net_settlement_value(double import_kwh, double import_cost, double export_kwh, double export_credit)
+{
+    if (import_kwh >= export_kwh) {
+        return import_kwh > 0 ? import_cost * ((import_kwh - export_kwh) / import_kwh) : 0.0;
+    }
+    return -export_credit * ((export_kwh - import_kwh) / export_kwh);
+}
 inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FREEZE; }
 
 
@@ -263,6 +276,13 @@ struct PkContext {
     int32_t iboost_on_export;
     int32_t has_rate_gas;
     int32_t has_iboost_plan;
+    int32_t metric_net_settlement_window; // net settlement window in minutes, 0 = off
+    int32_t net_seed_window;              // window id the seed below belongs to, -1 = none
+    double net_seed_import_kwh;           // already-metered import in that window
+    double net_seed_import_cost;
+    double net_seed_export_kwh;
+    double net_seed_export_credit;
+    double net_seed_applied;              // settled value already inside cost_today_sofar
 };
 
 // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
@@ -762,6 +782,23 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const double battery_rate_max_scaling_discharge = c->battery_rate_max_scaling_discharge;
     const double *pv_step = is_pv10 ? c->pv10 : (is_pv90 ? c->pv90 : c->pv);
     const double *load_step = is_pv10 ? c->load10 : (is_pv90 ? c->load90 : c->load);
+
+    // Net settlement state - prediction.py net_window block before the simulation loop
+    const int32_t net_window = c->metric_net_settlement_window;
+    int32_t net_window_id = -1;
+    double net_import_kwh = 0.0;
+    double net_import_cost = 0.0;
+    double net_export_kwh = 0.0;
+    double net_export_credit = 0.0;
+    double net_applied = 0.0;
+    if (net_window > 0 && c->net_seed_window >= 0 && c->net_seed_window == c->minutes_now / net_window) {
+        net_window_id = c->net_seed_window;
+        net_import_kwh = c->net_seed_import_kwh;
+        net_import_cost = c->net_seed_import_cost;
+        net_export_kwh = c->net_seed_export_kwh;
+        net_export_credit = c->net_seed_export_credit;
+        net_applied = c->net_seed_applied;
+    }
 
     // Simulate each forward step - prediction.py:570-1200
     for (int32_t k = 0; k < n_steps; k++) {
@@ -1352,6 +1389,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0;
         }
 
+        // Net settlement - start a new window's totals when the wall-clock window changes (prediction.py)
+        if (net_window > 0) {
+            const int32_t window_id = minute_absolute / net_window;
+            if (window_id != net_window_id) {
+                net_window_id = window_id;
+                net_import_kwh = 0.0;
+                net_import_cost = 0.0;
+                net_export_kwh = 0.0;
+                net_export_credit = 0.0;
+                net_applied = 0.0;
+            }
+        }
+
         // Import/export accounting - prediction.py:1104-1143
         if (diff > 0) {
             // Import
@@ -1365,10 +1415,18 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             }
             // Premium for car charging capped at the actual grid import - prediction.py:1119-1122
             car_amount_premium = std::min(diff, car_amount_premium);
-            metric += import_rate * diff + car_rate_premium * car_amount_premium;
+            double import_cost = import_rate * diff;
             if (car_gone_kwh != 0) {
                 // The car's share of the import is paid at its own rate, not the worst-case rate
-                metric -= std::min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh);
+                import_cost -= std::min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh);
+            }
+            if (net_window > 0) {
+                // Grid import is settled below, the car premium is not netted
+                net_import_kwh += diff;
+                net_import_cost += import_cost;
+                metric += car_rate_premium * car_amount_premium;
+            } else {
+                metric += import_cost + car_rate_premium * car_amount_premium;
             }
         } else {
             // Export
@@ -1377,12 +1435,24 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             if (c->carbon_enable) {
                 carbon_g -= energy * c->carbon[k];
             }
-            if (!c->car_energy_reported_load) {
+            if (net_window > 0) {
+                // Only the export that reaches the meter is netted
+                const double export_valued = !c->car_energy_reported_load ? std::max(0.0, energy - car_load_energy_bypass) : energy;
+                net_export_kwh += export_valued;
+                net_export_credit += export_rate * export_valued;
+            } else if (!c->car_energy_reported_load) {
                 // Export can end up in a car outside the CT clamp, value that amount at 0 - prediction.py:1131-1135
                 metric -= export_rate * std::max(0.0, energy - car_load_energy_bypass);
             } else {
                 metric -= export_rate * energy;
             }
+        }
+
+        // Net settlement - move metric to the window's settled value so far (prediction.py)
+        if (net_window > 0) {
+            const double settled = pk_net_settlement_value(net_import_kwh, net_import_cost, net_export_kwh, net_export_credit);
+            metric += settled - net_applied;
+            net_applied = settled;
         }
 
         // Record final soc & metric - prediction.py:1145-1186

@@ -36,8 +36,8 @@ import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
-from utils import remove_intersecting_windows, unpack_export_limit
-from tests.test_infra import reset_inverter, reset_rates
+from utils import remove_intersecting_windows, unpack_export_limit, net_settlement_value, NetSettlementSeed
+from tests.test_infra import reset_inverter, reset_rates, FIXTURE_MINUTES_NOW
 from tests.test_model import run_model_tests
 
 # Tolerance for scalar and SoC comparisons; the kernel targets bit-exact results
@@ -141,6 +141,8 @@ SCENARIO_STATE_ATTRS = [
     "rate_gas",
     "iboost_plan",
     "end_record",
+    "metric_net_settlement_window_minutes",
+    "net_settlement_seed",
 ]
 
 
@@ -772,6 +774,498 @@ def run_edge_case_tests(my_predbat):
                 load90_step=load90_step,
             )
         my_predbat.io_adjusted = {}
+
+    failed |= run_net_settlement_semantic_tests(my_predbat)
+    failed |= run_net_settlement_window_size_tests(my_predbat)
+    failed |= run_net_settlement_today_cost_tests(my_predbat)
+    failed |= run_net_settlement_edge_tests(my_predbat)
+    return failed
+
+
+def reset_net_settlement_base(my_predbat, minutes_now, import_rate=10.0, export_rate=5.0):
+    """Put my_predbat into a known state for the net settlement tests.
+
+    The edge-case table above lets its overrides leak from one case into the next, so everything the
+    net settlement scenarios depend on is set explicitly here rather than inherited.
+    """
+    reset_inverter(my_predbat)
+    # After reset_inverter, which pins minutes_now to the fixture clock, and before reset_rates so the
+    # rate tables cover the shifted horizon
+    my_predbat.minutes_now = minutes_now
+    reset_rates(my_predbat, import_rate, export_rate)
+    my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+    my_predbat.inverter_hybrid = False
+    my_predbat.inverter_can_charge_during_export = True
+    my_predbat.inverter_support_feedin_first = False
+    my_predbat.inverter_freeze_export_discharge_rate = 0.0
+    my_predbat.set_charge_freeze = False
+    my_predbat.set_reserve_enable = False
+    my_predbat.set_export_freeze = False
+    my_predbat.set_export_freeze_only = False
+    my_predbat.set_discharge_during_charge = True
+    my_predbat.set_export_low_power = False
+    my_predbat.battery_charge_power_curve = {}
+    my_predbat.battery_discharge_power_curve = {}
+    my_predbat.battery_temperature = 20
+    my_predbat.battery_temperature_prediction = {}
+    my_predbat.best_soc_keep = 0.0
+    my_predbat.best_soc_keep_weight = 0.5
+    my_predbat.io_adjusted = {}
+    my_predbat.all_active_keep = {}
+    my_predbat.all_active_keep_max = {}
+    my_predbat.carbon_enable = False
+    my_predbat.carbon_intensity = {}
+    my_predbat.num_cars = 0
+    my_predbat.car_energy_reported_load = True
+    my_predbat.iboost_enable = False
+    my_predbat.iboost_plan = []
+    my_predbat.rate_gas = {}
+    my_predbat.metric_net_settlement_window_minutes = 0
+    my_predbat.net_settlement_seed = None
+
+
+def make_mixed_step_data(my_predbat, pv_kw, load_kw, pv_minutes=20, period=60):
+    """Step data where PV is on for pv_minutes of every period (relative to now), so import and export mix within an hour"""
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = (pv_kw / 12.0) if (minute % period) < pv_minutes else 0.0
+        load_step[minute] = load_kw / 12.0
+    pv10_step = {minute: value * 0.5 for minute, value in pv_step.items()}
+    load10_step = {minute: value * 1.1 for minute, value in load_step.items()}
+    pv90_step = {minute: value * 1.5 for minute, value in pv_step.items()}
+    load90_step = {minute: value * 0.9 for minute, value in load_step.items()}
+    return pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step
+
+
+def run_net_settlement_semantic_tests(my_predbat):
+    """Hand-computed net settlement totals for a battery that cannot move, returns True on failure.
+
+    With the battery pinned (full, reserve = full) and a lossless inverter the grid flow per step is
+    exactly load - pv, so the expected netted and un-netted costs can be worked out independently of
+    the engine. Also checks that netting leaves the physical kWh and carbon figures untouched and that
+    both engines agree with the hand calculation.
+    """
+    print("**** Running net settlement semantic tests ****")
+    failed = False
+    state = snapshot_scenario_state(my_predbat)
+    try:
+        for offset in (0, 25):
+            minutes_now = FIXTURE_MINUTES_NOW + offset
+            reset_net_settlement_base(my_predbat, minutes_now)
+            if my_predbat.minutes_now != minutes_now:
+                print("ERROR: net settlement semantic test could not set minutes_now to {}".format(minutes_now))
+                failed = True
+            my_predbat.soc_max = 10.0
+            my_predbat.soc_kw = 10.0
+            my_predbat.reserve = 10.0
+            my_predbat.best_soc_min = 0.0
+            my_predbat.inverter_loss = 1.0
+            my_predbat.inverter_limit = 20 / 60.0
+            my_predbat.export_limit = 20 / 60.0
+            my_predbat.carbon_enable = True
+            my_predbat.carbon_intensity = {minute: 100 + (minute % 60) for minute in range(0, my_predbat.forecast_minutes, 5)}
+            pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step = make_mixed_step_data(my_predbat, pv_kw=3.0, load_kw=1.0)
+
+            # Independent expectation: per wall-clock hour, import and export kWh, then price
+            window_totals = {}
+            gross = 0.0
+            for minute in range(0, my_predbat.forecast_minutes, 5):
+                diff = load_step[minute] - pv_step[minute]
+                window = (minute + minutes_now) // 60
+                totals = window_totals.setdefault(window, [0.0, 0.0])
+                if diff > 0:
+                    totals[0] += diff
+                    gross += 10.0 * diff
+                else:
+                    totals[1] += -diff
+                    gross -= 5.0 * -diff
+            net = 0.0
+            for imported, exported in window_totals.values():
+                if imported >= exported:
+                    net += (imported - exported) * 10.0
+                else:
+                    net -= (exported - imported) * 5.0
+            expected = {0: my_predbat.cost_today_sofar + gross, 60: my_predbat.cost_today_sofar + net}
+            if not net < gross:
+                print("ERROR: net settlement semantic test offset {} is not exercising any netting (net {} gross {})".format(offset, net, gross))
+                failed = True
+
+            # Seeded variant: pretend 0.3kWh import and 0.5kWh export were already metered this hour
+            seed_import, seed_export = 0.3, 0.5
+            seed_window = minutes_now // 60
+            seed_applied = net_settlement_value(seed_import, seed_import * 10.0, seed_export, seed_export * 5.0)
+            first = window_totals[seed_window]
+            first_gross_settled = net_settlement_value(first[0], first[0] * 10.0, first[1], first[1] * 5.0)
+            first_seeded_settled = net_settlement_value(first[0] + seed_import, (first[0] + seed_import) * 10.0, first[1] + seed_export, (first[1] + seed_export) * 5.0)
+            expected["seeded"] = expected[60] - first_gross_settled + first_seeded_settled - seed_applied
+
+            results = {}
+            for window in (0, 60, "seeded"):
+                my_predbat.net_settlement_seed = (seed_window, seed_import, seed_import * 10.0, seed_export, seed_export * 5.0, seed_applied) if window == "seeded" else None
+                window_minutes = 60 if window == "seeded" else window
+                my_predbat.metric_net_settlement_window_minutes = window_minutes
+                my_predbat.prediction_kernel_enable = False
+                prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
+                python_result = prediction.run_prediction([], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes, save=None, cache=False)
+                results[window] = python_result
+                if abs(python_result[0] - expected[window]) > 1e-3:
+                    print("ERROR: net settlement semantic offset {} window {}: python metric {} expected {}".format(offset, window, python_result[0], expected[window]))
+                    failed = True
+                prediction.kernel_handle = create_kernel_context(prediction)
+                kernel_result = run_prediction_kernel(prediction, [], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes, 5, False) if prediction.kernel_handle else None
+                if kernel_result is None:
+                    print("ERROR: net settlement semantic offset {} window {}: kernel run failed".format(offset, window))
+                    failed = True
+                else:
+                    failed |= compare_results("net_semantic_{}_w{}".format(offset, window), python_result, kernel_result)
+
+            # Only the cost may change - physical energy and carbon must not be netted
+            for index, result_name in enumerate(RESULT_NAMES):
+                if result_name in ("final_metric",):
+                    continue
+                if results[0][index] != results[60][index]:
+                    print("ERROR: net settlement changed {} (offset {}): off {} on {}".format(result_name, offset, results[0][index], results[60][index]))
+                    failed = True
+    finally:
+        # Hand the rest of the suite the state it would have seen without these tests
+        restore_scenario_state(my_predbat, state)
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def expected_window_settlement(import_kwh, import_cost, export_kwh, export_credit):
+    """Independent restatement of the tariff for the tests (deliberately not utils.net_settlement_value):
+    the winning direction's net kWh is priced at that direction's volume-weighted rate within the window"""
+    if import_kwh >= export_kwh:
+        return (import_kwh - export_kwh) * (import_cost / import_kwh) if import_kwh > 0 else 0.0
+    return -(export_kwh - import_kwh) * (export_credit / export_kwh)
+
+
+def run_net_settlement_window_size_tests(my_predbat):
+    """Hand-computed netted cost for 15/30/60 minute windows, with flat rates and with rates changing
+    every 15 minutes (so a 30/60 minute window has to average the rate of the winning direction),
+    checked against both engines. Returns True on failure."""
+    print("**** Running net settlement window size tests ****")
+    failed = False
+    state = snapshot_scenario_state(my_predbat)
+    try:
+        minutes_now = FIXTURE_MINUTES_NOW + 25
+        for rate_profile in ("flat", "quarter"):
+            for window in (15, 30, 60):
+                reset_net_settlement_base(my_predbat, minutes_now)
+                if rate_profile == "quarter":
+                    quarter_import = [10.0, 22.0, 15.0, 31.0]
+                    quarter_export = [4.0, 9.0, 13.0, 6.0]
+                    for minute in range(my_predbat.forecast_minutes + minutes_now):
+                        my_predbat.rate_import[minute] = quarter_import[(minute % 60) // 15]
+                        my_predbat.rate_export[minute] = quarter_export[(minute % 60) // 15]
+                    my_predbat.rate_max = max(quarter_import)
+                # Battery pinned and lossless, so grid flow per step is exactly load - pv
+                my_predbat.soc_max = 10.0
+                my_predbat.soc_kw = 10.0
+                my_predbat.reserve = 10.0
+                my_predbat.best_soc_min = 0.0
+                my_predbat.inverter_loss = 1.0
+                my_predbat.inverter_limit = 20 / 60.0
+                my_predbat.export_limit = 20 / 60.0
+                # PV on for 10 of every 20 minutes, so every 15/30/60 minute window mixes import and export
+                pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step = make_mixed_step_data(my_predbat, pv_kw=3.0, load_kw=1.0, pv_minutes=10, period=20)
+
+                windows = {}
+                gross = 0.0
+                for minute in range(0, my_predbat.forecast_minutes, 5):
+                    minute_absolute = minute + minutes_now
+                    diff = load_step[minute] - pv_step[minute]
+                    totals = windows.setdefault(minute_absolute // window, [0.0, 0.0, 0.0, 0.0])
+                    if diff > 0:
+                        totals[0] += diff
+                        totals[1] += my_predbat.rate_import[minute_absolute] * diff
+                        gross += my_predbat.rate_import[minute_absolute] * diff
+                    else:
+                        totals[2] += -diff
+                        totals[3] += my_predbat.rate_export[minute_absolute] * -diff
+                        gross -= my_predbat.rate_export[minute_absolute] * -diff
+                expected = my_predbat.cost_today_sofar + sum(expected_window_settlement(*totals) for totals in windows.values())
+                if not expected < my_predbat.cost_today_sofar + gross:
+                    print("ERROR: window size test {} {} is not exercising any netting".format(rate_profile, window))
+                    failed = True
+
+                my_predbat.metric_net_settlement_window_minutes = window
+                my_predbat.prediction_kernel_enable = False
+                prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
+                python_result = prediction.run_prediction([], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes, save=None, cache=False)
+                if abs(python_result[0] - expected) > 1e-3:
+                    print("ERROR: window size test {} window {}: python metric {} expected {}".format(rate_profile, window, python_result[0], expected))
+                    failed = True
+                prediction.kernel_handle = create_kernel_context(prediction)
+                kernel_result = run_prediction_kernel(prediction, [], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes, 5, False) if prediction.kernel_handle else None
+                if kernel_result is None or abs(kernel_result[0] - expected) > 1e-3:
+                    print("ERROR: window size test {} window {}: kernel metric {} expected {}".format(rate_profile, window, kernel_result[0] if kernel_result else None, expected))
+                    failed = True
+    finally:
+        restore_scenario_state(my_predbat, state)
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def run_net_settlement_today_cost_tests(my_predbat):
+    """today_cost() nets the metered day per wall-clock window and hands the current window on as the seed, returns True on failure"""
+    print("**** Running net settlement today_cost tests ****")
+    failed = False
+    saved = {attr: getattr(my_predbat, attr, None) for attr in ("minutes_now", "rate_import", "rate_export", "metric_net_settlement_window_minutes", "net_settlement_seed", "carbon_enable", "num_cars")}
+    try:
+        minutes_now = 3 * 60 + 25
+        my_predbat.minutes_now = minutes_now
+        my_predbat.carbon_enable = False
+        my_predbat.num_cars = 0
+        # Rates change every 15 minutes, so 30/60 minute windows have to average them
+        my_predbat.rate_import = {minute: [10.0, 30.0, 18.0, 25.0][(minute % 60) // 15] for minute in range(24 * 60)}
+        my_predbat.rate_export = {minute: [5.0, 12.0, 7.0, 3.0][(minute % 60) // 15] for minute in range(24 * 60)}
+        # Per-minute metered flows since midnight: export for 7 of every 20 minutes, import otherwise, so
+        # 15, 30 and 60 minute windows all mix both directions
+        import_minute = {}
+        export_minute = {}
+        for minute in range(minutes_now):
+            if (minute % 20) < 7:
+                import_minute[minute], export_minute[minute] = 0.0, 0.03
+            else:
+                import_minute[minute], export_minute[minute] = 0.02, 0.0
+        # Incrementing series indexed by minutes ago, as minute_data_import_export produces
+        import_today = {}
+        export_today = {}
+        total_import = total_export = 0.0
+        for minute_back in range(minutes_now, -1, -1):
+            minute = minutes_now - minute_back - 1
+            if minute >= 0:
+                total_import += import_minute[minute]
+                total_export += export_minute[minute]
+            import_today[minute_back] = total_import
+            export_today[minute_back] = total_export
+        load_today = {minute_back: 0.0 for minute_back in range(minutes_now + 1)}
+
+        gross = sum(my_predbat.rate_import[m] * import_minute[m] - my_predbat.rate_export[m] * export_minute[m] for m in range(minutes_now))
+        windows_by_size = {}
+        net_by_size = {}
+        for size in (15, 30, 60):
+            windows = {}
+            for minute in range(minutes_now):
+                totals = windows.setdefault(minute // size, [0.0, 0.0, 0.0, 0.0])
+                totals[0] += import_minute[minute]
+                totals[1] += my_predbat.rate_import[minute] * import_minute[minute]
+                totals[2] += export_minute[minute]
+                totals[3] += my_predbat.rate_export[minute] * export_minute[minute]
+            windows_by_size[size] = windows
+            net_by_size[size] = sum(expected_window_settlement(*totals) for totals in windows.values())
+            if not net_by_size[size] < gross:
+                print("ERROR: today_cost test window {} is not exercising any netting (net {} gross {})".format(size, net_by_size[size], gross))
+                failed = True
+
+        for window, expected in ((0, gross), (15, net_by_size[15]), (30, net_by_size[30]), (60, net_by_size[60])):
+            my_predbat.metric_net_settlement_window_minutes = window
+            day_cost, _ = my_predbat.today_cost(import_today, export_today, {}, load_today, save=False)
+            day_cost -= my_predbat.metric_standing_charge
+            if abs(day_cost - expected) > 1e-6:
+                print("ERROR: today_cost window {} gave {} expected {}".format(window, day_cost, expected))
+                failed = True
+            if window == 0 and my_predbat.net_settlement_seed is not None:
+                print("ERROR: today_cost left a seed with netting off: {}".format(my_predbat.net_settlement_seed))
+                failed = True
+            if window:
+                current = windows_by_size[window][minutes_now // window]
+                expected_seed = (minutes_now // window, current[0], current[1], current[2], current[3], expected_window_settlement(*current))
+                seed = my_predbat.net_settlement_seed
+                if not isinstance(seed, NetSettlementSeed):
+                    print("ERROR: today_cost seed is not a NetSettlementSeed: {!r}".format(seed))
+                    failed = True
+                if not seed or seed[0] != expected_seed[0] or any(abs(a - b) > 1e-9 for a, b in zip(seed[1:], expected_seed[1:])):
+                    print("ERROR: today_cost seed {} expected {}".format(seed, expected_seed))
+                    failed = True
+        # At the top of an hour nothing is metered in the new window yet, so there is no seed
+        my_predbat.minutes_now = 3 * 60
+        my_predbat.metric_net_settlement_window_minutes = 60
+        my_predbat.today_cost(import_today, export_today, {}, load_today, save=False)
+        if my_predbat.net_settlement_seed is not None:
+            print("ERROR: today_cost at the top of the hour left a seed: {}".format(my_predbat.net_settlement_seed))
+            failed = True
+    finally:
+        for attr, value in saved.items():
+            setattr(my_predbat, attr, value)
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def run_net_settlement_edge_tests(my_predbat):
+    """Parity of both engines with net settlement on, across window sizes, clock offsets and branches, returns True on failure"""
+    print("**** Running net settlement parity tests ****")
+    failed = False
+    state = snapshot_scenario_state(my_predbat)
+    forecast_minutes = my_predbat.forecast_minutes
+    try:
+        # name, window, minutes_now offset, rate profile, overrides, charge windows (relative start/end), charge_limit, export windows, export_limits, end_record
+        cases = [
+            ("net60_mixed", 60, 0, "flat", {"soc_kw": 20.0}, [], [], [], [], forecast_minutes),
+            ("net60_offset", 60, 25, "flat", {"soc_kw": 20.0}, [], [], [], [], forecast_minutes),
+            ("net60_half_rates", 60, 25, "half", {"soc_kw": 20.0}, [], [], [], [], forecast_minutes),
+            ("net60_negative_export", 60, 10, "negative", {"soc_kw": 20.0}, [], [], [], [], forecast_minutes),
+            ("net30_charge_export", 30, 10, "half", {"soc_kw": 50.0}, [(0, 180)], [100.0], [(300, 480)], [0.0], forecast_minutes),
+            ("net15", 15, 5, "flat", {"soc_kw": 50.0}, [(60, 120)], [80.0], [(200, 260)], [20.0], forecast_minutes),
+            ("net45_off_hour", 45, 0, "half", {"soc_kw": 30.0}, [], [], [(100, 400)], [10.0], forecast_minutes),
+            ("net7_not_step_multiple", 7, 0, "flat", {"soc_kw": 30.0}, [(0, 120)], [60.0], [], [], forecast_minutes),
+            ("net60_end_record_mid_window", 60, 25, "half", {"soc_kw": 20.0}, [(0, 120)], [60.0], [(240, 300)], [0.0], forecast_minutes // 2 + 35),
+            ("net60_end_record_zero", 60, 25, "flat", {"soc_kw": 20.0}, [], [], [], [], 0),
+            ("net1440_day", 1440, 25, "half", {"soc_kw": 40.0}, [(0, 240)], [100.0], [(600, 900)], [0.0], forecast_minutes),
+            (
+                "net60_car_not_reported",
+                60,
+                0,
+                "flat",
+                {
+                    "num_cars": 1,
+                    "car_energy_reported_load": False,
+                    "car_charging_slots": [[{"start": 0, "end": 300, "kwh": 15.0, "average": 0, "octopus": False}], [], [], []],
+                    "car_charging_soc": [0, 0, 0, 0],
+                    "car_charging_limit": [100, 100, 100, 100],
+                    "soc_kw": 50.0,
+                },
+                [],
+                [],
+                [],
+                [],
+                forecast_minutes,
+            ),
+            (
+                "net60_car_premium",
+                60,
+                25,
+                "flat",
+                {
+                    "num_cars": 1,
+                    "car_energy_reported_load": True,
+                    "car_charging_slots": [[{"start": 60, "end": 240, "kwh": 21.0, "average": 30, "octopus": True}], [], [], []],
+                    "car_charging_soc": [10, 0, 0, 0],
+                    "car_charging_limit": [50, 100, 100, 100],
+                    "car_charging_loss": 0.9,
+                    "soc_kw": 30.0,
+                },
+                [],
+                [],
+                [],
+                [],
+                forecast_minutes,
+            ),
+            ("net60_io_adjusted", 60, 25, "flat", {"soc_kw": 5.0, "rate_max": 50.0, "io_adjusted": "all"}, [(0, 180)], [50.0], [], [], forecast_minutes),
+            ("net60_carbon_keep", 60, 25, "half", {"soc_kw": 5.0, "best_soc_keep": 10.0, "carbon_enable": True, "carbon_intensity": "hourly"}, [], [], [], [], forecast_minutes),
+            # Current window seeded with already-metered flows (today_cost), import- and export-heavy
+            ("net60_seed_import", 60, 25, "half", {"soc_kw": 20.0, "net_settlement_seed": (0, 1.2, 12.0, 0.2, 1.0)}, [], [], [(30, 90)], [0.0], forecast_minutes),
+            ("net60_seed_export", 60, 25, "flat", {"soc_kw": 20.0, "net_settlement_seed": (0, 0.1, 1.0, 1.5, 7.5)}, [(0, 60)], [50.0], [], [], forecast_minutes),
+            ("net30_seed_end_record_zero", 30, 10, "flat", {"soc_kw": 20.0, "net_settlement_seed": (0, 0.4, 4.0, 0.1, 0.5)}, [], [], [], [], 0),
+            # A seed from another window, or with netting off, must be ignored
+            ("net60_seed_stale", 60, 25, "flat", {"soc_kw": 20.0, "net_settlement_seed": (-1, 1.2, 12.0, 0.2, 1.0)}, [], [], [], [], forecast_minutes),
+            ("net0_seed_ignored", 0, 25, "flat", {"soc_kw": 20.0, "net_settlement_seed": (0, 1.2, 12.0, 0.2, 1.0)}, [], [], [], [], forecast_minutes),
+            # An Intelligent dispatch assumed gone in PV10: the car-gone import correction is netted with the
+            # rest of the window. Kept last because car_charging_from_battery is not reset between cases.
+            (
+                "net60_car_dispatch_gone",
+                60,
+                25,
+                "flat",
+                {
+                    "num_cars": 1,
+                    "car_energy_reported_load": True,
+                    "car_charging_from_battery": False,
+                    "car_charging_slots": [[{"start": 0, "end": 300, "kwh": 15.0, "average": 5, "octopus": True}], [], [], []],
+                    "car_charging_soc": [0, 0, 0, 0],
+                    "car_charging_limit": [100, 100, 100, 100],
+                    "car_charging_loss": 0.9,
+                    "soc_kw": 20.0,
+                    "rate_max": 40.0,
+                    "io_adjusted": "all",
+                },
+                [],
+                [],
+                [(120, 240)],
+                [0.0],
+                forecast_minutes,
+            ),
+            (
+                "net30_car_dispatch_gone_not_reported",
+                30,
+                10,
+                "half",
+                {
+                    "num_cars": 1,
+                    "car_energy_reported_load": False,
+                    "car_charging_from_battery": False,
+                    "car_charging_slots": [[{"start": 0, "end": 300, "kwh": 15.0, "average": 5, "octopus": True}], [], [], []],
+                    "car_charging_soc": [0, 0, 0, 0],
+                    "car_charging_limit": [100, 100, 100, 100],
+                    "car_charging_loss": 0.9,
+                    "soc_kw": 20.0,
+                    "rate_max": 40.0,
+                    "io_adjusted": "all",
+                },
+                [],
+                [],
+                [],
+                [],
+                forecast_minutes,
+            ),
+        ]
+        for name, window, offset, rate_profile, overrides, charge_rel, charge_limit, export_rel, export_limits, end_record in cases:
+            minutes_now = FIXTURE_MINUTES_NOW + offset
+            reset_net_settlement_base(my_predbat, minutes_now)
+            if rate_profile != "flat":
+                for minute in range(my_predbat.forecast_minutes + minutes_now):
+                    if rate_profile == "half":
+                        my_predbat.rate_import[minute] = 10.0 if (minute % 60) < 30 else 25.0
+                        my_predbat.rate_export[minute] = 5.0 if (minute % 60) < 30 else 12.0
+                    else:
+                        my_predbat.rate_import[minute] = 10.0
+                        my_predbat.rate_export[minute] = -3.0
+                my_predbat.rate_max = max(my_predbat.rate_import.values())
+            for key, value in overrides.items():
+                if key == "io_adjusted":
+                    value = {minute: 1 for minute in range(my_predbat.forecast_minutes + minutes_now)}
+                elif key == "carbon_intensity":
+                    value = {minute: 100 + (minute % 60) for minute in range(0, my_predbat.forecast_minutes, 5)}
+                elif key == "net_settlement_seed":
+                    # (window offset from the current window, import kWh, import cost, export kWh, export credit)
+                    window_offset, seed_import, seed_import_cost, seed_export, seed_export_credit = value
+                    seed_window = (minutes_now // window + window_offset) if window > 0 else (minutes_now // 60)
+                    value = (seed_window, seed_import, seed_import_cost, seed_export, seed_export_credit, net_settlement_value(seed_import, seed_import_cost, seed_export, seed_export_credit))
+                elif key == "car_charging_slots":
+                    value = [[dict(slot, start=slot["start"] + minutes_now, end=slot["end"] + minutes_now) for slot in slots] for slots in value]
+                setattr(my_predbat, key, value)
+            my_predbat.metric_net_settlement_window_minutes = window
+            charge_window = [{"start": minutes_now + start, "end": minutes_now + end, "average": 10} for start, end in charge_rel]
+            export_window = [{"start": minutes_now + start, "end": minutes_now + end, "average": 10} for start, end in export_rel]
+            pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step = make_mixed_step_data(my_predbat, pv_kw=3.0, load_kw=1.0)
+            for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+                failed |= dual_run(
+                    "{}_scenario_{}".format(name, pv_scenario),
+                    my_predbat,
+                    pv_step,
+                    pv10_step,
+                    load_step,
+                    load10_step,
+                    charge_limit[:],
+                    [dict(item) for item in charge_window],
+                    [dict(item) for item in export_window],
+                    export_limits[:],
+                    pv_scenario,
+                    end_record,
+                    pv90_step=pv90_step,
+                    load90_step=load90_step,
+                )
+    finally:
+        # Hand the rest of the suite the state it would have seen without these tests
+        restore_scenario_state(my_predbat, state)
+    if not failed:
+        print("PASS")
     return failed
 
 
@@ -784,6 +1278,7 @@ def run_random_sweep_tests(my_predbat, count=150):
     the sweep is fast enough to absorb the 3x.
     """
     failed = False
+    net_count = 0
     scenario_counts = {PV_SCENARIO_NOMINAL: 0, PV_SCENARIO_PV10: 0, PV_SCENARIO_PV90: 0}
     for seed in range(count):
         rng = random.Random(seed)
@@ -818,6 +1313,44 @@ def run_random_sweep_tests(my_predbat, count=150):
                 break
         if failed:
             break
+
+        # The same configuration once more with net settlement on. Drawn from its own generator so
+        # the main rng stream - and every pre-existing scenario above - is unchanged. The random rates
+        # change every 30 minutes, so 60+ minute windows also exercise a rate change inside a window.
+        rng_net = random.Random(seed + 2000000)
+        net_window = rng_net.choice([15, 30, 45, 60, 60, 60, 1440])
+        net_scenario = rng_net.choice([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90])
+        my_predbat.metric_net_settlement_window_minutes = net_window
+        my_predbat.net_settlement_seed = None
+        if rng_net.random() < 0.5:
+            seed_import = round(rng_net.uniform(0, 2), 3)
+            seed_export = round(rng_net.uniform(0, 2), 3)
+            seed_import_cost = round(seed_import * rng_net.uniform(-5, 45), 4)
+            seed_export_credit = round(seed_export * rng_net.uniform(-5, 30), 4)
+            my_predbat.net_settlement_seed = (my_predbat.minutes_now // net_window, seed_import, seed_import_cost, seed_export, seed_export_credit, net_settlement_value(seed_import, seed_import_cost, seed_export, seed_export_credit))
+        net_count += 1
+        failed |= dual_run(
+            "random_{}_net{}_s{}".format(seed, net_window, net_scenario),
+            my_predbat,
+            pv_step,
+            pv10_step,
+            load_step,
+            load10_step,
+            charge_limit,
+            charge_window,
+            export_window,
+            export_limits,
+            net_scenario,
+            end_record,
+            pv90_step=pv90_step,
+            load90_step=load90_step,
+        )
+        my_predbat.metric_net_settlement_window_minutes = 0
+        my_predbat.net_settlement_seed = None
+        if failed:
+            print("Random sweep failed at seed {} with net settlement window {}".format(seed, net_window))
+            break
+    print("Random sweep ran {} net settlement configurations".format(net_count))
     print("Random sweep ran {} configurations: nominal {}, pv10 {}, pv90 {}".format(sum(scenario_counts.values()), scenario_counts[PV_SCENARIO_NOMINAL], scenario_counts[PV_SCENARIO_PV10], scenario_counts[PV_SCENARIO_PV90]))
     return failed
 

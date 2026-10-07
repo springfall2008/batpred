@@ -2051,6 +2051,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_gas** - Gas rates over a 24-hour period with start and end times
 - **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
 - **rates_export_override** - Over-ride export rate for specific date and time range
+- **metric_net_settlement_window_minutes** - Net import against export within settlement windows of this many minutes (e.g. `60` for hourly balancing) before pricing them; `0` or absent turns it off. See [Net settlement of import and export](energy-rates.md#net-settlement-of-import-and-export)
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_adjust_auto** - Auto-detect which of the import/export rates are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component

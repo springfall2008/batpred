@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, net_settlement_window_from_arg
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -983,6 +983,7 @@ class Fetch:
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
         self.cost_today_sofar = 0
+        self.net_settlement_seed = None
         self.carbon_today_sofar = 0
         self.import_today = {}
         self.export_today = {}
@@ -3086,6 +3087,28 @@ class Fetch:
             self.log("Warn: export_more_solar is enabled but has no effect, as it works by enabling Freeze Export on idle solar slots and " + reason)
         self.export_more_solar_warned_reason = reason
 
+    def fetch_net_settlement_config(self):
+        """Read and validate metric_net_settlement_window_minutes (apps.yaml only), 0 = net settlement off.
+
+        An invalid value disables netting rather than raising. The warning and the enabled message are
+        logged once per change of the setting, while an invalid value is flagged on predbat.status
+        (had_errors) every cycle, like other configuration errors.
+        """
+        # No typed default: get_arg would truncate 60.5 to a valid-looking 60, so validate the raw value here
+        net_window_arg = self.get_arg("metric_net_settlement_window_minutes", None)
+        net_window = net_settlement_window_from_arg(net_window_arg)
+        # Log once per change of setting rather than every cycle
+        if net_window_arg != self.net_settlement_window_arg:
+            if net_window is None:
+                self.log("Warn: metric_net_settlement_window_minutes {} must be a multiple of {} that divides 1440 (e.g. 15, 30 or 60) - net settlement disabled".format(net_window_arg, PREDICT_STEP))
+            elif net_window:
+                self.log("Net settlement of import/export enabled over {} minute windows".format(net_window))
+            self.net_settlement_window_arg = net_window_arg
+        if net_window is None:
+            # had_errors is reset every cycle, so flag it every cycle to keep it on predbat.status
+            self.record_status("Warn: metric_net_settlement_window_minutes {} is invalid - net settlement disabled".format(net_window_arg), had_errors=True)
+        self.metric_net_settlement_window_minutes = net_window or 0
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -3330,6 +3353,7 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
+        self.fetch_net_settlement_config()
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")

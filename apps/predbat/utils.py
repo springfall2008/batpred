@@ -40,6 +40,7 @@ from const import (
 )
 import copy
 import json
+from collections import namedtuple
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -3025,3 +3026,53 @@ def allocate_export_rates(needs, max_rates, p_fleet):
             remaining = 0.0
 
     return alloc
+
+
+# Import and export already metered in the current net settlement window, handed by today_cost()
+# (output.py) to the prediction so the rest of the window nets against them. window is the window id
+# (minutes since midnight // window length); applied is the settled value of these totals, already
+# included in cost_today_sofar. A debug dump replays it as a plain list, so readers rebuild it with
+# net_settlement_seed_from().
+NetSettlementSeed = namedtuple("NetSettlementSeed", ["window", "import_kwh", "import_cost", "export_kwh", "export_credit", "applied"])
+
+
+def net_settlement_seed_from(value):
+    """Return value as a NetSettlementSeed, or None when there is no seed (value is None or empty)"""
+    if not value:
+        return None
+    return NetSettlementSeed(*value)
+
+
+def net_settlement_value(import_kwh, import_cost, export_kwh, export_credit):
+    """Settled cost of one net settlement window (metric_net_settlement_window_minutes).
+
+    Import and export within the window cancel out and only the winning direction is priced, at its
+    volume-weighted rate within the window - with one rate per window that is simply net kWh * rate.
+    Mirrored by the settlement block in prediction_kernel.cpp, so the arithmetic must not change
+    without a parity revision bump.
+    """
+    if import_kwh >= export_kwh:
+        return import_cost * ((import_kwh - export_kwh) / import_kwh) if import_kwh > 0 else 0.0
+    return -export_credit * ((export_kwh - import_kwh) / export_kwh)
+
+
+def net_settlement_window_from_arg(value):
+    """Validate metric_net_settlement_window_minutes, returns the window in minutes (0 = off) or None if invalid.
+
+    Windows must tile the day in whole prediction steps, so the plan's windows (counted on past
+    midnight) and today_cost's (restarting at midnight) line up with each other and with the bill.
+    Anything else, including non-numeric values and booleans, is invalid rather than an error.
+    """
+    if value is None or value is False:
+        return 0
+    if isinstance(value, bool):
+        return None
+    try:
+        window = float(value)
+    except (TypeError, ValueError):
+        return None
+    if window == 0:
+        return 0
+    if window < 0 or not window.is_integer() or int(window) % PREDICT_STEP or (24 * 60) % int(window):
+        return None
+    return int(window)

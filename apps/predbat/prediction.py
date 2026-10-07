@@ -33,6 +33,8 @@ from utils import (
     export_power_of,
     export_target_of,
     pack_export_limit,
+    net_settlement_value,
+    net_settlement_seed_from,
 )
 from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
@@ -124,6 +126,10 @@ class Prediction(PredictionBatch):
             self.car_energy_reported_load = base.car_energy_reported_load
             self.reserve = base.reserve
             self.metric_standing_charge = base.metric_standing_charge
+            # Net settlement window in minutes (0 = off), see the import/export accounting in run_prediction
+            self.metric_net_settlement_window_minutes = getattr(base, "metric_net_settlement_window_minutes", 0)
+            # Import/export already metered in the current window, from today_cost() in output.py
+            self.net_settlement_seed = net_settlement_seed_from(getattr(base, "net_settlement_seed", None))
             self.set_charge_freeze = base.set_charge_freeze
             self.set_reserve_enable = base.set_reserve_enable
             self.set_export_freeze = base.set_export_freeze
@@ -726,6 +732,28 @@ class Prediction(PredictionBatch):
             for minute_step in range(((self.forecast_minutes - 1) // step) * step, -1, -step):
                 pv_remaining += pv_forecast_minute_step_flat.get(minute_step, 0.0)
                 pv_remaining_kwh[minute_step] = pv_remaining
+
+        # Net settlement: when set, import and export within the same wall-clock window of this many
+        # minutes are netted before being priced, so only the winning direction costs or earns.
+        # minute_absolute counts from local midnight, so minute_absolute // window aligns to the clock.
+        net_window = self.metric_net_settlement_window_minutes
+        net_window_id = -1
+        net_import_kwh = 0.0
+        net_import_cost = 0.0
+        net_export_kwh = 0.0
+        net_export_credit = 0.0
+        net_applied = 0.0
+        # Start the current window from what has already been metered in it (today_cost), so the
+        # forecast part of this hour nets against the part that already happened. net_applied is the
+        # settled value today_cost already put into cost_today_sofar for that elapsed part.
+        net_seed = self.net_settlement_seed
+        if net_window > 0 and net_seed and net_seed.window == self.minutes_now // net_window:
+            net_window_id = net_seed.window
+            net_import_kwh = net_seed.import_kwh
+            net_import_cost = net_seed.import_cost
+            net_export_kwh = net_seed.export_kwh
+            net_export_credit = net_seed.export_credit
+            net_applied = net_seed.applied
 
         # Simulate each forward minute
         minute = 0
@@ -1367,6 +1395,17 @@ class Prediction(PredictionBatch):
             if best_soc_max >= 0 and soc >= best_soc_max:
                 metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
 
+            # Net settlement - start a new window's totals when the wall-clock window changes
+            if net_window > 0:
+                window_id = minute_absolute // net_window
+                if window_id != net_window_id:
+                    net_window_id = window_id
+                    net_import_kwh = 0.0
+                    net_import_cost = 0.0
+                    net_export_kwh = 0.0
+                    net_export_credit = 0.0
+                    net_applied = 0.0
+
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
@@ -1385,10 +1424,17 @@ class Prediction(PredictionBatch):
                 # Account for premium for car charging in import metric
                 # but it can't be more than we actually imported from the grid.
                 car_amount_premium = min(diff, car_amount_premium)
-                metric += import_rate * diff + car_rate_premium * car_amount_premium
+                import_cost = import_rate * diff
                 if car_gone_kwh:
                     # The car's share of the import is paid at its own rate, not the worst-case rate
-                    metric -= min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh)
+                    import_cost -= min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh)
+                if net_window > 0:
+                    # Grid import is settled at the end of the step below, the car premium is not netted
+                    net_import_kwh += diff
+                    net_import_cost += import_cost
+                    metric += car_rate_premium * car_amount_premium
+                else:
+                    metric += import_cost + car_rate_premium * car_amount_premium
                 grid_state = "<"
             else:
                 # Export
@@ -1397,7 +1443,12 @@ class Prediction(PredictionBatch):
                 if carbon_enable:
                     carbon_g -= energy * carbon_intensity.get(minute, 0)
 
-                if not car_energy_reported_load:
+                if net_window > 0:
+                    # Only the export that reaches the meter (see the car bypass case below) is netted
+                    export_valued = max(0.0, energy - car_load_energy_bypass) if not car_energy_reported_load else energy
+                    net_export_kwh += export_valued
+                    net_export_credit += export_rate * export_valued
+                elif not car_energy_reported_load:
                     # If the car is not reporting load, but we export then this export can
                     # end up in the car meaning we don't get the export profit.
                     # We can't really value the car charging amount so we just assume its 0 value
@@ -1410,6 +1461,14 @@ class Prediction(PredictionBatch):
                     grid_state = ">"
                 else:
                     grid_state = "~"
+
+            # Net settlement - move metric to the window's settled value so far. Only the winning
+            # direction is priced, at the volume-weighted rate of that direction within the window
+            # (with one rate per window this is simply net kWh * rate). Carbon and kWh totals stay physical.
+            if net_window > 0:
+                settled = net_settlement_value(net_import_kwh, net_import_cost, net_export_kwh, net_export_credit)
+                metric += settled - net_applied
+                net_applied = settled
 
             # Record final soc & metric
             if record:
