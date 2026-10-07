@@ -727,7 +727,7 @@ def test_spotprice_zones_and_registry(my_predbat=None):
     assert entry["args"]["entsoe_token"]["secret"] and entry["args"]["tibber_token"]["secret"]
     # provider defaults to energycharts, so the component must be gated on a zone or a Tibber token
     assert "default" not in entry["args"]["provider"] and not entry["args"]["provider"]["required"]
-    assert entry["required_or"] == ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret", "octopus_de_api_key"]
+    assert entry["required_or"] == ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret", "octopus_de_api_key", "ews_api_key"]
     assert SpotPriceAPI(FakeBase(), zone="NL").provider == "energycharts"
 
 
@@ -1993,6 +1993,115 @@ def test_spotprice_awattar_fallback(my_predbat=None):
     assert make_api(provider=None, entsoe_token=None, zone="DE-LU").provider == "energycharts"
 
 
+# ---------------------------------------------------------------------------
+# EWS Schönau
+# ---------------------------------------------------------------------------
+
+
+def ews_reply(start="2025-05-02T00:00:00.000+02:00", quarters=8, base=30.0, tomorrow=0):
+    """An EWS dynamic prices reply: today/tomorrow lists of quarter-hour {startsAt, total} with total in cents incl. VAT."""
+    first = datetime.fromisoformat(start)
+
+    def entries(offset, count):
+        """count quarter hours from first + offset quarters."""
+        return [{"startsAt": (first + timedelta(minutes=15 * (offset + i))).isoformat(timespec="milliseconds"), "total": base + offset + i} for i in range(count)]
+
+    return {"today": entries(0, quarters), "tomorrow": entries(96, tomorrow)}
+
+
+def test_spotprice_ews_parse(my_predbat=None):
+    """EWS totals are quarter-hourly cents incl. VAT across today and tomorrow; a null total is a gap; euro-looking or malformed replies are rejected."""
+    from spotprice import parse_ews_json
+
+    intervals = parse_ews_json(ews_reply(quarters=3, tomorrow=2))
+    assert [(start, end) for start, end, _v in intervals][:2] == [(dt("2025-05-01T22:00Z"), dt("2025-05-01T22:15Z")), (dt("2025-05-01T22:15Z"), dt("2025-05-01T22:30Z"))]
+    assert [value for _s, _e, value in intervals] == [30.0, 31.0, 32.0, 126.0, 127.0], intervals
+    assert intervals[3][0] == dt("2025-05-02T22:00Z")
+    gap = ews_reply(quarters=3)
+    gap["today"][1]["total"] = None
+    assert [start for start, _e, _v in parse_ews_json(gap)] == [dt("2025-05-01T22:00Z"), dt("2025-05-01T22:30Z")]
+    # Omitted quarters are not covered by their neighbour
+    omitted = ews_reply(quarters=4)
+    del omitted["today"][1]
+    assert parse_ews_json(omitted)[0][1] == dt("2025-05-01T22:15Z")
+    euros = ews_reply(quarters=4)
+    for entry in euros["today"]:
+        entry["total"] = 0.3
+    for bad in (euros, {"today": [{"startsAt": 1746136800, "total": 30}]}, {"today": [{"total": 30}]}, {"today": "x"}, None):
+        try:
+            parse_ews_json(bad)
+        except SpotPriceError:
+            continue
+        raise AssertionError("expected SpotPriceError for {}".format(bad))
+    assert parse_ews_json({"today": [], "tomorrow": None}) == []
+
+
+def test_spotprice_ews_fetch(my_predbat=None):
+    """fetch_ews sends the API key as X-API-Key, uses the totals as-is (no markup or VAT), and maps failures to SpotPriceError categories with per-source back-off."""
+    import spotprice as spotprice_module
+
+    seen = []
+    api = make_api(provider="ews", entsoe_token=None, zone=None, ews_api_key="pub_dpa_test", markup=15, vat=0.19, charge_zones=[{"from": "00:00", "to": "00:00", "charge": 9}])
+
+    async def request(method, url, params=None, headers=None, data=None):
+        """Return the fixture."""
+        seen.append((method, url, headers))
+        return 200, ews_reply(quarters=96, tomorrow=96)
+
+    api.http_request = request
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert api.sources_needed() == ["supplier"]
+    assert run(api.refresh(now)) is True
+    assert seen == [("GET", "https://api.ews-schoenau.de/v1/dynamicprices/EWS-OEKO-DYN", {"X-API-Key": "pub_dpa_test", "Accept": "application/json"})], seen
+    rates = api.build_import_rates()
+    assert len(rates) == 192 and rates[0] == (dt("2025-05-01T22:00Z"), dt("2025-05-01T22:15Z"), 30.0)
+    assert api.data_end() == dt("2025-05-03T22:00Z")
+
+    recorded = []
+    original = spotprice_module.record_api_call
+    spotprice_module.record_api_call = lambda service, success=True, reason=None: recorded.append((service, success, reason))
+    try:
+        for reply, phrase, reason in (
+            ((401, {"error": {"title": "Unauthorized", "status": 401, "detail": "Missing authorization"}}), "EWS rejected the API key (HTTP 401): Missing authorization", "auth_error"),
+            ((429, None), "rate limit", "rate_limit"),
+            ((500, None), "HTTP 500", "server_error"),
+            ((200, {"today": [], "tomorrow": []}), "no prices", "client_error"),
+            ((200, {"today": [{"startsAt": "2025-05-02T00:00:00.000+02:00", "total": 0.3}]}), "euros", "decode_error"),
+        ):
+            failing = make_api(provider="ews", entsoe_token=None, zone=None, ews_api_key="pub_dpa_secret")
+
+            async def bad(method, url, params=None, headers=None, data=None, reply=reply):
+                """Return an error reply."""
+                return reply
+
+            failing.http_request = bad
+            recorded.clear()
+            assert run(failing.refresh(now)) is False
+            assert phrase in failing.last_error and "pub_dpa_secret" not in failing.last_error, (phrase, failing.last_error)
+            assert recorded == [("ews", False, reason)], (phrase, recorded)
+            assert failing.source_failures["supplier"] == 1 and failing.source_next_attempt["supplier"] == now + timedelta(minutes=5)
+
+        async def network(method, url, params=None, headers=None, data=None):
+            """A connection failure."""
+            raise asyncio.TimeoutError()
+
+        offline = make_api(provider="ews", entsoe_token=None, zone=None, ews_api_key="k")
+        offline.http_request = network
+        recorded.clear()
+        assert run(offline.refresh(now)) is False and recorded == [("ews", False, "connection_error")] and "EWS request failed" in offline.last_error
+    finally:
+        spotprice_module.record_api_call = original
+
+
+def test_spotprice_ews_inference_and_config(my_predbat=None):
+    """An EWS API key alone selects ews; with another supplier's key the provider must be set; provider ews without a key is a config error."""
+    assert make_api(provider=None, entsoe_token=None, zone=None, ews_api_key="k").provider == "ews"
+    assert "octopus_de, ews" in make_api(provider=None, entsoe_token=None, zone=None, ews_api_key="k", octopus_de_api_key="o").config_error
+    missing = make_api(provider="ews", entsoe_token=None, zone=None)
+    assert "spotprice_ews_api_key is required" in missing.config_error and missing.sources_needed() == []
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -2049,6 +2158,9 @@ SPOTPRICE_TESTS = [
     test_spotprice_awattar_parse_and_fetch,
     test_spotprice_awattar_markup_percent,
     test_spotprice_awattar_fallback,
+    test_spotprice_ews_parse,
+    test_spotprice_ews_fetch,
+    test_spotprice_ews_inference_and_config,
 ]
 
 

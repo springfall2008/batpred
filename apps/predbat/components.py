@@ -581,6 +581,7 @@ COMPONENT_LIST = {
             "ostrom_contract_id": {"required": False, "secret": True, "config": "spotprice_ostrom_contract_id"},
             "octopus_de_api_key": {"required": False, "secret": True, "config": "spotprice_octopus_de_api_key"},
             "octopus_de_account": {"required": False, "secret": True, "config": "spotprice_octopus_de_account"},
+            "ews_api_key": {"required": False, "secret": True, "config": "spotprice_ews_api_key"},
             "markup": {"required": False, "config": "spotprice_markup", "default": 0.0},
             # No registry default: when unset, initialize() uses the provider's published percentage (3 for awattar), else 0
             "markup_percent": {"required": False, "config": "spotprice_markup_percent"},
@@ -597,7 +598,7 @@ COMPONENT_LIST = {
         # bidding zone for the spot sources, or a supplier's credentials (either half of a pair is
         # enough to start it, so a missing other half is reported rather than silently ignored).
         # Without this the component would start on every install.
-        "required_or": ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret", "octopus_de_api_key"],
+        "required_or": ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret", "octopus_de_api_key", "ews_api_key"],
         "can_restart": True,
         "phase": 1,
     },

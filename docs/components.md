@@ -1695,7 +1695,7 @@ With the default exchange rate of 1 the result is in euro cents per kWh. The mar
 Prices are kept at their native resolution - 15 minutes for most of Europe since October 2025, 30 minutes for Ireland's SEM, 60 minutes where a market still publishes hourly prices.
 Tomorrow's prices are published around 12:00-13:00 CET; from 12:00 CET the component checks every 15 minutes until it holds the whole of the next market day (which runs midnight to midnight CET/CEST everywhere - 23:00 to 23:00 local time in Ireland and Portugal, 01:00 to 01:00 in Finland and the Baltics), otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours - each source on its own, so a spot price outage never delays a supplier's prices - and the last prices fetched are cached so they survive a restart.
 
-Price sources (`spotprice_provider`; when it is not set and the credentials of exactly one supplier (Tibber, Ostrom, Octopus Energy Germany) are set, that supplier is used, otherwise `energycharts`. Credentials for more than one supplier without a `spotprice_provider` are reported as a configuration error, so set the provider explicitly):
+Price sources (`spotprice_provider`; when it is not set and the credentials of exactly one supplier (Tibber, Ostrom, Octopus Energy Germany, EWS) are set, that supplier is used, otherwise `energycharts`. Credentials for more than one supplier without a `spotprice_provider` are reported as a configuration error, so set the provider explicitly):
 
 - `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If the token is missing or ENTSO-E fails, the component falls back to Energy-Charts automatically and logs it once (and again once ENTSO-E recovers). The fallback only runs this way round: with `energycharts` ENTSO-E is never used, even if a token is set.
 - `energycharts` - [Energy-Charts](https://api.energy-charts.info/) from Fraunhofer ISE, no key needed. Prices for AT, BE, CH, CZ, DE-LU, DK1, DK2, FR, HU, IT-North, NL, NO2, PL, SE4 and SI are licensed CC BY 4.0 (Bundesnetzagentur | SMARD.de); Energy-Charts states that prices for other zones are for private use only. Ireland (IE-SEM) is not available from Energy-Charts, so it needs `entsoe` with a token: without one the component logs a single error, shows it on the status sensor and fetches nothing until the configuration is fixed, and an ENTSO-E failure there is not retried against Energy-Charts.
@@ -1703,11 +1703,12 @@ Price sources (`spotprice_provider`; when it is not set and the credentials of e
 - `tibber` - [Tibber](https://developer.tibber.com/)'s own end-user price, read with your personal access token. Tibber's price already includes markup, grid fees and VAT, so `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied to it. Quarter-hourly prices are requested.
 - `ostrom` - [Ostrom](https://www.ostrom.de/) (Germany) dynamic tariff, read from the [Ostrom API](https://docs.ostrom-api.io/). Create a production client in the [Ostrom developer portal](https://developer.ostrom-api.io/) and set its client ID and secret. The component finds your dynamic contract (set `spotprice_ostrom_contract_id` if the account has more than one) and asks for prices at the contract's postcode, which is what makes Ostrom include the local taxes, levies and variable grid fees. The price used is Ostrom's documented variable price per kWh - the spot price plus taxes, levies and grid fees, VAT included - so, as with Tibber, `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied. Ostrom's monthly base fee and fixed grid fees are not per kWh and are left out. Ostrom publishes hourly prices, with tomorrow's arriving between 15:00 and 17:00 CET. A fixed-price Ostrom contract (Simply Fair) is reported as an error: set its price with `rates_import` instead.
 - `octopus_de` - [Octopus Energy Germany](https://octopusenergy.de/), read from its Kraken GraphQL API with an API key (`spotprice_octopus_de_api_key`). The component uses the active electricity agreement on the account (set `spotprice_octopus_de_account`, e.g. `A-1234ABCD`, if the key can see more than one account): a dynamic tariff's published price forecast, interval by interval; a time-of-use tariff's timeslots, repeated each day in your local time; or a fixed unit rate. These are Octopus's gross unit rates - VAT, grid fees and levies included - so `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied. Octopus Energy Germany has no export tariff here; use `spotprice_export_mode` for your feed-in tariff.
+- `ews` - [EWS Elektrizitätswerke Schönau](https://www.ews-schoenau.de/oekostrom/oekostrom-dynamisch/) "Ökostrom Dynamisch", read from EWS's dynamic price API with an API key, which EWS issues on request at <api@ews-schoenau.de>. EWS publishes quarter-hourly gross prices (VAT, grid fees and levies included, the same across Germany) for the next day between 15:00 and 17:00, and they are used as-is - `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied. EWS describes the API as being in a test phase.
 
 #### When to enable (spotprice)
 
 - You are on a dynamic tariff that follows the day-ahead spot price (e.g. most German, Austrian, Dutch, Belgian or Nordic dynamic tariffs)
-- Your electricity comes from Tibber, Ostrom or Octopus Energy Germany and you want the supplier's own prices used directly
+- Your electricity comes from Tibber, Ostrom, Octopus Energy Germany or EWS Schönau and you want the supplier's own prices used directly
 - You have a fixed feed-in tariff, or a spot-linked export tariff, and want export priced alongside
 
 #### Important notes (spotprice)
@@ -1722,8 +1723,8 @@ Price sources (`spotprice_provider`; when it is not set and the credentials of e
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `provider` | String | No | `energycharts` | `spotprice_provider` | `entsoe`, `energycharts`, `awattar`, `tibber`, `ostrom` or `octopus_de` |
-| `zone` | String | Yes, except for tibber, ostrom and octopus_de | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
+| `provider` | String | No | `energycharts` | `spotprice_provider` | `entsoe`, `energycharts`, `awattar`, `tibber`, `ostrom`, `octopus_de` or `ews` |
+| `zone` | String | Yes, except for tibber, ostrom, octopus_de and ews | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
 | `entsoe_token` | String | For entsoe | - | `spotprice_entsoe_token` | ENTSO-E Transparency Platform security token |
 | `tibber_token` | String | For tibber | - | `spotprice_tibber_token` | Tibber personal access token |
 | `tibber_home_id` | String | No | First home | `spotprice_tibber_home_id` | Tibber home id when your account has more than one home |
@@ -1732,6 +1733,7 @@ Price sources (`spotprice_provider`; when it is not set and the credentials of e
 | `ostrom_contract_id` | String | No | Active contract | `spotprice_ostrom_contract_id` | Ostrom contract number, needed only when the account has more than one active contract |
 | `octopus_de_api_key` | String | For octopus_de | - | `spotprice_octopus_de_api_key` | Octopus Energy Germany API key |
 | `octopus_de_account` | String | No | The key's only account | `spotprice_octopus_de_account` | Octopus Energy Germany account number, needed only when the key can see more than one account |
+| `ews_api_key` | String | For ews | - | `spotprice_ews_api_key` | EWS Schönau dynamic price API key |
 | `markup` | Float | No | 0 | `spotprice_markup` | Supplier markup plus flat grid fees and levies, minor units per kWh, excluding VAT |
 | `markup_percent` | Float | No | 0 (3 for awattar) | `spotprice_markup_percent` | Percentage of the absolute spot price added before VAT (e.g. tado Energy / aWATTar HOURLY's 3%). Set `0` to turn the awattar default off |
 | `vat` | Float | No | 0 | `spotprice_vat` | VAT as a fraction, e.g. `0.19`. A value of 1 or more is read as a percentage with a warning, so `1` means 1% |
@@ -1752,6 +1754,7 @@ tibber_token: YOUR_TIBBER_TOKEN
 ostrom_client_id: YOUR_OSTROM_CLIENT_ID
 ostrom_client_secret: YOUR_OSTROM_CLIENT_SECRET
 octopus_de_api_key: YOUR_OCTOPUS_DE_API_KEY
+ews_api_key: YOUR_EWS_API_KEY
 ```
 
 #### apps.yaml configuration example (spotprice)

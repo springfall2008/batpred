@@ -37,11 +37,14 @@ Price sources, chosen by spotprice_provider:
   - octopus_de:   Octopus Energy Germany's unit rates for the account's active agreement (dynamic
                   forecast, time-of-use or fixed; VAT included), read from its Kraken GraphQL API
                   with an API key. Used as-is, like Tibber.
+  - ews:          EWS Schönau's "Ökostrom Dynamisch" quarter-hourly gross prices (VAT, grid fees and
+                  levies included), read from its price API with an API key EWS issues on request.
+                  Used as-is, like Tibber.
 
 Export is either a fixed feed-in tariff or spot-linked (spot + export markup, no VAT), with an
 optional rule that pays nothing in any interval where the spot price is negative (Germany's
 Solarspitzengesetz). Spot data for the export side is fetched from ENTSO-E/Energy-Charts even when
-a supplier (Tibber, Ostrom, Octopus Energy Germany) supplies the import price.
+a supplier (Tibber, Ostrom, Octopus Energy Germany, EWS) supplies the import price.
 
 Rates are published in the same shape as the Octopus/Kraken rate sensors (value_inc_vat,
 valid_from, valid_to) and wired in through metric_octopus_import / metric_octopus_export, so the
@@ -67,12 +70,12 @@ from const import TIME_FORMAT_HA
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
-SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom", "octopus_de", "awattar")
+SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom", "octopus_de", "awattar", "ews")
 # Providers whose import price is the market spot price plus the configured markup, charge zones and VAT
 SPOT_PROVIDERS = ("entsoe", "energycharts", "awattar")
 # Suppliers read through the generic "supplier" source: their API gives the end-user price in minor
 # units per kWh with markup, grid fees, levies and VAT already in, so it is used as-is
-SUPPLIER_PROVIDERS = ("ostrom", "octopus_de")
+SUPPLIER_PROVIDERS = ("ostrom", "octopus_de", "ews")
 # Every provider whose import price comes from the supplier rather than from spot + markup
 ALL_IN_PROVIDERS = ("tibber",) + SUPPLIER_PROVIDERS
 SPOTPRICE_EXPORT_MODES = ("none", "fixed", "spot")
@@ -90,6 +93,8 @@ OSTROM_AUTH_URL = "https://auth.production.ostrom-api.io/oauth2/token"
 OSTROM_API_URL = "https://production.ostrom-api.io"
 # Ostrom also runs a sandbox (auth.sandbox.ostrom-api.io / sandbox.ostrom-api.io) with test data only
 OCTOPUS_DE_URL = "https://api.oeg-kraken.energy/v1/graphql/"
+EWS_URL = "https://api.ews-schoenau.de/v1/dynamicprices/EWS-OEKO-DYN"
+QUARTER_HOUR = timedelta(minutes=15)
 # Kraken error codes: a token the API no longer accepts (refresh it and retry once), credentials it
 # rejects outright, and its GraphQL rate limit
 KRAKEN_TOKEN_ERROR_CODES = ("KT-CT-1111", "KT-CT-1124", "KT-CT-1139", "KT-CT-1143")
@@ -520,6 +525,34 @@ def parse_tibber_json(data, home_id=None, resolution_minutes=None):
     return intervals_from_starts(pairs, expected), currency, home.get("id")
 
 
+@parse_errors_as("EWS")
+def parse_ews_json(data):
+    """Parse an EWS dynamic prices response into (start, end, cents per kWh incl. VAT) UTC intervals.
+
+    The reply has today and tomorrow lists of {startsAt, total}, one per quarter hour, total being
+    the gross price in cents per kWh. A missing total leaves a gap. As the response format is only
+    known from third-party use, a reply whose typical price is below 1 is rejected rather than read
+    as cents: it would mean the unit is euros, and the prices would be a hundred times too low.
+    """
+    if not isinstance(data, dict):
+        raise SpotPriceError("EWS returned an unexpected response")
+    pairs = []
+    for day in ("today", "tomorrow"):
+        entries = data.get(day) or []
+        if not isinstance(entries, list):
+            raise SpotPriceError("EWS returned an unexpected {} list".format(day))
+        for entry in entries:
+            starts_at = entry["startsAt"]
+            if not isinstance(starts_at, str):
+                raise SpotPriceError("EWS returned a startsAt of type {}".format(type(starts_at).__name__))
+            total = entry.get("total")
+            pairs.append((parse_utc(starts_at), None if total is None else round(float(total), 4)))
+    values = sorted(value for _start, value in pairs if value is not None)
+    if values and values[len(values) // 2] < 1.0:
+        raise SpotPriceError("EWS prices look like euros rather than cents per kWh (typical value {})".format(values[len(values) // 2]))
+    return intervals_from_starts(pairs, QUARTER_HOUR)
+
+
 @parse_errors_as("Ostrom")
 def select_ostrom_contract(data, contract_id=None):
     """Pick the contract to price from an Ostrom /contracts response.
@@ -896,6 +929,7 @@ class SpotPriceAPI(ComponentBase):
         ostrom_contract_id=None,
         octopus_de_api_key=None,
         octopus_de_account=None,
+        ews_api_key=None,
         markup=0.0,
         markup_percent=None,
         vat=0.0,
@@ -912,6 +946,7 @@ class SpotPriceAPI(ComponentBase):
         self.ostrom_client_id = ostrom_client_id
         self.ostrom_client_secret = ostrom_client_secret
         self.octopus_de_api_key = octopus_de_api_key
+        self.ews_api_key = ews_api_key
         ambiguous = None
         if not provider:
             # Unset: the one supplier whose credentials are present - even when a zone is also set,
@@ -1028,6 +1063,7 @@ class SpotPriceAPI(ComponentBase):
             "tibber": bool(self.tibber_token),
             "ostrom": bool(self.ostrom_client_id or self.ostrom_client_secret),
             "octopus_de": bool(self.octopus_de_api_key),
+            "ews": bool(self.ews_api_key),
         }
         return [name for name in SPOTPRICE_PROVIDERS if present.get(name)]
 
@@ -1037,6 +1073,8 @@ class SpotPriceAPI(ComponentBase):
             return "spotprice_ostrom_client_id and spotprice_ostrom_client_secret are both required for provider ostrom"
         if self.provider == "octopus_de" and not self.octopus_de_api_key:
             return "spotprice_octopus_de_api_key is required for provider octopus_de"
+        if self.provider == "ews" and not self.ews_api_key:
+            return "spotprice_ews_api_key is required for provider ews (ask EWS for one at api@ews-schoenau.de)"
         return None
 
     def to_float(self, value, name, default=0.0):
@@ -1275,7 +1313,7 @@ class SpotPriceAPI(ComponentBase):
         has already warned once if not) and then Energy-Charts. Provider energycharts uses Energy-Charts
         only, even if a token is present. Provider tibber, whose spot prices only feed the export side,
         behaves like entsoe when a token is set and like energycharts otherwise, as do the other
-        suppliers (ostrom, octopus_de). Provider awattar tries aWATTar first, then carries on as entsoe.
+        suppliers (ostrom, octopus_de, ews). Provider awattar tries aWATTar first, then carries on as entsoe.
         Returns (intervals, source).
         """
         sources = []
@@ -1545,6 +1583,26 @@ class SpotPriceAPI(ComponentBase):
         record_api_call("octopus_de")
         return intervals
 
+    async def fetch_ews(self, start, end):
+        """Fetch EWS's quarter-hourly gross prices (today and tomorrow). Returns intervals in cents per kWh, VAT included."""
+        if not self.ews_api_key:
+            raise SpotPriceError("EWS API key is not configured (spotprice_ews_api_key)")
+        headers = {"X-API-Key": self.ews_api_key, "Accept": "application/json"}
+        status, body = await self.supplier_request("ews", "EWS", "GET", EWS_URL, headers=headers)
+        if status != 200:
+            self.supplier_status_error("ews", "EWS", status, body, what="API key")
+        try:
+            intervals = parse_ews_json(body)
+        except SpotPriceError:
+            record_api_call("ews", False, "decode_error")
+            raise
+        intervals = [item for item in intervals if item[0] < end and item[1] > start]
+        if not intervals:
+            record_api_call("ews", False, "client_error")
+            raise SpotPriceError("EWS returned no prices for this period")
+        record_api_call("ews")
+        return intervals
+
     async def fetch_supplier(self, now):
         """Fetch the configured supplier's end-user prices over the fetch window."""
         start, end = self.fetch_window(now)
@@ -1552,6 +1610,8 @@ class SpotPriceAPI(ComponentBase):
             return await self.fetch_ostrom(start, end)
         if self.provider == "octopus_de":
             return await self.fetch_octopus_de(start, end)
+        if self.provider == "ews":
+            return await self.fetch_ews(start, end)
         raise SpotPriceError("provider {} has no supplier price source".format(self.provider))
 
     # ------------------------------------------------------------------
@@ -1980,6 +2040,7 @@ async def test_spotprice_api(args):  # pragma: no cover
         ostrom_contract_id=args.ostrom_contract_id,
         octopus_de_api_key=args.octopus_de_api_key,
         octopus_de_account=args.octopus_de_account,
+        ews_api_key=args.ews_api_key,
         markup=args.markup,
         markup_percent=args.markup_percent,
         vat=args.vat,
@@ -2015,6 +2076,7 @@ def main():  # pragma: no cover
     parser.add_argument("--ostrom-contract-id", dest="ostrom_contract_id")
     parser.add_argument("--octopus-de-api-key", dest="octopus_de_api_key")
     parser.add_argument("--octopus-de-account", dest="octopus_de_account")
+    parser.add_argument("--ews-api-key", dest="ews_api_key")
     parser.add_argument("--markup", type=float, default=0.0)
     parser.add_argument("--markup-percent", dest="markup_percent", type=float, default=None, help="Percentage of the absolute spot price added (default 3 for awattar, else 0)")
     parser.add_argument("--vat", type=float, default=0.0, help="VAT as a fraction, e.g. 0.19")

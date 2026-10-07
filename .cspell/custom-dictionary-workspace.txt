@@ -171,11 +171,13 @@ dstamp
 dstart
 dtype
 dwindow
+Dynamisch
 eauth
 echargingpile
 Eddi
 eddis
 efgh
+Elektrizitätswerke
 elif
 elinter
 eload
@@ -582,6 +584,8 @@ saverestore
 savez
 scalarstring
 scalings
+schoenau
+Schönau
 searr
 securetoken
 Segoe
@@ -684,6 +688,7 @@ timekey
 timelapse
 timenow
 timeobj
+timespec
 timestep
 timestr
 timezone
@@ -772,3 +777,4 @@ zappi
 zappis
 zcat
 zigbee
+Ökostrom

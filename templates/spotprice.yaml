@@ -19,7 +19,8 @@ pred_bat:
   # energycharts (no key needed), awattar (tado Energy / aWATTar HOURLY prices for DE-LU and AT, no key needed,
   # adds 3% of the spot price by default - add the 1.5 ct/kWh and your grid fees to spotprice_markup), or a supplier's own end-user price, used as-is with no markup or VAT added:
   # tibber (needs a Tibber token), ostrom (needs an Ostrom API client ID and secret) or
-  # octopus_de (Octopus Energy Germany, needs an API key)
+  # octopus_de (Octopus Energy Germany, needs an API key) or ews (EWS Schönau Ökostrom Dynamisch, needs an API key
+  # from api@ews-schoenau.de)
   spotprice_provider: energycharts
   # Bidding zone, e.g. DE-LU, AT, NL, BE, FR, DK1, SE3, NO1, IE-SEM (ENTSO-E only)
   spotprice_zone: DE-LU
@@ -30,6 +31,7 @@ pred_bat:
   # spotprice_ostrom_contract_id: 100523456  # only if the account has more than one active contract
   # spotprice_octopus_de_api_key: !secret octopus_de_api_key
   # spotprice_octopus_de_account: A-1234ABCD  # only if the API key can see more than one account
+  # spotprice_ews_api_key: !secret ews_api_key
 
   # Supplier markup plus any flat grid fees and levies, per kWh, excluding VAT
   spotprice_markup: 18.5
