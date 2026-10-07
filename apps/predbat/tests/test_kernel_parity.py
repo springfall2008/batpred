@@ -1163,6 +1163,54 @@ def run_net_settlement_edge_tests(my_predbat):
             # A seed from another window, or with netting off, must be ignored
             ("net60_seed_stale", 60, 25, "flat", {"soc_kw": 20.0, "net_settlement_seed": (-1, 1.2, 12.0, 0.2, 1.0)}, [], [], [], [], forecast_minutes),
             ("net0_seed_ignored", 0, 25, "flat", {"soc_kw": 20.0, "net_settlement_seed": (0, 1.2, 12.0, 0.2, 1.0)}, [], [], [], [], forecast_minutes),
+            # An Intelligent dispatch assumed gone in PV10: the car-gone import correction is netted with the
+            # rest of the window. Kept last because car_charging_from_battery is not reset between cases.
+            (
+                "net60_car_dispatch_gone",
+                60,
+                25,
+                "flat",
+                {
+                    "num_cars": 1,
+                    "car_energy_reported_load": True,
+                    "car_charging_from_battery": False,
+                    "car_charging_slots": [[{"start": 0, "end": 300, "kwh": 15.0, "average": 5, "octopus": True}], [], [], []],
+                    "car_charging_soc": [0, 0, 0, 0],
+                    "car_charging_limit": [100, 100, 100, 100],
+                    "car_charging_loss": 0.9,
+                    "soc_kw": 20.0,
+                    "rate_max": 40.0,
+                    "io_adjusted": "all",
+                },
+                [],
+                [],
+                [(120, 240)],
+                [0.0],
+                forecast_minutes,
+            ),
+            (
+                "net30_car_dispatch_gone_not_reported",
+                30,
+                10,
+                "half",
+                {
+                    "num_cars": 1,
+                    "car_energy_reported_load": False,
+                    "car_charging_from_battery": False,
+                    "car_charging_slots": [[{"start": 0, "end": 300, "kwh": 15.0, "average": 5, "octopus": True}], [], [], []],
+                    "car_charging_soc": [0, 0, 0, 0],
+                    "car_charging_limit": [100, 100, 100, 100],
+                    "car_charging_loss": 0.9,
+                    "soc_kw": 20.0,
+                    "rate_max": 40.0,
+                    "io_adjusted": "all",
+                },
+                [],
+                [],
+                [],
+                [],
+                forecast_minutes,
+            ),
         ]
         for name, window, offset, rate_profile, overrides, charge_rel, charge_limit, export_rel, export_limits, end_record in cases:
             minutes_now = FIXTURE_MINUTES_NOW + offset
