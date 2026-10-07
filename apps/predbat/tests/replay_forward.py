@@ -41,13 +41,19 @@ from prediction import Prediction
 from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models, rescan_rate_windows, apply_overrides
 
 RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
-SOC_RE = re.compile(r"Inverter 0 SoC: ([\d.]+)kWh (\d+)%.*current battery power (-?\d+)W")
-TODAY_RE = re.compile(r"Current data so far today: load ([\d.]+)kWh, import ([\d.]+)kWh, export ([\d.]+)kWh, PV ([\d.]+)kWh")
+# Inverter 0's SoC, power and percentage. Older versions wrote "SOC: 1.9kW 20% ... Current power -1134.0W"
+SOC_RE = re.compile(r"Inverter 0 S[Oo][Cc]: ([\d.]+)kWh? (\d+)%.*?(?i:current) (?:battery )?power (-?[\d.]+)W")
+# Older versions also logged the total across all inverters, which is what the plan starts from with more than one
+SOC_TOTAL_RE = re.compile(r"Found \d+ inverters totals: .*?soc_max ([\d.]+) soc ([\d.]+)")
+# Older versions: "load 5.04 kWh import 14.07 kWh export 0.0 kWh pv 0.0 kWh"
+TODAY_RE = re.compile(r"Current data so far today: load ([\d.]+) ?kWh,? import ([\d.]+) ?kWh,? export ([\d.]+) ?kWh,? (?:PV|pv) ([\d.]+) ?kWh")
 INDAY_RE = re.compile(r"in-day adjustment ([\d.]+)%")
 DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
 # The divergence fraction exactly as get_load_divergence() returns it, which the rounded percentage above can miss
 DIVERGENCE_EXACT_RE = re.compile(r"Replay input: load divergence ([\d.e+-]+|None)$")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
+# Logged on every re-plan in every version, including those that do not log the export windows filtered
+REPLAN_RE = re.compile(r"Filtered charge windows \[")
 NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), (\w+), ([\d.]+)\)")
 VERSION_RE = re.compile(r"version (\S+) currently running")
 # Lines written by Predbat versions that log the inputs a replay cannot otherwise recover
@@ -70,6 +76,12 @@ PV_EXACT_RE = re.compile(r"Replay input: PV forecast changed, per-minute kWh run
 INVERTER_INPUT_RE = re.compile(r"Replay input: inverter changed (\{.*\})$")
 # The car state the plan reads, logged only when it changes, as a dict that reads back with ast.literal_eval
 CARS_INPUT_RE = re.compile(r"Replay input: cars changed (\{.*\})$")
+# Human-readable lines older logs carry instead (since v5.1 and v7.0): each car's planned slots, and the planned and
+# charging-now flags. Read only where a run has no exact cars line.
+CAR_PLAN_RE = re.compile(r"Car (\d+) charging plan is: (\[.*\])$")
+CAR_FLAGS_RE = re.compile(r"Cars \d+ charging from battery \w+ planned (\[[^\]]*\]), charging_now (\[[^\]]*\])")
+# The Intelligent dispatch list as the API returned it, logged on a change (since v8.27.27)
+OCTOPUS_SLOTS_RE = re.compile(r"Octopus slots changed from (\[.*\])$")
 COST_RE = re.compile(r"Today's energy total net .*?, cost (-?[\d.]+)")
 IN_FORCE_RE = re.compile(r"Best export window (\[.*\])")
 # Logged just before it, as percent limits: the charge windows in force
@@ -198,6 +210,15 @@ def parse_log(path):
                 if found:
                     run["in_force"] = found.group(1)
                     continue
+            if parse_human_car_lines(run, line):
+                continue
+            if REPLAN_RE.search(line):
+                run["replan"] = True
+                continue
+            found = SOC_TOTAL_RE.search(line)
+            if found and not run.get("soc_total"):
+                run["soc_total"] = (float(found.group(1)), float(found.group(2)))
+                continue
             for regex, store in (
                 (SOC_RE, "soc"),
                 (TODAY_RE, "today"),
@@ -235,16 +256,92 @@ def parse_log(path):
     kept = []
     pending = {}
     for run in runs:
-        # Rates and cars are logged only when they change, so a change logged by a dropped run still holds for the runs after it
-        for store in ("rates", "cars", "inverter"):
+        # Rates, cars and dispatches are logged only when they change, so a change logged by a dropped run still holds for the runs after it
+        for store in ("rates", "cars", "inverter", "octopus_slots"):
             pending[store] = run.get(store) or pending.get(store)
         if run.get("soc"):
-            for store in ("rates", "cars", "inverter"):
+            for store in ("rates", "cars", "inverter", "octopus_slots"):
                 if pending.get(store) and not run.get(store):
                     run[store] = pending[store]
             pending = {}
             kept.append(run)
     return kept
+
+
+# The parsed "Replay input:" lines; a log with none of them comes from Predbat before they were added
+REPLAY_INPUT_STORES = ("state", "rates", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact")
+
+
+def parse_human_car_lines(run, line):
+    """Read the human-readable car and dispatch lines older logs carry into run, returning True if line was one.
+
+    Formats have changed over the years, so anything that does not read back is skipped rather than raised.
+    """
+    found = CAR_PLAN_RE.search(line)
+    if found:
+        plans = run.setdefault("car_plans", {})
+        # The first plan in a run is the one fetch built and the plan reads; later ones are re-logs
+        if int(found.group(1)) not in plans:
+            try:
+                plans[int(found.group(1))] = ast.literal_eval(found.group(2))
+            except (ValueError, SyntaxError):
+                pass
+        return True
+    found = CAR_FLAGS_RE.search(line)
+    if found:
+        if "car_flags" not in run:
+            try:
+                run["car_flags"] = (ast.literal_eval(found.group(1)), ast.literal_eval(found.group(2)))
+            except (ValueError, SyntaxError):
+                pass
+        return True
+    found = OCTOPUS_SLOTS_RE.search(line)
+    if found:
+        # "from <list> to <list>": both read back, so split at the " to " that leaves two valid literals
+        text = found.group(1)
+        index = text.find("] to [")
+        while index >= 0:
+            try:
+                ast.literal_eval(text[: index + 1])
+                run["octopus_slots"] = ast.literal_eval(text[index + 5 :])
+                break
+            except (ValueError, SyntaxError):
+                index = text.find("] to [", index + 1)
+        return True
+    return False
+
+
+def apply_human_car_lines(my_predbat, run):
+    """Set the car state from an older log's human-readable lines, where the run has no exact cars line."""
+    if run.get("cars"):
+        return
+    for car_n, slots in (run.get("car_plans") or {}).items():
+        if car_n < len(my_predbat.car_charging_slots or []):
+            my_predbat.car_charging_slots[car_n] = slots
+    if run.get("car_flags"):
+        planned, now = run["car_flags"]
+        if len(planned) == my_predbat.num_cars:
+            my_predbat.car_charging_planned = planned
+        if len(now) == my_predbat.num_cars:
+            my_predbat.car_charging_now = now
+
+
+def rebuild_io_rates(my_predbat):
+    """Rebuild the import rates from the logged dispatch list, as fetch does, for a log that has no rates lines.
+
+    Starts from the rates before any dispatch (rate_import_no_io, from the yaml) and adds each car's dispatches, then
+    the saving and free sessions, with the live code. Rate overrides and manual rates are not reapplied.
+    """
+    my_predbat.io_adjusted = {}
+    rates = dict(my_predbat.rate_import_no_io or {})
+    if not rates:
+        return
+    for car_n in range(my_predbat.num_cars):
+        if car_n < len(my_predbat.octopus_slots or []):
+            rates = my_predbat.rate_add_io_slots(car_n, rates, my_predbat.octopus_slots[car_n])
+    my_predbat.load_saving_slot(my_predbat.octopus_saving_slots, rates, export=False, rate_replicate=my_predbat.rate_import_replicated)
+    my_predbat.load_free_slot(my_predbat.octopus_free_slots, rates, export=False, rate_replicate=my_predbat.rate_import_replicated)
+    my_predbat.rate_import = rates
 
 
 def parse_state(text):
@@ -429,6 +526,14 @@ def roll_over_midnight(my_predbat, days=1):
     my_predbat.minutes_now -= minutes
 
 
+def run_soc(run):
+    """The battery's SoC (kWh) and percentage at a run: the all-inverter total where an older log gives one, else inverter 0's."""
+    if run.get("soc_total"):
+        soc_max, soc_kw = run["soc_total"]
+        return soc_kw, int(round(soc_kw / soc_max * 100)) if soc_max else 0
+    return float(run["soc"][0]), int(run["soc"][1])
+
+
 def apply_run(my_predbat, prev, run):
     """Move the restored instance forwards from the previous run's moment to this run's."""
     gap = run["minutes_now"] - my_predbat.minutes_now
@@ -451,12 +556,14 @@ def apply_run(my_predbat, prev, run):
     my_predbat.minutes_now = run["minutes_now"]
     my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=gap)
     my_predbat.now_utc_real = my_predbat.now_utc
-    soc_kw, soc_percent, battery_power = run["soc"]
-    my_predbat.soc_kw = float(soc_kw)
-    my_predbat.soc_percent = int(soc_percent)
+    soc_kw, soc_percent = run_soc(run)
+    my_predbat.soc_kw = soc_kw
+    my_predbat.soc_percent = soc_percent
+    # One inverter takes it all; with several, the total is shared by capacity, as the log gives only the total
+    total_max = sum(inverter.soc_max for inverter in my_predbat.inverters) if len(my_predbat.inverters) > 1 else 0
     for inverter in my_predbat.inverters:
-        inverter.soc_kw = float(soc_kw)
-        inverter.soc_percent = int(soc_percent)
+        inverter.soc_kw = soc_kw * inverter.soc_max / total_max if total_max else soc_kw
+        inverter.soc_percent = soc_percent
     # Every prediction's metric starts from the cost so far today, and the prediction's day totals start from
     # these counters; the live system recomputes both each run, so take them from the log too
     if run.get("cost"):
@@ -467,6 +574,7 @@ def apply_run(my_predbat, prev, run):
         apply_logged_rates(my_predbat, run["rates"])
     for name, value in (run.get("cars") or {}).items():
         setattr(my_predbat, name, value)
+    apply_human_car_lines(my_predbat, run)
     if run.get("pv_exact"):
         apply_logged_pv_exact(my_predbat, run["pv_exact"])
     elif run.get("pv_input"):
@@ -543,13 +651,20 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     # The yaml's own day counters stand in for the run before the first one
     yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
     install_logged_load_divergence(my_predbat)
+    if not runs:
+        raise ValueError("No runs after the yaml's time in {} that this replay can read (a run needs a 'PredBat - update at' line and an inverter SoC line)".format(log_file))
     # A log that records the inverter's state replaces the reconstruction of it from other lines
     my_predbat.replay_inverter_logged = any(run.get("inverter") for run in runs)
+    # A log with rates lines has the dispatch-adjusted rates already; an older one has them rebuilt from its dispatch list
+    my_predbat.replay_rates_logged = any(run.get("rates") for run in runs)
+    if not quiet and not any(run.get(store) for run in runs for store in REPLAY_INPUT_STORES):
+        print("Replay note: this log has no 'Replay input:' lines (Predbat before they were added), so the forecasts come from the yaml and the car, dispatches and other state from the human-readable lines. Expect approximate plans, not a match.")
     try:
         rows = replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate, quiet)
     finally:
         remove_logged_load_divergence(my_predbat)
         my_predbat.__dict__.pop("replay_inverter_logged", None)
+        my_predbat.__dict__.pop("replay_rates_logged", None)
     return rows
 
 
@@ -640,6 +755,9 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             rebuild_load_pv_models(my_predbat)
             sim_soc = simulate_soc(my_predbat, sim_soc, run["minutes_now"] - my_predbat.minutes_now, pv_kwh, load_kwh)
         apply_run(my_predbat, prev, run)
+        if run.get("octopus_slots") is not None and not my_predbat.replay_rates_logged:
+            my_predbat.octopus_slots = run["octopus_slots"]
+            rebuild_io_rates(my_predbat)
         model_car_charging_now(my_predbat)
         # Live rebuilds the load forecast every run, re-plan or not, so the instance holds what live held at each run
         refresh_load_forecast(my_predbat, run)
@@ -653,9 +771,9 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             "time": run["time"][11:16],
             # From the yaml day's midnight, like the windows below, so rows after midnight carry on from it
             "minutes_now": run["minute"],
-            "soc_percent": int(run["soc"][1]),
+            "soc_percent": run_soc(run)[1],
             "soc_sim_percent": my_predbat.soc_percent if simulate else None,
-            "replanned": run["filtered"] is not None,
+            "replanned": run["filtered"] is not None or bool(run.get("replan")),
             "logged": None,
             "replayed": None,
             "logged_charge": None,
