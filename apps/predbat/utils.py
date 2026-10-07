@@ -3304,3 +3304,16 @@ def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
     if size is not None and rate is None:
         return False
     return None
+
+
+def net_settlement_value(import_kwh, import_cost, export_kwh, export_credit):
+    """Settled cost of one net settlement window (metric_net_settlement_window_minutes).
+
+    Import and export within the window cancel out and only the winning direction is priced, at its
+    volume-weighted rate within the window - with one rate per window that is simply net kWh * rate.
+    Mirrored by the settlement block in prediction_kernel.cpp, so the arithmetic must not change
+    without a parity revision bump.
+    """
+    if import_kwh >= export_kwh:
+        return import_cost * ((import_kwh - export_kwh) / import_kwh) if import_kwh > 0 else 0.0
+    return -export_credit * ((export_kwh - import_kwh) / export_kwh)
