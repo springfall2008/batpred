@@ -4,12 +4,12 @@
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact
+from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -784,6 +784,78 @@ def test_model_car_charging_now(my_predbat):
     return 0
 
 
+OLD_FORMAT_LOG = """2024-12-27 06:55:00.000000: --------------- PredBat - update at 2024-12-27 06:55:00+00:00 with clock skew 0 minutes, minutes now 415
+2024-12-27 06:55:01.000000: Current data so far today: load 5.04 kWh import 14.07 kWh export 0.0 kWh pv 0.0 kWh
+2024-12-27 06:55:01.100000: Inverter 0 SOC: 1.9kW 20% Current charge rate 1314W Current discharge rate 2704W Current power -1134.0W Current voltage 52.64V
+2024-12-27 06:55:01.200000: Inverter 1 SOC: 0.21kW 5% Current charge rate 0W Current discharge rate 2704W Current power -120.0W Current voltage 51.31V
+2024-12-27 06:55:01.300000: Found 2 inverters totals: min reserve 0.55 current reserve 0.55 soc_max 13.696 soc 2.108 charge rate 1.31376 kW discharge rate 5.408 kW
+2024-12-27 06:55:01.400000: Cars 1 charging from battery False planned [True], charging_now [False] smart [False], max_price [0.0]p
+2024-12-27 06:55:01.500000: Car 0 charging plan is: [{'start': 1290, 'end': 1350, 'kwh': 7.658, 'average': 7.62, 'cost': 58.35, 'soc': 40.16, 'octopus': True}]
+2024-12-27 06:55:01.600000: Car 0 charging plan is: [{'start': 0, 'end': 30, 'kwh': 1.0, 'average': 7.62, 'cost': 7.6, 'soc': 50.0, 'octopus': True}]
+2024-12-27 06:55:01.700000: Octopus slots changed from [[]] to [[{'charge_in_kwh': -2.67, 'end': '2024-12-27T08:30:00+00:00', 'location': 'AT_HOME', 'source': 'smart-charge', 'start': '2024-12-27T08:00:00+00:00'}]]
+2024-12-27 06:55:02.000000: Filtered charge windows [ 27-12 08:00:00 - 27-12 08:30:00 @ 7.62p 100% ]
+2024-12-27 07:00:00.000000: --------------- PredBat - update at 2024-12-27 07:00:00+00:00 with clock skew 0 minutes, minutes now 420
+2024-12-27 07:00:01.000000: Inverter 0 SoC: 6.85kW 72%, current charge rate 3600W, current discharge rate 3780W, current battery power 366W, current battery voltage 53.3V
+"""
+
+
+def test_old_log_formats():
+    """Older logs' line formats are read: the inverter total SoC, the spaced day totals, the re-plan marker that does not
+    need the filtered export line, the car plan and flags, the dispatch list, and kW-labelled SoC lines."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(OLD_FORMAT_LOG)
+        runs = parse_log(path)
+    if len(runs) != 2:
+        print("ERROR: expected two runs from the old-format log, got {}".format(len(runs)))
+        return 1
+    first, second = runs
+    if run_soc(first) != (2.108, 15) or first.get("today") != ("5.04", "14.07", "0.0", "0.0"):
+        print("ERROR: the inverter totals and old day totals should be read, got {} {}".format(run_soc(first), first.get("today")))
+        return 1
+    if not first.get("replan") or first.get("filtered") is not None:
+        print("ERROR: a 'Filtered charge windows' line should mark a re-plan without a filtered export line")
+        return 1
+    if first.get("car_plans", {}).get(0, [{}])[0].get("start") != 1290 or first.get("car_flags") != ([True], [False]):
+        print("ERROR: the first car plan in a run and the car flags should be read, got {} {}".format(first.get("car_plans"), first.get("car_flags")))
+        return 1
+    if first.get("octopus_slots") != [[{"charge_in_kwh": -2.67, "end": "2024-12-27T08:30:00+00:00", "location": "AT_HOME", "source": "smart-charge", "start": "2024-12-27T08:00:00+00:00"}]]:
+        print("ERROR: the dispatch list should be read from the 'Octopus slots changed' line, got {}".format(first.get("octopus_slots")))
+        return 1
+    # The dispatch list is applied once and the instance keeps it, so a later run that logged no change has none
+    if run_soc(second) != (6.85, 72) or second.get("octopus_slots") is not None:
+        print("ERROR: a kW-labelled SoC line should be read, and only a run logging a change carry the dispatch list, got {} {}".format(run_soc(second), second.get("octopus_slots")))
+        return 1
+    bat = SimpleNamespace(minutes_now=400, now_utc=datetime(2024, 12, 27, 6, 40, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, num_cars=1, car_charging_slots=[[]], car_charging_planned=[False], car_charging_now=[True])
+    apply_run(bat, {"today": None, "force": None, "time": "2024-12-27 06:50:00+00:00"}, first)
+    if bat.car_charging_slots[0][0]["start"] != 1290 or bat.car_charging_planned != [True] or bat.car_charging_now != [False] or bat.soc_kw != 2.108:
+        print("ERROR: the old-format car state and total SoC should be applied, got {}".format(vars(bat)))
+        return 1
+    return 0
+
+
+def test_rebuild_io_rates(my_predbat):
+    """Rates rebuilt from a dispatch list start from the rates before any dispatch and lower the dispatch's minutes."""
+    names = ("rate_import", "rate_import_no_io", "octopus_slots", "io_adjusted", "num_cars", "octopus_saving_slots", "octopus_free_slots")
+    saved = {name: getattr(my_predbat, name) for name in names}
+    try:
+        my_predbat.num_cars = 1
+        my_predbat.rate_import_no_io = {minute: 30.0 for minute in range(-24 * 60, 48 * 60)}
+        my_predbat.octopus_saving_slots = []
+        my_predbat.octopus_free_slots = []
+        start = my_predbat.midnight_utc + timedelta(hours=22)
+        my_predbat.octopus_slots = [[{"start": start.isoformat(), "end": (start + timedelta(minutes=30)).isoformat(), "charge_in_kwh": -3.0, "source": "smart-charge", "location": "AT_HOME"}]]
+        rebuild_io_rates(my_predbat)
+        if my_predbat.rate_import[22 * 60] >= 30.0 or my_predbat.rate_import[21 * 60] != 30.0:
+            print("ERROR: the dispatch minutes should be cheaper and others unchanged, got {} {}".format(my_predbat.rate_import[22 * 60], my_predbat.rate_import[21 * 60]))
+            return 1
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return 0
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -817,4 +889,6 @@ def run_replay_forward_tests(my_predbat):
     failed += test_cars_input()
     failed += test_inverter_input()
     failed += test_model_car_charging_now(my_predbat)
+    failed += test_old_log_formats()
+    failed += test_rebuild_io_rates(my_predbat)
     return failed
