@@ -46,7 +46,7 @@ TODAY_RE = re.compile(r"Current data so far today: load ([\d.]+)kWh, import ([\d
 INDAY_RE = re.compile(r"in-day adjustment ([\d.]+)%")
 DIVERGENCE_RE = re.compile(r"Load divergence over .* divergence ([\d.]+)%")
 # The divergence fraction exactly as get_load_divergence() returns it, which the rounded percentage above can miss
-DIVERGENCE_EXACT_RE = re.compile(r"Replay input: load divergence ([\d.e+-]+)$")
+DIVERGENCE_EXACT_RE = re.compile(r"Replay input: load divergence ([\d.e+-]+|None)$")
 FILTERED_RE = re.compile(r"Export windows filtered (\[.*\])")
 NEXT_LIMIT_RE = re.compile(r"Next export window will be: .* at reserve \((\d+), (\w+), ([\d.]+)\)")
 VERSION_RE = re.compile(r"version (\S+) currently running")
@@ -480,7 +480,8 @@ def apply_run(my_predbat, prev, run):
     # at the log's 5-minute resolution - smoother than the live 1-minute history, so it comes out different.
     # Use the logged value instead; it is rounded to 2 dp of the fraction exactly as get_load_divergence returns it.
     if run.get("divergence_exact"):
-        my_predbat.replay_load_divergence = float(run["divergence_exact"])
+        # None when the live plan had divergence off, which the rounded percentage line does not show
+        my_predbat.replay_load_divergence = None if run["divergence_exact"] == "None" else float(run["divergence_exact"])
     elif run.get("divergence"):
         my_predbat.replay_load_divergence = round(float(run["divergence"]) / 100.0, 2)
     apply_logged_state(my_predbat, run.get("state"))
