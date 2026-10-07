@@ -983,6 +983,7 @@ class Fetch:
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(self.num_cars)]
         self.cost_today_sofar = 0
+        self.net_settlement_seed = None
         self.carbon_today_sofar = 0
         self.import_today = {}
         self.export_today = {}
@@ -3330,6 +3331,19 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
+        net_window_arg = self.get_arg("metric_net_settlement_window_minutes", 0) or 0
+        try:
+            net_window = float(net_window_arg)
+        except (TypeError, ValueError):
+            net_window = -1.0
+        # Windows must tile the day in whole prediction steps, so the plan's windows (counted on past
+        # midnight) and today_cost's (restarting at midnight) line up with each other and with the bill
+        if net_window != 0 and (net_window < 0 or not net_window.is_integer() or int(net_window) % PREDICT_STEP or (24 * 60) % int(net_window)):
+            self.log("Warn: metric_net_settlement_window_minutes {} must be a multiple of {} that divides 1440 (e.g. 15, 30 or 60) - net settlement disabled".format(net_window_arg, PREDICT_STEP))
+            net_window = 0
+        self.metric_net_settlement_window_minutes = int(net_window)
+        if self.metric_net_settlement_window_minutes:
+            self.log("Net settlement of import/export enabled over {} minute windows".format(self.metric_net_settlement_window_minutes))
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")

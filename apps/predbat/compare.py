@@ -377,6 +377,7 @@ class Compare:
 
         # Reset totals
         my_predbat.cost_today_sofar = 0
+        my_predbat.net_settlement_seed = None
         my_predbat.carbon_today_sofar = 0
         my_predbat.iboost_today = 0
         my_predbat.import_today_now = 0
@@ -582,6 +583,7 @@ class Compare:
         save_export_limits_best = my_predbat.export_limits_best
         save_charge_limit_best = my_predbat.charge_limit_best
         save_cost_today_sofar = my_predbat.cost_today_sofar
+        save_net_settlement_seed = my_predbat.net_settlement_seed
         save_carbon_today_sofar = my_predbat.carbon_today_sofar
         save_iboost_today = my_predbat.iboost_today
         save_iboost_plan = my_predbat.iboost_plan
@@ -693,6 +695,7 @@ class Compare:
             my_predbat.export_limits_best = save_export_limits_best
             my_predbat.charge_limit_best = save_charge_limit_best
             my_predbat.cost_today_sofar = save_cost_today_sofar
+            my_predbat.net_settlement_seed = save_net_settlement_seed
             my_predbat.carbon_today_sofar = save_carbon_today_sofar
             my_predbat.iboost_today = save_iboost_today
             my_predbat.iboost_plan = save_iboost_plan

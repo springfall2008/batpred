@@ -600,6 +600,34 @@ If a date is specified then the rate override applies to that specific date, oth
 - **rate** is an optional figure in pence to override the rate for the specific period
 - **rate_increment** is optional and is the number of pence to add (or subtract) to the reported energy rates during this period
 
+## Net settlement of import and export
+
+Some tariffs do not bill every import and every export separately. Instead they net import against export within a fixed
+settlement period, typically each clock hour or quarter hour, and only the net direction is charged or paid. For example, the
+hourly balancing used in Poland for households with their own generation works this way: if you import 1 kWh and export 0.4 kWh in the same hour you pay for
+0.6 kWh of import and nothing is paid for the export.
+
+By default Predbat prices every import and export independently. To model a settlement period, set
+**metric_net_settlement_window_minutes** in `apps.yaml` to its length in minutes:
+
+```yaml
+  metric_net_settlement_window_minutes: 60
+```
+
+- `0` (the default, or leaving the setting out) disables netting and gives exactly the same results as before.
+- The value must be a multiple of 5 that divides a day evenly (e.g. 15, 30 or 60), otherwise Predbat logs a warning and disables netting.
+- Windows are aligned to the clock from midnight, so `60` settles 10:00-11:00, 11:00-12:00 and so on.
+
+Within each window Predbat adds up the import and export energy. If you imported more than you exported, the net amount is
+charged at the import rate; otherwise the net amount is paid at the export rate. If the rate changes within a window, the average
+rate of the winning direction (weighted by energy) is used.
+
+Only the cost is netted. The planned import and export energy, carbon figures, standing charge and car charging premiums are
+unchanged. The optimiser plans against the netted cost, and **predbat.cost_today** reports the netted cost of the energy metered so
+far today (the attribute `cost_net_settlement_adjust` shows the difference from the gross cost). Import and export already metered
+in the current window are carried into the plan, so the rest of the window is netted against them. **predbat.cost_hour** is a
+rolling 60 minutes that spans two settlement windows, so it stays gross.
+
 ## Rate offsets
 
 If you are on an Agile or Tracker tariff you can tune future unknown energy rates by adjusting the entities **input_number.predbat_metric_future_rate_offset_import** (*expert mode*)
