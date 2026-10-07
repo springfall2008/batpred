@@ -1363,7 +1363,8 @@ class OctopusAPI(ComponentBase):
             # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
             # first, because a joined Happy Hour takes its event type from this list.
             if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
-                self.log("OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code))
+                # Logged once an hour per event: the event list is re-read every poll
+                self.log_gate.log(self.log, "happy-hour", code, ["OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code)], None)
                 continue
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
@@ -3845,6 +3846,7 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
+        slot_lines = []  # One log line per half hour of each slot, logged after the loop only when the list changes
         # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
         # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
         # what the tariff charged, and today's cost is built from them. None when the car is not cancelled.
@@ -3939,11 +3941,15 @@ class Octopus:
                                 rates[minute] = assumed_price
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
-                            self.log(
+                            slot_lines.append(
                                 "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
+
+        # The slot list is re-derived every plan but rarely changes, so log it only when it does, and at least hourly
+        if slot_lines:
+            self.io_slot_log_gate.log(self.log, ("slots", car_n), "\n".join(slot_lines), slot_lines, lambda when: "Octopus: Intelligent slots for car {} unchanged since logged in full at {}, {} half-hour slot lines".format(car_n, when, len(slot_lines)))
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):

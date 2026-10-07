@@ -65,6 +65,7 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    REPEAT_FULL_LOG_SECONDS,
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
@@ -77,6 +78,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    RepeatLogGate,
     minutes_since_yesterday,
     minutes_since_midnight,
     dp1,
@@ -491,6 +493,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_power = 0
         self.car_charging_power_configured = False
         self.io_adjusted = {}
+        # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)
+        self.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
         self.current_charge_limit = 0.0
         self.current_charge_limit_kwh = 0.0
         self.inverter_limit = 0.0
