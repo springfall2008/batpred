@@ -7,6 +7,9 @@ import re
 
 SAVED = (
     "pv_light_dark",
+    "iboost_today",
+    "load_forecast_only",
+    "dynamic_load_baseline",
     "pv_forecast_minute",
     "pv_forecast_minute10",
     "pv_forecast_minute90",
@@ -120,9 +123,11 @@ def test_load_forecast_logged(my_predbat):
     if lines[0].count("[") - 1 != steps:
         print("ERROR: the line should cover every step the plan builds ({}), got {}".format(steps, lines[0].count("[") - 1))
         return 1
+    # No forecast is a state the replay must follow too, so it is logged (once - see test_empty_load_forecast_logged_on_change)
     my_predbat.load_forecast = {}
-    if capture(my_predbat, my_predbat.log_replay_load_forecast):
-        print("ERROR: no load forecast should log nothing")
+    my_predbat.replay_load_empty = None
+    if capture(my_predbat, my_predbat.log_replay_load_forecast) != ["Replay input: load forecast empty"]:
+        print("ERROR: no load forecast should be logged as empty")
         return 1
     return 0
 
@@ -238,8 +243,10 @@ def test_state_logged(my_predbat):
     my_predbat.charge_rate_now = 25 / 60000.0
     my_predbat.discharge_rate_now = 0.09625
     my_predbat.battery_temperature = 24
+    my_predbat.iboost_today = 1.25
+    my_predbat.load_forecast_only = True
     lines = capture(my_predbat, my_predbat.log_replay_state)
-    expected = "Replay input: state soc_kw 4.104 soc_max 18.08 inday 0.8347826086956521 cost_today 54.2213 load_today 3.09 import_today 17.05 export_today 7.64 pv_today None charge_rate_now {!r} discharge_rate_now 0.09625 battery_temperature 24.0".format(25 / 60000.0)
+    expected = "Replay input: state soc_kw 4.104 soc_max 18.08 inday 0.8347826086956521 cost_today 54.2213 load_today 3.09 import_today 17.05 export_today 7.64 pv_today None charge_rate_now {!r} discharge_rate_now 0.09625 battery_temperature 24.0 iboost_today 1.25 load_forecast_only 1.0".format(25 / 60000.0)
     if lines != [expected]:
         print("ERROR: state line wrong:\n  got      {}\n  expected {}".format(lines, expected))
         return 1
@@ -342,6 +349,44 @@ def test_logging_never_raises(my_predbat):
     return 0
 
 
+def test_empty_load_forecast_logged_on_change(my_predbat):
+    """An empty load forecast is logged when the forecast becomes empty, not every cycle, and again after it returns."""
+    my_predbat.replay_load_empty = None
+    my_predbat.load_forecast = {}
+    first = capture(my_predbat, my_predbat.log_replay_load_forecast)
+    second = capture(my_predbat, my_predbat.log_replay_load_forecast)
+    if first != ["Replay input: load forecast empty"] or second:
+        print("ERROR: an empty forecast should be logged once, got {} then {}".format(first, second))
+        return 1
+    my_predbat.minutes_now = 9 * 60
+    my_predbat.forecast_minutes = 10
+    my_predbat.load_forecast = {minute: minute / 10000.0 for minute in range(0, 24 * 60)}
+    capture(my_predbat, my_predbat.log_replay_load_forecast)
+    my_predbat.load_forecast = {}
+    if capture(my_predbat, my_predbat.log_replay_load_forecast) != ["Replay input: load forecast empty"]:
+        print("ERROR: a forecast that empties again should be logged again")
+        return 1
+    return 0
+
+
+def test_baseline_logged_on_change(my_predbat):
+    """The dynamic load baseline is logged as a dict that reads back exactly, and only when it changes."""
+    my_predbat.replay_baseline_text = None
+    my_predbat.dynamic_load_baseline = {600: 0.0625, 605: 0.0625}
+    lines = capture(my_predbat, my_predbat.log_replay_baseline)
+    if len(lines) != 1 or ast.literal_eval(lines[0].split("baseline ", 1)[1]) != {600: 0.0625, 605: 0.0625}:
+        print("ERROR: expected one baseline line that reads back, got {}".format(lines))
+        return 1
+    if capture(my_predbat, my_predbat.log_replay_baseline):
+        print("ERROR: an unchanged baseline should not be logged again")
+        return 1
+    my_predbat.dynamic_load_baseline = {}
+    if capture(my_predbat, my_predbat.log_replay_baseline) != ["Replay input: dynamic load baseline {}"]:
+        print("ERROR: a baseline that clears should be logged")
+        return 1
+    return 0
+
+
 def test_unreadable_state_warns_once(my_predbat):
     """A value whose repr does not read back warns once per change, not on every cycle."""
     my_predbat.num_cars = 1
@@ -371,7 +416,7 @@ def test_comparison_runs_not_logged(my_predbat):
 def run_log_replay_inputs_tests(my_predbat):
     """Run the replay-input logging tests, restoring the shared fixture afterwards."""
     missing = object()
-    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_cars_text", "replay_inverter_text")}
+    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text")}
     failed = 0
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
@@ -385,6 +430,8 @@ def run_log_replay_inputs_tests(my_predbat):
         failed += test_inverter_logged_on_change(my_predbat)
         failed += test_logging_never_raises(my_predbat)
         failed += test_unreadable_state_warns_once(my_predbat)
+        failed += test_empty_load_forecast_logged_on_change(my_predbat)
+        failed += test_baseline_logged_on_change(my_predbat)
         failed += test_comparison_runs_not_logged(my_predbat)
     finally:
         for key, value in saved.items():

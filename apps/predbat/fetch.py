@@ -1033,7 +1033,11 @@ class Fetch:
         """
         try:
             if not self.load_forecast:
+                # The plan then uses the load history alone, so a replay must drop any forecast it still holds.
+                # Logged when the forecast becomes empty, not every cycle, as many setups have no forecast at all.
+                self.log_replay_changed("replay_load_empty", lambda: True, lambda: "Replay input: load forecast empty", "load forecast")
                 return
+            self.replay_load_empty = None
             start = self.minutes_now
             steps = list(range(start, start + self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP))
             # The value at each step, the minute after it, and the start of the step after the last
@@ -1126,6 +1130,16 @@ class Fetch:
 
         self.log_replay_changed(attribute, lambda: repr(state), build, label + " state")
 
+    def log_replay_baseline(self):
+        """Log the dynamic load baseline the plan will use, when it changes.
+
+        dynamic_load() raises the load in the current slot or two to the load just measured when it is high, and
+        step_data_history() adds that floor to all three load scenarios, so a replay needs it as it was. Usually
+        empty. Logged as a dict of minute to kWh whose repr reads back exactly.
+        """
+        baseline = dict(self.dynamic_load_baseline or {})
+        self.log_replay_changed("replay_baseline_text", lambda: repr(baseline), lambda: "Replay input: dynamic load baseline {!r}".format(baseline), "dynamic load baseline")
+
     def log_replay_state(self):
         """Log the values the plan starts from this cycle at full precision.
 
@@ -1140,7 +1154,7 @@ class Fetch:
                 return None if value is None else repr(float(value))
 
             self.log(
-                "Replay input: state soc_kw {} soc_max {} inday {} cost_today {} load_today {} import_today {} export_today {} pv_today {} charge_rate_now {} discharge_rate_now {} battery_temperature {}".format(
+                "Replay input: state soc_kw {} soc_max {} inday {} cost_today {} load_today {} import_today {} export_today {} pv_today {} charge_rate_now {} discharge_rate_now {} battery_temperature {} iboost_today {} load_forecast_only {}".format(
                     exact(self.soc_kw),
                     exact(self.soc_max),
                     exact(self.load_inday_adjustment),
@@ -1152,6 +1166,8 @@ class Fetch:
                     exact(self.charge_rate_now),
                     exact(self.discharge_rate_now),
                     exact(self.battery_temperature),
+                    exact(self.iboost_today),
+                    exact(self.load_forecast_only),
                 )
             )
         except Exception as e:
