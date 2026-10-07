@@ -582,6 +582,8 @@ COMPONENT_LIST = {
             "octopus_de_api_key": {"required": False, "secret": True, "config": "spotprice_octopus_de_api_key"},
             "octopus_de_account": {"required": False, "secret": True, "config": "spotprice_octopus_de_account"},
             "markup": {"required": False, "config": "spotprice_markup", "default": 0.0},
+            # No registry default: when unset, initialize() uses the provider's published percentage (3 for awattar), else 0
+            "markup_percent": {"required": False, "config": "spotprice_markup_percent"},
             "vat": {"required": False, "config": "spotprice_vat", "default": 0.0},
             "charge_zones": {"required": False, "config": "spotprice_charge_zones", "default": []},
             "exchange_rate": {"required": False, "config": "spotprice_exchange_rate", "default": 1.0},

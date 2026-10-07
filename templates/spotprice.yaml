@@ -4,7 +4,8 @@
 # spot-linked tariff, without needing a supplier-specific integration. Merge the keys below into your
 # existing pred_bat section in apps.yaml - this file is not a complete configuration on its own.
 #
-# import rate = (spot EUR/MWh / 10 + spotprice_markup + charge zone) x (1 + spotprice_vat)
+# import rate = (spot + |spot| x spotprice_markup_percent / 100 + spotprice_markup + charge zone) x (1 + spotprice_vat)
+# where spot = spot EUR/MWh / 10; spotprice_markup_percent is 0 unless set (3 for awattar)
 #
 # Markup, charge zones and export rates are in your minor currency unit per kWh (e.g. euro cents)
 # and exclude VAT. See docs/components.md for every option.
@@ -15,7 +16,8 @@ pred_bat:
     - 'c'
 
   # Price source (default energycharts): entsoe (needs a free ENTSO-E token, falls back to Energy-Charts),
-  # energycharts (no key needed), or a supplier's own end-user price, used as-is with no markup or VAT added:
+  # energycharts (no key needed), awattar (tado Energy / aWATTar HOURLY prices for DE-LU and AT, no key needed,
+  # adds 3% of the spot price by default - add the 1.5 ct/kWh and your grid fees to spotprice_markup), or a supplier's own end-user price, used as-is with no markup or VAT added:
   # tibber (needs a Tibber token), ostrom (needs an Ostrom API client ID and secret) or
   # octopus_de (Octopus Energy Germany, needs an API key)
   spotprice_provider: energycharts
@@ -31,6 +33,8 @@ pred_bat:
 
   # Supplier markup plus any flat grid fees and levies, per kWh, excluding VAT
   spotprice_markup: 18.5
+  # Optional percentage of the absolute spot price, added before VAT (defaults to 3 for awattar, else 0)
+  # spotprice_markup_percent: 3
   # VAT as a fraction (0.19 = 19%)
   spotprice_vat: 0.19
 

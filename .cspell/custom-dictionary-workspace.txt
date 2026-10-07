@@ -43,6 +43,7 @@ autoflake
 automations
 autopep
 autoupdate
+awattar
 axvline
 axvspan
 Backfeed
@@ -375,6 +376,8 @@ mallopt
 malo
 malos
 markdownlint
+marketdata
+marketprice
 matplotlib
 maximise
 maxrss
@@ -656,6 +659,7 @@ syscmd
 sysdn
 syssn
 tabindex
+tado
 tasmota
 TCWORLD
 tdata

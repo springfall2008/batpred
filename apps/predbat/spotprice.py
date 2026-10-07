@@ -16,15 +16,19 @@ day, e.g. Germany's section 14a module 3 network charges), with VAT on top. This
 that price from the spot market itself, so it works for any supplier with a spot-linked tariff
 rather than needing a per-supplier integration:
 
-    import rate = (spot EUR/MWh x exchange_rate / 10 + markup + charge_zone(t)) x (1 + vat)
+    import rate = (spot + |spot| x markup_percent / 100 + markup + charge_zone(t)) x (1 + vat)
 
-which, with exchange_rate 1, is in euro cents per kWh. Markup and charge zones are entered in the
+where spot = spot EUR/MWh x exchange_rate / 10, which, with exchange_rate 1, is in euro cents per kWh. Markup and charge zones are entered in the
 same minor currency units per kWh and exclude VAT; vat is a fraction (0.19 for 19%).
 
 Price sources, chosen by spotprice_provider:
   - entsoe:       ENTSO-E Transparency Platform, document A44 (day-ahead prices). Needs a free
                   security token. Falls back to Energy-Charts when it fails.
   - energycharts: Fraunhofer ISE Energy-Charts, no key needed.
+  - awattar:      The aWATTar market data API (api.awattar.de / api.awattar.at), no key needed - the
+                  hourly spot prices behind tado Energy's (formerly aWATTar's) HOURLY tariff for
+                  DE-LU and AT. Falls back to ENTSO-E (with a token) and then Energy-Charts. Adds
+                  spotprice_markup_percent (default 3 here) of the absolute spot price on top.
   - tibber:       Tibber's own end-user price (already includes markup, grid fees and VAT), read
                   with a personal access token. No markup or VAT is added on top.
   - ostrom:       Ostrom's end-user price for the contract's postcode (spot plus taxes, levies and
@@ -63,9 +67,9 @@ from const import TIME_FORMAT_HA
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
-SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom", "octopus_de")
+SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom", "octopus_de", "awattar")
 # Providers whose import price is the market spot price plus the configured markup, charge zones and VAT
-SPOT_PROVIDERS = ("entsoe", "energycharts")
+SPOT_PROVIDERS = ("entsoe", "energycharts", "awattar")
 # Suppliers read through the generic "supplier" source: their API gives the end-user price in minor
 # units per kWh with markup, grid fees, levies and VAT already in, so it is used as-is
 SUPPLIER_PROVIDERS = ("ostrom", "octopus_de")
@@ -75,6 +79,12 @@ SPOTPRICE_EXPORT_MODES = ("none", "fixed", "spot")
 
 ENTSOE_URL = "https://web-api.tp.entsoe.eu/api"
 ENERGYCHARTS_URL = "https://api.energy-charts.info/price"
+# aWATTar's public market data API, one host per country. tado Energy's HOURLY tariff (the former
+# aWATTar tariff) is billed on these hourly prices.
+AWATTAR_URLS = {"DE-LU": "https://api.awattar.de/v1/marketdata", "AT": "https://api.awattar.at/v1/marketdata"}
+# The HOURLY tariff's published percentage markup, charged on the absolute spot price
+AWATTAR_MARKUP_PERCENT = 3.0
+SOURCE_LABELS = {"entsoe": "ENTSO-E", "energycharts": "Energy-Charts", "awattar": "aWATTar"}
 TIBBER_URL = "https://api.tibber.com/v1-beta/gql"
 OSTROM_AUTH_URL = "https://auth.production.ostrom-api.io/oauth2/token"
 OSTROM_API_URL = "https://production.ostrom-api.io"
@@ -445,6 +455,30 @@ def parse_energycharts_json(data):
     return intervals_from_starts(pairs)
 
 
+@parse_errors_as("aWATTar")
+def parse_awattar_json(data):
+    """Parse an aWATTar /v1/marketdata response into (start, end, price per MWh) UTC intervals.
+
+    Every entry carries its own start and end (milliseconds since the epoch), so intervals keep the
+    length aWATTar gives them. Only prices in EUR/MWh are accepted.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        raise SpotPriceError("aWATTar returned an unexpected response")
+    intervals = []
+    for entry in data["data"]:
+        unit = str(entry.get("unit") or "Eur/MWh").replace(" ", "").lower()
+        if unit != "eur/mwh":
+            raise SpotPriceError("aWATTar returned prices in {}, expected Eur/MWh".format(entry.get("unit")))
+        if entry.get("marketprice") is None:
+            continue
+        start = datetime.fromtimestamp(int(entry["start_timestamp"]) / 1000, tz=timezone.utc)
+        end = datetime.fromtimestamp(int(entry["end_timestamp"]) / 1000, tz=timezone.utc)
+        if end <= start:
+            raise SpotPriceError("aWATTar returned an interval ending before it starts")
+        intervals.append((start, end, float(entry["marketprice"])))
+    return resolve_overlaps([(0, 0, intervals)])
+
+
 @parse_errors_as("Tibber")
 def parse_tibber_json(data, home_id=None, resolution_minutes=None):
     """Parse a Tibber priceInfo response into (start, end, total per kWh in major units) UTC intervals.
@@ -811,9 +845,14 @@ def charge_zone_rate(zones, local_time):
     return 0.0
 
 
-def spot_import_rate(spot_mwh, markup, zone_charge, vat, exchange_rate=1.0):
-    """Price formula: (spot per MWh x exchange_rate / 10 + markup + zone_charge) x (1 + vat), minor units per kWh; vat is a fraction."""
-    return round((spot_mwh * exchange_rate / 10.0 + markup + zone_charge) * (1.0 + vat), 4)
+def spot_import_rate(spot_mwh, markup, zone_charge, vat, exchange_rate=1.0, markup_percent=0.0):
+    """Price formula: (spot + |spot| x markup_percent / 100 + markup + zone_charge) x (1 + vat), minor units per kWh.
+
+    spot is the price per MWh x exchange_rate / 10; vat is a fraction. The percentage is charged on
+    the absolute spot price, so it is a cost in negative hours too.
+    """
+    spot = spot_mwh * exchange_rate / 10.0
+    return round((spot + abs(spot) * markup_percent / 100.0 + markup + zone_charge) * (1.0 + vat), 4)
 
 
 def spot_export_rate(spot_mwh, export_markup, exchange_rate=1.0):
@@ -858,6 +897,7 @@ class SpotPriceAPI(ComponentBase):
         octopus_de_api_key=None,
         octopus_de_account=None,
         markup=0.0,
+        markup_percent=None,
         vat=0.0,
         charge_zones=None,
         exchange_rate=1.0,
@@ -893,6 +933,8 @@ class SpotPriceAPI(ComponentBase):
         self.ostrom_contract_id = ostrom_contract_id
         self.octopus_de_account = str(octopus_de_account).strip() if octopus_de_account else None
         self.markup = self.to_float(markup, "spotprice_markup")
+        # Unset: the published percentage of the provider's tariff (aWATTar/tado HOURLY), else none
+        self.markup_percent = self.to_float(markup_percent, "spotprice_markup_percent", default=AWATTAR_MARKUP_PERCENT if self.provider == "awattar" else 0.0)
         self.vat = self.to_float(vat, "spotprice_vat")
         if self.vat >= 1:
             # spotprice_vat is a fraction (0.19); 1 or more can only have meant a percentage (1 = 1%, not 100%)
@@ -909,6 +951,8 @@ class SpotPriceAPI(ComponentBase):
         self.export_zero_on_negative = bool(export_zero_on_negative)
         self.automatic = bool(automatic)
 
+        if self.provider == "awattar" and (self.zone or self.zone_eic) and self.zone not in AWATTAR_URLS:
+            self.log("Warn: SpotPrice: aWATTar publishes prices for {} only, not {} - using {}".format(" and ".join(AWATTAR_URLS), self.zone or self.zone_eic, "ENTSO-E" if self.entsoe_token else "Energy-Charts"))
         if self.provider == "entsoe" and not self.entsoe_token and (self.energycharts_covers_zone() or not (self.zone or self.zone_eic)):
             # Only where Energy-Charts can actually stand in; an ENTSO-E-only zone gets the config error below instead
             self.log("Warn: SpotPrice: spotprice_provider is entsoe but spotprice_entsoe_token is not set - using Energy-Charts")
@@ -932,7 +976,7 @@ class SpotPriceAPI(ComponentBase):
         # When ENTSO-E is not usable either there is nothing to fetch, ever: say so once and stop,
         # rather than failing every refresh with "Energy-Charts does not publish zone ...".
         self.config_error = None
-        entsoe_usable = bool(self.entsoe_token) and (self.provider == "entsoe" or self.provider in ALL_IN_PROVIDERS)
+        entsoe_usable = bool(self.entsoe_token) and self.provider != "energycharts"
         if self.needs_spot() and (self.zone or self.zone_eic) and not self.energycharts_covers_zone() and not entsoe_usable:
             zone_name = self.zone or self.zone_eic
             if self.provider in ALL_IN_PROVIDERS:
@@ -1192,17 +1236,52 @@ class SpotPriceAPI(ComponentBase):
         record_api_call("energycharts")
         return intervals
 
+    async def fetch_awattar(self, start, end):
+        """Fetch hourly spot prices from aWATTar for [start, end). Returns intervals or raises SpotPriceError."""
+        url = AWATTAR_URLS.get(self.zone)
+        if not url:
+            raise SpotPriceError("aWATTar does not publish zone {}".format(self.zone or self.zone_eic))
+        params = {"start": int(start.timestamp() * 1000), "end": int(end.timestamp() * 1000)}
+        try:
+            status, body = await self.http_get(url, params, expect_json=True)
+        except NETWORK_ERRORS as e:
+            record_api_call("awattar", False, "connection_error")
+            raise SpotPriceError("aWATTar request failed: {}".format(e))
+        except Exception as e:
+            record_api_call("awattar", False, "decode_error")
+            raise SpotPriceError("aWATTar response could not be read ({}: {})".format(type(e).__name__, e))
+        if status == 429:
+            record_api_call("awattar", False, "rate_limit")
+            raise SpotPriceError("aWATTar rate limit hit (HTTP 429)")
+        if status != 200:
+            record_api_call("awattar", False, "server_error" if status >= 500 else "client_error")
+            raise SpotPriceError("aWATTar returned HTTP {}".format(status))
+        try:
+            intervals = parse_awattar_json(body)
+        except SpotPriceError:
+            record_api_call("awattar", False, "decode_error")
+            raise
+        intervals = [item for item in intervals if item[0] < end and item[1] > start]
+        if not intervals:
+            record_api_call("awattar", False, "client_error")
+            raise SpotPriceError("aWATTar has no prices for {} in this period".format(self.zone))
+        record_api_call("awattar")
+        return intervals
+
     async def fetch_spot(self, start, end):
-        """Fetch spot prices from the configured source, falling back from ENTSO-E to Energy-Charts.
+        """Fetch spot prices from the configured source, falling back from aWATTar to ENTSO-E to Energy-Charts.
 
         The fallback only runs one way. Provider entsoe tries ENTSO-E (when a token is set - initialize()
         has already warned once if not) and then Energy-Charts. Provider energycharts uses Energy-Charts
         only, even if a token is present. Provider tibber, whose spot prices only feed the export side,
         behaves like entsoe when a token is set and like energycharts otherwise, as do the other
-        suppliers (ostrom, octopus_de). Returns (intervals, source).
+        suppliers (ostrom, octopus_de). Provider awattar tries aWATTar first, then carries on as entsoe.
+        Returns (intervals, source).
         """
         sources = []
-        if self.entsoe_token and (self.provider == "entsoe" or self.provider in ALL_IN_PROVIDERS):
+        if self.provider == "awattar" and self.zone in AWATTAR_URLS:
+            sources.append(("awattar", self.fetch_awattar))
+        if self.entsoe_token and self.provider != "energycharts":
             sources.append(("entsoe", self.fetch_entsoe))
         if self.energycharts_covers_zone():
             # Energy-Charts does not publish every zone (IE-SEM); there the ENTSO-E error stands alone
@@ -1214,12 +1293,13 @@ class SpotPriceAPI(ComponentBase):
             except SpotPriceError as e:
                 errors.append(str(e))
                 continue
-            if name == "entsoe" and self.entsoe_fallback_logged:
-                self.log("SpotPrice: ENTSO-E is working again")
+            primary = SOURCE_LABELS[sources[0][0]]
+            if name == sources[0][0] and self.entsoe_fallback_logged:
+                self.log("SpotPrice: {} is working again".format(primary))
                 self.entsoe_fallback_logged = False
             elif errors and not self.entsoe_fallback_logged:
-                # Logged once per outage rather than on every refresh while ENTSO-E stays down
-                self.log("Warn: SpotPrice: {}, using {} until ENTSO-E recovers".format("; ".join(errors), name))
+                # Logged once per outage rather than on every refresh while the first source stays down
+                self.log("Warn: SpotPrice: {}, using {} until {} recovers".format("; ".join(errors), name, primary))
                 self.entsoe_fallback_logged = True
             return intervals, name
         raise SpotPriceError("; ".join(errors))
@@ -1489,7 +1569,7 @@ class SpotPriceAPI(ComponentBase):
         rates = []
         for start, end, spot in self.spot_intervals:
             zone_charge = charge_zone_rate(self.charge_zones, self.to_local(start)) if self.charge_zones else 0.0
-            rates.append((start, end, spot_import_rate(spot, self.markup, zone_charge, self.vat, self.exchange_rate)))
+            rates.append((start, end, spot_import_rate(spot, self.markup, zone_charge, self.vat, self.exchange_rate, self.markup_percent)))
         return rates
 
     def build_export_rates(self):
@@ -1901,6 +1981,7 @@ async def test_spotprice_api(args):  # pragma: no cover
         octopus_de_api_key=args.octopus_de_api_key,
         octopus_de_account=args.octopus_de_account,
         markup=args.markup,
+        markup_percent=args.markup_percent,
         vat=args.vat,
         export_mode=args.export_mode,
         export_rate=args.export_rate,
@@ -1935,6 +2016,7 @@ def main():  # pragma: no cover
     parser.add_argument("--octopus-de-api-key", dest="octopus_de_api_key")
     parser.add_argument("--octopus-de-account", dest="octopus_de_account")
     parser.add_argument("--markup", type=float, default=0.0)
+    parser.add_argument("--markup-percent", dest="markup_percent", type=float, default=None, help="Percentage of the absolute spot price added (default 3 for awattar, else 0)")
     parser.add_argument("--vat", type=float, default=0.0, help="VAT as a fraction, e.g. 0.19")
     parser.add_argument("--export-mode", dest="export_mode", default="none", choices=SPOTPRICE_EXPORT_MODES)
     parser.add_argument("--export-rate", dest="export_rate", type=float, default=0.0)

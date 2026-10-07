@@ -1861,6 +1861,138 @@ def test_spotprice_octopus_de_inference_and_config(my_predbat=None):
     assert jwt_expiry("not-a-jwt") is None
 
 
+# ---------------------------------------------------------------------------
+# aWATTar / tado Energy
+# ---------------------------------------------------------------------------
+
+
+def awattar_reply(start="2025-05-01T22:00Z", hours=48, price=100.0, unit="Eur/MWh"):
+    """An aWATTar /v1/marketdata reply: hourly entries with millisecond start/end timestamps."""
+    first = int(dt(start).timestamp() * 1000)
+    return {"object": "list", "data": [{"start_timestamp": first + 3600000 * h, "end_timestamp": first + 3600000 * (h + 1), "marketprice": price + h, "unit": unit} for h in range(hours)], "url": "/de/v1/marketdata"}
+
+
+def test_spotprice_awattar_parse_and_fetch(my_predbat=None):
+    """aWATTar's hourly EUR/MWh prices parse with their own start/end, are asked for by zone host and millisecond window, and failures map to SpotPriceError categories."""
+    import spotprice as spotprice_module
+    from spotprice import parse_awattar_json
+
+    intervals = parse_awattar_json(awattar_reply(hours=3))
+    assert intervals == [(dt("2025-05-01T22:00Z"), dt("2025-05-01T23:00Z"), 100.0), (dt("2025-05-01T23:00Z"), dt("2025-05-02T00:00Z"), 101.0), (dt("2025-05-02T00:00Z"), dt("2025-05-02T01:00Z"), 102.0)]
+    with_null = awattar_reply(hours=3)
+    with_null["data"][1]["marketprice"] = None
+    assert [start for start, _e, _v in parse_awattar_json(with_null)] == [dt("2025-05-01T22:00Z"), dt("2025-05-02T00:00Z")]
+    for bad in (awattar_reply(hours=1, unit="Eur/kWh"), {"data": [{"start_timestamp": "x", "end_timestamp": 1, "marketprice": 1}]}, {"data": [{"start_timestamp": 2000, "end_timestamp": 1000, "marketprice": 1}]}, {"object": "list"}, None):
+        try:
+            parse_awattar_json(bad)
+        except SpotPriceError:
+            continue
+        raise AssertionError("expected SpotPriceError for {}".format(bad))
+
+    seen = []
+    for zone, host in (("DE-LU", "https://api.awattar.de/v1/marketdata"), ("AT", "https://api.awattar.at/v1/marketdata")):
+        api = make_api(provider="awattar", entsoe_token=None, zone=zone)
+
+        async def get(url, params, expect_json):
+            """Return the fixture."""
+            seen.append((url, params))
+            return 200, awattar_reply()
+
+        api.http_get = get
+        fetched = run(api.fetch_awattar(dt("2025-05-01T22:00Z"), dt("2025-05-02T22:00Z")))
+        assert len(fetched) == 24, len(fetched)  # trimmed to the window
+        assert seen[-1] == (host, {"start": int(dt("2025-05-01T22:00Z").timestamp() * 1000), "end": int(dt("2025-05-02T22:00Z").timestamp() * 1000)}), seen[-1]
+
+    recorded = []
+    original = spotprice_module.record_api_call
+    spotprice_module.record_api_call = lambda service, success=True, reason=None: recorded.append((service, success, reason))
+    try:
+        for reply, reason in (((429, None), "rate_limit"), ((503, None), "server_error"), ((404, None), "client_error"), ((200, {"data": []}), "client_error"), ((200, {"nope": 1}), "decode_error")):
+            api = make_api(provider="awattar", entsoe_token=None, zone="DE-LU")
+
+            async def bad_get(url, params, expect_json, reply=reply):
+                """Return an error reply."""
+                return reply
+
+            api.http_get = bad_get
+            recorded.clear()
+            try:
+                run(api.fetch_awattar(dt("2025-05-01T22:00Z"), dt("2025-05-02T22:00Z")))
+                raise AssertionError("expected an error for {}".format(reply))
+            except SpotPriceError:
+                pass
+            assert recorded == [("awattar", False, reason)], (reply, recorded)
+    finally:
+        spotprice_module.record_api_call = original
+
+
+def test_spotprice_awattar_markup_percent(my_predbat=None):
+    """The percentage markup is charged on the absolute spot price before VAT; awattar defaults it to 3, an explicit value (even 0) wins, other providers default to 0."""
+    assert spot_import_rate(100.0, 1.5, 0.0, 0.19, markup_percent=3.0) == 14.042
+    # Negative spot: 3% of |spot| is still a cost
+    assert spot_import_rate(-50.0, 1.5, 0.0, 0.19, markup_percent=3.0) == -3.9865
+    assert spot_import_rate(100.0, 1.5, 0.0, 0.19) == 13.685
+
+    api = make_api(provider="awattar", entsoe_token=None, markup=1.5, vat=0.19, charge_zones=[{"from": "00:00", "to": "00:00", "charge": 10.0}])
+    assert api.markup_percent == 3.0 and api.sources_needed() == ["spot"]
+    api.spot_intervals = [(dt("2025-05-02T10:00Z"), dt("2025-05-02T11:00Z"), 100.0), (dt("2025-05-02T11:00Z"), dt("2025-05-02T12:00Z"), -50.0)]
+    assert [rate for _s, _e, rate in api.build_import_rates()] == [25.942, 7.9135], api.build_import_rates()
+    assert make_api(provider="awattar", entsoe_token=None, markup_percent=0).markup_percent == 0.0
+    assert make_api(provider="energycharts", entsoe_token=None).markup_percent == 0.0
+    linked = make_api(provider="entsoe", markup=0, vat=0, markup_percent=10)
+    linked.spot_intervals = [(dt("2025-05-02T10:00Z"), dt("2025-05-02T11:00Z"), 100.0)]
+    assert linked.build_import_rates()[0][2] == 11.0
+    # Export is not touched by the import markup percentage
+    linked.export_mode = "spot"
+    assert linked.build_export_rates()[0][2] == 10.0
+
+
+def test_spotprice_awattar_fallback(my_predbat=None):
+    """aWATTar falls back to ENTSO-E (with a token) and then Energy-Charts, logging the outage and the recovery once; zones aWATTar does not publish go straight to the fallbacks; awattar is never inferred."""
+    calls = []
+
+    def source(name, fail):
+        """A fake fetch that records its name and fails or returns spot prices."""
+
+        async def fetch(start, end):
+            """Fake fetch."""
+            calls.append(name)
+            if fail["on"]:
+                raise SpotPriceError("{} down".format(name))
+            return spot_fixture()
+
+        return fetch
+
+    awattar_state = {"on": True}
+    api = make_api(provider="awattar", entsoe_token=None, zone="AT")
+    api.fetch_awattar = source("awattar", awattar_state)
+    api.fetch_energycharts = source("energycharts", {"on": False})
+    assert run(api.refresh(dt("2025-05-02T08:00Z"))) is True
+    assert calls == ["awattar", "energycharts"] and api.spot_source == "energycharts"
+    assert run(api.refresh(dt("2025-05-02T14:00Z"))) is True
+    assert sum("until aWATTar recovers" in line for line in api.base.logs) == 1, api.base.logs
+    awattar_state["on"] = False
+    assert run(api.refresh(dt("2025-05-02T20:00Z"))) is True and api.spot_source == "awattar"
+    assert sum("aWATTar is working again" in line for line in api.base.logs) == 1
+
+    calls.clear()
+    with_token = make_api(provider="awattar", entsoe_token="t", zone="DE-LU")
+    with_token.fetch_awattar = source("awattar", {"on": True})
+    with_token.fetch_entsoe = source("entsoe", {"on": True})
+    with_token.fetch_energycharts = source("energycharts", {"on": False})
+    assert run(with_token.refresh(dt("2025-05-02T08:00Z"))) is True
+    assert calls == ["awattar", "entsoe", "energycharts"], calls
+
+    calls.clear()
+    elsewhere = make_api(provider="awattar", entsoe_token=None, zone="NL")
+    assert any("aWATTar publishes prices for DE-LU and AT only" in line for line in elsewhere.base.logs)
+    elsewhere.fetch_awattar = source("awattar", {"on": False})
+    elsewhere.fetch_energycharts = source("energycharts", {"on": False})
+    assert run(elsewhere.refresh(dt("2025-05-02T08:00Z"))) is True and calls == ["energycharts"]
+
+    assert make_api(provider=None, entsoe_token=None, zone="DE-LU").provider == "energycharts"
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1914,6 +2046,9 @@ SPOTPRICE_TESTS = [
     test_spotprice_octopus_de_fixed_and_time_of_use,
     test_spotprice_octopus_de_auth_and_errors,
     test_spotprice_octopus_de_inference_and_config,
+    test_spotprice_awattar_parse_and_fetch,
+    test_spotprice_awattar_markup_percent,
+    test_spotprice_awattar_fallback,
 ]
 
 
