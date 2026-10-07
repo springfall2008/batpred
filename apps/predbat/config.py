@@ -2421,6 +2421,43 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    "FroniusCloud": {
+        "name": "FroniusCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        # ChargeBattery/DischargeBattery take MinW/MaxW in watts, so Predbat's rate entities map
+        # straight onto them. A discharge rate of zero is how Predbat signals a hold; the component
+        # turns it into ChargeBattery MaxW=0, Fronius's own "keep the current level".
+        "output_charge_control": "power",
+        # False: Predbat hands the component ordinary windows and it builds the dated Fronius
+        # schedule itself.
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        # The Flexibility API cannot set a minimum SoC, so Predbat supplies its own dummy reserve
+        # and the inverter's configured minimum still applies.
+        "has_reserve_soc": False,
+        "has_timed_pause": False,
+        # Anything other than HH:MM:SS makes inverter.py replace the published select entities
+        # with its own dummies and the window never reaches the component.
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
     "SolaxCloud": {
         "name": "SolaxCloud",
         "has_rest_api": False,
@@ -2824,6 +2861,17 @@ APPS_SCHEMA = {
     "alphaess_battery_rate_max": {"type": "float"},
     "alphaess_api_delay": {"type": "float"},
     "alphaess_min_write_interval": {"type": "integer"},
+    "fronius_access_key_id": {"type": "string", "empty": False},
+    "fronius_access_key_value": {"type": "string", "empty": False},
+    "fronius_pv_system_id": {"type": "string", "empty": False},
+    "fronius_automatic": {"type": "boolean"},
+    "fronius_automatic_ignore_pv": {"type": "boolean"},
+    "fronius_control_enable": {"type": "boolean"},
+    "fronius_battery_rate_max": {"type": "float"},
+    "fronius_grid_export_limit": {"type": "float"},
+    "fronius_energy_interval": {"type": "integer"},
+    "fronius_query_url": {"type": "string", "empty": False},
+    "fronius_control_url": {"type": "string", "empty": False},
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
