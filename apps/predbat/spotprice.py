@@ -27,11 +27,14 @@ Price sources, chosen by spotprice_provider:
   - energycharts: Fraunhofer ISE Energy-Charts, no key needed.
   - tibber:       Tibber's own end-user price (already includes markup, grid fees and VAT), read
                   with a personal access token. No markup or VAT is added on top.
+  - ostrom:       Ostrom's end-user price for the contract's postcode (spot plus taxes, levies and
+                  variable grid fees, VAT included), read with a client ID and secret from Ostrom's
+                  developer portal. Used as-is, like Tibber.
 
 Export is either a fixed feed-in tariff or spot-linked (spot + export markup, no VAT), with an
 optional rule that pays nothing in any interval where the spot price is negative (Germany's
 Solarspitzengesetz). Spot data for the export side is fetched from ENTSO-E/Energy-Charts even when
-Tibber supplies the import price.
+a supplier (Tibber, Ostrom) supplies the import price.
 
 Rates are published in the same shape as the Octopus/Kraken rate sensors (value_inc_vat,
 valid_from, valid_to) and wired in through metric_octopus_import / metric_octopus_export, so the
@@ -40,6 +43,7 @@ rest of Predbat consumes them unchanged. Intervals keep their native length (15,
 
 import argparse
 import asyncio
+import base64
 import functools
 import hashlib
 import re
@@ -55,12 +59,24 @@ from const import TIME_FORMAT_HA
 from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
-SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber")
+SPOTPRICE_PROVIDERS = ("entsoe", "energycharts", "tibber", "ostrom")
+# Providers whose import price is the market spot price plus the configured markup, charge zones and VAT
+SPOT_PROVIDERS = ("entsoe", "energycharts")
+# Suppliers read through the generic "supplier" source: their API gives the end-user price in minor
+# units per kWh with markup, grid fees, levies and VAT already in, so it is used as-is
+SUPPLIER_PROVIDERS = ("ostrom",)
+# Every provider whose import price comes from the supplier rather than from spot + markup
+ALL_IN_PROVIDERS = ("tibber",) + SUPPLIER_PROVIDERS
 SPOTPRICE_EXPORT_MODES = ("none", "fixed", "spot")
 
 ENTSOE_URL = "https://web-api.tp.entsoe.eu/api"
 ENERGYCHARTS_URL = "https://api.energy-charts.info/price"
 TIBBER_URL = "https://api.tibber.com/v1-beta/gql"
+OSTROM_AUTH_URL = "https://auth.production.ostrom-api.io/oauth2/token"
+OSTROM_API_URL = "https://production.ostrom-api.io"
+# Ostrom also runs a sandbox (auth.sandbox.ostrom-api.io / sandbox.ostrom-api.io) with test data only
+# Seconds before an OAuth2 access token's stated expiry at which it is renewed
+TOKEN_EXPIRY_MARGIN_SECONDS = 60
 
 # Bidding zone name -> ENTSO-E EIC area code. Names follow Energy-Charts' bzn codes so one setting
 # drives both sources. IE-SEM is ENTSO-E only (Energy-Charts does not publish it).
@@ -460,6 +476,68 @@ def parse_tibber_json(data, home_id=None, resolution_minutes=None):
     return intervals_from_starts(pairs, expected), currency, home.get("id")
 
 
+@parse_errors_as("Ostrom")
+def select_ostrom_contract(data, contract_id=None):
+    """Pick the contract to price from an Ostrom /contracts response.
+
+    contract_id (spotprice_ostrom_contract_id) chooses one explicitly. Otherwise the single active
+    contract is used, or the single contract when none is marked active. The contract must be a
+    dynamic product (SIMPLY_DYNAMIC and its successors) with a postcode: the postcode is what makes
+    /spot-prices include the local taxes, levies and grid fees. Returns the contract dict.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        raise SpotPriceError("Ostrom returned an unexpected contracts response")
+    contracts = [contract for contract in data["data"] if isinstance(contract, dict)]
+    if not contracts:
+        raise SpotPriceError("Ostrom account has no contracts")
+    ids = ", ".join(str(contract.get("id")) for contract in contracts)
+    if contract_id not in (None, ""):
+        matches = [contract for contract in contracts if str(contract.get("id")) == str(contract_id).strip()]
+        if not matches:
+            raise SpotPriceError("Ostrom contract {} not found, the account has {}".format(contract_id, ids))
+        contract = matches[0]
+    else:
+        active = [contract for contract in contracts if str(contract.get("status", "")).upper() == "ACTIVE"] or contracts
+        if len(active) > 1:
+            raise SpotPriceError("Ostrom account has several contracts ({}), set spotprice_ostrom_contract_id".format(ids))
+        contract = active[0]
+    product = str(contract.get("productCode") or "")
+    if "DYNAMIC" not in product.upper():
+        raise SpotPriceError("Ostrom contract {} is {}, not a dynamic tariff - set its fixed price with rates_import instead".format(contract.get("id"), product or "an unknown product"))
+    if not str((contract.get("address") or {}).get("zip") or "").strip():
+        raise SpotPriceError("Ostrom contract {} has no postcode, so its local taxes and grid fees cannot be priced".format(contract.get("id")))
+    return contract
+
+
+@parse_errors_as("Ostrom")
+def parse_ostrom_json(data):
+    """Parse an Ostrom /spot-prices response into (start, end, cents per kWh incl. VAT) UTC intervals.
+
+    Each entry gives an hour from its date. Ostrom documents the end-user's variable price per kWh
+    as grossKwhPrice (spot, with VAT) + grossKwhTaxAndLevies (taxes, levies and variable grid fees
+    for the postcode, with VAT); Ostrom's own margin is a monthly fee, not a per-kWh charge. Without
+    a postcode Ostrom returns the taxes and levies as zero, which would leave only the bare spot
+    price - so a response where every entry has zero taxes and levies is rejected.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("data", []), list):
+        raise SpotPriceError("Ostrom returned an unexpected prices response")
+    pairs = []
+    any_levies = False
+    for entry in data.get("data") or []:
+        start = parse_utc(entry["date"])
+        price = entry.get("grossKwhPrice")
+        levies = entry.get("grossKwhTaxAndLevies")
+        if price is None or levies is None:
+            pairs.append((start, None))
+            continue
+        if float(levies) != 0:
+            any_levies = True
+        pairs.append((start, round(float(price) + float(levies), 4)))
+    if pairs and not any_levies:
+        raise SpotPriceError("Ostrom returned prices without taxes, levies or grid fees (no postcode applied)")
+    return intervals_from_starts(pairs, HOUR)
+
+
 def parse_hhmm(text):
     """Parse HH:MM or HH:MM:SS into minutes after midnight (24:00 allowed), or None."""
     if text is None:
@@ -607,7 +685,7 @@ def deserialise_intervals(data):
 
 
 class SpotPriceAPI(ComponentBase):
-    """Builds import/export rates from day-ahead spot prices (ENTSO-E, Energy-Charts) or Tibber."""
+    """Builds import/export rates from day-ahead spot prices (ENTSO-E, Energy-Charts) or a supplier's own prices."""
 
     def initialize(
         self,
@@ -616,6 +694,9 @@ class SpotPriceAPI(ComponentBase):
         entsoe_token=None,
         tibber_token=None,
         tibber_home_id=None,
+        ostrom_client_id=None,
+        ostrom_client_secret=None,
+        ostrom_contract_id=None,
         markup=0.0,
         vat=0.0,
         charge_zones=None,
@@ -627,20 +708,28 @@ class SpotPriceAPI(ComponentBase):
         automatic=True,
     ):
         """Store configuration and validate it. Problems are logged once here, not on every cycle."""
+        self.tibber_token = tibber_token
+        self.ostrom_client_id = ostrom_client_id
+        self.ostrom_client_secret = ostrom_client_secret
+        ambiguous = None
         if not provider:
-            # Unset: any Tibber token means Tibber - even when a zone is also set, since the zone may
-            # only be there for spot-linked export - otherwise the keyless default
-            provider = "tibber" if tibber_token else "energycharts"
+            # Unset: the one supplier whose credentials are present - even when a zone is also set,
+            # since the zone may only be there for spot-linked export - otherwise the keyless default.
+            # Credentials for more than one supplier are a configuration error rather than a guess.
+            suppliers = self.suppliers_with_credentials()
+            if len(suppliers) > 1:
+                ambiguous = "credentials for several suppliers ({}) are set, set spotprice_provider to choose one".format(", ".join(suppliers))
+            provider = suppliers[0] if len(suppliers) == 1 else "energycharts"
         self.provider = str(provider).strip().lower()
         if self.provider not in SPOTPRICE_PROVIDERS:
             self.log("Warn: SpotPrice: unknown spotprice_provider '{}', expected one of {} - using energycharts".format(provider, ", ".join(SPOTPRICE_PROVIDERS)))
             self.provider = "energycharts"
         self.zone, self.zone_eic = self.resolve_zone(zone)
         self.entsoe_token = entsoe_token
-        self.tibber_token = tibber_token
         self.tibber_home_id = tibber_home_id
         # The configured home, kept apart from one picked at run time, so the cache name is stable
         self.tibber_home_id_configured = tibber_home_id
+        self.ostrom_contract_id = ostrom_contract_id
         self.markup = self.to_float(markup, "spotprice_markup")
         self.vat = self.to_float(vat, "spotprice_vat")
         if self.vat >= 1:
@@ -663,8 +752,8 @@ class SpotPriceAPI(ComponentBase):
             self.log("Warn: SpotPrice: spotprice_provider is entsoe but spotprice_entsoe_token is not set - using Energy-Charts")
         if self.provider == "tibber" and not self.tibber_token:
             self.log("Warn: SpotPrice: spotprice_provider is tibber but spotprice_tibber_token is not set")
-        if self.provider == "tibber" and self.needs_spot() and not (self.zone or self.zone_eic):
-            # Tibber only needs spot prices for the export side; without a zone they cannot be fetched,
+        if self.provider in ALL_IN_PROVIDERS and self.needs_spot() and not (self.zone or self.zone_eic):
+            # A supplier's price only needs spot prices for the export side; without a zone they cannot be fetched,
             # so switch that export off once here (leaving rates_export in charge) rather than failing
             # every refresh
             self.log(
@@ -681,11 +770,11 @@ class SpotPriceAPI(ComponentBase):
         # When ENTSO-E is not usable either there is nothing to fetch, ever: say so once and stop,
         # rather than failing every refresh with "Energy-Charts does not publish zone ...".
         self.config_error = None
-        entsoe_usable = bool(self.entsoe_token) and self.provider in ("entsoe", "tibber")
+        entsoe_usable = bool(self.entsoe_token) and (self.provider == "entsoe" or self.provider in ALL_IN_PROVIDERS)
         if self.needs_spot() and (self.zone or self.zone_eic) and not self.energycharts_covers_zone() and not entsoe_usable:
             zone_name = self.zone or self.zone_eic
-            if self.provider == "tibber":
-                # Only the export side needs spot prices - keep Tibber's import prices and drop that export
+            if self.provider in ALL_IN_PROVIDERS:
+                # Only the export side needs spot prices - keep the supplier's import prices and drop that export
                 self.log("Warn: SpotPrice: spotprice_entsoe_token is required for spot prices in zone {} - spot-linked export disabled".format(zone_name))
                 self.export_mode = "none"
                 self.export_zero_on_negative = False
@@ -695,24 +784,49 @@ class SpotPriceAPI(ComponentBase):
                 self.config_error = "Energy-Charts does not publish zone {}, use spotprice_provider entsoe with spotprice_entsoe_token".format(zone_name)
             if self.config_error:
                 self.log("Error: SpotPrice: {}".format(self.config_error))
+        if not self.config_error:
+            self.config_error = ambiguous or self.supplier_config_error()
+            if self.config_error:
+                self.log("Error: SpotPrice: {}".format(self.config_error))
 
         # Raw source data, cached to storage. Spot intervals are per-MWh in EUR as published;
-        # Tibber intervals are end-user totals in major currency units per kWh.
+        # Tibber intervals are end-user totals in major currency units per kWh; supplier intervals
+        # are end-user totals in minor units per kWh (euro cents), VAT included.
         self.spot_intervals = []
         self.spot_source = None
         self.tibber_intervals = []
         self.tibber_currency = None
-        self.fetched = {"spot": None, "tibber": None}
+        self.supplier_intervals = []
+        self.fetched = {"spot": None, "tibber": None, "supplier": None}
         self.source_errors = {}
-        # Back-off is per source: a spot outage must never hold back Tibber's poll for tomorrow
-        self.source_failures = {"spot": 0, "tibber": 0}
-        self.source_next_attempt = {"spot": None, "tibber": None}
+        # Back-off is per source: a spot outage must never hold back a supplier's poll for tomorrow
+        self.source_failures = {"spot": 0, "tibber": 0, "supplier": 0}
+        self.source_next_attempt = {"spot": None, "tibber": None, "supplier": None}
+        # Supplier session state, kept in memory only: OAuth2 access tokens are renewed shortly before
+        # they expire, and the contract lookup is done once per run
+        self.ostrom_access_token = None
+        self.ostrom_token_expiry = None
+        self.ostrom_contract = None
         self.last_error = None
         self.import_rates = []
         self.export_rates = []
         self.entsoe_fallback_logged = False
         self.import_wired = False
         self.export_wired = False
+
+    def suppliers_with_credentials(self):
+        """The suppliers that have any of their credentials set, in SPOTPRICE_PROVIDERS order."""
+        present = {
+            "tibber": bool(self.tibber_token),
+            "ostrom": bool(self.ostrom_client_id or self.ostrom_client_secret),
+        }
+        return [name for name in SPOTPRICE_PROVIDERS if present.get(name)]
+
+    def supplier_config_error(self):
+        """A configuration problem that stops the chosen supplier from ever fetching, or None."""
+        if self.provider == "ostrom" and not (self.ostrom_client_id and self.ostrom_client_secret):
+            return "spotprice_ostrom_client_id and spotprice_ostrom_client_secret are both required for provider ostrom"
+        return None
 
     def to_float(self, value, name, default=0.0):
         """Coerce a numeric setting to float, logging and falling back to default when it is not one."""
@@ -744,7 +858,7 @@ class SpotPriceAPI(ComponentBase):
 
     def needs_spot(self):
         """True when spot prices are needed: for the import price, spot-linked export, or the negative-price export rule."""
-        if self.provider in ("entsoe", "energycharts"):
+        if self.provider in SPOT_PROVIDERS:
             return True
         return self.export_mode == "spot" or (self.export_mode == "fixed" and self.export_zero_on_negative)
 
@@ -807,6 +921,17 @@ class SpotPriceAPI(ComponentBase):
                         body = None
                 else:
                     body = await response.text()
+                return response.status, body
+
+    async def http_request(self, method, url, params=None, headers=None, data=None):
+        """Send a request with optional headers and form data, returning (status, parsed JSON body or None)."""
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.request(method, url, params=params, headers=headers, data=data) as response:
+                try:
+                    body = await response.json(content_type=None)
+                except Exception:
+                    body = None
                 return response.status, body
 
     async def http_post_json(self, url, payload, headers):
@@ -906,10 +1031,11 @@ class SpotPriceAPI(ComponentBase):
         The fallback only runs one way. Provider entsoe tries ENTSO-E (when a token is set - initialize()
         has already warned once if not) and then Energy-Charts. Provider energycharts uses Energy-Charts
         only, even if a token is present. Provider tibber, whose spot prices only feed the export side,
-        behaves like entsoe when a token is set and like energycharts otherwise. Returns (intervals, source).
+        behaves like entsoe when a token is set and like energycharts otherwise, as do the other
+        suppliers (ostrom). Returns (intervals, source).
         """
         sources = []
-        if self.entsoe_token and self.provider in ("entsoe", "tibber"):
+        if self.entsoe_token and (self.provider == "entsoe" or self.provider in ALL_IN_PROVIDERS):
             sources.append(("entsoe", self.fetch_entsoe))
         if self.energycharts_covers_zone():
             # Energy-Charts does not publish every zone (IE-SEM); there the ENTSO-E error stands alone
@@ -979,6 +1105,115 @@ class SpotPriceAPI(ComponentBase):
         record_api_call("tibber", False, "decode_error")
         raise last_error
 
+    async def supplier_request(self, service, label, method, url, params=None, headers=None, data=None):
+        """One supplier HTTP request with the shared failure handling. Returns (status, body).
+
+        Network failures become connection_error and anything else raised while sending or decoding
+        becomes decode_error, both as SpotPriceError. Status codes are left to the caller.
+        """
+        try:
+            return await self.http_request(method, url, params=params, headers=headers, data=data)
+        except NETWORK_ERRORS as e:
+            record_api_call(service, False, "connection_error")
+            raise SpotPriceError("{} request failed: {}".format(label, e))
+        except Exception as e:
+            record_api_call(service, False, "decode_error")
+            raise SpotPriceError("{} response could not be read ({}: {})".format(label, type(e).__name__, e))
+
+    def supplier_status_error(self, service, label, status, body, what="request"):
+        """Raise SpotPriceError for a non-200 supplier reply, recording the failure category."""
+        detail = ""
+        if isinstance(body, dict):
+            detail = body.get("detail") or body.get("error_description") or body.get("error") or ""
+            if isinstance(detail, dict):
+                detail = detail.get("detail") or detail.get("title") or ""
+        detail = ": {}".format(detail) if detail else ""
+        if status in (401, 403):
+            record_api_call(service, False, "auth_error")
+            raise SpotPriceError("{} rejected the {} (HTTP {}){}".format(label, what, status, detail))
+        if status == 429:
+            record_api_call(service, False, "rate_limit")
+            raise SpotPriceError("{} rate limit hit (HTTP 429)".format(label))
+        record_api_call(service, False, "server_error" if status >= 500 else "client_error")
+        raise SpotPriceError("{} returned HTTP {}{}".format(label, status, detail))
+
+    async def ostrom_token(self):
+        """Return an Ostrom access token, requesting a new one (client credentials grant) when none is held or it is about to expire."""
+        now = self.now()
+        if self.ostrom_access_token and self.ostrom_token_expiry and now < self.ostrom_token_expiry:
+            return self.ostrom_access_token
+        basic = base64.b64encode("{}:{}".format(self.ostrom_client_id, self.ostrom_client_secret).encode("utf-8")).decode("ascii")
+        headers = {"Authorization": "Basic {}".format(basic), "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
+        status, body = await self.supplier_request("ostrom", "Ostrom", "POST", OSTROM_AUTH_URL, headers=headers, data={"grant_type": "client_credentials"})
+        if status in (400, 401, 403):
+            # The token endpoint answers bad client credentials with 400 invalid_client as well as 401
+            status = 401
+        if status != 200:
+            self.supplier_status_error("ostrom", "Ostrom", status, body, what="client ID and secret")
+        token = body.get("access_token") if isinstance(body, dict) else None
+        if not token:
+            record_api_call("ostrom", False, "decode_error")
+            raise SpotPriceError("Ostrom token response has no access_token")
+        try:
+            expires_in = int(body.get("expires_in") or 3600)
+        except (TypeError, ValueError):
+            expires_in = 3600
+        self.ostrom_access_token = token
+        self.ostrom_token_expiry = now + timedelta(seconds=max(expires_in - TOKEN_EXPIRY_MARGIN_SECONDS, TOKEN_EXPIRY_MARGIN_SECONDS))
+        return token
+
+    async def ostrom_get(self, path, params=None):
+        """GET an Ostrom API path with a Bearer token. A 401 drops the token and retries once with a new one."""
+        for attempt in (1, 2):
+            token = await self.ostrom_token()
+            headers = {"Authorization": "Bearer {}".format(token), "Accept": "application/json"}
+            status, body = await self.supplier_request("ostrom", "Ostrom", "GET", OSTROM_API_URL + path, params=params, headers=headers)
+            if status == 401 and attempt == 1:
+                self.ostrom_access_token = None
+                self.ostrom_token_expiry = None
+                continue
+            if status != 200:
+                self.supplier_status_error("ostrom", "Ostrom", status, body, what="access token" if status in (401, 403) else "request")
+            return body
+        return None  # pragma: no cover - the loop always returns or raises
+
+    async def fetch_ostrom(self, start, end):
+        """Fetch Ostrom's end-user prices for [start, end). Returns intervals in cents per kWh, VAT included, or raises SpotPriceError."""
+        if not (self.ostrom_client_id and self.ostrom_client_secret):
+            raise SpotPriceError("Ostrom client ID and secret are not configured (spotprice_ostrom_client_id, spotprice_ostrom_client_secret)")
+        if self.ostrom_contract is None:
+            contracts = await self.ostrom_get("/contracts")
+            try:
+                self.ostrom_contract = select_ostrom_contract(contracts, self.ostrom_contract_id)
+            except SpotPriceError:
+                record_api_call("ostrom", False, "client_error")
+                raise
+        params = {
+            "startDate": start.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "endDate": end.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "resolution": "HOUR",
+            "zip": str(self.ostrom_contract["address"]["zip"]).strip(),
+        }
+        body = await self.ostrom_get("/spot-prices", params)
+        try:
+            intervals = parse_ostrom_json(body)
+        except SpotPriceError:
+            record_api_call("ostrom", False, "decode_error")
+            raise
+        intervals = [item for item in intervals if item[0] < end]
+        if not intervals:
+            record_api_call("ostrom", False, "client_error")
+            raise SpotPriceError("Ostrom returned no prices for this period")
+        record_api_call("ostrom")
+        return intervals
+
+    async def fetch_supplier(self, now):
+        """Fetch the configured supplier's end-user prices over the fetch window."""
+        start, end = self.fetch_window(now)
+        if self.provider == "ostrom":
+            return await self.fetch_ostrom(start, end)
+        raise SpotPriceError("provider {} has no supplier price source".format(self.provider))
+
     # ------------------------------------------------------------------
     # Rate building
     # ------------------------------------------------------------------
@@ -988,6 +1223,9 @@ class SpotPriceAPI(ComponentBase):
         if self.provider == "tibber":
             # Tibber's total already includes markup, grid fees and VAT - only convert to minor units
             return [(start, end, round(total * 100.0, 4)) for start, end, total in self.tibber_intervals]
+        if self.provider in SUPPLIER_PROVIDERS:
+            # Already the end-user price in minor units with VAT - markup, charge zones and VAT do not apply
+            return list(self.supplier_intervals)
         rates = []
         for start, end, spot in self.spot_intervals:
             zone_charge = charge_zone_rate(self.charge_zones, self.to_local(start)) if self.charge_zones else 0.0
@@ -1017,20 +1255,32 @@ class SpotPriceAPI(ComponentBase):
         return [(start, end, round(self.export_rate, 4))]
 
     def sources_needed(self):
-        """The price sources this configuration fetches: "spot" and/or "tibber"."""
+        """The price sources this configuration fetches: "spot" and/or the import source ("tibber" or "supplier")."""
         needed = []
         if self.config_error:
             # Nothing can be fetched until the configuration changes (initialize() has logged why)
             return needed
         if self.needs_spot():
             needed.append("spot")
-        if self.provider == "tibber":
-            needed.append("tibber")
+        if self.import_source() != "spot":
+            needed.append(self.import_source())
         return needed
+
+    def import_source(self):
+        """The source that carries the import price: "tibber", "supplier" or "spot"."""
+        if self.provider == "tibber":
+            return "tibber"
+        if self.provider in SUPPLIER_PROVIDERS:
+            return "supplier"
+        return "spot"
 
     def intervals_of(self, source):
         """The held intervals of one source."""
-        return self.tibber_intervals if source == "tibber" else self.spot_intervals
+        if source == "tibber":
+            return self.tibber_intervals
+        if source == "supplier":
+            return self.supplier_intervals
+        return self.spot_intervals
 
     def source_data_end(self, source):
         """End of the last held interval of one source, or None."""
@@ -1041,11 +1291,11 @@ class SpotPriceAPI(ComponentBase):
 
     def source_intervals(self):
         """The intervals that define how far ahead the import price is known."""
-        return self.intervals_of("tibber" if self.provider == "tibber" else "spot")
+        return self.intervals_of(self.import_source())
 
     def data_end(self):
         """End time of the last known import interval, or None."""
-        return self.source_data_end("tibber" if self.provider == "tibber" else "spot")
+        return self.source_data_end(self.import_source())
 
     @property
     def fetched_at(self):
@@ -1135,6 +1385,9 @@ class SpotPriceAPI(ComponentBase):
         if source == "tibber":
             self.tibber_intervals = await self.fetch_tibber()
             return
+        if source == "supplier":
+            self.supplier_intervals = await self.fetch_supplier(now)
+            return
         if not (self.zone or self.zone_eic):
             raise SpotPriceError("spotprice_zone is not set")
         start, end = self.fetch_window(now)
@@ -1209,7 +1462,8 @@ class SpotPriceAPI(ComponentBase):
         self.spot_source = data.get("spot_source")
         self.tibber_intervals = deserialise_intervals(data.get("tibber_intervals"))
         self.tibber_currency = data.get("tibber_currency")
-        for source in ("spot", "tibber"):
+        self.supplier_intervals = deserialise_intervals(data.get("supplier_intervals"))
+        for source in ("spot", "tibber", "supplier"):
             stamp = data.get("{}_fetched_at".format(source)) or data.get("fetched_at")
             try:
                 self.fetched[source] = parse_utc(stamp) if stamp else None
@@ -1229,6 +1483,8 @@ class SpotPriceAPI(ComponentBase):
             "tibber_currency": self.tibber_currency,
             "spot_fetched_at": self.fetched["spot"].isoformat() if self.fetched.get("spot") else None,
             "tibber_fetched_at": self.fetched["tibber"].isoformat() if self.fetched.get("tibber") else None,
+            "supplier_intervals": serialise_intervals(self.supplier_intervals),
+            "supplier_fetched_at": self.fetched["supplier"].isoformat() if self.fetched.get("supplier") else None,
         }
         await self.storage.save("spotprice", self.cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=3))
 
@@ -1287,7 +1543,7 @@ class SpotPriceAPI(ComponentBase):
                 "prices_until": data_end.isoformat() if data_end else None,
                 "last_error": self.config_error or self.last_error,
                 "source_errors": dict(self.source_errors),
-                "failures": dict(self.source_failures),
+                "failures": {source: self.source_failures.get(source, 0) for source in self.sources_needed()},
                 "next_attempt": {source: when.isoformat() for source, when in self.source_next_attempt.items() if when},
                 "icon": "mdi:chart-bell-curve",
             },
@@ -1379,6 +1635,9 @@ async def test_spotprice_api(args):  # pragma: no cover
         zone=args.zone,
         entsoe_token=args.entsoe_token,
         tibber_token=args.tibber_token,
+        ostrom_client_id=args.ostrom_client_id,
+        ostrom_client_secret=args.ostrom_client_secret,
+        ostrom_contract_id=args.ostrom_contract_id,
         markup=args.markup,
         vat=args.vat,
         export_mode=args.export_mode,
@@ -1408,6 +1667,9 @@ def main():  # pragma: no cover
     parser.add_argument("--timezone", default="Europe/Berlin")
     parser.add_argument("--entsoe-token", dest="entsoe_token")
     parser.add_argument("--tibber-token", dest="tibber_token")
+    parser.add_argument("--ostrom-client-id", dest="ostrom_client_id")
+    parser.add_argument("--ostrom-client-secret", dest="ostrom_client_secret")
+    parser.add_argument("--ostrom-contract-id", dest="ostrom_contract_id")
     parser.add_argument("--markup", type=float, default=0.0)
     parser.add_argument("--vat", type=float, default=0.0, help="VAT as a fraction, e.g. 0.19")
     parser.add_argument("--export-mode", dest="export_mode", default="none", choices=SPOTPRICE_EXPORT_MODES)

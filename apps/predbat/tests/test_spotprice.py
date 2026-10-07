@@ -727,7 +727,7 @@ def test_spotprice_zones_and_registry(my_predbat=None):
     assert entry["args"]["entsoe_token"]["secret"] and entry["args"]["tibber_token"]["secret"]
     # provider defaults to energycharts, so the component must be gated on a zone or a Tibber token
     assert "default" not in entry["args"]["provider"] and not entry["args"]["provider"]["required"]
-    assert entry["required_or"] == ["zone", "tibber_token"]
+    assert entry["required_or"] == ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret"]
     assert SpotPriceAPI(FakeBase(), zone="NL").provider == "energycharts"
 
 
@@ -1351,6 +1351,269 @@ def test_spotprice_tibber_cache_key(my_predbat=None):
     assert make_api(provider="energycharts", entsoe_token=None, tibber_token="t").cache_filename() == "energycharts_de_lu"
 
 
+# ---------------------------------------------------------------------------
+# Ostrom
+# ---------------------------------------------------------------------------
+
+OSTROM_CONTRACTS = {
+    "data": [
+        {"id": 100523456, "type": "ELECTRICITY", "productCode": "SIMPLY_DYNAMIC", "status": "ACTIVE", "address": {"zip": "10997", "city": "Berlin"}},
+        {"id": 100523999, "type": "ELECTRICITY", "productCode": "SIMPLY_FAIR", "status": "TERMINATED", "address": {"zip": "10997"}},
+    ]
+}
+
+
+def ostrom_prices(start="2025-05-01T22:00:00.000Z", hours=48, spot=10.0, levies=19.28):
+    """An Ostrom /spot-prices reply: hourly entries of grossKwhPrice + grossKwhTaxAndLevies (cents incl. VAT)."""
+    first = dt(start)
+    return {
+        "data": [
+            {"date": (first + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "netMwhPrice": spot * 10 / 1.19, "netKwhPrice": spot / 1.19, "grossKwhPrice": spot + h, "netKwhTaxAndLevies": levies / 1.19, "grossKwhTaxAndLevies": levies}
+            for h in range(hours)
+        ]
+    }
+
+
+class FakeOstrom:
+    """Answers http_request for the Ostrom token, contracts and spot-prices endpoints, recording every call."""
+
+    def __init__(self, contracts=None, prices=None):
+        """Set the replies; each may be replaced or queued (a list of (status, body)) by a test."""
+        self.calls = []
+        self.token_replies = []
+        self.api_replies = {}
+        self.contracts = contracts if contracts is not None else OSTROM_CONTRACTS
+        self.prices = prices if prices is not None else ostrom_prices()
+        self.issued = 0
+
+    async def __call__(self, method, url, params=None, headers=None, data=None):
+        """Route a request to the matching fake endpoint."""
+        self.calls.append((method, url, params, headers, data))
+        if url.endswith("/oauth2/token"):
+            if self.token_replies:
+                return self.token_replies.pop(0)
+            self.issued += 1
+            return 200, {"access_token": "tok-{}".format(self.issued), "token_type": "Bearer", "expires_in": 3600}
+        path = url.split("ostrom-api.io", 1)[1]
+        queued = self.api_replies.get(path)
+        if queued:
+            return queued.pop(0)
+        return 200, self.contracts if path == "/contracts" else self.prices
+
+    def count(self, suffix):
+        """How many requests went to a URL ending in suffix."""
+        return sum(1 for call in self.calls if call[1].endswith(suffix))
+
+
+def make_ostrom(**kwargs):
+    """An Ostrom-provider component with a FakeOstrom behind http_request."""
+    config = {"provider": "ostrom", "entsoe_token": None, "zone": None, "ostrom_client_id": "cid", "ostrom_client_secret": "the-secret"}
+    config.update(kwargs)
+    api = make_api(**config)
+    fake = FakeOstrom()
+    api.http_request = fake
+    return api, fake
+
+
+def test_spotprice_ostrom_parse(my_predbat=None):
+    """Ostrom's price is grossKwhPrice + grossKwhTaxAndLevies per hour; a missing field is a gap; a reply with no levies at all (no postcode) is rejected."""
+    from spotprice import parse_ostrom_json
+
+    intervals = parse_ostrom_json(ostrom_prices(hours=3, spot=10.0, levies=19.28))
+    assert [(start, end) for start, end, _v in intervals][0] == (dt("2025-05-01T22:00Z"), dt("2025-05-01T23:00Z"))
+    assert [value for _s, _e, value in intervals] == [29.28, 30.28, 31.28], intervals
+    gap = ostrom_prices(hours=3)
+    gap["data"][1]["grossKwhTaxAndLevies"] = None
+    gapped = parse_ostrom_json(gap)
+    assert [start for start, _e, _v in gapped] == [dt("2025-05-01T22:00Z"), dt("2025-05-02T00:00Z")], gapped
+    assert gapped[0][1] == dt("2025-05-01T23:00Z")
+    # Negative spot still adds the levies
+    negative = ostrom_prices(hours=1, spot=-5.0, levies=19.0)
+    assert parse_ostrom_json(negative)[0][2] == 14.0
+    for bad in (ostrom_prices(hours=2, levies=0.0), {"data": [{"date": 12345, "grossKwhPrice": 1, "grossKwhTaxAndLevies": 1}]}, {"data": [{"grossKwhPrice": 1}]}, {"data": "x"}, None):
+        try:
+            parse_ostrom_json(bad)
+        except SpotPriceError:
+            continue
+        raise AssertionError("expected SpotPriceError for {}".format(bad))
+    assert parse_ostrom_json({"data": []}) == []
+
+
+def test_spotprice_ostrom_contract_selection(my_predbat=None):
+    """The single active dynamic contract is used; an explicit id picks one; fixed products, unknown ids, several candidates and a missing postcode are errors."""
+    from spotprice import select_ostrom_contract
+
+    assert select_ostrom_contract(OSTROM_CONTRACTS)["id"] == 100523456
+    assert select_ostrom_contract(OSTROM_CONTRACTS, 100523456)["id"] == 100523456
+    assert select_ostrom_contract(OSTROM_CONTRACTS, "100523456")["id"] == 100523456
+    v2 = {"data": [{"id": 1, "productCode": "SimplyDynamic_V2", "address": {"zip": "80331"}}]}
+    assert select_ostrom_contract(v2)["id"] == 1
+    two_active = {"data": [dict(OSTROM_CONTRACTS["data"][0]), dict(OSTROM_CONTRACTS["data"][0], id=7)]}
+    cases = [
+        ((OSTROM_CONTRACTS, 100523999), "not a dynamic tariff"),
+        ((OSTROM_CONTRACTS, 42), "not found"),
+        ((two_active, None), "spotprice_ostrom_contract_id"),
+        (({"data": [dict(OSTROM_CONTRACTS["data"][0], address={})]}, None), "no postcode"),
+        (({"data": []}, None), "no contracts"),
+        (({"nope": 1}, None), "unexpected"),
+    ]
+    for args, phrase in cases:
+        try:
+            select_ostrom_contract(*args)
+        except SpotPriceError as e:
+            assert phrase in str(e), (phrase, str(e))
+            continue
+        raise AssertionError("expected an error containing '{}'".format(phrase))
+
+
+def test_spotprice_ostrom_fetch_and_token_cache(my_predbat=None):
+    """Client credentials are sent as Basic auth; the token is reused until shortly before expiry; contracts are read once; prices are asked for by postcode, hourly, in UTC."""
+    import base64
+
+    api, fake = make_ostrom()
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    intervals = run(api.fetch_supplier(now))
+    assert len(intervals) == 48 and intervals[0][2] == 29.28
+    method, url, _params, headers, data = fake.calls[0]
+    assert method == "POST" and url == "https://auth.production.ostrom-api.io/oauth2/token"
+    assert headers["Authorization"] == "Basic " + base64.b64encode(b"cid:the-secret").decode("ascii")
+    assert data == {"grant_type": "client_credentials"}
+    assert fake.calls[1][1] == "https://production.ostrom-api.io/contracts" and fake.calls[1][3]["Authorization"] == "Bearer tok-1"
+    _m, url, params, headers, _d = fake.calls[2]
+    assert url == "https://production.ostrom-api.io/spot-prices" and headers["Authorization"] == "Bearer tok-1"
+    assert params == {"startDate": "2025-04-30T22:00:00.000Z", "endDate": "2025-05-03T22:00:00.000Z", "resolution": "HOUR", "zip": "10997"}, params
+
+    # Within the token's life: no new token and no second contracts lookup
+    later = now + timedelta(minutes=50)
+    pin_now(api, later)
+    run(api.fetch_supplier(later))
+    assert fake.count("/oauth2/token") == 1 and fake.count("/contracts") == 1 and fake.count("/spot-prices") == 2
+    # Inside the renewal margin (expires_in 3600 less 60 seconds) a new token is requested
+    renew = now + timedelta(seconds=3540)
+    pin_now(api, renew)
+    run(api.fetch_supplier(renew))
+    assert fake.count("/oauth2/token") == 2 and fake.calls[-1][3]["Authorization"] == "Bearer tok-2"
+
+
+def test_spotprice_ostrom_auth_errors(my_predbat=None):
+    """A 401 from the API renews the token and retries once; a second 401, or rejected client credentials, is an auth_error SpotPriceError."""
+    import spotprice as spotprice_module
+
+    recorded = []
+    original = spotprice_module.record_api_call
+    spotprice_module.record_api_call = lambda service, success=True, reason=None: recorded.append((service, success, reason))
+    try:
+        now = dt("2025-05-02T08:00Z")
+        api, fake = make_ostrom()
+        pin_now(api, now)
+        fake.api_replies["/contracts"] = [(401, {"type": "unauthorized", "detail": "Unauthorized API access."})]
+        assert len(run(api.fetch_supplier(now))) == 48
+        assert fake.count("/oauth2/token") == 2 and fake.count("/contracts") == 2
+
+        api, fake = make_ostrom()
+        pin_now(api, now)
+        fake.api_replies["/contracts"] = [(401, None), (401, {"detail": "Unauthorized API access."})]
+        recorded.clear()
+        try:
+            run(api.fetch_supplier(now))
+            raise AssertionError("second 401 should raise")
+        except SpotPriceError as e:
+            assert "Ostrom rejected the access token (HTTP 401)" in str(e), str(e)
+        assert ("ostrom", False, "auth_error") in recorded
+        assert fake.count("/contracts") == 2, fake.calls
+
+        for status in (400, 401):
+            api, fake = make_ostrom(ostrom_client_secret="wrong-secret")
+            pin_now(api, now)
+            fake.token_replies = [(status, {"error": "invalid_client"})]
+            recorded.clear()
+            try:
+                run(api.fetch_supplier(now))
+                raise AssertionError("bad credentials should raise")
+            except SpotPriceError as e:
+                assert "client ID and secret" in str(e) and "wrong-secret" not in str(e), str(e)
+            assert recorded == [("ostrom", False, "auth_error")], recorded
+
+        for status, reason in ((429, "rate_limit"), (503, "server_error"), (400, "client_error")):
+            api, fake = make_ostrom()
+            pin_now(api, now)
+            fake.api_replies["/spot-prices"] = [(status, {"detail": "nope"})]
+            recorded.clear()
+            try:
+                run(api.fetch_supplier(now))
+                raise AssertionError("HTTP {} should raise".format(status))
+            except SpotPriceError:
+                pass
+            assert recorded[-1] == ("ostrom", False, reason), recorded
+
+        api, fake = make_ostrom()
+        pin_now(api, now)
+        fake.token_replies = [(200, {"token_type": "Bearer"})]
+        try:
+            run(api.fetch_supplier(now))
+            raise AssertionError("a token reply without access_token should raise")
+        except SpotPriceError as e:
+            assert "access_token" in str(e)
+    finally:
+        spotprice_module.record_api_call = original
+
+
+def test_spotprice_ostrom_all_in_and_refresh(my_predbat=None):
+    """Ostrom's price is used as-is (no markup, charge zones or VAT); failures back off on the supplier source only and the prices survive a restart."""
+    storage = FakeStorage()
+    api, fake = make_ostrom(markup=15, vat=0.19, charge_zones=[{"from": "00:00", "to": "00:00", "charge": 9}], storage=storage)
+    assert api.sources_needed() == ["supplier"] and not api.needs_spot()
+    now = dt("2025-05-02T08:00Z")
+    pin_now(api, now)
+    assert run(api.refresh(now)) is True
+    assert api.fetched["supplier"] == now and api.data_end() == dt("2025-05-03T22:00Z")
+    rates = api.build_import_rates()
+    assert rates[0] == (dt("2025-05-01T22:00Z"), dt("2025-05-01T23:00Z"), 29.28), rates[0]
+    api.publish(now)
+    assert api.base.entities["sensor.predbat_spotprice_import_rates"]["state"] == 39.28
+    assert api.base.entities["sensor.predbat_spotprice_status"]["state"] == "ok"
+    assert ("metric_octopus_import", "sensor.predbat_spotprice_import_rates") in api.base.set_args
+
+    restored, _fake = make_ostrom(storage=storage)
+    run(restored.load_cache())
+    assert restored.supplier_intervals == api.supplier_intervals and restored.fetched_at == now
+
+    fake.api_replies["/spot-prices"] = [(503, None)]
+    later = now + timedelta(hours=7)
+    pin_now(api, later)
+    assert run(api.refresh(later)) is False
+    assert api.source_failures == {"spot": 0, "tibber": 0, "supplier": 1} and api.source_next_attempt["supplier"] == later + timedelta(minutes=5)
+    assert "Ostrom returned HTTP 503" in api.last_error
+
+    # With spot-linked export the spot source is fetched alongside, and its failure does not block Ostrom
+    both, both_fake = make_ostrom(zone="DE-LU", export_mode="spot")
+    assert both.sources_needed() == ["spot", "supplier"]
+
+    async def spot_down(start, end):
+        """Spot source down."""
+        raise SpotPriceError("Energy-Charts returned HTTP 500")
+
+    both.fetch_energycharts = spot_down
+    pin_now(both, now)
+    assert run(both.refresh(now)) is False
+    assert both.fetched["supplier"] == now and both.source_failures["spot"] == 1 and both.source_failures["supplier"] == 0
+
+
+def test_spotprice_ostrom_provider_inference(my_predbat=None):
+    """With the provider unset the one supplier with credentials is used; credentials for two suppliers, or half an Ostrom pair, are one clear config error."""
+    assert make_api(provider=None, entsoe_token=None, zone=None, ostrom_client_id="i", ostrom_client_secret="s").provider == "ostrom"
+    assert make_api(provider=None, entsoe_token=None, zone="DE-LU", ostrom_client_id="i", ostrom_client_secret="s").provider == "ostrom"
+    # An explicit provider stays the authority
+    explicit = make_api(provider="energycharts", entsoe_token=None, ostrom_client_id="i", ostrom_client_secret="s", tibber_token="t")
+    assert explicit.provider == "energycharts" and explicit.config_error is None
+    both = make_api(provider=None, entsoe_token=None, zone="DE-LU", tibber_token="t", ostrom_client_id="i", ostrom_client_secret="s")
+    assert both.config_error == "credentials for several suppliers (tibber, ostrom) are set, set spotprice_provider to choose one", both.config_error
+    assert both.sources_needed() == [] and sum(line.startswith("Error:") for line in both.base.logs) == 1
+    half = make_api(provider=None, entsoe_token=None, zone=None, ostrom_client_id="i")
+    assert half.provider == "ostrom" and "spotprice_ostrom_client_secret" in half.config_error and half.sources_needed() == []
+
+
 SPOTPRICE_TESTS = [
     test_spotprice_entsoe_a03_gap_fill,
     test_spotprice_entsoe_a01_missing_point_not_filled,
@@ -1394,6 +1657,12 @@ SPOTPRICE_TESTS = [
     test_spotprice_refresh_all_blocked,
     test_spotprice_omitted_timestamps,
     test_spotprice_tibber_cache_key,
+    test_spotprice_ostrom_parse,
+    test_spotprice_ostrom_contract_selection,
+    test_spotprice_ostrom_fetch_and_token_cache,
+    test_spotprice_ostrom_auth_errors,
+    test_spotprice_ostrom_all_in_and_refresh,
+    test_spotprice_ostrom_provider_inference,
 ]
 
 

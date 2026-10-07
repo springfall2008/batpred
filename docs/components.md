@@ -1690,18 +1690,19 @@ import rate = (spot EUR/MWh x spotprice_exchange_rate / 10 + spotprice_markup + 
 With the default exchange rate of 1 the result is in euro cents per kWh. The markup, charge zones and export rates are entered in your minor currency unit per kWh (as set by `currency_symbols`) and **exclude VAT**; `spotprice_vat` is a fraction (`0.19` for 19%).
 
 Prices are kept at their native resolution - 15 minutes for most of Europe since October 2025, 30 minutes for Ireland's SEM, 60 minutes where a market still publishes hourly prices.
-Tomorrow's prices are published around 12:00-13:00 CET; from 12:00 CET the component checks every 15 minutes until it holds the whole of the next market day (which runs midnight to midnight CET/CEST everywhere - 23:00 to 23:00 local time in Ireland and Portugal, 01:00 to 01:00 in Finland and the Baltics), otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours - each source on its own, so a spot price outage never delays Tibber prices - and the last prices fetched are cached so they survive a restart.
+Tomorrow's prices are published around 12:00-13:00 CET; from 12:00 CET the component checks every 15 minutes until it holds the whole of the next market day (which runs midnight to midnight CET/CEST everywhere - 23:00 to 23:00 local time in Ireland and Portugal, 01:00 to 01:00 in Finland and the Baltics), otherwise it refreshes every 6 hours. Failed fetches back off from 5 minutes up to 2 hours - each source on its own, so a spot price outage never delays a supplier's prices - and the last prices fetched are cached so they survive a restart.
 
-Price sources (`spotprice_provider`; when it is not set the default is `tibber` if `spotprice_tibber_token` is set, otherwise `energycharts`):
+Price sources (`spotprice_provider`; when it is not set and the credentials of exactly one supplier (Tibber, Ostrom) are set, that supplier is used, otherwise `energycharts`. Credentials for more than one supplier without a `spotprice_provider` are reported as a configuration error, so set the provider explicitly):
 
 - `entsoe` - the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) day-ahead prices (document A44). Needs a free security token: register on the platform, then email <transparency@entsoe.eu> with the subject "Restful API access" and generate the token in your account settings. If the token is missing or ENTSO-E fails, the component falls back to Energy-Charts automatically and logs it once (and again once ENTSO-E recovers). The fallback only runs this way round: with `energycharts` ENTSO-E is never used, even if a token is set.
 - `energycharts` - [Energy-Charts](https://api.energy-charts.info/) from Fraunhofer ISE, no key needed. Prices for AT, BE, CH, CZ, DE-LU, DK1, DK2, FR, HU, IT-North, NL, NO2, PL, SE4 and SI are licensed CC BY 4.0 (Bundesnetzagentur | SMARD.de); Energy-Charts states that prices for other zones are for private use only. Ireland (IE-SEM) is not available from Energy-Charts, so it needs `entsoe` with a token: without one the component logs a single error, shows it on the status sensor and fetches nothing until the configuration is fixed, and an ENTSO-E failure there is not retried against Energy-Charts.
 - `tibber` - [Tibber](https://developer.tibber.com/)'s own end-user price, read with your personal access token. Tibber's price already includes markup, grid fees and VAT, so `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied to it. Quarter-hourly prices are requested.
+- `ostrom` - [Ostrom](https://www.ostrom.de/) (Germany) dynamic tariff, read from the [Ostrom API](https://docs.ostrom-api.io/). Create a production client in the [Ostrom developer portal](https://developer.ostrom-api.io/) and set its client ID and secret. The component finds your dynamic contract (set `spotprice_ostrom_contract_id` if the account has more than one) and asks for prices at the contract's postcode, which is what makes Ostrom include the local taxes, levies and variable grid fees. The price used is Ostrom's documented variable price per kWh - the spot price plus taxes, levies and grid fees, VAT included - so, as with Tibber, `spotprice_markup`, `spotprice_vat` and the charge zones are **not** applied. Ostrom's monthly base fee and fixed grid fees are not per kWh and are left out. Ostrom publishes hourly prices, with tomorrow's arriving between 15:00 and 17:00 CET. A fixed-price Ostrom contract (Simply Fair) is reported as an error: set its price with `rates_import` instead.
 
 #### When to enable (spotprice)
 
 - You are on a dynamic tariff that follows the day-ahead spot price (e.g. most German, Austrian, Dutch, Belgian or Nordic dynamic tariffs)
-- Your electricity comes from Tibber and you want Tibber's prices used directly
+- Your electricity comes from Tibber or Ostrom and you want the supplier's own prices used directly
 - You have a fixed feed-in tariff, or a spot-linked export tariff, and want export priced alongside
 
 #### Important notes (spotprice)
@@ -1716,11 +1717,14 @@ Price sources (`spotprice_provider`; when it is not set the default is `tibber` 
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `provider` | String | No | `energycharts` | `spotprice_provider` | `entsoe`, `energycharts` or `tibber` |
-| `zone` | String | Yes, except for tibber | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
+| `provider` | String | No | `energycharts` | `spotprice_provider` | `entsoe`, `energycharts`, `tibber` or `ostrom` |
+| `zone` | String | Yes, except for tibber and ostrom | - | `spotprice_zone` | Bidding zone, e.g. `DE-LU`, `AT`, `NL`, `BE`, `FR`, `DK1`, `SE3`, `NO1`, `IT-North`, `IE-SEM`, or a raw ENTSO-E EIC area code |
 | `entsoe_token` | String | For entsoe | - | `spotprice_entsoe_token` | ENTSO-E Transparency Platform security token |
 | `tibber_token` | String | For tibber | - | `spotprice_tibber_token` | Tibber personal access token |
 | `tibber_home_id` | String | No | First home | `spotprice_tibber_home_id` | Tibber home id when your account has more than one home |
+| `ostrom_client_id` | String | For ostrom | - | `spotprice_ostrom_client_id` | Ostrom API client ID (production client from the Ostrom developer portal) |
+| `ostrom_client_secret` | String | For ostrom | - | `spotprice_ostrom_client_secret` | Ostrom API client secret |
+| `ostrom_contract_id` | String | No | Active contract | `spotprice_ostrom_contract_id` | Ostrom contract number, needed only when the account has more than one active contract |
 | `markup` | Float | No | 0 | `spotprice_markup` | Supplier markup plus flat grid fees and levies, minor units per kWh, excluding VAT |
 | `vat` | Float | No | 0 | `spotprice_vat` | VAT as a fraction, e.g. `0.19`. A value of 1 or more is read as a percentage with a warning, so `1` means 1% |
 | `charge_zones` | List | No | - | `spotprice_charge_zones` | Time-of-day charges added before VAT: entries of `from`, `to` (HH:MM local), `charge` and optional `days` - day names (e.g. `[mon, tue, wed, thu, fri]`) or numbers 1-7 with Monday = 1, as for `day_of_week` in `rates_import` (`day_of_week` is also accepted here, with a warning). The first matching entry wins; a `to` at or before `from` wraps past midnight, so `to: "00:00"` runs up to midnight. Any other key (such as `start`, `end` or `rate`) is reported in the log |
@@ -1737,6 +1741,8 @@ Keep tokens in `secrets.yaml`:
 # secrets.yaml
 entsoe_token: YOUR_ENTSOE_TOKEN
 tibber_token: YOUR_TIBBER_TOKEN
+ostrom_client_id: YOUR_OSTROM_CLIENT_ID
+ostrom_client_secret: YOUR_OSTROM_CLIENT_SECRET
 ```
 
 #### apps.yaml configuration example (spotprice)
@@ -1776,6 +1782,18 @@ Tibber, with spot-linked export:
   spotprice_zone: NL
   spotprice_export_mode: spot
   spotprice_export_markup: -1.5
+```
+
+Ostrom, with a fixed feed-in tariff that pays nothing at negative spot prices (the zone is needed only for that rule):
+
+```yaml
+  spotprice_provider: ostrom
+  spotprice_ostrom_client_id: !secret ostrom_client_id
+  spotprice_ostrom_client_secret: !secret ostrom_client_secret
+  spotprice_zone: DE-LU
+  spotprice_export_mode: fixed
+  spotprice_export_rate: 7.94
+  spotprice_export_zero_on_negative: true
 ```
 
 A commented template is available in [templates/spotprice.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/spotprice.yaml).

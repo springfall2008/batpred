@@ -15,12 +15,16 @@ pred_bat:
     - 'c'
 
   # Price source (default energycharts): entsoe (needs a free ENTSO-E token, falls back to Energy-Charts),
-  # energycharts (no key needed) or tibber (Tibber's own end-user price, needs a Tibber token)
+  # energycharts (no key needed), or a supplier's own end-user price, used as-is with no markup or VAT added:
+  # tibber (needs a Tibber token) or ostrom (needs an Ostrom API client ID and secret)
   spotprice_provider: energycharts
   # Bidding zone, e.g. DE-LU, AT, NL, BE, FR, DK1, SE3, NO1, IE-SEM (ENTSO-E only)
   spotprice_zone: DE-LU
   # spotprice_entsoe_token: !secret entsoe_token
   # spotprice_tibber_token: !secret tibber_token
+  # spotprice_ostrom_client_id: !secret ostrom_client_id
+  # spotprice_ostrom_client_secret: !secret ostrom_client_secret
+  # spotprice_ostrom_contract_id: 100523456  # only if the account has more than one active contract
 
   # Supplier markup plus any flat grid fees and levies, per kWh, excluding VAT
   spotprice_markup: 18.5
