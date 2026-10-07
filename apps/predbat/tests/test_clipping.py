@@ -7,7 +7,8 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from const import TIME_FORMAT
 from tests.test_infra import reset_inverter
 from utils import (
     EXPORT_MODE_FREEZE,
@@ -43,6 +44,7 @@ def run_clipping_tests(my_predbat):
     failed |= test_try_socs_includes_clipping_target_kwh(my_predbat)
     failed |= test_multi_car_charging_during_clipping_window(my_predbat)
     failed |= test_clipping_allocated_today(my_predbat)
+    failed |= test_surplus_ev_dispatch_anti_clipping_alignment(my_predbat)
     return failed
 
 
@@ -1487,6 +1489,102 @@ def test_clipping_allocated_today(my_predbat):
     finally:
         if orig_dashboard_item:
             my_predbat.dashboard_item = orig_dashboard_item
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_surplus_ev_dispatch_anti_clipping_alignment(my_predbat):
+    """
+    Verify REQ-45: Surplus EV dispatch gating strips cheap rate discounts outside car need,
+    preventing spurious battery pre-charging before anti-clipping windows and preserving
+    battery headroom for solar absorption.
+    """
+    print("**** test_surplus_ev_dispatch_anti_clipping_alignment ****")
+    from prediction import Prediction
+
+    failed = False
+    setup(my_predbat)
+
+    # Configure 1 car
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_battery_size = [50.0]
+    my_predbat.car_charging_limit = [50.0]
+    my_predbat.car_charging_soc = [100.0]  # Already fully charged
+    my_predbat.car_charging_from_battery = False
+    my_predbat.rate_max_base = 30.0
+    my_predbat.rate_min_base = 7.0
+    my_predbat.minutes_now = 0
+    my_predbat.forecast_minutes = 24 * 60
+
+    midnight = datetime(2026, 7, 15, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = midnight
+
+    # Base rates: expensive day rates (30.0p) except overnight
+    rates = {m: (7.0 if m < 300 else 30.0) for m in range(24 * 60)}
+
+    # Octopus delivers an Intelligent dispatch slot for EV: 08:00 - 10:00 (minutes 480 to 600)
+    start_dt = midnight + timedelta(hours=8)
+    end_dt = midnight + timedelta(hours=10)
+    dispatch_slot = [{"start": start_dt.strftime(TIME_FORMAT), "end": end_dt.strftime(TIME_FORMAT), "charge_in_kwh": 0.0, "source": "smart-charge", "location": "AT_HOME"}]
+    my_predbat.octopus_slots = [dispatch_slot]
+
+    # Feed marks minutes 480-600 as io_adjusted @ 7.0p
+    my_predbat.io_adjusted = {m: (480 <= m < 600) for m in range(24 * 60)}
+    for m in range(480, 600):
+        rates[m] = 7.0
+
+    # 1. Active surplus gating: car is full, so minutes 480-600 are identified as octopus_surplus
+    my_predbat.octopus_surplus = set(range(480, 600))
+    stripped_rates = rates.copy()
+    stripped_rates = my_predbat.dynamic_load_car_strip_feed_rates(stripped_rates)
+
+    # Verify surplus discount was stripped and io_adjusted cleared
+    surplus_discount_stripped = all(stripped_rates[m] == 30.0 for m in range(480, 600))
+    io_adjusted_cleared = not any(my_predbat.io_adjusted.get(m, False) for m in range(480, 600))
+
+    if not surplus_discount_stripped:
+        print("ERROR: Surplus EV dispatch rates were not restored to base rate (30.0p)")
+        failed = True
+    if not io_adjusted_cleared:
+        print("ERROR: io_adjusted was not cleared for surplus minutes")
+        failed = True
+
+    # 2. Inactive surplus gating: without surplus detection, rates remain discounted @ 7.0p
+    my_predbat.octopus_surplus = set()
+    my_predbat.io_adjusted = {m: (480 <= m < 600) for m in range(24 * 60)}
+    unstripped_rates = rates.copy()
+    unstripped_rates = my_predbat.dynamic_load_car_strip_feed_rates(unstripped_rates)
+
+    if not all(unstripped_rates[m] == 7.0 for m in range(480, 600)):
+        print("ERROR: Rates were unexpectedly modified when octopus_surplus was empty")
+        failed = True
+
+    # 3. Plan evaluation with stripped rates: anti-clipping window preserves headroom
+    my_predbat.rate_import = stripped_rates
+    my_predbat.rate_import_base = stripped_rates
+    my_predbat.rate_import_replicated = stripped_rates
+
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_target_soc_pct = 70.0
+    my_predbat.export_window_best = [{"start": 600, "end": 720, "clipping_target_soc_pct": 70.0, "average": 12.0}]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 70)]
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.soc_kw = 7.0
+    my_predbat.soc_max = 10.0
+
+    pv_step = {m: (5.0 if 720 <= m < 900 else 0.0) for m in range(0, 24 * 60, 5)}
+    load_step = {m: 0.5 for m in range(0, 24 * 60, 5)}
+
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+    my_predbat.run_prediction([], [], my_predbat.export_window_best, my_predbat.export_limits_best, 0, end_record=my_predbat.forecast_minutes, save="best")
+
+    soc_at_start = my_predbat.predict_soc_best.get(600)
+    if soc_at_start is not None and soc_at_start > 7.1:
+        print("ERROR: Battery headroom compromised at clipping window start: SOC={}".format(soc_at_start))
+        failed = True
 
     if not failed:
         print("PASS")
