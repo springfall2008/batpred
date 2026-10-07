@@ -168,3 +168,7 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 # need the same answer to "which of these two states is the more significant one to show".
 CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
 EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+
+# A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
+# the full text is never only in a rotated-out log file; in between it is logged as one short line
+REPEAT_FULL_LOG_SECONDS = 3600
