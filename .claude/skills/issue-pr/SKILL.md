@@ -14,7 +14,7 @@ This skill assumes the issue has already been triaged — the daemon only invoke
 
 ## 1. Read the ticket
 
-Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bot's own triage comment (opens with "automated first-pass triage") already has the classification, priority, and any root-cause pointer — start from there rather than re-investigating from scratch.
+Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bot's own triage comment (opens with "automated first-pass triage") already has the classification, priority, and any root-cause pointer — start from there rather than re-investigating from scratch. If it's labelled `bug`, the comment also has a one-line statement of the fault right after the classification — use that as the precise claim to fix, not the reporter's (often vaguer) symptom description.
 
 ## 2. Investigate
 
