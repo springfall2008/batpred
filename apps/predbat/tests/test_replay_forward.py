@@ -551,6 +551,7 @@ def test_apply_run_clears_p90_signatures():
         inverters=[],
         rate_export={},
         pv_forecast_minute90_signatures=((1, 1.0, 0, 0), (1, 1.0, 0, 0)),
+        soc_max=18.08,
     )
     apply_run(bat, {"today": None, "force": None, "time": "2026-10-04 08:20:00+01:00"}, {"time": "2026-10-04 08:25:00+01:00", "minutes_now": 505, "soc": ("10.0", "55", "0")})
     if bat.pv_forecast_minute90_signatures is not None or bat.minutes_now != 505:
@@ -711,7 +712,7 @@ def test_cars_input():
     if len(runs) != 1 or runs[0].get("cars", {}).get("car_charging_soc") != [33.11]:
         print("ERROR: the dropped run's car state should carry to the next run: {}".format(runs))
         return 1
-    bat = SimpleNamespace(minutes_now=1040, now_utc=datetime(2026, 10, 5, 16, 20, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, car_charging_planned=[False], car_charging_slots=[[]])
+    bat = SimpleNamespace(minutes_now=1040, now_utc=datetime(2026, 10, 5, 16, 20, tzinfo=timezone.utc), soc_max=18.08, load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, car_charging_planned=[False], car_charging_slots=[[]])
     apply_run(bat, {"today": None, "force": None, "time": "2026-10-05 17:20:00+01:00"}, runs[0])
     if bat.car_charging_planned != [True] or bat.car_charging_slots[0][0]["kwh"] != 7.658 or bat.car_charging_limit_model != [9999.0]:
         print("ERROR: car state not applied: {}".format(vars(bat)))
@@ -738,7 +739,7 @@ def test_inverter_input():
     if len(runs) != 1 or runs[0].get("inverter", {}).get("charge_window") != [{"start": 1410, "end": 1440, "average": 0}]:
         print("ERROR: the dropped run's inverter state should carry to the next run: {}".format(runs))
         return 1
-    bat = SimpleNamespace(minutes_now=1400, now_utc=datetime(2026, 10, 5, 22, 20, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, charge_window=[], isCharging=False, replay_inverter_logged=True)
+    bat = SimpleNamespace(minutes_now=1400, now_utc=datetime(2026, 10, 5, 22, 20, tzinfo=timezone.utc), soc_max=18.08, load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, charge_window=[], isCharging=False, replay_inverter_logged=True)
     apply_run(bat, {"today": None, "force": None, "time": "2026-10-05 23:20:00+01:00"}, runs[0])
     if bat.charge_window != [{"start": 1410, "end": 1440, "average": 0}] or bat.isCharging is not True or bat.reserve != 0.723:
         print("ERROR: inverter state not applied: {}".format(vars(bat)))
@@ -827,10 +828,39 @@ def test_old_log_formats():
     if run_soc(second) != (6.85, 72) or second.get("octopus_slots") is not None:
         print("ERROR: a kW-labelled SoC line should be read, and only a run logging a change carry the dispatch list, got {} {}".format(run_soc(second), second.get("octopus_slots")))
         return 1
-    bat = SimpleNamespace(minutes_now=400, now_utc=datetime(2024, 12, 27, 6, 40, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, num_cars=1, car_charging_slots=[[]], car_charging_planned=[False], car_charging_now=[True])
+    bat = SimpleNamespace(minutes_now=400, now_utc=datetime(2024, 12, 27, 6, 40, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, num_cars=1, soc_max=13.696, car_charging_slots=[[]], car_charging_planned=[False], car_charging_now=[True])
     apply_run(bat, {"today": None, "force": None, "time": "2024-12-27 06:50:00+00:00"}, first)
     if bat.car_charging_slots[0][0]["start"] != 1290 or bat.car_charging_planned != [True] or bat.car_charging_now != [False] or bat.soc_kw != 2.108:
         print("ERROR: the old-format car state and total SoC should be applied, got {}".format(vars(bat)))
+        return 1
+    return 0
+
+
+MULTI_INVERTER_LOG = """2026-10-06 18:45:00.000000: --------------- PredBat - update at 2026-10-06 18:45:00+01:00 with clock skew 0 minutes, minutes now 1125
+2026-10-06 18:45:01.000000: Inverter 0 SoC: 6.46kWh 52%, current charge rate 2600W, current discharge rate 2675W, current battery power 2637W, current battery voltage 52.0V
+2026-10-06 18:45:01.100000: Inverter 1 SoC: 6.76kWh 71%, current charge rate 2600W, current discharge rate 2730W, current battery power 2725W, current battery voltage 52.0V
+2026-10-06 18:45:01.200000: Inverter 2 SoC: 5.32kWh 65%, current charge rate 3000W, current discharge rate 3150W, current battery power 3143W, current battery voltage 52.0V
+2026-10-06 18:45:05.000000: Inverter 0 SoC: 6.30kWh 51%, current charge rate 2600W, current discharge rate 2675W, current battery power 2637W, current battery voltage 52.0V
+"""
+
+
+def test_multi_inverter_soc():
+    """With several inverters and no totals line, the run's SoC is the sum of each inverter's first SoC line, and each
+    inverter is set to its own."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "predbat.log")
+        with open(path, "w") as handle:
+            handle.write(MULTI_INVERTER_LOG)
+        run = parse_log(path)[0]
+    soc_kw, percent = run_soc(run, 30.12)
+    if abs(soc_kw - 18.54) > 1e-9 or percent != 62:
+        print("ERROR: three inverters should total 18.54 kWh (62% of 30.12), got {} {}".format(soc_kw, percent))
+        return 1
+    inverters = [SimpleNamespace(soc_max=12.41), SimpleNamespace(soc_max=9.52), SimpleNamespace(soc_max=8.19)]
+    bat = SimpleNamespace(minutes_now=1120, now_utc=datetime(2026, 10, 6, 17, 40, tzinfo=timezone.utc), load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=inverters, rate_export={}, soc_max=30.12)
+    apply_run(bat, {"today": None, "force": None, "time": "2026-10-06 18:40:00+01:00"}, run)
+    if [inverter.soc_kw for inverter in inverters] != [6.46, 6.76, 5.32] or inverters[1].soc_percent != 71:
+        print("ERROR: each inverter should take its own logged SoC, got {}".format([vars(inverter) for inverter in inverters]))
         return 1
     return 0
 
@@ -891,4 +921,5 @@ def run_replay_forward_tests(my_predbat):
     failed += test_model_car_charging_now(my_predbat)
     failed += test_old_log_formats()
     failed += test_rebuild_io_rates(my_predbat)
+    failed += test_multi_inverter_soc()
     return failed

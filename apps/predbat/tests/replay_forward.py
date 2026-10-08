@@ -43,6 +43,8 @@ from tests.test_single_debug import restore_debug_state, rebuild_load_pv_models,
 RUN_RE = re.compile(r"PredBat - update at (\S+ \S+) with clock skew .*minutes now (\d+)")
 # Inverter 0's SoC, power and percentage. Older versions wrote "SOC: 1.9kW 20% ... Current power -1134.0W"
 SOC_RE = re.compile(r"Inverter 0 S[Oo][Cc]: ([\d.]+)kWh? (\d+)%.*?(?i:current) (?:battery )?power (-?[\d.]+)W")
+# Every inverter's own SoC line, to total a system with several when the log has no totals line
+SOC_EACH_RE = re.compile(r"Inverter (\d+) S[Oo][Cc]: ([\d.]+)kWh? (\d+)%")
 # Older versions also logged the total across all inverters, which is what the plan starts from with more than one
 SOC_TOTAL_RE = re.compile(r"Found \d+ inverters totals: .*?soc_max ([\d.]+) soc ([\d.]+)")
 # Older versions: "load 5.04 kWh import 14.07 kWh export 0.0 kWh pv 0.0 kWh"
@@ -215,6 +217,10 @@ def parse_log(path):
             if REPLAN_RE.search(line):
                 run["replan"] = True
                 continue
+            found = SOC_EACH_RE.search(line)
+            if found:
+                # The first line per inverter is the SoC the plan starts from; each is logged again after executing
+                run.setdefault("soc_each", {}).setdefault(int(found.group(1)), float(found.group(2)))
             found = SOC_TOTAL_RE.search(line)
             if found and not run.get("soc_total"):
                 run["soc_total"] = (float(found.group(1)), float(found.group(2)))
@@ -526,11 +532,19 @@ def roll_over_midnight(my_predbat, days=1):
     my_predbat.minutes_now -= minutes
 
 
-def run_soc(run):
-    """The battery's SoC (kWh) and percentage at a run: the all-inverter total where an older log gives one, else inverter 0's."""
+def run_soc(run, soc_max=None):
+    """The battery's SoC (kWh) and percentage at a run, across all inverters.
+
+    From the totals line where an older log has one, else the sum of each inverter's own SoC line (as a percentage of
+    soc_max, the system's capacity), else inverter 0's line for a single inverter.
+    """
     if run.get("soc_total"):
-        soc_max, soc_kw = run["soc_total"]
-        return soc_kw, int(round(soc_kw / soc_max * 100)) if soc_max else 0
+        total_max, soc_kw = run["soc_total"]
+        return soc_kw, int(round(soc_kw / total_max * 100)) if total_max else 0
+    each = run.get("soc_each") or {}
+    if len(each) > 1 and soc_max:
+        soc_kw = sum(each.values())
+        return soc_kw, int(round(soc_kw / soc_max * 100))
     return float(run["soc"][0]), int(run["soc"][1])
 
 
@@ -556,14 +570,18 @@ def apply_run(my_predbat, prev, run):
     my_predbat.minutes_now = run["minutes_now"]
     my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=gap)
     my_predbat.now_utc_real = my_predbat.now_utc
-    soc_kw, soc_percent = run_soc(run)
+    soc_kw, soc_percent = run_soc(run, my_predbat.soc_max)
     my_predbat.soc_kw = soc_kw
     my_predbat.soc_percent = soc_percent
-    # One inverter takes it all; with several, the total is shared by capacity, as the log gives only the total
+    # One inverter takes it all; with several, each takes its own logged SoC, or a share of the total by capacity
+    each = run.get("soc_each") or {}
     total_max = sum(inverter.soc_max for inverter in my_predbat.inverters) if len(my_predbat.inverters) > 1 else 0
-    for inverter in my_predbat.inverters:
-        inverter.soc_kw = soc_kw * inverter.soc_max / total_max if total_max else soc_kw
-        inverter.soc_percent = soc_percent
+    for index, inverter in enumerate(my_predbat.inverters):
+        if total_max and index in each:
+            inverter.soc_kw = each[index]
+        else:
+            inverter.soc_kw = soc_kw * inverter.soc_max / total_max if total_max else soc_kw
+        inverter.soc_percent = int(round(inverter.soc_kw / inverter.soc_max * 100)) if total_max else soc_percent
     # Every prediction's metric starts from the cost so far today, and the prediction's day totals start from
     # these counters; the live system recomputes both each run, so take them from the log too
     if run.get("cost"):
@@ -771,7 +789,7 @@ def replay_runs(my_predbat, runs, until_minutes, plan_day, yaml_today, simulate,
             "time": run["time"][11:16],
             # From the yaml day's midnight, like the windows below, so rows after midnight carry on from it
             "minutes_now": run["minute"],
-            "soc_percent": run_soc(run)[1],
+            "soc_percent": run_soc(run, my_predbat.soc_max)[1],
             "soc_sim_percent": my_predbat.soc_percent if simulate else None,
             "replanned": run["filtered"] is not None or bool(run.get("replan")),
             "logged": None,
