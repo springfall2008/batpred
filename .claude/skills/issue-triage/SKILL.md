@@ -79,7 +79,7 @@ If you classify as `bug`, write a one-line statement of the bug in your own word
 
 Search existing issues (`gh issue list --search ...`, both open and closed) for the same symptom.
 
-- High confidence match: label `duplicate`, comment linking the original issue, and close this one.
+- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one.
 - Low confidence: mention "possibly related to #N" in your triage comment; don't close.
 
 Then look for **similar** issues and PRs as well, whether or not they are duplicates: search both open and closed ones for the symptom, the integration and the component it touches (`gh issue list --state all --search ...` and `gh pr list --state all --search ...`). Read the findings in the best matches — what was diagnosed, what was fixed, and what was ruled out — before forming a hypothesis, and link the relevant ones in your triage comment as "related to #N". An issue that shares a symptom or a trigger is not necessarily the same problem: only call it a duplicate when the cause matches, not just the symptom, and treat a past finding as a lead to confirm against current main, not as a conclusion.
