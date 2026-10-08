@@ -467,6 +467,44 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "hanchu": {
+        "class": "hanchu.HanchuAPI",
+        "name": "Hanchu ESS Cloud API",
+        "inverter": True,
+        "event_filter": "predbat_hanchu_",
+        "args": {
+            # The e-mail address and password the user signs into the Hanchu phone app with. There
+            # is no developer portal and no API key: the app account IS the credential.
+            "account": {"required": False, "secret": True, "config": "hanchu_account"},
+            "password": {"required": False, "secret": True, "config": "hanchu_password"},
+            "inverter_sn": {"required": False, "config": "hanchu_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "hanchu_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "hanchu_automatic_ignore_pv"},
+            # On by default, matching alphaess_control_enable and sunsynk_control_enable: an
+            # inverter component that does not drive the inverter is not what a user configuring it
+            # expects. Set false for monitoring only. switch.predbat_set_read_only still gates
+            # every write.
+            "control_enable": {"required": False, "default": True, "config": "hanchu_control_enable"},
+            # The escape hatch for the one genuinely inferred behaviour in this component: nothing
+            # documents which work mode honours the timed slots, so "User-defined" is a deduction.
+            # Set false to write the windows and leave the mode exactly as the user set it.
+            "work_mode_control": {"required": False, "default": True, "config": "hanchu_work_mode_control"},
+            # The API reports no battery power limit directly - it is taken from the charge power
+            # setting's own upper bound. This is the escape hatch for a user who knows their pack's
+            # real limit.
+            "battery_rate_max": {"required": False, "config": "hanchu_battery_rate_max"},
+            # Same idea for the inverter's AC rating, which is taken from the discharge power
+            # setting's upper bound. Hanchu units come in 3.68, 5, 6 and 10 kW.
+            "inverter_limit": {"required": False, "config": "hanchu_inverter_limit"},
+            "api_delay": {"required": False, "default": 1, "config": "hanchu_api_delay"},
+            "min_write_interval": {"required": False, "default": 60, "config": "hanchu_min_write_interval"},
+        },
+        # Gate activation on having an account. Without this the component would start for every
+        # instance, since all individual args are optional.
+        "required_or": ["account"],
+        "phase": 1,
+        "can_restart": True,
+    },
     "enphase": {
         "class": "enphase.EnphaseAPI",
         "name": "Enphase API",
