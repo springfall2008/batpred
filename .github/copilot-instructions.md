@@ -136,7 +136,7 @@ class MyComponent(ComponentBase):
             await asyncio.sleep(interval)
 ```
 
-**Key components**: `WebInterface`, `PredbatMCPServer`, `SolarAPI`, `AlertFeed`, `GECloudDirect`, `CarbonAPI`, `FoxAPI`, `DatabaseManager`, `OctopusAPI`, `OhmeAPI`, `HAHistory`, `HAInterface`
+**Key components**: `WebInterface`, `PredbatMCPServer`, `SolarAPI`, `AlertFeed`, `GECloudDirect`, `CarbonAPI`, `FoxAPI`, `DatabaseManager`, `OctopusAPI`, `OhmeAPI`, `WallboxAPI`, `HAHistory`, `HAInterface`
 
 Components are managed via `Components` class (`apps/predbat/components.py`) and initialized via plugin system (`apps/predbat/plugin_system.py`).
 
@@ -326,6 +326,7 @@ Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_
 - `gecloud.py` - GivEnergy cloud API
 - `fox.py` - Fox ESS cloud API  
 - `ohme.py` - Ohme EV charger integration
+- `wallbox.py` - Wallbox EV charger integration
 - `carbon.py` - Carbon intensity API
 
 ## Common Gotchas
