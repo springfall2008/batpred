@@ -1852,6 +1852,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
+        "rate_step_percent_of_capacity": 1,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -2776,6 +2777,11 @@ APPS_SCHEMA = {
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
+    "wallbox_username": {"type": "string", "empty": False},
+    "wallbox_password": {"type": "string", "empty": False},
+    "wallbox_automatic": {"type": "boolean"},
+    "wallbox_control": {"type": "boolean"},
+    "wallbox_poll_seconds": {"type": "integer", "zero": False},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2917,6 +2923,8 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA

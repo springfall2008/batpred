@@ -68,6 +68,7 @@ BLAS
 boostable
 Bottlecap
 brickatius
+britkat1980
 bundesnetzagentur
 bwignore
 byok
@@ -174,6 +175,7 @@ dwindow
 Dynamisch
 eauth
 echargingpile
+ecosmart
 Eddi
 eddis
 efgh

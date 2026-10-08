@@ -35,6 +35,9 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 
 PV_CALIBRATION_LOWEST = 0.20
 PV_CALIBRATION_HIGHEST = 4.0
+# Ceiling on the Open-Meteo ensemble's P90:median ratio. Near dawn and dusk the median is a few
+# W/m2 and the ratio is unbounded; this is the same limit best_day_scaling is held to.
+OPEN_METEO_P90_RATIO_MAX = 2.0
 
 # apps.yaml args pointing at solar forecast entities an EXTERNAL integration publishes (typically
 # the HACS "Solcast PV Forecast" integration, when fetch_pv_forecast() falls back to reading HA
@@ -94,6 +97,8 @@ class SolarAPI(ComponentBase):
         self.pv_scaling = pv_scaling
         self.open_meteo_forecast = open_meteo_forecast
         self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
+        # Set by download_open_meteo_data(): True when the last download carried a real ensemble spread
+        self.open_meteo_ensemble_band = False
         self.solcast_requests_total = 0
         self.solcast_failures_total = 0
         self.forecast_solar_requests_total = 0
@@ -267,10 +272,17 @@ class SolarAPI(ComponentBase):
     URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
     URL_PERSONAL_DUAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec1}/{az1}/{kwp1}/{dec2}/{az2}/{kwp2}?time=utc"
 
-    async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
+    async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az):
         """
-        Download Open-Meteo ensemble data for P10 solar estimate.
-        Returns a dict mapping ISO timestamp strings to P10 kW values.
+        Download Open-Meteo ensemble data for the spread of the solar estimate.
+        Returns a dict mapping ISO timestamp strings to (p10_ratio, p90_ratio): the ensemble's 10th
+        and 90th percentile irradiance for that hour relative to its own median.
+
+        The ratios are applied to the deterministic P50 rather than the ensemble's absolute values
+        being used. The two are different model runs and can disagree on the level of a whole day,
+        so an absolute ensemble P10 can land above the deterministic P50 (leaving no downside at
+        all once clamped) or far below it; the ensemble's spread about its own centre is the part
+        that carries over. Hours where the ensemble median is zero have no ratio and are left out.
         """
         url = "https://ensemble-api.open-meteo.com/v1/ensemble?models=icon_seamless&latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(lat=lat, lon=lon, tilt=tilt, az=az)
         data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
@@ -291,23 +303,32 @@ class SolarAPI(ComponentBase):
                 if val is not None:
                     values.append(val)
             if not values:
-                result[ts] = 0.0
                 continue
             values.sort()
-            p10_idx = max(0, math.ceil(len(values) * 0.10) - 1)
-            gti_p10 = values[p10_idx]
-            result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
+            gti_p10 = values[max(0, math.ceil(len(values) * 0.10) - 1)]
+            # A true median: with an even number of usable members there is no middle one, so
+            # take the mean of the two either side rather than the lower of them
+            middle = len(values) // 2
+            gti_p50 = values[middle] if len(values) % 2 else 0.5 * (values[middle - 1] + values[middle])
+            gti_p90 = values[max(0, math.ceil(len(values) * 0.90) - 1)]
+            if gti_p50 <= 0:
+                continue
+            result[ts] = (dp4(max(gti_p10, 0) / gti_p50), dp4(min(gti_p90 / gti_p50, OPEN_METEO_P90_RATIO_MAX)))
         return result
 
     async def download_open_meteo_data(self, configs=None):
         """
         Download Open-Meteo forecast data and convert to PV power estimates.
         Uses GTI (global tilted irradiance) with simple temperature derating for P50,
-        and ensemble members for P10. Returns (sorted_data, max_kwh).
+        and the spread of the ensemble members for P10 and P90. Returns (sorted_data, max_kwh).
         If configs is provided it is used directly; otherwise self.open_meteo_forecast is used.
         """
         period_data = {}
         max_kwh = 0
+        # Whether every array that returned a forecast also got a real ensemble spread. Without one
+        # gti_hourly_to_period_kwh() fills pv_estimate10/90 with fixed fractions of P50, which
+        # fetch_pv_forecast() must not mistake for provider figures worth keeping.
+        ensemble_band_ok = True
 
         if configs is None:
             configs = self.open_meteo_forecast
@@ -362,7 +383,10 @@ class SolarAPI(ComponentBase):
                 self.log("Warn: SolarAPI: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
                 continue
 
-            ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
+            ensemble_band = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az)
+            if not ensemble_band:
+                self.log("Warn: SolarAPI: Open-Meteo ensemble data for lat {} lon {} could not be downloaded, the 10% and 90% scenarios will be created from history instead".format(lat, lon))
+                ensemble_band_ok = False
 
             array_periods = gti_hourly_to_period_kwh(
                 times,
@@ -372,22 +396,25 @@ class SolarAPI(ComponentBase):
                 kwp=kwp,
                 system_loss=system_loss,
                 shading_factors=shading_factors,
-                p10_instant=ensemble_p10,
+                band_ratio=ensemble_band,
             )
             for stamp, values in array_periods.items():
                 pv50 = values["pv_estimate"]
                 pv10 = values["pv_estimate10"]
+                pv90 = values["pv_estimate90"]
                 if stamp in period_data:
                     period_data[stamp]["pv_estimate"] = dp4(period_data[stamp]["pv_estimate"] + pv50)
                     period_data[stamp]["pv_estimate10"] = dp4(period_data[stamp]["pv_estimate10"] + pv10)
+                    period_data[stamp]["pv_estimate90"] = dp4(period_data[stamp]["pv_estimate90"] + pv90)
                 else:
-                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
 
         sorted_data = []
         if period_data:
             for key in sorted(period_data.keys()):
                 sorted_data.append(period_data[key])
 
+        self.open_meteo_ensemble_band = ensemble_band_ok and bool(sorted_data)
         self.log("SolarAPI: Open-Meteo returned {} data points".format(len(sorted_data)))
         return sorted_data, max_kwh
 
@@ -1142,11 +1169,14 @@ class SolarAPI(ComponentBase):
             self.log("Warn: SolarAPI: PV Calibration: could not read any forecast history from sensor.{}_pv_forecast_h0_uncalibrated or sensor.{}_pv_forecast_h0 - calibration will be disabled until history builds up".format(self.prefix, self.prefix))
         return history
 
-    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None, calibrate_band=False):
         """
         Perform PV calibration based on historical data and forecast data.
         This will adjust the forecast data based on historical PV production and forecast data.
         It will also create pv_estimate10 and pv_estimate90 data if create_pv10 is True.
+        calibrate_band is for a provider that supplies its own pv_estimate10/pv_estimate90 (so
+        create_pv10 is False): they are kept, and moved with P50 by whatever calibration and array
+        ceiling were applied to it, so they keep the provider's ratio to the P50 that is returned.
         """
         # If no period is given, default to the plan interval (backward-compatible for unit tests).
         if period is None:
@@ -1419,6 +1449,12 @@ class SolarAPI(ComponentBase):
         # Per-slot best_day_scaling for the planner's p90 series, held back so the create_pv10 block
         # below can apply the same ceiling this loop applies to the published pv_estimate90.
         slot_best_scaling = {}
+        # The user's switch, as opposed to enabled_calibration above which is "enough history to
+        # calibrate from". It picks the series returned as P50, and so the one the band is built on.
+        calibration_on = self.get_arg("metric_pv_calibration_enable", default=True)
+        # The raw forecast as the planner gets it with calibration off: unscaled, but still held to
+        # the array ceiling in the loop below. A copy, so the caller's series is left alone.
+        pv_forecast_minute_raw = dict(pv_forecast_minute)
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             raw_value = 0
@@ -1447,17 +1483,27 @@ class SolarAPI(ComponentBase):
             # for. Only the array limit may cap the upside case.
             capped_p50 = min(pv_value, capped_data)
             pv_estimateCL[minute] = dp4(capped_p50)
-            pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
-            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, ceiling_slot))
 
-            # The planner's p90 series (built in the create_pv10 block below from the capped
+            # The 10%/90% band is a scaling of whichever series is handed to the planner as P50:
+            # the capped calibrated one, or the raw forecast when the user has switched calibration
+            # off. Scaling the calibrated series regardless left the band and its centre line on two
+            # different curves, so P10 could sit above P50 and P90 below it (GH#5345).
+            #
+            # Switching calibration off turns off the scaling, not the array ceiling: a raw forecast
+            # above what the array can produce is clipped to ceiling_slot either way (the warning
+            # below says as much), so P50 never sits above the ceiling P90 is clamped to.
+            band_p50 = capped_p50 if calibration_on else min(raw_value, ceiling_slot)
+            pv_estimate10[minute] = dp4(band_p50 * worst_day_scaling)
+            pv_estimate90[minute] = dp4(min(band_p50 * best_day_scaling, ceiling_slot))
+
+            # The planner's p90 series (built in the create_pv10 block below from the same
             # per-minute data) must land on the same ceiling as pv_estimate90 above, or the two
             # disagree exactly where the comment above says they must agree. ceiling_slot is kWh per
             # plan interval, so the clamp cannot be applied per minute; record the scaling that
-            # holds this slot's p90 total at min(capped_p50 * best_day_scaling, ceiling_slot) instead
+            # holds this slot's p90 total at min(band_p50 * best_day_scaling, ceiling_slot) instead
             # and let the block below scale every minute of the slot by it. An empty slot has no
             # ratio to take, and needs no clamp either - scaling zero by anything stays zero.
-            slot_best_scaling[minute] = min(best_day_scaling, ceiling_slot / capped_p50) if capped_p50 > 0 else best_day_scaling
+            slot_best_scaling[minute] = min(best_day_scaling, ceiling_slot / band_p50) if band_p50 > 0 else best_day_scaling
 
             # Apply the same cap to the per-minute data the planner consumes. Scale rather than
             # clamp per minute: capped_data is kWh per plan interval, not per minute.
@@ -1467,6 +1513,13 @@ class SolarAPI(ComponentBase):
                     if (minute + offset) in pv_forecast_minute_adjusted:
                         pv_forecast_minute_adjusted[minute + offset] = dp4(pv_forecast_minute_adjusted[minute + offset] * scale_down)
                 capped_slots += 1
+
+            # And the ceiling alone to the raw series used when calibration is switched off.
+            if raw_value > ceiling_slot:
+                scale_down = ceiling_slot / raw_value
+                for offset in range(0, self.plan_interval_minutes, 1):
+                    if (minute + offset) in pv_forecast_minute_raw:
+                        pv_forecast_minute_raw[minute + offset] = dp4(pv_forecast_minute_raw[minute + offset] * scale_down)
 
         if capped_slots:
             ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
@@ -1486,6 +1539,33 @@ class SolarAPI(ComponentBase):
                     raw_exceeds_ceiling_slots, dp2(raw_peak_kw), dp2(ceiling_kw), self.pv_scaling
                 )
             )
+
+        # Do we use calibrated or raw data? The band below is built from whichever is returned.
+        pv_forecast_minute_used = pv_forecast_minute_adjusted if calibration_on else pv_forecast_minute_raw
+
+        # A provider's own band (Open-Meteo's ensemble spread) says how far either side of P50 that
+        # particular hour could land, which the flat worst/best day scaling cannot. Keep it, but
+        # move it with the P50 it is paired with: calibration says the array produces some multiple
+        # of the forecast in this slot, and that holds for the pessimistic and optimistic scenarios
+        # as much as the central one. Scaling each minute by used / raw preserves the provider's
+        # ratios to P50 and picks up the array cap applied above (the only thing that moves the raw
+        # series when calibration is off). P10 is held at or below P50; P90 at or above it and, as
+        # for a created P90, no higher than the array ceiling unless P50 itself is.
+        if calibrate_band and not create_pv10:
+            pv_estimate10 = {}
+            pv_estimate90 = {}
+            ceiling_minute = ceiling_slot / self.plan_interval_minutes
+            for minute in range(0, max(pv_forecast_minute.keys()) + 1):
+                raw_minute = pv_forecast_minute.get(minute, 0)
+                used_minute = pv_forecast_minute_used.get(minute, 0)
+                scale = used_minute / raw_minute if raw_minute > 0 else 1.0
+                pv10_minute = dp4(min(pv_forecast_minute10.get(minute, 0) * scale, used_minute))
+                pv90_minute = dp4(max(min(pv_forecast_minute90.get(minute, 0) * scale, ceiling_minute), used_minute))
+                pv_forecast_minute10[minute] = pv10_minute
+                pv_forecast_minute90[minute] = pv90_minute
+                slot_start = int(minute / self.plan_interval_minutes) * self.plan_interval_minutes
+                pv_estimate10[slot_start] = pv_estimate10.get(slot_start, 0) + pv10_minute
+                pv_estimate90[slot_start] = pv_estimate90.get(slot_start, 0) + pv90_minute
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
@@ -1521,16 +1601,16 @@ class SolarAPI(ComponentBase):
                 # When we store the data we have to reverse the divide_by factor
                 if has_calibrated:
                     entry["pv_estimateCL"] = calibrated * divide_by
-                if create_pv10 and has_calibrated10:
+                if (create_pv10 or calibrate_band) and has_calibrated10:
                     entry["pv_estimate10"] = calibrated10 * divide_by
-                if create_pv10 and has_calibrated90:
+                if (create_pv10 or calibrate_band) and has_calibrated90:
                     entry["pv_estimate90"] = calibrated90 * divide_by
 
         # Creation of PV10 data using worst day scaling factor
         if create_pv10:
             capped_best_slots = 0
-            for minute in range(0, max(pv_forecast_minute_adjusted.keys()) + 1):
-                pv_value = pv_forecast_minute_adjusted.get(minute, 0)
+            for minute in range(0, max(pv_forecast_minute_used.keys()) + 1):
+                pv_value = pv_forecast_minute_used.get(minute, 0)
                 # Use the worst day scaling factor to create pv_estimate10. No ceiling clamp is
                 # needed: worst_day_scaling is capped at 1.0 above, so this can only scale down.
                 pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
@@ -1550,12 +1630,9 @@ class SolarAPI(ComponentBase):
                 )
             )
 
-        # Do we use calibrated or raw data?
-        if self.get_arg("metric_pv_calibration_enable", default=True):
+        if calibration_on:
             self.log("SolarAPI: PV Calibration: Using calibrated PV data")
-            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
-        else:
-            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
+        return pv_forecast_minute_used, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
 
     def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90):
         """
@@ -1808,9 +1885,18 @@ class SolarAPI(ComponentBase):
             # of double-counting a site configured against two providers.
             self.base.resolve_pv_array_kwp(max_kwh)
 
+            # Open-Meteo's ensemble supplies a real spread, so keep the P10 and P90 built from it
+            # (calibrated alongside P50) rather than replacing them with ones created from history.
+            # active_source, not configured_source: a Forecast.Solar fallback or primary that
+            # actually served the data has no band of its own.
+            calibrate_band = False
+            if active_source == "open_meteo" and self.open_meteo_ensemble_band:
+                create_pv10 = False
+                calibrate_band = True
+
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
-                pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period
+                pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period, calibrate_band=calibrate_band
             )
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
