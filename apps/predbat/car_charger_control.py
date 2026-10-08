@@ -534,6 +534,16 @@ class CarChargerControl:
         held = [(key, handle) for key, handle in self.charger_control_chargers() if key in self.charger_control_state]
         await self.charger_control_each([lambda key=key, handle=handle: self.charger_control_release_held(key, handle) for key, handle in held])
 
+    async def charger_control_hand_over_held(self, key, handle):
+        """Hand one held charger to Octopus, then forget it - after, so a failed command is retried."""
+        await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
+        del self.charger_control_state[key]
+
+    async def charger_control_hand_over_all(self):
+        """Hand every held charger to Octopus, each on its own so one refusing does not strand the rest."""
+        held = [(key, handle) for key, handle in self.charger_control_chargers() if key in self.charger_control_state]
+        await self.charger_control_each([lambda key=key, handle=handle: self.charger_control_hand_over_held(key, handle) for key, handle in held])
+
     async def charger_control_release_held(self, key, handle):
         """Release one charger Predbat holds, then forget it."""
         await self.charger_control_release_one(handle, self.charger_control_state[key])
@@ -590,8 +600,7 @@ class CarChargerControl:
             if key in self.charger_control_state:
                 if why == "octopus":
                     # Handed over before it is forgotten, so a failed command is retried next cycle
-                    await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
-                    del self.charger_control_state[key]
+                    await self.charger_control_hand_over_held(key, handle)
                 elif why != "discovering":
                     # Nobody is known to be taking it over - with Octopus driving the car, nobody drives the
                     # charger - so a stop is undone rather than left in place

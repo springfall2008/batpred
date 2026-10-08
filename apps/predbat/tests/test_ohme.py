@@ -1650,6 +1650,7 @@ class MockOhmeAPI(OhmeAPI):
         self.charger_slots = False
         self.charger_slots_blocked = None
         self.control_saved_target = None
+        self.control_max_charge_started = False
         self.prefix = "predbat"
         self.local_tz = pytz.timezone("Europe/London")
         self.states = {}
@@ -2002,12 +2003,33 @@ def _test_ohme_control_hand_to_octopus(my_predbat=None):
 
     api = _ohme_control_api()
     api.control_saved_target = 70
+    api.control_max_charge_started = True
     run_async(api.charger_control_hand_to_octopus(api.client, False))
     urls = [request["url"] for request in api.client.request_log]
     max_off = next(i for i, url in enumerate(urls) if "max-charge?enabled=false" in url)
     resume = next(i for i, url in enumerate(urls) if url.endswith("/resume"))
     assert max_off < resume, f"Max charge must be off before the charger is resumed, got {urls}"
     assert api.control_saved_target is None, "Expected the saved target to be restored and cleared"
+
+    # Max charge started with no readable target to save, then paused: the max charge is still Predbat's to undo
+    api = _ohme_control_api()
+    assert api.control_saved_target is None
+    api.control_max_charge_started = True
+    run_async(api.charger_control_hand_to_octopus(api.client, False))
+    urls = [request["url"] for request in api.client.request_log]
+    max_off = next(i for i, url in enumerate(urls) if "max-charge?enabled=false" in url)
+    resume = next(i for i, url in enumerate(urls) if url.endswith("/resume"))
+    assert max_off < resume, f"Max charge must be off before the resume even with no saved target, got {urls}"
+    assert api.control_max_charge_started is False, "Expected the flag cleared once max charge is off"
+
+    # A charger Predbat only paused, never on max charge, has no max charge of Predbat's to undo -
+    # one the user set in the Ohme app is left alone
+    api = _ohme_control_api()
+    assert api.control_saved_target is None
+    run_async(api.charger_control_hand_to_octopus(api.client, False))
+    urls = [request["url"] for request in api.client.request_log]
+    assert not any("max-charge" in url for url in urls), f"Expected no max charge change for a charger Predbat never put on max charge, got {urls}"
+    assert any(url.endswith("/resume") for url in urls), f"Expected the paused charger resumed, got {urls}"
     return 0
 
 
@@ -2484,7 +2506,7 @@ def _test_ohme_follows_car_switch(my_predbat=None):
     api.args["octopus_intelligent_charger_follows_car"] = False
     _ohme_run_poll(api, seconds=240)
     assert api.charger_control_active is False and not api.charger_control_state, f"Expected control off and the charger released, got {api.charger_control_state}"
-    assert "resume" in released, f"Expected the charger handed back, got {released}"
+    assert released == ["resume", ("max_charge", False)], f"Expected a normal release (resume first) when Octopus drives the car, got {released}"
 
     # Octopus Intelligent charging off in Predbat: Predbat plans the car itself, so it drives the charger
     api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_CAR})
@@ -3553,8 +3575,15 @@ def _test_ohme_run_tariff_change_with_control(my_predbat=None):
     async def mock_max_charge(state=True):
         released.append(("max_charge", state))
 
+    async def mock_set_target(target_percent=None):
+        """Accept the target being put back"""
+
     api.client.async_resume_charge = mock_resume
     api.client.async_max_charge = mock_max_charge
+    api.client.async_set_target = mock_set_target
+    # Paused after an earlier max charge, so Predbat has a max charge and a user target to undo
+    api.control_saved_target = 70
+    api.control_max_charge_started = True
     api.charger_control_state = {api.charger_control_chargers()[0][0]: False}
     _ohme_set_tariff(api, "E-1R-INTELLI-VAR-22-10-14-A")
     assert _ohme_run_poll(api, seconds=120) == [False], "Expected plain dispatches on Intelligent"
@@ -3562,7 +3591,7 @@ def _test_ohme_run_tariff_change_with_control(my_predbat=None):
     assert released == [("max_charge", False), "resume"], f"Expected max charge off before the resume, so no charge starts outside a dispatch, got {released}"
     assert not api.charger_control_state, "Expected the control state cleared"
     assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Intelligent mode, got {api.slot_mode} owner {api.base.car_slot_owner}"
-    assert any("Octopus Intelligent now schedules the charge" in msg for msg in api.log_messages), f"Expected the release to say why, got {api.log_messages}"
+    assert any("handing the charger to Octopus" in msg for msg in api.log_messages), f"Expected the release to say why, got {api.log_messages}"
 
     # Back off Intelligent: control resumes, and the Ohme slots must stop being the car plan or
     # Predbat's own plan - the one it is now enforcing - would never be built
@@ -3648,9 +3677,15 @@ def _test_ohme_run_release_retried_after_failure(my_predbat=None):
         if fail[0]:
             raise ApiException("max charge failed")
 
+    async def mock_set_target(target_percent=None):
+        """Accept the target being put back"""
+
     api.client.async_resume_charge = mock_resume
     api.client.async_max_charge = mock_max_charge
-    api.charger_control_state = {api.charger_control_chargers()[0][0]: False}  # Predbat is holding the charger paused
+    api.client.async_set_target = mock_set_target
+    api.control_saved_target = 70  # Predbat is holding the charger paused, after an earlier max charge
+    api.control_max_charge_started = True
+    api.charger_control_state = {api.charger_control_chargers()[0][0]: False}
 
     # Onto Intelligent, and the hand-back fails half way: control has stood down, the charger is not released
     _ohme_set_tariff(api, "E-1R-INTELLI-VAR-22-10-14-A")

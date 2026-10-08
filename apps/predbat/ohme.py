@@ -255,6 +255,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.charger_slots_blocked = None
         # The charger's own target percent as it was before Predbat took control, restored on release
         self.control_saved_target = None
+        self.control_max_charge_started = False
         self.energy_today = 0.0
         self.energy_today_date = None
         self.energy_last_time = None
@@ -407,6 +408,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
                 self.control_saved_target = self.charger_target()
             self.log("Info: Ohme API: Charge window active, setting max charge")
             await client.async_max_charge(True)
+            self.control_max_charge_started = True
         else:
             self.log("Info: Ohme API: Outside the charge plan, pausing the charger")
             await client.async_pause_charge()
@@ -417,6 +419,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if not charge:
             await client.async_resume_charge()
         await client.async_max_charge(False)
+        self.control_max_charge_started = False
         # Max charge overrides the charger's own target percent, so put back what the user had
         # before Predbat took over - otherwise Ohme's smart schedule is left charging to the wrong
         # level once we hand it back
@@ -432,7 +435,10 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         only returns it to Ohme's smart schedule, which Octopus drives.
         """
         self.log("Info: Ohme API: Octopus Intelligent drives the charger, handing it back")
-        await client.async_max_charge(False)
+        # Only undo a max charge Predbat started - one the user set themselves is not ours to cancel
+        if charge or self.control_max_charge_started:
+            await client.async_max_charge(False)
+            self.control_max_charge_started = False
         if self.control_saved_target is not None:
             await client.async_set_target(target_percent=self.control_saved_target)
             self.control_saved_target = None
@@ -544,15 +550,13 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # poll rather than only on the change, as charger_control_release() forgets the charger last -
         # a hand-back that failed part way is tried again until the charger really is released
         if not self.charger_control_active and self.charger_control_state:
-            self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, releasing the charger")
             if octopus_intelligent:
                 # Octopus drives this charger: hand it over without starting a charge outside a dispatch
-                for key, handle in self.charger_control_chargers():
-                    if key in self.charger_control_state:
-                        await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
-                        del self.charger_control_state[key]
+                self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, handing the charger to Octopus")
+                await self.charger_control_hand_over_all()
             else:
                 # Octopus drives the car: nobody drives the charger, so a stop is undone
+                self.log("Info: Ohme API: Predbat no longer drives the charger, releasing it")
                 await self.charger_control_release()
 
         if octopus_intelligent:
