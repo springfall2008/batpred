@@ -1323,7 +1323,7 @@ class OctopusAPI(ComponentBase):
         # Default saving session rate in octopoints/kWh
         # octopus_saving_session_rate is in p/kWh, convert to octopoints
         octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)
-        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100)  # 100p/kWh default
+        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100.0)  # 100p/kWh default
         default_octopoints = default_rate_pence * octopoints_per_penny
 
         if not has_joined:
@@ -4212,7 +4212,7 @@ class Octopus:
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
-            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0)
+            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0.0)
             join_lead_hours = self.get_arg("octopus_saving_auto_join_lead_hours", 0)
 
             joined_events = []
@@ -4327,7 +4327,7 @@ class Octopus:
 
             # Default saving session rate for when octopoints_per_kwh is not available
             # (e.g. new flexibility API events that don't report reward rates)
-            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0)
+            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0.0)
 
             if joined_events:
                 for event in joined_events:
