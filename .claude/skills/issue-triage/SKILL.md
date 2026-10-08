@@ -131,7 +131,7 @@ Skip priority for pure questions and feature requests.
 
 Check existing comments first — if one from you is already there, stop; don't post again.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, the one-line bug statement from step 3 immediately after the classification if you classified as `bug`, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, the one-line bug statement from step 3 immediately after the classification if you reached step 3 and classified as `bug` (gates 1a/1b apply a type label without ever reaching step 3, so there's no statement to include if you took one of those paths), priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
 
