@@ -10,6 +10,7 @@
 # fmt: on
 
 from utils import dp4
+import copy
 import numpy as np
 from datetime import datetime, timezone, timedelta
 import tempfile
@@ -59,8 +60,8 @@ def test_load_ml(my_predbat=None):
         ("training_stop_callback", _test_training_stops_on_stop_callback, "Training abandons a run when the stop hook trips"),
         ("training_off_event_loop", _test_component_training_does_not_block_event_loop, "Component training leaves its event loop free to run"),
         ("training_abandoned_on_stop", _test_component_training_abandons_run_on_stop, "Component abandons an in-flight training run when stopping"),
-        ("training_abort_restores_norm", _test_training_abort_restores_normalisation, "An aborted train() restores normalisation statistics with the weights"),
-        ("curriculum_mid_abort_rollback", _test_curriculum_mid_abort_rolls_back_stamps, "An abandoned curriculum rolls back the completed passes' published stamps"),
+        ("clone_is_independent", _test_clone_is_independent, "Training a clone leaves the original model untouched"),
+        ("training_swaps_clone_on_success", _test_component_training_swaps_in_clone_only_on_success, "Component swaps in its trained clone only when the run succeeds"),
         ("untrained_model_not_valid", _test_untrained_model_is_not_valid, "A model that never completed a training does not read as valid"),
         ("training_watchdog_cancel", _test_component_training_survives_watchdog_cancel, "A cancelled run() stops the training thread instead of orphaning it"),
         ("training_failure_not_abandon", _test_component_training_failure_is_not_reported_as_abandoned, "An all-passes-failed run is reported as a failure, not an abandonment"),
@@ -3382,6 +3383,14 @@ def _test_training_progress_callback():
     return True
 
 
+class _SelfCloningFake:
+    """Base for fake predictors: clone() hands back the fake itself, so a test sees the calls _do_training makes."""
+
+    def clone(self):
+        """Return this fake, standing in for the independent copy a real predictor would return."""
+        return self
+
+
 def _make_training_component(predictor, now_utc):
     """Build a bare LoadMLComponent wired up with just the attributes _do_training reads."""
     import asyncio
@@ -3448,7 +3457,7 @@ def _test_component_marks_itself_alive_during_training():
     now_utc = datetime.now(timezone.utc)
     recorded = {}
 
-    class FakePredictor:
+    class FakePredictor(_SelfCloningFake):
         """Captures the kwargs the component passes, and pulses the callback like a real run."""
 
         def train_curriculum(self, *args, **kwargs):
@@ -3505,7 +3514,7 @@ def _test_component_training_does_not_block_event_loop():
     loop_released = [threading.Event(), threading.Event()]
     observed = {}
 
-    class BlockingPredictor:
+    class BlockingPredictor(_SelfCloningFake):
         """Blocks inside training the way a real curriculum pass does."""
 
         def train_curriculum(self, *args, **kwargs):
@@ -3561,7 +3570,7 @@ def _test_component_training_abandons_run_on_stop():
     now_utc = datetime.now(timezone.utc)
     observed = {}
 
-    class StoppablePredictor:
+    class StoppablePredictor(_SelfCloningFake):
         """Polls the stop hook the way a real pass does, and abandons the run once it trips."""
 
         def train_curriculum(self, *args, **kwargs):
@@ -3588,95 +3597,107 @@ def _test_component_training_abandons_run_on_stop():
     return True
 
 
-def _test_training_abort_restores_normalisation():
-    """An aborted train() must put back the normalisation statistics along with the weights.
+def _test_clone_is_independent():
+    """Training a clone must leave the original model exactly as it was.
 
-    Weights and normalisation are one model. train() refits the statistics before the first epoch
-    check, so restoring only best_weights would leave restored weights paired with statistics fitted
-    for the run that was abandoned, and every subsequent predict() would scale its inputs by numbers
-    those weights were never trained against. Only reachable while the component survives the abort
-    - a cancelled run(), not a process shutdown - which is exactly the run_timeout watchdog path.
+    The component trains a clone so the live model keeps serving, whole, while a run is in flight
+    and survives an abandoned, failed or raising run untouched. That only holds if no array is
+    shared: _adam_update changes the weights and moments in place, so a shallow copy would train
+    the live model too.
     """
     now_utc = datetime.now(timezone.utc)
     np.random.seed(11)
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
 
     predictor = LoadPredictor(learning_rate=0.01)
-    assert predictor.train(load_data, now_utc, epochs=2, patience=3) is not None, "the baseline run must succeed so there is a fitted model to abort against"
+    assert predictor.train(load_data, now_utc, epochs=2, patience=3) is not None, "the baseline run must succeed so there is a model to clone"
+    before = {field: copy.deepcopy(getattr(predictor, field)) for field in LoadPredictor.TRAINING_STATE_FIELDS}
 
-    before = {
-        "feature_mean": predictor.feature_mean.copy(),
-        "feature_std": predictor.feature_std.copy(),
-        "target_mean": predictor.target_mean,
-        "target_std": predictor.target_std,
-        "weights": [w.copy() for w in predictor.weights],
-    }
+    trainee = predictor.clone()
+    assert trainee is not predictor, "clone() must return a new object"
+    assert trainee.log == predictor.log, "the clone must log through the same function"
+    other_data = {minute: value * 3.0 for minute, value in load_data.items()}
+    assert trainee.train(other_data, now_utc, is_initial=False, epochs=2, patience=3) is not None, "the clone must be trainable"
 
-    # Fine-tune on plainly different data so the EMA refit moves the statistics by an amount no
-    # tolerance could absorb, then abort at the very first epoch check - after the refit has
-    # already happened
-    other_data = {minute: value * 5.0 for minute, value in load_data.items()}
-    aborted_mae = predictor.train(other_data, now_utc, epochs=5, patience=3, stop_callback=lambda: True)
-
-    assert aborted_mae is None, "an aborted fine-tune must report None"
-    assert np.allclose(predictor.feature_mean, before["feature_mean"]), "an aborted run must restore feature_mean, or predictions are normalised by statistics the restored weights never saw"
-    assert np.allclose(predictor.feature_std, before["feature_std"]), "an aborted run must restore feature_std"
-    assert predictor.target_mean == before["target_mean"], "an aborted run must restore target_mean"
-    assert predictor.target_std == before["target_std"], "an aborted run must restore target_std"
-    for n, (restored, original) in enumerate(zip(predictor.weights, before["weights"])):
-        assert np.allclose(restored, original), f"an aborted run must restore layer {n} weights unchanged"
+    for field, original in before.items():
+        current = getattr(predictor, field)
+        if isinstance(original, list):
+            for n, (now_value, then_value) in enumerate(zip(current, original)):
+                assert np.array_equal(now_value, then_value), f"training the clone changed the original's {field}[{n}]"
+        elif isinstance(original, np.ndarray):
+            assert np.array_equal(current, original), f"training the clone changed the original's {field}"
+        else:
+            assert current == original, f"training the clone changed the original's {field}: {original} -> {current}"
+    assert not all(np.array_equal(a, b) for a, b in zip(trainee.weights, predictor.weights)), "the clone's weights should have moved during its own training"
 
     return True
 
 
-def _test_curriculum_mid_abort_rolls_back_stamps():
-    """A curriculum abandoned mid-run must not leave a completed pass's stamps published.
+def _test_component_training_swaps_in_clone_only_on_success():
+    """_do_training must replace the live predictor only with a clone whose run succeeded.
 
-    train() stamps training_timestamp/validation_mae/epochs_trained at the end of every pass,
-    including the intermediate curriculum windows. is_valid() judges purely on those two, so without
-    a rollback a model trained on only the first window of the curriculum reports "active" and its
-    fresh timestamp suppresses the staleness retrain that is the only route back to a full model.
+    An abandoned run must leave the live model as it was - same object, same weights - rather than
+    part-trained, and so must a run that raises. A successful run must swap the trained clone in.
     """
+    import asyncio
+
     now_utc = datetime.now(timezone.utc)
     np.random.seed(13)
-    load_data = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
 
-    stale_timestamp = now_utc - timedelta(hours=100)
-    predictor = LoadPredictor(learning_rate=0.01)
-    predictor.model_initialized = True
-    predictor.model_trained = True
-    predictor.weights = [np.zeros((1, 1), dtype=np.float32)]
-    predictor.training_timestamp = stale_timestamp
-    predictor.validation_mae = 0.4
-    predictor.validation_bias = 0.05
-    predictor.epochs_trained = 42
+    live = LoadPredictor(learning_rate=0.01)
+    assert live.train(load_data, now_utc, epochs=2, patience=3) is not None, "the baseline run must succeed so there is a live model"
+    live_weights = [w.copy() for w in live.weights]
 
-    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (False, "stale"), "the starting model must be due a retrain, so the abandonment cannot be mistaken for it"
+    component = _make_training_component(live, now_utc)
+    component.load_data = load_data
+    component.load_data_age_days = 7
+    component.ml_epochs_update = 3
+    logged = []
+    component.log = logged.append
 
-    passes = {"count": 0}
+    # Abandoned: a stop lands after the first epoch
+    def stop_after_first_epoch():
+        """Stand in for a shutdown arriving mid-run."""
+        component.api_stop = True
 
-    def fake_train(*args, **kwargs):
-        """Stand in for a completed pass, stamping the model the way the real train() does."""
-        passes["count"] += 1
-        predictor.model_trained = True
-        predictor.training_timestamp = now_utc
-        predictor.validation_mae = 0.3
-        predictor.validation_bias = 0.01
-        predictor.epochs_trained += 3
-        return 0.3
+    component.update_success_timestamp = stop_after_first_epoch
+    asyncio.run(component._do_training(is_initial=False))
+    assert component.predictor is live, "an abandoned run must not swap its part-trained clone in"
+    for n, (now_value, then_value) in enumerate(zip(live.weights, live_weights)):
+        assert np.array_equal(now_value, then_value), f"an abandoned run must leave the live model's layer {n} weights untouched"
+    assert component.last_train_time is None, "an abandoned run must not stamp last_train_time"
 
-    predictor.train = fake_train
-    # Trips only once a pass has completed, so the run is abandoned between passes rather than
-    # before the first one - the path the existing stop-callback test never reaches
-    curriculum_mae = predictor.train_curriculum(load_data, now_utc, epochs=3, patience=3, curriculum_window_days=7, curriculum_step_days=7, stop_callback=lambda: passes["count"] >= 1)
+    # Raising: the trainee fails part way, after the live model has been cloned
+    class RaisingTrainee:
+        """A clone whose training blows up."""
 
-    assert passes["count"] == 1, f"exactly one pass should complete before the hook trips, got {passes['count']}"
-    assert curriculum_mae is None, "an abandoned curriculum must not return the completed intermediate pass's val_mae as a finished result"
-    assert predictor.training_timestamp == stale_timestamp, "an abandoned curriculum must roll back training_timestamp, or a partial model's fresh stamp suppresses the staleness retrain"
-    assert predictor.validation_mae == 0.4, "an abandoned curriculum must roll back validation_mae"
-    assert predictor.validation_bias == 0.05, "an abandoned curriculum must roll back validation_bias"
-    assert predictor.epochs_trained == 42, "an abandoned curriculum must roll back epochs_trained"
-    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (False, "stale"), "the model must still read as due a retrain after an abandoned curriculum"
+        def train_curriculum(self, *args, **kwargs):
+            """Fail the way a NumPy error mid-epoch would."""
+            raise FloatingPointError("simulated failure mid-epoch")
+
+    class RaisingPredictor:
+        """A live model whose clone fails to train."""
+
+        def clone(self):
+            """Hand back a trainee that raises."""
+            return RaisingTrainee()
+
+    raising_live = RaisingPredictor()
+    component.predictor = raising_live
+    component.api_stop = False
+    asyncio.run(component._do_training(is_initial=False))
+    assert component.predictor is raising_live, "a run that raises must not replace the live model"
+    assert any("Training exception" in msg for msg in logged), "a raising run must be logged as an exception"
+
+    # Successful: the trained clone replaces the live model, which itself was never touched
+    component.predictor = live
+    component.update_success_timestamp = lambda: None
+    asyncio.run(component._do_training(is_initial=False))
+    assert component.predictor is not live, "a successful run must swap its trained clone in"
+    assert component.last_train_time is not None, "a successful run must stamp last_train_time"
+    for n, (now_value, then_value) in enumerate(zip(live.weights, live_weights)):
+        assert np.array_equal(now_value, then_value), f"training must never touch the live model's layer {n} weights, only its clone's"
 
     return True
 
@@ -3722,7 +3743,7 @@ def _test_component_training_survives_watchdog_cancel():
     allow_exit = threading.Event()
     observed = {"calls": 0}
 
-    class CancelWatchPredictor:
+    class CancelWatchPredictor(_SelfCloningFake):
         """Polls the stop hook until it trips, then holds the thread open so the guard can be seen."""
 
         def train_curriculum(self, *args, **kwargs):
@@ -3794,7 +3815,7 @@ def _test_component_training_failure_is_not_reported_as_abandoned():
     now_utc = datetime.now(timezone.utc)
     logged = []
 
-    class FailingPredictor:
+    class FailingPredictor(_SelfCloningFake):
         """Fails every pass without the stop hook ever tripping, then a stop lands at the end."""
 
         def train_curriculum(self, *args, **kwargs):

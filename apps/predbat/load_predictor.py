@@ -20,6 +20,7 @@ Inputs: historical load, PV generation, temperature, import/export rates,
 and cyclical time features (minute-of-day, day-of-week, day-of-year).
 """
 
+import copy
 import numpy as np
 import json
 import os
@@ -290,6 +291,45 @@ class LoadPredictor:
 
         self.adam_t = 0
         self.log("ML Predictor: Reset Adam optimiser state for fine-tuning")
+
+    # Everything a training run changes. Weights, optimiser state, normalisation and the published
+    # stamps are one model, so clone() copies all of them rather than sharing any with the original.
+    TRAINING_STATE_FIELDS = (
+        "weights",
+        "biases",
+        "m_weights",
+        "v_weights",
+        "m_biases",
+        "v_biases",
+        "adam_t",
+        "feature_mean",
+        "feature_std",
+        "target_mean",
+        "target_std",
+        "model_initialized",
+        "model_trained",
+        "training_timestamp",
+        "validation_mae",
+        "validation_bias",
+        "rollout_mae",
+        "pattern_mae",
+        "epochs_trained",
+    )
+
+    def clone(self):
+        """Return an independent copy of this model to train while the original keeps serving.
+
+        Training mutates the model in place for minutes or hours, and an aborted, failed or raising
+        run leaves it part-trained. Training a clone and swapping it in only on success keeps the
+        live model whole and usable throughout, with nothing to roll back. The training state is
+        deep-copied because _adam_update changes the arrays in place; everything else - the
+        hyperparameters and log_func - is shared, as copy.deepcopy would also copy whatever object
+        log_func is bound to.
+        """
+        twin = copy.copy(self)
+        for field in self.TRAINING_STATE_FIELDS:
+            setattr(twin, field, copy.deepcopy(getattr(self, field)))
+        return twin
 
     def _forward(self, X, training=False):
         """
@@ -1274,15 +1314,6 @@ class LoadPredictor:
             self.log("Warn: ML Predictor: No validation data available")
             return None
 
-        # Snapshot the normalisation statistics before they are refitted below. An aborted run
-        # restores its starting weights, but weights and normalisation are one model: leaving the
-        # newly fitted statistics in place alongside restored weights would have every subsequent
-        # predict() scale its inputs by statistics those weights were never trained against.
-        entry_feature_mean = self.feature_mean.copy() if self.feature_mean is not None else None
-        entry_feature_std = self.feature_std.copy() if self.feature_std is not None else None
-        entry_target_mean = self.target_mean
-        entry_target_std = self.target_std
-
         # Normalize features and targets
         # On initial train: fit normalization from scratch
         # On fine-tune: apply EMA update to track distribution drift gradually
@@ -1457,6 +1488,13 @@ class LoadPredictor:
                 self.log("ML Predictor: Early stopping at epoch {}".format(epoch + 1))
                 break
 
+        if aborted:
+            # Report failure so the caller neither publishes nor saves a partial model, and skip the
+            # AR rollout diagnostic, which is itself minutes of the work we just abandoned. The model
+            # is left part-trained - weights, optimiser state and normalisation are not rolled back -
+            # so a caller that needs its live model intact trains a clone() and discards it.
+            return None
+
         # Restore best weights after early stopping
         if best_weights is not None and best_biases is not None:
             self.weights = best_weights
@@ -1466,18 +1504,6 @@ class LoadPredictor:
                     best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)
                 )
             )
-
-        if aborted:
-            # Weights are restored above; put the normalisation statistics back with them so the
-            # in-memory model is left wholly as it was found, rather than as restored weights paired
-            # with statistics refitted for the training that was abandoned. Report failure so the
-            # caller neither publishes nor saves a partial model, and skip the AR rollout diagnostic,
-            # which is itself minutes of the work we just abandoned.
-            self.feature_mean = entry_feature_mean
-            self.feature_std = entry_feature_std
-            self.target_mean = entry_target_mean
-            self.target_std = entry_target_std
-            return None
 
         self.model_trained = True
         self.training_timestamp = datetime.now(timezone.utc)
@@ -1609,24 +1635,17 @@ class LoadPredictor:
 
                 Returns:
                     Validation MAE from the final pass, or None if all passes failed or the run was
-                    aborted via stop_callback.
+                    aborted via stop_callback. An aborted curriculum leaves the model part-trained,
+                    with the completed passes' weights and stamps in place - train a clone() to keep
+                    a live model intact.
         """
         if self._should_stop(stop_callback):
             self.log("ML Predictor: Curriculum training not started - stop requested")
             return None
 
-        # Snapshot the published training stamps. train() stamps these at the end of EVERY completed
-        # pass, including the intermediate curriculum windows, so an abandoned curriculum would
-        # otherwise leave the last completed intermediate pass's timestamp and validation_mae behind
-        # - and is_valid() judges purely on those, so a model trained on the first 7 days of a 28-day
-        # curriculum would report "active" and its fresh timestamp would suppress the staleness
-        # retrain that is the only route back to a complete model.
-        entry_stamps = (self.model_trained, self.training_timestamp, self.validation_mae, self.validation_bias, self.epochs_trained)
-
         def abandon_curriculum(message):
-            """Log an abandoned curriculum, roll the published stamps back, and report no result."""
+            """Log an abandoned curriculum and report no result."""
             self.log(message)
-            self.model_trained, self.training_timestamp, self.validation_mae, self.validation_bias, self.epochs_trained = entry_stamps
             return None
 
         # Build list of positive minute keys to find total history span
@@ -2169,8 +2188,8 @@ class LoadPredictor:
         if not self.model_trained:
             # model_initialized only means _initialize_weights() has run, which it does before the
             # first epoch, so weights alone can still be the random He initialisation. Without this
-            # an initial run abandoned mid-curriculum - whose stamps train_curriculum rolls back -
-            # would report "active" on a model that has never been trained. Tested separately from
+            # an initial run abandoned or failing before any pass completes would report "active"
+            # on a model that has never been trained. Tested separately from
             # training_timestamp, which a model saved before timestamps existed legitimately lacks.
             return False, "not_trained"
 

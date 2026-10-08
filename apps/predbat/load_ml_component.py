@@ -988,9 +988,9 @@ class LoadMLComponent(ComponentBase):
         if self.training_running:
             # A previous run()'s worker thread is still inside train_curriculum. That happens when
             # the run_timeout watchdog cancelled the coroutine awaiting it: the coroutine went away,
-            # the thread did not. Starting a second curriculum here would have two threads mutating
-            # the same LoadPredictor's weights, biases, Adam moments and normalisation statistics in
-            # place, and both racing to save() over the same model file.
+            # the thread did not. It is training its own clone, so the live predictor is safe, but a
+            # second curriculum would compete with it for the CPU, and resetting training_cancelled
+            # below would tell the orphan to carry on.
             self.log("Warn: ML Component: Previous training run is still finishing, skipping this training cycle")
             return
 
@@ -1029,6 +1029,12 @@ class LoadMLComponent(ComponentBase):
                 max_intermediate_passes = self.ml_curriculum_max_passes
         # Lock released
 
+        # Train a clone, not the live predictor. Training mutates the model in place for the whole
+        # run, so the live one would be part-trained and racing the thread for anything that reads
+        # it in the meantime, and left part-trained by a run that is abandoned, fails or raises.
+        # The clone replaces it only once a run succeeds; otherwise it is simply dropped.
+        trainee = self.predictor.clone()
+
         # Tracks whether the stop hook ever actually answered True during this run. train() and
         # train_curriculum() both return None for "aborted" and for "every pass failed", so reading
         # the hook again after the fact would file a genuine data failure as an abandonment whenever
@@ -1050,7 +1056,7 @@ class LoadMLComponent(ComponentBase):
             """
             self.training_running = True
             try:
-                return self.predictor.train_curriculum(
+                return trainee.train_curriculum(
                     load_data_snap,
                     now_utc_snap,
                     pv_minutes=pv_data_snap,
@@ -1088,11 +1094,13 @@ class LoadMLComponent(ComponentBase):
                 raise
 
             if val_mae is None and stop_signalled["tripped"]:
-                # Abandoned on purpose, not a failure - and nothing to save, the model is partial
+                # Abandoned on purpose, not a failure. The part-trained clone is dropped, and the
+                # live model is exactly as it was before the run
                 self.log("ML Component: Training abandoned because the run was cancelled or the component is stopping")
                 return
 
             if val_mae is not None:
+                self.predictor = trainee
                 self.last_train_time = datetime.now(timezone.utc)
                 self.initial_training_done = True
 
