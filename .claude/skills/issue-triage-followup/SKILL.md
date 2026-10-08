@@ -50,11 +50,18 @@ Compare your updated understanding against the original triage comment's classif
 - If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`) — never remove a label a human added.
 - Apply the same duplicate check as `/issue-triage` step 4 if the new information suggests one.
 
+If any prior bot comment on this issue carries a one-line bug statement (`/issue-triage` step 3), that statement is a standing claim and this review must settle it, one of:
+
+- **Still a bug** — restate the one-line statement in this comment, updated if the new evidence sharpens or changes what the fault actually is.
+- **Not a bug after all** — say so plainly, retract the statement, and give the corrected classification. This is the expected outcome when, as happened on #5390, a maintainer's own reply shows the reported behaviour is Predbat doing what the config says.
+
+Never let a `bug` classification stand in a later comment without either restating or retracting the line that justified it.
+
 ## 5. Post one follow-up comment
 
 Check the comment history first: if the most recent comment is already a bot comment with nothing from a human posted after it, stop — this review already happened and nothing new has arrived since.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), and any further information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), the restated or retracted one-line bug statement from step 4 if one is in play, and any further information request.
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 

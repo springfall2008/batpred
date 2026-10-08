@@ -73,6 +73,8 @@ A `predbat_debug.yaml` can also be replayed against current main to reproduce th
 
 Apply exactly one of: `bug`, `question`, `configuration` (user error/misconfiguration), `enhancement` (feature request). If genuinely ambiguous, apply `unclear` instead of guessing.
 
+If you classify as `bug`, write a one-line statement of the bug in your own words — what Predbat actually does wrong, not the reporter's symptom description. State the faulty behaviour and, if you have one, the mechanism, e.g. "The dispatch-cancel check re-reads the car's live status instead of the status at cancel time, so a car that resumes charging a second later still loses its slot." A restatement of the title ("battery charging not working") is not acceptable. This line carries into step 9.
+
 ## 4. Check for duplicates
 
 Search existing issues (`gh issue list --search ...`, both open and closed) for the same symptom.
@@ -129,7 +131,7 @@ Skip priority for pure questions and feature requests.
 
 Check existing comments first — if one from you is already there, stop; don't post again.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, the one-line bug statement from step 3 immediately after the classification if you classified as `bug`, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
 
