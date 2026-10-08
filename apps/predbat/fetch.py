@@ -1445,6 +1445,21 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
+    def car_planned_slot_entity(self, planned_entity_id_list, car_n, slot_entity_id):
+        """
+        The sensor a car's planned dispatches are read from, where that is not its slot sensor.
+
+        octopus_intelligent_slot supplies both the completed and the planned dispatches unless
+        octopus_intelligent_planned_slot names another sensor for the car. None when it does not, or
+        when it names the slot sensor itself - reading that twice would only repeat its dispatches.
+        """
+        if car_n >= len(planned_entity_id_list):
+            return None
+        planned_entity_id = planned_entity_id_list[car_n]
+        if not planned_entity_id or not isinstance(planned_entity_id, str) or planned_entity_id.startswith("re:") or planned_entity_id == slot_entity_id:
+            return None
+        return planned_entity_id
+
     def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
@@ -1477,6 +1492,14 @@ class Fetch:
             entity_id_list = entity_id_config
         else:
             entity_id_list = []
+
+        # A second sensor per car for the planned dispatches, where the one above only has a reliable
+        # record of the completed ones - see car_planned_slot_entity()
+        planned_entity_id_config = self.get_arg("octopus_intelligent_planned_slot", default=None, indirect=False)
+        if planned_entity_id_config and not isinstance(planned_entity_id_config, list):
+            planned_entity_id_list = [planned_entity_id_config]
+        else:
+            planned_entity_id_list = planned_entity_id_config or []
 
         # Cars whose charging plan came from Octopus Intelligent dispatch slots this cycle - used
         # below to decide which cars get a model-facing charge limit override (#4967)
@@ -1513,6 +1536,21 @@ class Fetch:
                     except (ValueError, TypeError):
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
+
+                    planned_entity_id = self.car_planned_slot_entity(planned_entity_id_list, car_n, entity_id)
+                    if planned_entity_id:
+                        # The slot sensor above keeps the record of what was dispatched, and so billed
+                        # off-peak (#5413); the plan of what is still to come is taken from here instead.
+                        # What this sensor has already seen finish goes in behind the slot sensor's own
+                        # completed list: it covers a slot from when it ends until the slot sensor lists
+                        # it, and load_octopus_slots() drops whatever of it the slot sensor has by then
+                        try:
+                            planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
+                            planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")
+                            completed = (completed or []) + (planned_completed or [])
+                        except (ValueError, TypeError):
+                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id, car_n))
+                            self.record_status(message="Error: octopus_intelligent_planned_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
                 # Completed and planned slots - merge from all cars
                 if completed:

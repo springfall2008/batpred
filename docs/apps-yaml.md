@@ -2098,6 +2098,8 @@ Details of configuring `apps.yaml` for EV charging are described in [Configure a
 - **car_charging_power** - Live power drawn by your EV charger, used for display only
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
+- **octopus_intelligent_planned_slot** - Optional second sensor to take the planned charging slots from, leaving **octopus_intelligent_slot** to supply the completed ones
+(see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
