@@ -583,14 +583,23 @@ COMPONENT_LIST = {
         "class": "spotprice.SpotPriceAPI",
         "name": "Day-ahead Spot Price Tariff",
         "args": {
-            # No registry default: when unset, initialize() picks tibber whenever a Tibber token is set
-            # (with or without a zone), else energycharts
+            # No registry default: when unset, initialize() picks the one supplier whose credentials are
+            # set (with or without a zone), else energycharts; credentials for several is a config error
             "provider": {"required": False, "config": "spotprice_provider"},
             "zone": {"required": False, "config": "spotprice_zone"},
             "entsoe_token": {"required": False, "secret": True, "config": "spotprice_entsoe_token"},
             "tibber_token": {"required": False, "secret": True, "config": "spotprice_tibber_token"},
             "tibber_home_id": {"required": False, "secret": True, "config": "spotprice_tibber_home_id"},
+            "ostrom_client_id": {"required": False, "secret": True, "config": "spotprice_ostrom_client_id"},
+            "ostrom_client_secret": {"required": False, "secret": True, "config": "spotprice_ostrom_client_secret"},
+            "ostrom_contract_id": {"required": False, "secret": True, "config": "spotprice_ostrom_contract_id"},
+            "octopus_de_api_key": {"required": False, "secret": True, "config": "spotprice_octopus_de_api_key"},
+            "octopus_de_account": {"required": False, "secret": True, "config": "spotprice_octopus_de_account"},
+            "octopus_de_malo": {"required": False, "secret": True, "config": "spotprice_octopus_de_malo"},
+            "ews_api_key": {"required": False, "secret": True, "config": "spotprice_ews_api_key"},
             "markup": {"required": False, "config": "spotprice_markup", "default": 0.0},
+            # No registry default: when unset, initialize() uses the provider's published percentage (3 for awattar), else 0
+            "markup_percent": {"required": False, "config": "spotprice_markup_percent"},
             "vat": {"required": False, "config": "spotprice_vat", "default": 0.0},
             "charge_zones": {"required": False, "config": "spotprice_charge_zones", "default": []},
             "exchange_rate": {"required": False, "config": "spotprice_exchange_rate", "default": 1.0},
@@ -601,9 +610,10 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "spotprice_automatic", "default": True},
         },
         # The provider defaults to energycharts, so gate on what a real configuration must carry: a
-        # bidding zone for the spot sources, or a Tibber token. Without this the component would
-        # start on every install.
-        "required_or": ["zone", "tibber_token"],
+        # bidding zone for the spot sources, or a supplier's credentials (either half of a pair is
+        # enough to start it, so a missing other half is reported rather than silently ignored).
+        # Without this the component would start on every install.
+        "required_or": ["zone", "tibber_token", "ostrom_client_id", "ostrom_client_secret", "octopus_de_api_key", "ews_api_key"],
         "can_restart": True,
         "phase": 1,
     },

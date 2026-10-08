@@ -43,6 +43,7 @@ autoflake
 automations
 autopep
 autoupdate
+awattar
 axvline
 axvspan
 Backfeed
@@ -171,12 +172,14 @@ dstamp
 dstart
 dtype
 dwindow
+Dynamisch
 eauth
 echargingpile
 ecosmart
 Eddi
 eddis
 efgh
+Elektrizitätswerke
 elif
 elinter
 eload
@@ -374,7 +377,11 @@ lstrip
 luxpower
 malloc
 mallopt
+malo
+malos
 markdownlint
+marketdata
+marketprice
 matplotlib
 maximise
 maxrss
@@ -473,6 +480,7 @@ openapi
 openrouter
 openweathermap
 Opticaster
+ostrom
 overclaim
 overfitting
 oversizing
@@ -578,6 +586,8 @@ saverestore
 savez
 scalarstring
 scalings
+schoenau
+Schönau
 searr
 securetoken
 Segoe
@@ -655,6 +665,7 @@ syscmd
 sysdn
 syssn
 tabindex
+tado
 tasmota
 TCWORLD
 tdata
@@ -679,6 +690,7 @@ timekey
 timelapse
 timenow
 timeobj
+timespec
 timestep
 timestr
 timezone
@@ -767,3 +779,4 @@ zappi
 zappis
 zcat
 zigbee
+Ökostrom
