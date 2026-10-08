@@ -1279,9 +1279,9 @@ class LoadPredictor:
             huber_delta: Huber loss transition point in normalised target units (default 1.35; errors within
                          this threshold are penalised quadratically, beyond it linearly)
             ema_smoothing_alpha: EMA alpha for smoothing the early-stopping metric across epochs (0=no smoothing, 0.3=moderate)
-            progress_callback: Called with no arguments once per epoch, so a caller whose liveness is
-                               judged on how recently it reported success can stay alive through a
-                               training run longer than that window. Exceptions are logged and swallowed
+            progress_callback: Called with no arguments once per epoch, so a caller can tell a long
+                               run that is progressing from one that is stuck. Exceptions are logged
+                               and swallowed
             stop_callback: Called with no arguments at the top of every epoch; returning True abandons
                            the run. Distinct from progress_callback precisely because that hook must
                            never be able to abort a run - this one is the caller explicitly asking to.
@@ -1621,8 +1621,8 @@ class LoadPredictor:
                     validation_holdout_hours: Holdout window for the final pass
                     norm_ema_alpha: Normalisation EMA alpha for passes after the first
                     progress_callback: Called with no arguments once per epoch across every pass, so a
-                                       run that lasts longer than the caller's liveness timeout can
-                                       still report itself alive
+                                       caller can tell a long run that is progressing from one that
+                                       is stuck
                     stop_callback: Called with no arguments before each pass and, via train(), before each
                                    epoch; returning True abandons the whole curriculum and returns None
                     curriculum_window_days: Initial training window size in days (default 7)

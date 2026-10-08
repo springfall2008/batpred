@@ -1737,6 +1737,11 @@ The ML component tracks several status indicators:
 - **validation_failed**: Predictions are disabled due to high validation error
 - **stale**: Model hasn't been trained in 48+ hours and needs retraining
 
+Training runs in the background on a copy of the model, so the current model keeps producing predictions every 30 minutes while it does, and is replaced only once a run succeeds.
+The `training_status` attribute of `sensor.predbat_load_ml_stats` shows `idle`, `training` or `stalled`, with `training_started` and `training_last_progress` timestamps as of the last prediction cycle, and `training_retry_after` once a run has failed.
+A first training run on slow hardware can take hours: Predbat logs a warning once a run has gone two hours and is still progressing, and lets it finish.
+A run that completes no training epoch for two hours is treated as stalled: the error is logged, the run is abandoned and retried 30 minutes after it ends, and the current model stays in use.
+
 Check Predbat logs for training progress and validation metrics:
 
 ```text
