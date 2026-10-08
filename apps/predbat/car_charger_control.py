@@ -377,9 +377,11 @@ class CarChargerControl:
             return
         module, key, field = self.charger_control_storage
         try:
-            await self.storage.save(module, key, {field: self.charger_control_enabled})
+            # Storage reports serialisation and I/O failures by returning False rather than raising
+            if await self.storage.save(module, key, {field: self.charger_control_enabled}) is False:
+                raise OSError("storage refused the save")
         except Exception as exc:
-            self.log("Warn: {}: could not save the {} control switch state: {}".format(self.charger_control_log_name, self.charger_control_noun, exc))
+            self.log("Warn: {}: could not save the {} control switch state, it may revert to the last saved state on restart: {}".format(self.charger_control_log_name, self.charger_control_noun, exc))
 
     async def charger_control_load_enabled(self):
         """Restore the control switch from storage, leaving it on when nothing is saved.

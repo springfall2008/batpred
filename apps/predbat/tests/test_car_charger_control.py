@@ -270,6 +270,30 @@ def test_storage_failures_fail_soft():
     assert sum("Warn" in line for line in component.logs) == 2, component.logs
 
 
+def test_storage_save_returning_false_is_a_failed_save():
+    """Storage reports serialisation and I/O failures by returning False, which must be warned about; None is a pass."""
+    component = FakeComponent([FakeCharger("a")], storage=FakeStorage())
+
+    async def refused(module, key, value):
+        """A save that Storage refuses without raising."""
+        return False
+
+    component.storage.save = refused
+    run_async(component.charger_control_save_enabled())
+    assert sum("Warn" in line for line in component.logs) == 1, component.logs
+
+    for ok in (None, True):
+        component = FakeComponent([FakeCharger("a")], storage=FakeStorage())
+
+        async def accepted(module, key, value, ok=ok):
+            """A save that goes through, as None from a test double or True from the real Storage."""
+            return ok
+
+        component.storage.save = accepted
+        run_async(component.charger_control_save_enabled())
+        assert not any("Warn" in line for line in component.logs), component.logs
+
+
 def test_no_switch_without_storage_settings():
     """A component that passes no storage location has no persisted switch."""
     component = FakeComponent([FakeCharger("a")], storage=FakeStorage())
@@ -803,6 +827,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_read_only_falls_back_to_the_arg()
     test_switch_off_releases_and_persists()
     test_storage_failures_fail_soft()
+    test_storage_save_returning_false_is_a_failed_save()
     test_no_switch_without_storage_settings()
     test_failed_release_is_retried()
     test_one_refusing_charger_does_not_block_the_others()

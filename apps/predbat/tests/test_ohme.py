@@ -3559,7 +3559,7 @@ def _test_ohme_run_tariff_change_with_control(my_predbat=None):
     _ohme_set_tariff(api, "E-1R-INTELLI-VAR-22-10-14-A")
     assert _ohme_run_poll(api, seconds=120) == [False], "Expected plain dispatches on Intelligent"
     assert api.charger_control_active is False, "Expected control to stand down on Intelligent"
-    assert released == ["resume", ("max_charge", False)], f"Expected the charger released, got {released}"
+    assert released == [("max_charge", False), "resume"], f"Expected max charge off before the resume, so no charge starts outside a dispatch, got {released}"
     assert not api.charger_control_state, "Expected the control state cleared"
     assert api.slot_mode == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected Intelligent mode, got {api.slot_mode} owner {api.base.car_slot_owner}"
     assert any("Octopus Intelligent now schedules the charge" in msg for msg in api.log_messages), f"Expected the release to say why, got {api.log_messages}"
@@ -3666,7 +3666,7 @@ def _test_ohme_run_release_retried_after_failure(my_predbat=None):
     fail[0] = False
     del calls[:]
     assert _ohme_run_poll(api, seconds=240) == [False], "Expected plain dispatches on Intelligent"
-    assert calls == ["resume", ("max_charge", False)], f"Expected the hand-back retried, got {calls}"
+    assert calls == [("max_charge", False), "resume"], f"Expected the hand-back retried, got {calls}"
     assert not api.charger_control_state, "Expected the charger released"
     assert api.slot_mode_applied == "octopus_intelligent" and api.base.car_slot_owner == "ohme", f"Expected the Intelligent wiring made, got {api.slot_mode_applied}"
 

@@ -545,7 +545,15 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # a hand-back that failed part way is tried again until the charger really is released
         if not self.charger_control_active and self.charger_control_state:
             self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, releasing the charger")
-            await self.charger_control_release()
+            if octopus_intelligent:
+                # Octopus drives this charger: hand it over without starting a charge outside a dispatch
+                for key, handle in self.charger_control_chargers():
+                    if key in self.charger_control_state:
+                        await self.charger_control_hand_to_octopus(handle, self.charger_control_state[key])
+                        del self.charger_control_state[key]
+            else:
+                # Octopus drives the car: nobody drives the charger, so a stop is undone
+                await self.charger_control_release()
 
         if octopus_intelligent:
             slot_mode = SLOT_MODE_INTELLIGENT
