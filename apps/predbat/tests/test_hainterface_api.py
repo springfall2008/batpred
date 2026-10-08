@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 import requests
 
-from tests.test_hainterface_common import MockBase, MockDatabaseManager, create_ha_interface, create_mock_requests_response
-from ha import HAInterface
+from tests.test_hainterface_common import MockBase, MockDatabaseManager, create_ha_interface, create_mock_requests_response, make_fake_time
+from ha import HAInterface, HA_OUTAGE_LIMIT_SECONDS, HA_RETRY_SECONDS, HA_RETRY_MAX_SECONDS
 
 
 def test_hainterface_api_call_get(my_predbat=None):
@@ -151,7 +151,6 @@ def test_hainterface_api_call_json_decode_error(my_predbat=None):
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-    ha_interface.api_errors = 0
 
     with patch("ha.requests.get") as mock_get:
         # Mock response that raises JSONDecodeError
@@ -168,12 +167,12 @@ def test_hainterface_api_call_json_decode_error(my_predbat=None):
         else:
             print("✓ Returned None on JSON decode error")
 
-        # Verify error count incremented
-        if ha_interface.api_errors != 1:
-            print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
+        # Verify an outage has been recorded
+        if ha_interface.outage.since is None:
+            print("ERROR: unavailable_since should be set")
             failed += 1
         else:
-            print("✓ api_errors incremented")
+            print("✓ outage recorded")
 
     return failed
 
@@ -185,7 +184,6 @@ def test_hainterface_api_call_timeout(my_predbat=None):
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-    ha_interface.api_errors = 0
 
     with patch("ha.requests.get") as mock_get:
         mock_get.side_effect = requests.Timeout("Connection timeout")
@@ -199,12 +197,12 @@ def test_hainterface_api_call_timeout(my_predbat=None):
         else:
             print("✓ Returned None on timeout")
 
-        # Verify error count incremented
-        if ha_interface.api_errors != 1:
-            print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
+        # Verify an outage has been recorded
+        if ha_interface.outage.since is None:
+            print("ERROR: unavailable_since should be set")
             failed += 1
         else:
-            print("✓ api_errors incremented")
+            print("✓ outage recorded")
 
     return failed
 
@@ -216,7 +214,6 @@ def test_hainterface_api_call_read_timeout(my_predbat=None):
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-    ha_interface.api_errors = 0
 
     with patch("ha.requests.get") as mock_get:
         mock_get.side_effect = requests.exceptions.ReadTimeout("Read timeout")
@@ -230,12 +227,12 @@ def test_hainterface_api_call_read_timeout(my_predbat=None):
         else:
             print("✓ Returned None on ReadTimeout")
 
-        # Verify error count incremented
-        if ha_interface.api_errors != 1:
-            print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
+        # Verify an outage has been recorded
+        if ha_interface.outage.since is None:
+            print("ERROR: unavailable_since should be set")
             failed += 1
         else:
-            print("✓ api_errors incremented")
+            print("✓ outage recorded")
 
     return failed
 
@@ -247,7 +244,6 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-    ha_interface.api_errors = 0
     log_called = [False]
 
     # Track log calls
@@ -278,56 +274,448 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
     return failed
 
 
-def test_hainterface_api_call_error_limit(my_predbat=None):
-    """Test api_call() triggers fatal error after 10 errors"""
-    print("\n=== Testing HAInterface api_call() error limit ===")
+def test_hainterface_api_call_outage_tolerated(my_predbat=None):
+    """Test api_call() rides out a burst of failures instead of stopping after 10 (#5437, #5354)"""
+    print("\n=== Testing HAInterface api_call() outage tolerated ===")
     failed = 0
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-    ha_interface.api_errors = 9  # Set to 9, next error will be 10th
     fatal_called = [False]
+    ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
 
-    def mock_fatal_error():
-        fatal_called[0] = True
-
-    ha_interface.fatal_error_occurred = mock_fatal_error
-
-    with patch("ha.requests.get") as mock_get:
+    clock = [1000.0]
+    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
         mock_get.side_effect = requests.Timeout("Connection timeout")
 
-        ha_interface.api_call("/api/states")
+        # Far more failures than the old limit of 10, all within a few seconds (an HA restart)
+        for _ in range(50):
+            ha_interface.api_call("/api/states")
+            clock[0] += 1.0
 
-        # Verify fatal error triggered
-        if not fatal_called[0]:
-            print("ERROR: fatal_error_occurred should be called at 10 errors")
+        if fatal_called[0]:
+            print("ERROR: 50 failures in under a minute should not be fatal")
             failed += 1
         else:
-            print("✓ fatal_error_occurred called at error limit")
+            print("✓ burst of failures is not fatal")
+
+        # Still failing, now every 5 minutes, up to just inside the outage limit
+        while clock[0] + 300 < 1000.0 + HA_OUTAGE_LIMIT_SECONDS:
+            clock[0] += 300
+            ha_interface.api_call("/api/states")
+        if fatal_called[0]:
+            print("ERROR: should not be fatal before the outage limit")
+            failed += 1
+        else:
+            print("✓ not fatal just inside the outage limit")
+
+        clock[0] = 1000.0 + HA_OUTAGE_LIMIT_SECONDS
+        ha_interface.api_call("/api/states")
+        if not fatal_called[0]:
+            print("ERROR: fatal_error_occurred should be called once the outage reaches the limit")
+            failed += 1
+        else:
+            print("✓ fatal_error_occurred called at the outage limit")
 
     return failed
 
 
-def test_hainterface_api_call_error_reset(my_predbat=None):
-    """Test api_call() resets error count on success"""
-    print("\n=== Testing HAInterface api_call() error reset ===")
+def test_hainterface_api_call_outage_cleared(my_predbat=None):
+    """Test api_call() success ends the outage so the limit is measured from the next failure"""
+    print("\n=== Testing HAInterface api_call() outage cleared ===")
     failed = 0
 
     mock_base = MockBase()
     ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-    ha_interface.api_errors = 5
+    fatal_called = [False]
+    ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.return_value = create_mock_requests_response(200, {"result": "success"})
-
+    clock = [1000.0]
+    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
+        mock_get.side_effect = requests.Timeout("Connection timeout")
         ha_interface.api_call("/api/states")
+        if ha_interface.outage.since != 1000.0:
+            print(f"ERROR: outage should start at 1000.0, got {ha_interface.outage.since}")
+            failed += 1
 
-        # Verify error count reset
-        if ha_interface.api_errors != 0:
-            print(f"ERROR: api_errors should be reset to 0, got {ha_interface.api_errors}")
+        clock[0] = 1100.0
+        mock_get.side_effect = None
+        mock_get.return_value = create_mock_requests_response(200, {"result": "success"})
+        ha_interface.api_call("/api/states")
+        if ha_interface.outage.since is not None:
+            print("ERROR: unavailable_since should be cleared by a successful call")
             failed += 1
         else:
-            print("✓ api_errors reset on success")
+            print("✓ outage cleared on success")
+
+        # A later failure starts a new outage, so a long gap since the first one does not count
+        clock[0] = 1000.0 + 2 * HA_OUTAGE_LIMIT_SECONDS
+        mock_get.side_effect = requests.Timeout("Connection timeout")
+        ha_interface.api_call("/api/states")
+        if fatal_called[0]:
+            print("ERROR: a new outage should not inherit the earlier one's start time")
+            failed += 1
+        else:
+            print("✓ new outage measured from its own start")
+
+    return failed
+
+
+def test_hainterface_api_call_supervisor_failure_not_outage(my_predbat=None):
+    """Test a failing Supervisor call (expected in Docker installs) is not counted as Home Assistant being down"""
+    print("\n=== Testing HAInterface api_call() Supervisor failure ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get:
+        mock_env.return_value = "test_supervisor_token"
+        mock_get.side_effect = requests.exceptions.ConnectionError("no supervisor")
+        ha_interface.api_call("/addons/self/info", core=False, silent=True)
+
+    if ha_interface.outage.since is not None:
+        print("ERROR: a Supervisor failure must not start an outage")
+        failed += 1
+    else:
+        print("✓ Supervisor failure ignored")
+
+    return failed
+
+
+def test_hainterface_initialize_retries_until_ready(my_predbat=None):
+    """Test initialize() waits for Home Assistant to start serving its API rather than failing at once (#5437, #5134)"""
+    print("\n=== Testing HAInterface initialize() retries until ready ===")
+    failed = 0
+
+    mock_base = MockBase()
+    sleeps = []
+
+    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
+        mock_env.return_value = "test_supervisor_token"
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("supervisor down"),  # app info
+            create_mock_requests_response(502, json_error=True),  # /api/services: HTML 502 page, not JSON
+            requests.Timeout("still starting"),
+            create_mock_requests_response(200, [{"domain": "homeassistant"}]),
+        ]
+
+        ha_interface = object.__new__(HAInterface)
+        ha_interface.base = mock_base
+        ha_interface.log = mock_base.log
+        ha_interface.api_started = False
+        ha_interface.api_stop = False
+        ha_interface.last_success_timestamp = None
+        ha_interface.local_tz = mock_base.local_tz
+        ha_interface.prefix = mock_base.prefix
+        ha_interface.args = mock_base.args
+        ha_interface.count_errors = 0
+        ha_interface.db_manager = None
+
+        try:
+            ha_interface.initialize("http://test:8123", "test_key", False, False, False)
+        except ValueError:
+            print("ERROR: initialize() should have waited for Home Assistant, not raised")
+            failed += 1
+            return failed
+
+    if sleeps != [HA_RETRY_SECONDS, HA_RETRY_SECONDS * 2]:
+        print(f"ERROR: expected two backed-off pauses, got {sleeps}")
+        failed += 1
+    else:
+        print("✓ retried with backoff")
+
+    if mock_base.ha_interface is not ha_interface:
+        print("ERROR: base.ha_interface should be set once Home Assistant answers")
+        failed += 1
+    else:
+        print("✓ interface registered after the retries")
+
+    if ha_interface.outage.since is not None:
+        print("ERROR: the outage should have ended")
+        failed += 1
+
+    return failed
+
+
+def test_hainterface_initialize_gives_up_after_limit(my_predbat=None):
+    """Test initialize() still raises once Home Assistant has been unreachable for the outage limit"""
+    print("\n=== Testing HAInterface initialize() gives up after the outage limit ===")
+    failed = 0
+
+    mock_base = MockBase()
+    clock = [1000.0]
+
+    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
+        mock_env.return_value = "test_supervisor_token"
+        mock_get.side_effect = requests.exceptions.ConnectionError("down")
+
+        ha_interface = object.__new__(HAInterface)
+        ha_interface.base = mock_base
+        ha_interface.log = mock_base.log
+        ha_interface.api_started = False
+        ha_interface.api_stop = False
+        ha_interface.last_success_timestamp = None
+        ha_interface.local_tz = mock_base.local_tz
+        ha_interface.prefix = mock_base.prefix
+        ha_interface.args = mock_base.args
+        ha_interface.count_errors = 0
+        ha_interface.db_manager = None
+
+        raised = False
+        try:
+            ha_interface.initialize("http://test:8123", "test_key", False, False, False)
+        except ValueError:
+            raised = True
+
+    if not raised:
+        print("ERROR: initialize() should raise ValueError when Home Assistant never answers")
+        failed += 1
+    else:
+        print("✓ raised after the outage limit")
+
+    waited = clock[0] - 1000.0
+    if waited < HA_OUTAGE_LIMIT_SECONDS - HA_RETRY_MAX_SECONDS or waited > HA_OUTAGE_LIMIT_SECONDS:
+        print(f"ERROR: should wait close to the {HA_OUTAGE_LIMIT_SECONDS}s limit, waited {waited}s")
+        failed += 1
+    else:
+        print(f"✓ waited {waited:.0f}s before giving up")
+
+    return failed
+
+
+def test_hainterface_api_call_request_exception_is_outage(my_predbat=None):
+    """Test api_call() treats other requests failures seen while HA goes down (e.g. a reset mid-body) as an outage, not a crash"""
+    print("\n=== Testing HAInterface api_call() request exception ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.side_effect = requests.exceptions.ChunkedEncodingError("Connection reset by peer")
+        try:
+            result = ha_interface.api_call("/api/states")
+        except requests.exceptions.RequestException:
+            print("ERROR: the exception should not escape api_call()")
+            return failed + 1
+
+    if result is not None or ha_interface.outage.since is None:
+        print(f"ERROR: expected None and a recorded outage, got {result} / {ha_interface.outage.since}")
+        failed += 1
+    else:
+        print("✓ request exception recorded as an outage")
+
+    return failed
+
+
+def test_hainterface_api_call_auth_rejected(my_predbat=None):
+    """Test api_call() flags a rejected ha_key instead of treating it as Home Assistant being down"""
+    print("\n=== Testing HAInterface api_call() auth rejected ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(401, json_error=True)
+        result = ha_interface.api_call("/api/states")
+
+    if result is not None or not ha_interface.auth_rejected:
+        print(f"ERROR: expected None and auth_rejected, got {result} / {ha_interface.auth_rejected}")
+        failed += 1
+    elif ha_interface.outage.since is not None:
+        print("ERROR: a rejected key is not an outage")
+        failed += 1
+    elif not any("rejected the ha_key" in log for log in mock_base.log_messages):
+        print("ERROR: should log that the key was rejected")
+        failed += 1
+    else:
+        print("✓ rejected key flagged and logged")
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(200, {"ok": True})
+        ha_interface.api_call("/api/states")
+    if ha_interface.auth_rejected:
+        print("ERROR: a successful call should clear auth_rejected")
+        failed += 1
+    else:
+        print("✓ cleared by a successful call")
+
+    return failed
+
+
+def test_hainterface_initialize_auth_rejected_fails_fast(my_predbat=None):
+    """Test initialize() does not wait 15 minutes for a ha_key that Home Assistant rejects"""
+    print("\n=== Testing HAInterface initialize() auth rejected ===")
+    failed = 0
+
+    mock_base = MockBase()
+    sleeps = []
+
+    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
+        mock_env.return_value = None  # no Supervisor
+        mock_get.return_value = create_mock_requests_response(401, json_error=True)
+
+        ha_interface = object.__new__(HAInterface)
+        ha_interface.base = mock_base
+        ha_interface.log = mock_base.log
+        ha_interface.api_started = False
+        ha_interface.api_stop = False
+        ha_interface.last_success_timestamp = None
+        ha_interface.local_tz = mock_base.local_tz
+        ha_interface.prefix = mock_base.prefix
+        ha_interface.args = mock_base.args
+        ha_interface.count_errors = 0
+        ha_interface.db_manager = None
+
+        raised = False
+        try:
+            ha_interface.initialize("http://test:8123", "bad_key", False, False, False)
+        except ValueError:
+            raised = True
+
+    if not raised or sleeps:
+        print(f"ERROR: expected an immediate ValueError, raised={raised} sleeps={sleeps}")
+        failed += 1
+    else:
+        print("✓ failed immediately")
+
+    return failed
+
+
+def test_hainterface_api_call_outage_gap_starts_new_outage(my_predbat=None):
+    """Test two failures far apart are separate outages, not one 15 minute outage with nothing known about the gap"""
+    print("\n=== Testing HAInterface api_call() outage gap ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+    fatal_called = [False]
+    ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
+
+    clock = [1000.0]
+    with patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time(clock)):
+        mock_get.side_effect = requests.Timeout("Connection timeout")
+        ha_interface.api_call("/api/states")
+
+        # Nothing calls Home Assistant for 20 minutes, then one more transient failure
+        clock[0] += 2 * HA_OUTAGE_LIMIT_SECONDS // 3 + 60
+        ha_interface.api_call("/api/states")
+        if fatal_called[0]:
+            print("ERROR: a failure after a long silence must not inherit the earlier failure's outage")
+            failed += 1
+        elif ha_interface.outage.since != clock[0]:
+            print(f"ERROR: expected a new outage starting at {clock[0]}, got {ha_interface.outage.since}")
+            failed += 1
+        else:
+            print("✓ new outage started after the gap")
+
+        # Failures that keep coming within the gap are still one outage
+        for _ in range(HA_OUTAGE_LIMIT_SECONDS // 300):
+            clock[0] += 300
+            ha_interface.api_call("/api/states")
+        if not fatal_called[0]:
+            print("ERROR: failures every 5 minutes for the outage limit should be fatal")
+            failed += 1
+        else:
+            print("✓ failures within the gap accumulate")
+
+    return failed
+
+
+def test_hainterface_api_call_auth_rejected_ends_outage(my_predbat=None):
+    """Test a 401 proves Home Assistant is up, so it ends an outage in progress"""
+    print("\n=== Testing HAInterface api_call() 401 ends outage ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.side_effect = requests.Timeout("Connection timeout")
+        ha_interface.api_call("/api/states")
+        if ha_interface.outage.since is None:
+            print("ERROR: outage should have started")
+            failed += 1
+
+        mock_get.side_effect = None
+        mock_get.return_value = create_mock_requests_response(401, json_error=True)
+        ha_interface.api_call("/api/states")
+
+    if ha_interface.outage.since is not None or not ha_interface.auth_rejected:
+        print(f"ERROR: expected the outage ended and auth_rejected set, got {ha_interface.outage.since} / {ha_interface.auth_rejected}")
+        failed += 1
+    else:
+        print("✓ 401 ended the outage")
+
+    return failed
+
+
+def test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat=None):
+    """Test a ha_key rejected on 10 calls in a row (revoked while running) stops Predbat, as before, even with a JSON body"""
+    print("\n=== Testing HAInterface api_call() repeated 401 ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+    fatal_called = [False]
+    ha_interface.fatal_error_occurred = lambda: fatal_called.__setitem__(0, True)
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(401, {"message": "Unauthorized"})
+        for _ in range(9):
+            ha_interface.api_call("/api/states")
+        if fatal_called[0] or not ha_interface.auth_rejected:
+            print(f"ERROR: 9 rejections should flag auth_rejected without being fatal, fatal={fatal_called[0]} flagged={ha_interface.auth_rejected}")
+            failed += 1
+        ha_interface.api_call("/api/states")
+        if not fatal_called[0]:
+            print("ERROR: the 10th rejection should be fatal")
+            failed += 1
+        else:
+            print("✓ fatal after 10 rejected calls")
+
+        # Any good reply starts the count again
+        fatal_called[0] = False
+        mock_get.return_value = create_mock_requests_response(200, {"ok": True})
+        ha_interface.api_call("/api/states")
+        if ha_interface.auth_failures != 0 or ha_interface.auth_rejected:
+            print("ERROR: a successful call should reset the rejection count")
+            failed += 1
+        else:
+            print("✓ count reset by a successful call")
+
+    return failed
+
+
+def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
+    """Test a 502/503/504 counts as an outage even when the gateway's body happens to be JSON"""
+    print("\n=== Testing HAInterface api_call() gateway status ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(503, {"message": "Service Unavailable"})
+        result = ha_interface.api_call("/api/states")
+
+    if result is not None or ha_interface.outage.since is None:
+        print(f"ERROR: expected None and a recorded outage, got {result} / {ha_interface.outage.since}")
+        failed += 1
+    else:
+        print("✓ JSON 503 recorded as an outage")
+
+    # And it is not cleared by the next 503, only by a real reply
+    with patch("ha.requests.get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(200, {"ok": True})
+        ha_interface.api_call("/api/states")
+    if ha_interface.outage.since is not None:
+        print("ERROR: a 200 should end the outage")
+        failed += 1
+    else:
+        print("✓ ended by a real reply")
 
     return failed
 
@@ -559,10 +947,20 @@ def run_hainterface_api_tests(my_predbat):
     failed += test_hainterface_api_call_timeout(my_predbat)
     failed += test_hainterface_api_call_read_timeout(my_predbat)
     failed += test_hainterface_api_call_silent_mode(my_predbat)
-    failed += test_hainterface_api_call_error_limit(my_predbat)
-    failed += test_hainterface_api_call_error_reset(my_predbat)
+    failed += test_hainterface_api_call_outage_tolerated(my_predbat)
+    failed += test_hainterface_api_call_outage_cleared(my_predbat)
+    failed += test_hainterface_api_call_supervisor_failure_not_outage(my_predbat)
+    failed += test_hainterface_api_call_request_exception_is_outage(my_predbat)
+    failed += test_hainterface_api_call_auth_rejected(my_predbat)
+    failed += test_hainterface_api_call_auth_rejected_ends_outage(my_predbat)
+    failed += test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat)
+    failed += test_hainterface_api_call_gateway_status_is_outage(my_predbat)
+    failed += test_hainterface_api_call_outage_gap_starts_new_outage(my_predbat)
     failed += test_hainterface_initialize_app_check(my_predbat)
     failed += test_hainterface_initialize_no_app(my_predbat)
+    failed += test_hainterface_initialize_retries_until_ready(my_predbat)
+    failed += test_hainterface_initialize_gives_up_after_limit(my_predbat)
+    failed += test_hainterface_initialize_auth_rejected_fails_fast(my_predbat)
     failed += test_hainterface_get_history_basic(my_predbat)
     failed += test_hainterface_get_history_no_key(my_predbat)
     failed += test_hainterface_get_history_api_error(my_predbat)

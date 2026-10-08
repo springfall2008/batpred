@@ -9,10 +9,12 @@ Tests cover:
 """
 
 from unittest.mock import patch, MagicMock, AsyncMock
-from aiohttp import WSMsgType
+from aiohttp import ClientConnectionError, WSMsgType, WSServerHandshakeError
 import json
 
-from tests.test_hainterface_common import MockBase, create_ha_interface
+from ha import HA_OUTAGE_LIMIT_SECONDS
+
+from tests.test_hainterface_common import MockBase, create_ha_interface, make_fake_time
 from tests.test_infra import run_async
 
 
@@ -444,8 +446,8 @@ def test_hainterface_socketloop_message_closed(my_predbat=None):
 
 
 def test_hainterface_socketloop_error_limit(my_predbat=None):
-    """Test socketLoop() error limit handling"""
-    print("\n=== Testing HAInterface socketLoop() error limit ===")
+    """Test socketLoop() keeps reconnecting after repeated dropped connections instead of stopping after 10 (#5437)"""
+    print("\n=== Testing HAInterface socketLoop() repeated dropped connections ===")
     failed = 0
 
     mock_base = MockBase()
@@ -454,26 +456,23 @@ def test_hainterface_socketloop_error_limit(my_predbat=None):
     mock_ws = MagicMock()
     mock_ws.send_json = AsyncMock()
 
-    # Create messages that will cause 10 errors (ERROR type messages)
-    messages = [create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"})]
-    for _ in range(10):
+    # 15 connections, each authenticated and then dropped with an ERROR
+    drops = 15
+    messages = []
+    for _ in range(drops):
+        messages.append(create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"}))
         messages.append(create_mock_websocket_message(WSMsgType.ERROR, None))
 
-    # Mock receive() method instead of __aiter__
-    # After 10 ERROR messages, the loop will break and fatal_error will be set
-    message_index = [0]
     async def mock_receive():
-        if message_index[0] < len(messages):
-            msg = messages[message_index[0]]
-            message_index[0] += 1
-            return msg
+        if messages:
+            return messages.pop(0)
         ha_interface.api_stop = True
         return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
     mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
-        ha_interface.api_stop = True
+        pass
 
     with patch("ha.ClientSession") as mock_session_class:
         mock_session = MagicMock()
@@ -487,20 +486,18 @@ def test_hainterface_socketloop_error_limit(my_predbat=None):
         with patch("ha.asyncio.sleep", new=mock_sleep):
             run_async(ha_interface.socketLoop())
 
-    # ERROR messages increment error_count, after 10 errors the loop exits
-    # The "failed 10 times" log happens AFTER the loop exits at line 362-364
-    if not any("failed 10 times" in log or "will try to reconnect" in log for log in mock_base.log_messages):
-        print("ERROR: Should log error messages")
+    reconnects = len([log for log in mock_base.log_messages if "will try to reconnect" in log])
+    if reconnects < drops:
+        print(f"ERROR: expected at least {drops} reconnects, got {reconnects}")
         failed += 1
     else:
-        print("✓ Error logging present")
+        print(f"✓ reconnected {reconnects} times")
 
-    # fatal_error_occurred is called when error_count reaches 10
-    if not mock_base.fatal_error_occurred_called:
-        print("WARN: fatal_error_occurred not called (may exit before check)")
-        # Don't fail on this - timing dependent
+    if mock_base.fatal_error_occurred_called:
+        print("ERROR: dropped connections that recover should not be fatal")
+        failed += 1
     else:
-        print("✓ fatal_error_occurred called")
+        print("✓ not fatal")
 
     return failed
 
@@ -1024,6 +1021,200 @@ def test_hainterface_socketloop_call_service_target_field(my_predbat=None):
     return failed
 
 
+def run_socketloop_with_failing_connect(ha_interface, mock_base, exception, stop_after_attempts, rest_works=False):
+    """
+    Run socketLoop() against a Home Assistant that refuses every connection, on a fake clock where
+    each 5 second reconnect pause advances time by 5 seconds. Returns the number of attempts made.
+    With rest_works, a REST call succeeds during every pause (a proxy that passes REST but not the Web Socket).
+    """
+    clock = [1000.0]
+    attempts = [0]
+
+    def ws_connect_side_effect(*args, **kwargs):
+        attempts[0] += 1
+        if attempts[0] >= stop_after_attempts:
+            ha_interface.api_stop = True
+        raise exception
+
+    async def mock_sleep(delay):
+        clock[0] += delay
+        if rest_works:
+            ha_interface.ha_available()
+        if mock_base.fatal_error_occurred_called:
+            ha_interface.api_stop = True  # MockBase does not feed fatal_error back, so end the loop as the real base would
+
+    fake_time = make_fake_time(clock)
+
+    with patch("ha.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock(side_effect=ws_connect_side_effect)
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep), patch("ha.time", fake_time):
+            run_async(ha_interface.socketLoop())
+
+    return attempts[0]
+
+
+def test_hainterface_socketloop_connect_outage_tolerated(my_predbat=None):
+    """Test socketLoop() keeps reconnecting while Home Assistant restarts instead of stopping after 10 failures (#5437)"""
+    print("\n=== Testing HAInterface socketLoop() connect outage tolerated ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    # 60 refused connections is 5 minutes of outage, well past the old limit of 10 failures
+    attempts = run_socketloop_with_failing_connect(ha_interface, mock_base, ClientConnectionError("Cannot connect to host"), 60)
+
+    if attempts != 60:
+        print(f"ERROR: should keep trying until told to stop, made {attempts} attempts")
+        failed += 1
+    else:
+        print("✓ kept reconnecting through the outage")
+
+    if mock_base.fatal_error_occurred_called:
+        print("ERROR: a 5 minute outage should not be fatal")
+        failed += 1
+    else:
+        print("✓ not fatal")
+
+    return failed
+
+
+def test_hainterface_socketloop_connect_outage_limit(my_predbat=None):
+    """Test socketLoop() gives up once Home Assistant has been unreachable for the outage limit"""
+    print("\n=== Testing HAInterface socketLoop() connect outage limit ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    # REST calls keep succeeding throughout, which must not hide the Web Socket being down
+    attempts = run_socketloop_with_failing_connect(ha_interface, mock_base, ClientConnectionError("Cannot connect to host"), 100000, rest_works=True)
+
+    expected = HA_OUTAGE_LIMIT_SECONDS // 5 + 1
+    if not mock_base.fatal_error_occurred_called:
+        print("ERROR: should be fatal once the outage limit is reached")
+        failed += 1
+    else:
+        print("✓ fatal at the outage limit")
+
+    if attempts != expected:
+        print(f"ERROR: expected {expected} attempts over {HA_OUTAGE_LIMIT_SECONDS}s, made {attempts}")
+        failed += 1
+    else:
+        print(f"✓ gave up after {attempts} attempts")
+
+    return failed
+
+
+def test_hainterface_socketloop_other_startup_error_still_counted(my_predbat=None):
+    """Test an unexpected (non-connection) exception still stops after 10 failures, not after the outage limit"""
+    print("\n=== Testing HAInterface socketLoop() other startup error still counted ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    attempts = run_socketloop_with_failing_connect(ha_interface, mock_base, RuntimeError("a bug"), 100000)
+
+    if not mock_base.fatal_error_occurred_called or attempts != 10:
+        print(f"ERROR: expected fatal after 10 attempts, fatal={mock_base.fatal_error_occurred_called} attempts={attempts}")
+        failed += 1
+    else:
+        print("✓ stopped after 10 unexpected errors")
+
+    return failed
+
+
+def test_hainterface_socketloop_auth_ok_ends_outage(my_predbat=None):
+    """Test an authenticated Web Socket connection ends the outage, so the limit is measured from the next failure"""
+    print("\n=== Testing HAInterface socketLoop() auth_ok ends outage ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    clock = [1000.0]
+    attempts = [0]
+    # Down for 500 seconds, up briefly, then down for another 500 seconds: 1000 seconds in all, but never 900 in one go
+    connect_attempts = 100
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+    messages = [create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"}), create_mock_websocket_message(WSMsgType.CLOSED, None)]
+
+    async def mock_receive():
+        if messages:
+            return messages.pop(0)
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+    ws_context = MagicMock()
+    ws_context.__aenter__ = AsyncMock(return_value=mock_ws)
+    ws_context.__aexit__ = AsyncMock()
+
+    def ws_connect_side_effect(*args, **kwargs):
+        attempts[0] += 1
+        if attempts[0] == connect_attempts + 1:
+            return ws_context  # the brief recovery
+        if attempts[0] > 2 * connect_attempts + 1:
+            ha_interface.api_stop = True
+        raise ClientConnectionError("Cannot connect to host")
+
+    async def mock_sleep(delay):
+        clock[0] += delay
+
+    with patch("ha.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock(side_effect=ws_connect_side_effect)
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep), patch("ha.time", make_fake_time(clock)):
+            run_async(ha_interface.socketLoop())
+
+    if mock_base.fatal_error_occurred_called:
+        print("ERROR: two separate 500 second outages should not add up to a fatal one")
+        failed += 1
+    elif attempts[0] <= 2 * connect_attempts:
+        print(f"ERROR: expected the loop to run through both outages, made {attempts[0]} attempts")
+        failed += 1
+    else:
+        print("✓ outage ended by auth_ok")
+
+    return failed
+
+
+def test_hainterface_socketloop_handshake_rejection(my_predbat=None):
+    """Test a Web Socket upgrade Home Assistant refuses (404/401) stops after 10 attempts, but a 502 from its gateway is an outage"""
+    print("\n=== Testing HAInterface socketLoop() handshake rejection ===")
+    failed = 0
+
+    for status, expect_fatal_after in ((404, 10), (401, 10), (502, None), (503, None)):
+        mock_base = MockBase()
+        ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+        error = WSServerHandshakeError(MagicMock(), (), status=status, message="handshake")
+        attempts = run_socketloop_with_failing_connect(ha_interface, mock_base, error, 60)
+        if expect_fatal_after is not None:
+            if not mock_base.fatal_error_occurred_called or attempts != expect_fatal_after:
+                print(f"ERROR: HTTP {status} should be fatal after {expect_fatal_after} attempts, fatal={mock_base.fatal_error_occurred_called} attempts={attempts}")
+                failed += 1
+            else:
+                print(f"✓ HTTP {status} stops after {attempts} attempts")
+        elif mock_base.fatal_error_occurred_called or attempts != 60:
+            print(f"ERROR: HTTP {status} should be ridden out, fatal={mock_base.fatal_error_occurred_called} attempts={attempts}")
+            failed += 1
+        else:
+            print(f"✓ HTTP {status} treated as an outage")
+
+    return failed
+
+
 def run_hainterface_websocket_tests(my_predbat):
     """Run all HAInterface websocket tests"""
     print("\n" + "=" * 80)
@@ -1046,6 +1237,11 @@ def run_hainterface_websocket_tests(my_predbat):
     failed += test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predbat)
     failed += test_hainterface_socketloop_result_null_success(my_predbat)
     failed += test_hainterface_socketloop_call_service_target_field(my_predbat)
+    failed += test_hainterface_socketloop_connect_outage_tolerated(my_predbat)
+    failed += test_hainterface_socketloop_connect_outage_limit(my_predbat)
+    failed += test_hainterface_socketloop_other_startup_error_still_counted(my_predbat)
+    failed += test_hainterface_socketloop_auth_ok_ends_outage(my_predbat)
+    failed += test_hainterface_socketloop_handshake_rejection(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:
