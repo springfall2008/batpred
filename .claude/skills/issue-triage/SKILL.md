@@ -108,6 +108,7 @@ Then look for **similar** issues and PRs as well, whether or not they are duplic
 
 - Form a root-cause hypothesis with a `file:line` pointer if the investigation supports one. It's fine to say the cause needs maintainer review if it doesn't.
 - You may edit files locally to test a hypothesis (e.g. a temporary debug print, a tweaked test fixture) — this clone is hard-reset and cleaned before the next run, so nothing here persists. Never `git commit` or `git push`.
+- If this investigation changes your mind about step 3's classification — e.g. you classified `bug` but the investigation shows Predbat is doing what the config says — go back and revise it, and drop or rewrite the one-line bug statement to match. Don't let step 9 post a statement step 3 wrote before you knew better.
 
 ## 6. Apply component labels
 
@@ -131,7 +132,9 @@ Skip priority for pure questions and feature requests.
 
 Check existing comments first — if one from you is already there, stop; don't post again.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, the one-line bug statement from step 3 immediately after the classification if you reached step 3 and classified as `bug` (gates 1a/1b apply a type label without ever reaching step 3, so there's no statement to include if you took one of those paths), priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+
+If you reached step 3 and classified as `bug`, lead with the one-line bug statement immediately after the classification. Gates 1a/1b apply a type label without ever reaching step 3, so there's nothing to include if you took one of those paths.
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
 
