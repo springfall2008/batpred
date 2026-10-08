@@ -107,6 +107,7 @@ from plugin_system import PluginSystem
 from github import GitHub
 from ha import run_async
 from control_ledger import ControlLedger
+from rate_history import RateHistory
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -420,6 +421,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.iboost_value_scaling = 1.0
         self.rate_import = {}
         self.rate_import_no_io = {}
+        self.rate_history = None
+        self.rate_history_replay = False
+        self.rate_history_iog_allocations = {}
+        self.rate_history_iog_allocation_origin = None
+        self.rate_history_snapshot = None
+        self.rate_history_accounting_enabled = False
+        self.rate_history_import = {}
+        self.rate_history_export = {}
+        self.rate_history_no_io = {}
+        self.rate_history_coverage_import = set()
+        self.rate_history_coverage_export = set()
+        self.rate_history_standing_charge = {}
+        self.rate_history_car_premium_present = {}
         self.rate_import_base = {}
         self.rate_export = {}
         self.rate_export_base = {}
@@ -2086,6 +2100,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            self.rate_history = RateHistory(log=self.log, timezone=self.args.get("timezone", "Europe/London"), retention_days=self.get_arg("rate_retention_days", 2))
+            storage = self.components.get_component("storage")
+            if storage:
+                run_async(self.rate_history.load(storage))
+            self.rate_history_snapshot = self.rate_history.snapshot()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))

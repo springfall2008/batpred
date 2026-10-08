@@ -33,6 +33,26 @@ If your energy provider prices on the basis of smaller (or larger) intervals the
   plan_interval_minutes: duration
 ```
 
+## Historical prices
+
+Predbat records effective import and export prices for today and yesterday through the Storage component. Cost calculations use these recorded prices even if a provider later removes a dispatch or event. Future schedules remain provisional and can still change.
+
+Manual overrides remain editable until their tariff slot ends. The last applicable override becomes that slot's historical price. Removing an override before the end restores the underlying effective price. Configure `plan_interval_minutes` to match your tariff as described above.
+
+For Intelligent Octopus Go, fresh car-charging evidence can confirm the cheap price for the whole billing half-hour. That price survives stopping or unplugging the car. A planned dispatch alone is not charging evidence. Ohme's elapsed schedule entries do not prove delivery; its actual charging-power reading supplies that evidence. Direct Octopus metered completion data can also qualify when the delivered energy belongs to a single half-hour.
+
+Other automatic events keep their own start and end times. An Axle event does not make the rest of a tariff slot eligible for a reward. Predbat retains its observed effective event prices, which remain cost estimates rather than confirmed supplier charges or Axle payments. Managed Axle curve prices remain provisional while their period is open; an explicit null withdraws that provisional price.
+
+If Predbat misses a slot's closing update, it retains the last known observation. It cannot recover a vanished override it never observed or promote an unobserved future schedule into history. The history cost view can recalculate when recorded prices and energy history cover the required period. An incomplete first yesterday keeps its Home Assistant fallback, but does not stop today's fully covered rows from using retained prices. That fallback also applies on daylight-saving days because the existing yesterday renderer has a fixed 24-hour axis. Recorded prices still retain distinct UTC slot identities. The separate capped-car premium and lifetime-total rollup are unchanged.
+
+The default retention is two local calendar days. To keep more price history, set `rate_retention_days` in expert mode or in `apps.yaml`:
+
+```yaml
+  rate_retention_days: 7
+```
+
+Longer retention does not extend your energy recorder's history. Existing history views still need their usual energy and status data. Recording starts with this feature; it cannot restore older prices that have already disappeared.
+
 ## Octopus Energy direct
 
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.

@@ -335,6 +335,12 @@ from tests.test_annual_export_sweep import (
     test_annual_export_sweep_run,
     test_annual_export_sweep_tariff_threading,
 )
+from tests.test_rate_history import run_rate_history_tests
+from tests.test_rate_periods import run_rate_periods_tests
+from tests.test_io_cap_history import run_io_cap_history_tests
+from tests.test_axle_managed_periods import run_axle_managed_periods_tests
+from tests.test_rate_history_accounting import run_rate_history_accounting_tests
+from tests.test_rate_history_adapter import run_rate_history_adapter_tests
 from tests.test_debug_history import test_debug_history
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment, test_debug_history_count_range
 
@@ -705,6 +711,12 @@ def main():
         ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
         # Storage component unit tests
         ("storage", test_storage, "Storage component tests (yaml/json/text round-trip, expiry, cleanup)", False),
+        ("rate_history", run_rate_history_tests, "Observed effective-rate history, closing rules and durable snapshots", False),
+        ("rate_periods", run_rate_periods_tests, "Original tariff period metadata and cache boundaries", False),
+        ("io_cap_history", run_io_cap_history_tests, "Confirmed IOG prices retain cap allocation without dispatches", False),
+        ("axle_managed_periods", run_axle_managed_periods_tests, "Managed Axle nullable price periods and provisional withdrawal", False),
+        ("rate_history_accounting", run_rate_history_accounting_tests, "Historical price and cost series accounting", False),
+        ("rate_history_adapter", run_rate_history_adapter_tests, "Live history adapter, manual closing and charging evidence", False),
         ("plan_persistence", test_plan_persistence, "Plan persistence tests (save/load round-trip, expiry, missing storage)", False),
         ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
         # Ohme EV charger API unit tests

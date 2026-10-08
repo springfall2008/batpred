@@ -21,6 +21,7 @@ from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
+from rate_periods import extract_rate_periods, extend_rate_periods
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -1001,6 +1002,11 @@ class OctopusAPI(ComponentBase):
                     tariffs["gas"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_gas}
                     tariffs["gas"]["data"] = self.tariffs.get("gas", {}).get("data", None)
                     tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
+        for direction, tariff in tariffs.items():
+            previous = self.tariffs.get(direction, {})
+            for metadata_key in ("rate_periods", "standing_periods"):
+                if metadata_key in previous:
+                    tariff[metadata_key] = previous[metadata_key]
         self.tariffs = tariffs
 
         # Re-run automatic config if tariff structure changed (e.g. export agreement became active)
@@ -1967,7 +1973,8 @@ class OctopusAPI(ComponentBase):
             for interval_start, interval_end, rates in intervals:
                 rate = self._get_rate_for_time(rates, interval_start, now=current_time)
                 if rate is not None:
-                    mdata.append({"valid_from": interval_start.strftime(DATE_TIME_STR_FORMAT), "valid_to": interval_end.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": rate})
+                    source_periods = extract_rate_periods(rates, url_night if rates is result_night else url_day, from_key="valid_from", to_key="valid_to", period_kind="validity")
+                    mdata.append({"valid_from": interval_start.strftime(DATE_TIME_STR_FORMAT), "valid_to": interval_end.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": rate, "source_periods": source_periods})
         return mdata
 
     async def async_download_octopus_url(self, url, json_only=False):
@@ -2093,7 +2100,13 @@ class OctopusAPI(ComponentBase):
                         self.log("Warn: OctopusAPI: No import data available for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
-            rates = self.get_octopus_rates_direct(tariff)
+            # Fresh data replaces the prior raw-bound snapshot; getter preserves it
+            # alongside the legacy display-bound substitutions in tariff data.
+            tariffs[tariff].pop("rate_periods", None)
+            tariffs[tariff].pop("standing_periods", None)
+            source_periods = []
+            rates = self.get_octopus_rates_direct(tariff, periods_out=source_periods)
+            source_periods = [{**period, "start": period["start"].isoformat(), "end": period["end"].isoformat() if period["end"] else None} for period in source_periods]
             standing = self.get_octopus_rates_direct(tariff, standingCharge=True)
 
             rates_stamp = []
@@ -2114,7 +2127,7 @@ class OctopusAPI(ComponentBase):
             self.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_rates"),
                 rate_now,
-                attributes={"friendly_name": "Octopus Tariff Rates " + tariff, "icon": "mdi:currency-gbp", "standing_charge": standing_now, "rates": rates_stamp, "product_code": product_code, "tariff_code": tariff_code},
+                attributes={"friendly_name": "Octopus Tariff Rates " + tariff, "icon": "mdi:currency-gbp", "standing_charge": standing_now, "rates": rates_stamp, "rate_periods": source_periods, "product_code": product_code, "tariff_code": tariff_code},
                 app="octopus",
             )
             self.dashboard_item(
@@ -2124,9 +2137,10 @@ class OctopusAPI(ComponentBase):
                 app="octopus",
             )
 
-    def get_octopus_rates_direct(self, tariff_type, standingCharge=False):
+    def get_octopus_rates_direct(self, tariff_type, standingCharge=False, periods_out=None):
         """
-        Get the direct import rates from Octopus
+        Get the direct import rates from Octopus.
+        Optional periods_out retains original validity independently of display width.
         """
         tariff = self.get_tariff(tariff_type)
         if tariff and ("data" in tariff):
@@ -2135,14 +2149,28 @@ class OctopusAPI(ComponentBase):
             else:
                 tariff_data = tariff["data"]
 
-            # For Octopus rate data valid to of None means forever
+            # Preserve raw bounds alongside data before the existing display-horizon
+            # substitutions. Repeated reads must not promote substituted ends to evidence.
+            metadata_key = "standing_periods" if standingCharge else "rate_periods"
+            if metadata_key not in tariff:
+                source_id = tariff.get("tariffCode", tariff_type)
+                metadata = []
+                for rate in filter_payment_method(tariff_data) or []:
+                    if "source_periods" in rate:
+                        extend_rate_periods(metadata, rate["source_periods"])
+                    else:
+                        metadata.extend(extract_rate_periods([rate], source_id, from_key="valid_from", to_key="valid_to"))
+                unique = {(period["start"], period["end"], period["source_id"]): period for period in metadata}
+                tariff[metadata_key] = list(unique.values())
+            extend_rate_periods(periods_out, tariff[metadata_key])
+
+            # Preserve the existing dictionary/display behaviour for null valid_to.
             if tariff_data:
                 for rate in tariff_data:
-                    valid_to = rate.get("valid_to", None)
-                    if valid_to is None:
+                    if rate.get("valid_to") is None:
                         rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
-
             tariff_data = filter_payment_method(tariff_data)
+
             pdata, ignore_io = minute_data(tariff_data, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
             return pdata
         else:
@@ -3012,9 +3040,10 @@ class Octopus:
             self.log(f"Octopus: Error in create_free_session_simple: {e}")
             return None
 
-    def download_octopus_rates(self, url):
+    def download_octopus_rates(self, url, periods_out=None):
         """
-        Download octopus rates directly from a URL or return from cache if recent
+        Download octopus rates directly from a URL or return from cache if recent.
+        Optional periods_out receives original bounds with cache freshness labels.
         Retry 3 times and then throw error
         """
 
@@ -3034,13 +3063,16 @@ class Octopus:
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
             if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
                 self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
+                extend_rate_periods(periods_out, self.octopus_url_cache[url].get("periods", []), freshness="cache")
                 return pdata
             elif cached_midnight != self.midnight_utc:
                 self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
+        source_periods = []
         for _retry in range(3):
-            pdata = self.download_octopus_rates_func(url)
+            source_periods = []
+            pdata = self.download_octopus_rates_func(url, periods_out=source_periods)
             if pdata:
                 break
 
@@ -3050,6 +3082,7 @@ class Octopus:
             self.record_status("Warn: Octopus: Unable to download Octopus data from cloud", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
                 pdata = self.octopus_url_cache[url]["data"]
+                extend_rate_periods(periods_out, self.octopus_url_cache[url].get("periods", []), freshness="stale")
                 return pdata
             else:
                 raise ValueError
@@ -3063,6 +3096,7 @@ class Octopus:
             self.record_status("Warn: Octopus: URL has no current rates, check apps.yaml", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
                 pdata = self.octopus_url_cache[url]["data"]
+                extend_rate_periods(periods_out, self.octopus_url_cache[url].get("periods", []), freshness="stale")
                 return pdata
             else:
                 raise ValueError
@@ -3072,14 +3106,17 @@ class Octopus:
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
+        self.octopus_url_cache[url]["periods"] = source_periods
+        extend_rate_periods(periods_out, source_periods)
         self._save_octopus_url_cache_to_storage()
         return pdata
 
-    def download_octopus_rates_func(self, url):
+    def download_octopus_rates_func(self, url, periods_out=None):
         """
-        Download octopus rates directly from a URL
+        Download octopus rates directly from a URL, optionally collecting raw periods.
         """
         mdata = []
+        source_id = url
 
         pages = 0
 
@@ -3113,6 +3150,7 @@ class Octopus:
             pages += 1
 
         mdata = filter_payment_method(mdata)
+        extend_rate_periods(periods_out, extract_rate_periods(mdata, source_id, from_key="valid_from", to_key="valid_to"))
         pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
@@ -3803,10 +3841,12 @@ class Octopus:
                         new_slots.append(new_slot)
         return new_slots
 
-    def rate_add_io_slots(self, car_n, rates, octopus_slots):
+    def rate_add_io_slots(self, car_n, rates, octopus_slots, history_reservations=None, history_allocations=None):
         """
-        # Add in any planned octopus slots
-        # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
+        Add planned Octopus prices, preserving optional confirmed cap reservations.
+        Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period.
+        history_reservations retains only price/cap evidence, never charging commands.
+        history_allocations optionally records accepted unique billing half-hours.
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_octopus_slot_max()
@@ -3817,6 +3857,17 @@ class Octopus:
 
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
+        reserved_rates = {}
+        for reservation in history_reservations or []:
+            slot_start = reservation["slot_start"]
+            if slot_start in reserved_rates:
+                continue
+            day_offset = reservation["day_offset"]
+            reserved_rates[slot_start] = reservation["rate"]
+            slots_added_set.add(slot_start)
+            slots_per_day[day_offset] = slots_per_day.get(day_offset, 0) + 1
+            if history_allocations is not None:
+                history_allocations[slot_start] = {"day_offset": day_offset, "rate": reservation["rate"]}
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
         # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
@@ -3891,10 +3942,16 @@ class Octopus:
                         # At the start of each 30-min slot, decide if we can add it
                         apply_rate = False
                         if minute % 30 == 0:
-                            if slots_per_day[day_offset] < octopus_slot_max:
+                            if slot_start in reserved_rates:
+                                apply_rate = True
+                            elif slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
                                 apply_rate = True
+                                if history_allocations is not None:
+                                    supplied_price = rates.get(minute, assumed_price)
+                                    accepted_price = assumed_price if assumed_price < supplied_price - IO_RATE_TOLERANCE else supplied_price
+                                    history_allocations.setdefault(slot_start, {"day_offset": day_offset, "rate": accepted_price})
                             else:
                                 assumed_price = self.rate_max_base
                         else:
@@ -3918,6 +3975,16 @@ class Octopus:
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
+
+        # Confirmed price allocations survive empty/withdrawn dispatch feeds and
+        # command cancellation. Reapply the whole CURRENT billing half-hour so
+        # its plan row and elapsed portion agree; never stamp closed/future blocks.
+        for slot_start, confirmed_rate in reserved_rates.items():
+            if slot_start <= self.minutes_now < slot_start + 30:
+                for minute in range(slot_start, slot_start + 30):
+                    if minute in rates:
+                        rates[minute] = confirmed_rate
+                        self.io_adjusted.pop(minute, None)
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):
@@ -4052,11 +4119,12 @@ class Octopus:
         self.dynamic_load_car_stripped = stripped
         return rates
 
-    def fetch_octopus_rates(self, entity_id, adjust_key=None):
+    def fetch_octopus_rates(self, entity_id, adjust_key=None, periods_out=None):
         """
         Fetch the Octopus rates from the sensor
 
         :param entity_id: The entity_id of the sensor
+        :param periods_out: Optional collector of original source bounds, not display width
         :param adjust_key: The key use to find Octopus Intelligent adjusted rates. self.io_adjusted is only
             replaced when this is given, so a fetch without it (export, gas) keeps the import's markers
         """
@@ -4123,6 +4191,15 @@ class Octopus:
                 rate_key = "price"
                 from_key = "from"
                 to_key = "till"
+            if periods_out is not None:
+                # Predbat's own component publishes display-width rows; its separate
+                # metadata preserves the original API validity/settlement boundaries.
+                metadata = self.get_state_wrapper(entity_id=current_rate_id, attribute="rate_periods")
+                if metadata is not None:
+                    extend_rate_periods(periods_out, extract_rate_periods(metadata, entity_id, from_key="start", to_key="end"))
+                else:
+                    own_display = current_rate_id.startswith("sensor." + self.prefix + "_octopus_") and current_rate_id.endswith("_rates")
+                    extend_rate_periods(periods_out, extract_rate_periods(data_all, entity_id, from_key=from_key, to_key=to_key, period_kind="validity" if own_display else None, freshness="legacy" if own_display else "source"))
             rate_data, io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
             # A fetch without adjust_key has no markers to give, so it must not wipe the ones an earlier
             # import fetch found (#5286)

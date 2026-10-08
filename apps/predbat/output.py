@@ -120,6 +120,61 @@ def dominant_slot_status(minute_counts, precedence):
     return dominant
 
 
+def historical_cost_series(import_energy, export_energy, rate_import, rate_export, start, end, standing_charges):
+    """Return cumulative net/import/export cost endpoints for minute increments.
+
+    Minute keys share the rate-table origin. Endpoint ``start`` is zero; each
+    half-open minute contributes to the next endpoint, including the last minute.
+    Missing prices or energy are gaps, not zero-priced/zero-energy evidence.
+    Standing charges are separate accounting context, never rate adjustments.
+    """
+    net = {start: 0.0}
+    imported = {start: 0.0}
+    exported = {start: 0.0}
+    for minute in range(start, end):
+        if minute not in import_energy or minute not in export_energy or minute not in rate_import or minute not in rate_export:
+            return None
+        import_cost = import_energy[minute] * rate_import[minute]
+        export_cost = -export_energy[minute] * rate_export[minute]
+        imported[minute + 1] = imported[minute] + import_cost
+        exported[minute + 1] = exported[minute] + export_cost
+        net[minute + 1] = net[minute] + import_cost + export_cost + standing_charges.get(minute, 0.0)
+    return net, imported, exported
+
+
+def archived_history_cost_series(base, start, end):
+    """Reprice one covered span without requiring evidence for another day."""
+    if not getattr(base, "rate_history_accounting_enabled", False):
+        return None
+    if getattr(base, "rate_history_calendar_day_minutes", None) != 24 * 60 or not getattr(base, "rate_history_calendar_origin_valid", False):
+        return None
+    boundaries = [minute for minute in (-24 * 60, 0) if start <= minute < end]
+    premiums = getattr(base, "rate_history_car_premium_present", {})
+    if any(premiums.get(minute, False) for minute in boundaries):
+        return None
+    if base.num_cars > 0 and any(minute not in premiums for minute in boundaries):
+        return None
+    standing = getattr(base, "rate_history_standing_charge", {})
+    if any(minute not in standing for minute in boundaries):
+        return None
+    import_coverage = getattr(base, "rate_history_coverage_import", set())
+    export_coverage = getattr(base, "rate_history_coverage_export", set())
+    if any(minute not in import_coverage or (base.rate_export and minute not in export_coverage) for minute in range(start, end)):
+        return None
+    imported, exported = {}, {}
+    for minute in range(start, end):
+        index = base.minutes_now - minute - 1
+        if index in base.import_today and index + 1 in base.import_today:
+            imported[minute] = base.get_from_incrementing(base.import_today, index)
+        if base.export_today:
+            if index in base.export_today and index + 1 in base.export_today:
+                exported[minute] = base.get_from_incrementing(base.export_today, index)
+        elif not base.rate_export:
+            exported[minute] = 0.0
+    export_rates = getattr(base, "rate_history_export", {}) if base.rate_export else {minute: 0.0 for minute in exported}
+    return historical_cost_series(imported, exported, getattr(base, "rate_history_import", {}), export_rates, start, end, standing)
+
+
 class Output:
     """Output and sensor publishing mixin.
 
@@ -2011,6 +2066,11 @@ class Output:
         """
         Work out energy costs today (approx)
         """
+        # Comparison/replay calls must use their hypothetical tables, even if a
+        # live instance previously prepared historical accounting lookups.
+        use_history = save and getattr(self, "rate_history_accounting_enabled", False)
+        rate_import = getattr(self, "rate_history_import", self.rate_import) if use_history else self.rate_import
+        rate_export = getattr(self, "rate_history_export", self.rate_export) if use_history else self.rate_export
         day_cost = 0
         day_cost_import = 0
         day_cost_export = 0
@@ -2063,7 +2123,7 @@ class Output:
             )
 
         for minute_back in range(60):
-            minute = self.minutes_now - minute_back
+            minute = self.minutes_now - minute_back - (1 if use_history else 0)
             energy_import = self.get_from_incrementing(import_today, minute_back)
             load_energy = self.get_from_incrementing(load_today, minute_back)
 
@@ -2084,14 +2144,14 @@ class Output:
 
             hour_load += load_energy
 
-            if self.rate_import:
-                hour_cost += self.rate_import.get(minute, 0) * energy_import
-                hour_cost_import += self.rate_import.get(minute, 0) * energy_import
-                hour_cost_car += self.rate_import.get(minute, 0) * energy_car
+            if rate_import:
+                hour_cost += rate_import.get(minute, 0) * energy_import
+                hour_cost_import += rate_import.get(minute, 0) * energy_import
+                hour_cost_car += rate_import.get(minute, 0) * energy_car
 
-            if self.rate_export:
-                hour_cost -= self.rate_export.get(minute, 0) * energy_export
-                hour_cost_export -= self.rate_export.get(minute, 0) * energy_export
+            if rate_export:
+                hour_cost -= rate_export.get(minute, 0) * energy_export
+                hour_cost_export -= rate_export.get(minute, 0) * energy_export
 
             if self.carbon_enable:
                 hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
@@ -2120,7 +2180,7 @@ class Output:
         for minute in range(self.minutes_now):
             # Add in standing charge
             if (minute % (24 * 60)) == 0:
-                day_cost += self.metric_standing_charge
+                day_cost += getattr(self, "rate_history_standing_charge", {}).get(minute, self.metric_standing_charge) if use_history else self.metric_standing_charge
 
             minute_back = self.minutes_now - minute - 1
             energy = 0
@@ -2142,17 +2202,17 @@ class Output:
 
             day_import += energy
             day_car += car_energy
-            if self.rate_import:
-                day_cost += self.rate_import.get(minute, 0) * energy
-                day_cost_import += self.rate_import.get(minute, 0) * energy
-                day_cost_nosc += self.rate_import.get(minute, 0) * energy
-                day_cost_car += self.rate_import.get(minute, 0) * car_energy
+            if rate_import:
+                day_cost += rate_import.get(minute, 0) * energy
+                day_cost_import += rate_import.get(minute, 0) * energy
+                day_cost_nosc += rate_import.get(minute, 0) * energy
+                day_cost_car += rate_import.get(minute, 0) * car_energy
 
             day_export += energy_export
-            if self.rate_export:
-                day_cost -= self.rate_export.get(minute, 0) * energy_export
-                day_cost_nosc -= self.rate_export.get(minute, 0) * energy_export
-                day_cost_export -= self.rate_export.get(minute, 0) * energy_export
+            if rate_export:
+                day_cost -= rate_export.get(minute, 0) * energy_export
+                day_cost_nosc -= rate_export.get(minute, 0) * energy_export
+                day_cost_export -= rate_export.get(minute, 0) * energy_export
 
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
@@ -2172,7 +2232,7 @@ class Output:
         # For IOG slots where average > house rate (beyond cap), add the difference.
         for car_n in range(self.num_cars):
             for slot in self.car_charging_slots[car_n]:
-                house_rate = self.rate_import.get(slot["start"], 0)
+                house_rate = rate_import.get(slot["start"], 0)
                 premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
                 if premium > 0:
                     slot_start = slot["start"]
@@ -2184,16 +2244,16 @@ class Output:
                         hour_cost_car += premium
                         hour_cost += premium
 
-        day_pkwh = self.rate_import.get(0, 0)
-        day_car_pkwh = self.rate_import.get(0, 0)
-        day_import_pkwh = self.rate_import.get(0, 0)
-        day_export_pkwh = self.rate_export.get(0, 0)
-        day_load_pkwh = self.rate_import.get(0, 0)
-        hour_pkwh = self.rate_import.get(0, 0)
-        hour_pkwh_import = self.rate_import.get(0, 0)
-        hour_pkwh_car = self.rate_import.get(0, 0)
-        hour_pkwh_export = self.rate_export.get(0, 0)
-        hour_load_pkwh = self.rate_import.get(0, 0)
+        day_pkwh = rate_import.get(0, 0)
+        day_car_pkwh = rate_import.get(0, 0)
+        day_import_pkwh = rate_import.get(0, 0)
+        day_export_pkwh = rate_export.get(0, 0)
+        day_load_pkwh = rate_import.get(0, 0)
+        hour_pkwh = rate_import.get(0, 0)
+        hour_pkwh_import = rate_import.get(0, 0)
+        hour_pkwh_car = rate_import.get(0, 0)
+        hour_pkwh_export = rate_export.get(0, 0)
+        hour_load_pkwh = rate_import.get(0, 0)
 
         if day_load > 0:
             day_pkwh = (day_cost_nosc - value_increase_day) / day_load
@@ -3192,7 +3252,13 @@ class Output:
 
     def calculate_yesterday(self):
         """
-        Calculate the base plan for yesterday
+        Calculate the base plan for yesterday.
+
+        Archived cost recomputation requires a 1440-minute calendar day and a
+        table origin matching true local midnight (checked using UTC bounds by
+        the history adapter). On short/long DST days or a shifted origin, retain
+        the recorded HA cost fallback: the legacy history renderer still uses
+        a fixed 1440-minute axis and cannot safely display exact-day endpoints.
         """
 
         # Check  savings_last_updated timestamp, we don't need to re-compute this one every iteration, once an hour or when the day rolls over is enough
@@ -3203,11 +3269,25 @@ class Output:
                 # Less than an hour old and already updated today
                 return
 
-        # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
-        # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
-        # to compute and the step data and rate scans below would only be thrown away again
+        # Recompute actual costs only with complete price, energy and accounting
+        # context. Ordinary car energy is already included in measured imports;
+        # only a known/unknown capped premium needs the recorded-total fallback.
+        history_enabled = getattr(self, "rate_history_accounting_enabled", False)
+        history_start = -24 * 60
+        history_end = self.minutes_now
+        calendar_valid = getattr(self, "rate_history_calendar_day_minutes", None) == 24 * 60 and getattr(self, "rate_history_calendar_origin_valid", False)
+        standing_charges = getattr(self, "rate_history_standing_charge", {})
+        history_costs = archived_history_cost_series(self, history_start, history_end)
+        # A partial first yesterday must not force today's fully covered rows to
+        # use old recorded totals. Keep yesterday's fallback and reprice today alone.
+        history_today_costs = archived_history_cost_series(self, 0, history_end) if history_costs is None else None
+        if history_enabled and history_costs is None:
+            if not calendar_valid:
+                self.log("Warn: Calculate yesterday: short/long calendar day or table origin not at true local midnight; legacy 1440-minute history axis requires recorded cost fallback")
+            else:
+                self.log("Warn: Calculate yesterday: incomplete archived prices, energy, standing charge or car-premium context; using recorded cost estimate")
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
-        if not cost_today_data:
+        if not cost_today_data and history_costs is None:
             self.log("Warn: Calculate yesterday: No history for {}.cost_today, so the savings and plan history can not be computed - check that Home Assistant is recording this entity (see the recorder notes in the FAQ)".format(self.prefix))
             # Record the attempt so this is retried on the normal hourly cadence rather than every cycle
             self.savings_last_updated = self.now_utc
@@ -3246,9 +3326,9 @@ class Output:
             soc_yesterday = 0.0
 
         # Shift rates back
-        past_rates = self.history_to_future_rates(self.rate_import, 24 * 60, end_record + self.minutes_now)
-        past_rates_no_io = self.history_to_future_rates(self.rate_import_no_io, 24 * 60, end_record + self.minutes_now)
-        past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60, end_record + self.minutes_now)
+        past_rates = self.history_to_future_rates(getattr(self, "rate_history_import", self.rate_import) if history_enabled else self.rate_import, 24 * 60, end_record + self.minutes_now)
+        past_rates_no_io = self.history_to_future_rates(getattr(self, "rate_history_no_io", self.rate_import_no_io) if history_enabled else self.rate_import_no_io, 24 * 60, end_record + self.minutes_now)
+        past_rates_export = self.history_to_future_rates(getattr(self, "rate_history_export", self.rate_export) if history_enabled else self.rate_export, 24 * 60, end_record + self.minutes_now)
 
         # Assume user might charge at the lowest rate only, for fixed tariff
         # Only use yesterday's rate range (k < end_record) for the threshold to prevent today's rates
@@ -3292,8 +3372,11 @@ class Output:
         self.log("Yesterday basic charge window best: {} charge limit best: {} based on max charge slots {}".format(charge_window_best, charge_limit_best, self.calculate_savings_max_charge_slots))
 
         # Get Cost yesterday
-        cost_data, _ = minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        cost_data = {}
+        cost_data_per_kwh = {}
+        if cost_today_data:
+            cost_data, _ = minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
 
@@ -3318,6 +3401,16 @@ class Output:
             if minute >= end_record:
                 cost_value += cost_yesterday
             cost_yesterday_array[minute] = cost_value
+        if history_costs is not None:
+            net_cost, _, _ = history_costs
+            cost_yesterday = net_cost[0]
+            cost_yesterday_array = {minute - history_start: value for minute, value in net_cost.items()}
+            load_energy_yesterday = sum(self.get_from_incrementing(self.load_minutes, self.minutes_now - minute - 1) for minute in range(history_start, 0))
+            cost_yesterday_per_kwh = (cost_yesterday - standing_charges[history_start]) / load_energy_yesterday if load_energy_yesterday > 0 else 0.0
+        elif history_today_costs is not None:
+            today_net, _, _ = history_today_costs
+            cost_yesterday_array.update({end_record + minute: cost_yesterday + value for minute, value in today_net.items()})
+            self.log("Calculate yesterday: using archived prices for today's history; yesterday retains its recorded-cost fallback")
 
         # Get battery level yesterday - prefer the already-fetched in-memory history, fall back to HA query
         battery_data = self.soc_kwh_history
@@ -3355,6 +3448,19 @@ class Output:
             cost_data_car_per_kwh, _ = minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_yesterday_car = cost_data_car.get(minutes_back, 0.0)
             cost_car_per_kwh = cost_data_car_per_kwh.get(minutes_back, 0.0)
+
+        if history_costs is not None and self.num_cars > 0:
+            car_energy = {}
+            for minute in range(history_start, 0):
+                index = self.minutes_now - minute - 1
+                if index in self.car_charging_energy and index + 1 in self.car_charging_energy:
+                    car_energy[minute] = self.get_from_incrementing(self.car_charging_energy, index)
+            if len(car_energy) == -history_start:
+                cost_yesterday_car = sum(energy * self.rate_history_import[minute] for minute, energy in car_energy.items())
+                car_kwh = sum(car_energy.values())
+                cost_car_per_kwh = cost_yesterday_car / car_kwh if car_kwh > 0 else 0.0
+            else:
+                self.log("Warn: Calculate yesterday: incomplete car energy history; using recorded car cost estimate")
 
         # Save state
         minutes_now = self.minutes_now
