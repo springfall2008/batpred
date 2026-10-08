@@ -4,6 +4,7 @@ and the energyAddedKwh delta field used by the new Octopus dispatch API.
 """
 
 import asyncio
+import copy
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,9 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_intelligent_dispatch_change_requests_replan(my_predbat)
     failed += test_car_slots_rewired_when_owner_changes(my_predbat)
     failed += test_car_slots_not_taken_without_a_device_to_wire(my_predbat)
+    failed += test_catalogue_value_picks_between_conflicting_entries(my_predbat)
+    failed += asyncio.run(test_intelligent_devices_ambiguous_catalogue(my_predbat))
+    failed += test_ambiguous_charger_plans_at_configured_rate(my_predbat)
     return failed
 
 
@@ -1559,3 +1563,243 @@ def test_discovery_report_produced_when_automatic_is_false(my_predbat):
     if failed == 0:
         print("PASS: run() reports to the discovery catalogue even when self.automatic is False")
     return failed
+
+
+def test_catalogue_value_picks_between_conflicting_entries(my_predbat):
+    """
+    catalogue_value() returns a make and model's value as a float, and lets the caller choose when the
+    catalogue's matching entries disagree.
+
+    The Octopus catalogue lists some makes and models more than once with different values - myenergi's
+    "zappi (all models)" at both 7.400 and 22.000 kW - and the device record only gives the make and model
+    to match on (issue #5438). Taking the last match planned a 7.4 kW zappi at 22 kW. The values arrive
+    from GraphQL as strings; missing, non-numeric, non-finite and non-positive ones are ignored.
+    """
+    print("\n*** Test: catalogue_value() picks deliberately between conflicting catalogue entries ***")
+    from octopus import catalogue_value
+
+    chargers = [
+        {"make": "Myenergi", "models": [{"model": "zappi (all models)", "powerInKw": "7.400"}, {"model": "zappi (all models)", "powerInKw": "22.000"}]},
+        {"make": "Wallbox", "models": [{"model": "Pulsar", "powerInKw": "7.400"}, {"model": "Pulsar Plus", "powerInKw": "11.000"}]},
+        # The same make listed twice, agreeing on the model's value
+        {"make": "Andersen", "models": [{"model": "A2", "powerInKw": "7.000"}]},
+        {"make": "Andersen", "models": [{"model": "A2", "powerInKw": "7.0"}, {"model": "A3", "powerInKw": "not a number"}, {"model": "A3", "powerInKw": None}]},
+        # Unusable figures alongside a real one, which is the only one kept
+        {"make": "Sample", "models": [{"model": "One", "powerInKw": v} for v in ("nan", "inf", "-7.4", "0", "7.400")] + [{"model": "One"}]},
+        {"make": "Ohme", "models": None},
+    ]
+    cases = [
+        ("ambiguous match, lowest", "Myenergi", "zappi (all models)", min, (7.4, [7.4, 22.0])),
+        ("ambiguous match, highest", "Myenergi", "zappi (all models)", max, (22.0, [7.4, 22.0])),
+        ("unique match, string converted", "Wallbox", "Pulsar", min, (7.4, [7.4])),
+        ("duplicates that agree", "Andersen", "A2", max, (7.0, [7.0])),
+        ("non-numeric and null values ignored", "Andersen", "A3", min, (None, [])),
+        ("non-finite, negative, zero and missing values ignored", "Sample", "One", max, (7.4, [7.4])),
+        ("no such model", "Wallbox", "Commander", min, (None, [])),
+        ("no such make", "Unlisted", "Pulsar", min, (None, [])),
+        ("make with no models", "Ohme", "Home Pro", min, (None, [])),
+    ]
+    failed = 0
+    for name, make, model, pick, expected in cases:
+        got = catalogue_value(chargers, make, model, "powerInKw", pick)
+        if got != expected or (got[0] is not None and type(got[0]) is not float):
+            print(f"ERROR: {name}: catalogue_value({make!r}, {model!r}, {pick.__name__}) = {got}, expected {expected}")
+            failed += 1
+    if catalogue_value(None, "Myenergi", "zappi (all models)", "powerInKw", min) != (None, []):
+        print("ERROR: a missing catalogue list should give no value")
+        failed += 1
+    if not failed:
+        print("PASS: catalogue_value() converts to float, ignores unusable values and lets the caller pick between conflicting ones")
+    return failed
+
+
+AMBIGUOUS_CATALOGUE = {
+    "chargePointVariants": [
+        {"make": "Myenergi", "models": [{"model": "zappi (all models)", "powerInKw": "7.400"}, {"model": "zappi (all models)", "powerInKw": "22.000"}]},
+        {"make": "Wallbox", "models": [{"model": "Pulsar", "powerInKw": "7.400"}]},
+        # Listed in the opposite order to the zappi, so neither first- nor last-match-wins gets every answer right
+        {"make": "Andersen", "models": [{"model": "A2", "powerInKw": "22.000"}, {"model": "A2", "powerInKw": "7.000"}]},
+    ],
+    "electricVehicles": [
+        {"make": "Kia", "models": [{"model": "EV6 GT", "batterySize": "74.00"}, {"model": "EV6 GT", "batterySize": "80.00"}, {"model": "EV6 GT", "batterySize": "77.40"}]},
+        {"make": "Tesla", "models": [{"model": "Model 3", "batterySize": "75.00"}]},
+    ],
+}
+
+AMBIGUOUS_CATALOGUE_DEVICES = [
+    ("zappi", "SmartFlexChargePoint", "Myenergi", "zappi (all models)"),
+    ("pulsar", "SmartFlexChargePoint", "Wallbox", "Pulsar"),
+    ("andersen", "SmartFlexChargePoint", "Andersen", "A2"),
+    ("ev6", "SmartFlexVehicle", "Kia", "EV6 GT"),
+    ("model3", "SmartFlexVehicle", "Tesla", "Model 3"),
+]
+
+
+def _make_catalogue_api(my_predbat, account_id, devices):
+    """
+    An OctopusAPI whose GraphQL queries return the given LIVE devices (with no dispatches) and AMBIGUOUS_CATALOGUE,
+    and whose log lines are collected in api.logged rather than printed.
+    """
+    device_data = {"devices": [{"deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": typename, "make": make, "model": model, "id": device_id} for device_id, typename, make, model in devices]}
+    settings_data = {"devices": [{"id": device_id, "status": {"isSuspended": False}, "chargingPreferences": {}} for device_id, _, _, _ in devices]}
+
+    async def mock_query(query, context, ignore_errors=False, returns_data=True):
+        """Answer the device and settings queries; dispatches come back empty."""
+        if "get-intelligent-devices" in context:
+            return device_data
+        if "get-intelligent-settings" in context:
+            return settings_data
+        if "get-intelligent-dispatches" in context:
+            return {"flexPlannedDispatches": [], "completedDispatches": []}
+        return None
+
+    api = _make_discovery_api(my_predbat, account_id, automatic=False)
+    api.get_intelligent_completed_dispatches = MagicMock(return_value=[])
+    api.async_graphql_query = AsyncMock(side_effect=mock_query)
+    api.async_get_vehicle_catalogue = AsyncMock(return_value=AMBIGUOUS_CATALOGUE)
+    api.logged = []
+    api.log = lambda message: api.logged.append(message)
+    return api
+
+
+async def test_intelligent_devices_ambiguous_catalogue(my_predbat):
+    """
+    A device whose make and model the catalogue gives conflicting values for gets the lowest charge point
+    power or the largest battery size, with one warning however many polls; every value arrives as a number,
+    which survives the coordinator's typed ratings container (before, the raw "22.000" string was dropped with
+    "value does not fit the container's type").
+    """
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    print("\n*** Test: an ambiguous catalogue entry gives the lowest power or largest battery, as a number ***")
+    api = _make_catalogue_api(my_predbat, "ambiguous-catalogue", AMBIGUOUS_CATALOGUE_DEVICES)
+
+    failed = 0
+
+    def check(condition, message):
+        """Record one failed assertion, printing its message, without aborting the remaining checks."""
+        nonlocal failed
+        if not condition:
+            print("ERROR: " + message)
+            failed += 1
+
+    result = await api.async_get_intelligent_devices("ambiguous-catalogue", "zappi")
+    result = await api.async_get_intelligent_devices("ambiguous-catalogue", "zappi")
+
+    expected = {
+        "zappi": ("charge_point_power_in_kw", 7.4),
+        "pulsar": ("charge_point_power_in_kw", 7.4),
+        "andersen": ("charge_point_power_in_kw", 7.0),
+        "ev6": ("vehicle_battery_size_in_kwh", 80.0),
+        "model3": ("vehicle_battery_size_in_kwh", 75.0),
+    }
+    for device_id, (field, value) in expected.items():
+        got = result.get(device_id, {}).get(field, "missing")
+        check(got == value and type(got) is float, "{} {} should be {!r}, got {!r}".format(device_id, field, value, got))
+
+    warnings = [message for message in api.logged if "catalogue lists" in message]
+    # One per ambiguous make and model - the two chargers share a message but not a make and model
+    check(len(warnings) == 3, "expected one warning each for the zappi, the Andersen and the EV6 over two polls, got {}".format(warnings))
+    check(any("Andersen 'A2'" in message and "the lowest, 7 kW" in message for message in warnings), "expected a warning for the Andersen A2 using 7 kW, got {}".format(warnings))
+    zappi_warning = next((message for message in warnings if "zappi" in message), "")
+    check(
+        zappi_warning.startswith("Warn:") and "(7.4, 22 kW)" in zappi_warning and "the lowest, 7.4 kW" in zappi_warning and "input_number.predbat_car_charging_rate" in zappi_warning,
+        "the zappi warning should list both powers, the one used and the setting to change: {!r}".format(zappi_warning),
+    )
+    ev6_warning = next((message for message in warnings if "EV6" in message), "")
+    check(
+        ev6_warning.startswith("Warn:") and "(74, 77.4, 80 kWh)" in ev6_warning and "the largest, 80 kWh" in ev6_warning and "car_charging_battery_size" in ev6_warning,
+        "the EV6 warning should list all three sizes, the one used, and say car_charging_battery_size can't change it: {!r}".format(ev6_warning),
+    )
+
+    # Every value reaches the coordinator's ratings as a number, so none is dropped
+    api.intelligent_devices = result
+    for device_id in expected:
+        _publish_car_entities(my_predbat, api, device_id)
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.report("octopus", api.build_discovery())
+    ratings = {record["device_id"]: record.get("ratings", {}) for record in coordinator.reports["octopus"]["cars"]}
+    check(set(ratings) == {"octopus:" + device_id for device_id in expected}, "expected a car record for each device, got {}".format(sorted(ratings)))
+    for device_id, rating, value in (("zappi", "charge_point_power_kw", 7.4), ("pulsar", "charge_point_power_kw", 7.4), ("andersen", "charge_point_power_kw", 7.0), ("ev6", "vehicle_battery_kwh", 80.0), ("model3", "vehicle_battery_kwh", 75.0)):
+        got = ratings.get("octopus:" + device_id, {}).get(rating)
+        check(got == value, "{}'s {} should survive the coordinator as {}, ratings {}".format(device_id, rating, value, ratings.get("octopus:" + device_id)))
+
+    if not failed:
+        print("PASS: ambiguous catalogue entries give the lowest power or largest battery, warned about once; all values are numbers")
+    return failed
+
+
+def test_ambiguous_charger_plans_at_configured_rate(my_predbat):
+    """
+    End to end for issue #5438: a zappi the catalogue lists at both 7.4 and 22 kW, published on the
+    component's own intelligent_dispatch sensor and read by the real fetch_sensor_data_cars(), is planned
+    at 7.4 kW - not 22 kW, as it was when the last catalogue match won. Octopus's figure only ever raises
+    the configured rate: a lower one is raised to the catalogue's 7.4 kW, and a higher one still wins.
+    """
+    print("\n*** Test: a car on an ambiguously listed charger is planned at the configured rate ***")
+    api = _make_catalogue_api(my_predbat, "ambiguous-charger-plan", [AMBIGUOUS_CATALOGUE_DEVICES[0]])
+    result = asyncio.run(api.async_get_intelligent_devices("ambiguous-charger-plan", "zappi"))
+    api.intelligent_devices = result
+    asyncio.run(api.async_intelligent_update_sensor("ambiguous-charger-plan"))
+    entity_id = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix("zappi"))
+
+    saved_args = {key: my_predbat.args.get(key, None) for key in ("octopus_intelligent_slot", "car_charging_soc", "car_charging_limit", "car_charging_loss")}
+    saved = {key: copy.deepcopy(getattr(my_predbat, key, None)) for key in CAR_STATE_KEYS}
+    failed = 0
+    try:
+        for configured, expected in ((7.4, 7.4), (3.7, 7.4), (11.0, 11.0)):
+            my_predbat.num_cars = 1
+            my_predbat.car_charging_rate = [configured]
+            my_predbat.car_charging_battery_size = [64.0]
+            my_predbat.car_charging_limit = [64.0]
+            my_predbat.car_charging_planned = [True]
+            my_predbat.car_charging_now = [False]
+            my_predbat.car_charging_manual_soc = [False]
+            my_predbat.car_charging_exclusive = [False]
+            my_predbat.car_charging_slots = [[]]
+            my_predbat.octopus_intelligent_charging = True
+            my_predbat.octopus_slots = [[]]
+            my_predbat.args["octopus_intelligent_slot"] = [entity_id]
+            my_predbat.args["car_charging_soc"] = [50.0]
+            my_predbat.args["car_charging_limit"] = [100.0]
+            my_predbat.args["car_charging_loss"] = 0.0
+            my_predbat.fetch_sensor_data_cars()
+            got = my_predbat.car_charging_rate[0]
+            if got != expected:
+                print(f"ERROR: with car_charging_rate {configured} and the catalogue's lowest 7.4 kW the car should be planned at {expected} kW, got {got}")
+                failed += 1
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        for key, value in saved.items():
+            setattr(my_predbat, key, value)
+    if not failed:
+        print("PASS: the car is planned at the higher of the configured rate and the catalogue's lowest, never its 22 kW")
+    return failed
+
+
+# The PredBat car state test_ambiguous_charger_plans_at_configured_rate() and fetch_sensor_data_cars() set,
+# restored afterwards: every test in this module's wrapper shares one PredBat instance
+CAR_STATE_KEYS = (
+    "num_cars",
+    "car_charging_rate",
+    "car_charging_battery_size",
+    "car_charging_limit",
+    "car_charging_planned",
+    "car_charging_now",
+    "car_charging_manual_soc",
+    "car_charging_exclusive",
+    "car_charging_slots",
+    "car_charging_soc",
+    "car_charging_loss",
+    "car_charging_limit_model",
+    "car_charging_plan_time",
+    "car_charging_soc_next",
+    "dispatch_timeline_pending",
+    "octopus_intelligent_charging",
+    "octopus_slots",
+)
