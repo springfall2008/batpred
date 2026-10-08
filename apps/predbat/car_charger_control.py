@@ -12,7 +12,7 @@ read only mode or its control switch is turned off. CarChargerControl owns that 
 once; a component supplies only what is specific to its charger.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from utils import parse_car_plan_windows, in_car_plan_window
 
@@ -25,13 +25,14 @@ def parse_dispatch_time(value):
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        pass
-    try:
-        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
-    except ValueError:
-        return None
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
+        except ValueError:
+            return None
+    # A time with no offset cannot be compared with the clock; both sources write UTC
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 # A guest switch left on turns itself off after this long, for chargers that cannot tell a car was unplugged
@@ -195,6 +196,9 @@ class CarChargerControl:
         is_charger = self.get_state_wrapper(slot, attribute="is_charger")
         if is_charger is None:
             # Not published yet, or a sensor that does not say (the Octopus Energy HA integration)
+            return None
+        if isinstance(is_charger, str) and is_charger.strip().lower() in ("unknown", "unavailable", "none", ""):
+            # A sensor that has lost its value does not say, which is not the same as "not the charger"
             return None
         return parse_control_setting(is_charger)
 

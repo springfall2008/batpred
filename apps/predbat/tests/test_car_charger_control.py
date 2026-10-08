@@ -533,6 +533,16 @@ def test_dispatch_times_judged_against_the_clock():
     component.sensors[DISPATCH] = {"is_charger": False, "state": "on"}
     assert component.charger_control_dispatch_active(0, now) is True
     assert parse_dispatch_time("not a time") is None and parse_dispatch_time(None) is None
+    # No offset: read as UTC rather than raising when compared with the clock
+    component.sensors[DISPATCH] = {"is_charger": False, "state": "off", "planned_dispatches": [{"start": "2026-06-01T00:15:00", "end": "2026-06-01T01:00:00"}]}
+    assert component.charger_control_dispatch_active(0, now) is True
+
+
+def test_is_charger_that_has_lost_its_value_is_not_a_no():
+    """A dispatch sensor reporting is_charger as unknown or unavailable is cannot tell, not 'not the charger'."""
+    for lost in ("unknown", "unavailable", "none", ""):
+        component = _octopus_component(FakeOctopus(), is_charger=lost)
+        assert component.charger_control_octopus_drives_charger(0) is None, lost
 
 
 def test_guest_switch_toggle():
@@ -805,6 +815,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_charge_point_releases_a_running_charger()
     test_octopus_rule_car_integrated_follows_the_dispatch_sensor()
     test_dispatch_times_judged_against_the_clock()
+    test_is_charger_that_has_lost_its_value_is_not_a_no()
     test_guest_switch_toggle()
     test_octopus_rule_explicit_true_never_overrides_a_charge_point()
     test_octopus_rule_unknown_hands_off_unless_told()
