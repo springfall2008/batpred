@@ -25,6 +25,7 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     DYNAMIC_LOAD_CAR_CONFIRM_MINUTES,
     DYNAMIC_LOAD_CAR_LOAD_MINUTES,
+    DYNAMIC_LOAD_CAR_LOW_FACTOR,
     DYNAMIC_LOAD_CAR_SENSOR_MINUTES,
     DYNAMIC_LOAD_CAR_START_MINUTES,
     PREDICT_STEP,
@@ -367,19 +368,49 @@ class Plan:
     def dynamic_load_classify(self):
         """
         Classify load_last_period as "high" (above the battery's discharge rate), "low" (below both the
-        battery rate and the car charging threshold, so no car can be charging) or "baseline".
+        battery rate and the car's low-load cut-off, so no car can be charging) or "baseline".
 
         Shared by dynamic_load(), which runs after the inverter fetch, and dynamic_load_car_check(), which
         runs before it and so uses the previous cycle's battery_rate_max_discharge - it barely moves
         between cycles, and the car grace period spans several of them.
         """
         threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
-        threshold_car = self.car_charging_threshold_kw()
         if self.load_last_period >= threshold_battery:
             return "high"
-        if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
+        if (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < self.dynamic_load_car_low_kw()):
             return "low"
         return "baseline"
+
+    def dynamic_load_car_low_kw(self):
+        """
+        The load in kW under which no car can be charging: DYNAMIC_LOAD_CAR_LOW_FACTOR of car_charging_threshold.
+        """
+        return self.car_charging_threshold_kw() * DYNAMIC_LOAD_CAR_LOW_FACTOR
+
+    def dynamic_load_car_live_load(self):
+        """
+        The live house load from the load_power sensors, as (configured, kW): the total across inverters,
+        or None when any of them has no reading ("unknown", "unavailable", missing from HA) - part of the
+        load is not the load. configured is False when load_power is not set at all.
+
+        Read from the sensors rather than the inverters: dynamic_load_car_check() runs before
+        fetch_inverter_data(), where their load_power is still the previous cycle's.
+        """
+        entities = self.args.get("load_power", None)
+        if not entities:
+            return False, None
+        if not isinstance(entities, list):
+            entities = [entities]
+        total = 0.0
+        for inverter_n, entity_id in enumerate(entities):
+            try:
+                power = float(self.resolve_arg("load_power", entity_id, default=None, quiet=True, required_unit="W"))
+            except (ValueError, TypeError):
+                return True, None
+            if self.get_arg("load_power_invert", default=False, index=inverter_n):
+                power = -power
+            total += power
+        return True, total / 1000.0
 
     def dynamic_load_car_evidence(self, car_n, minute, now, dispatch_start, dispatch_end):
         """
@@ -399,6 +430,11 @@ class Plan:
         averages the PREDICT_STEP minutes up to minutes_now, so it only counts when that whole window lies
         inside the dispatch, and the grace is timed on that 5 minute grid. It is skipped just after
         midnight, when the load_today sensor resets, and without load history.
+
+        A low load_last_period alone is not enough where load_power is set: it lags a car that is still
+        ramping up, and a cloud inverter's late readings, so a car at full power can read low (GH#5461).
+        The live load has to be low too. Live load that is not low, or has no reading, makes a low window
+        no evidence either way - it neither cancels the car nor resumes it.
         """
         if car_n in self.dynamic_load_car_sensors:
             charging = self.car_charging_now_reading(car_n)
@@ -417,7 +453,18 @@ class Plan:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
             if self.minutes_now - PREDICT_STEP < dispatch_start or self.minutes_now > dispatch_end:
                 return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
-            return self.dynamic_load_classify() == "low", DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            if self.dynamic_load_classify() != "low":
+                return False, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            live_configured, live_load = self.dynamic_load_car_live_load()
+            live_low = not live_configured or (live_load is not None and live_load < self.dynamic_load_car_low_kw())
+            self.log(
+                "Octopus Intelligent: car {} load last period {:.2f}kW is low (under {:.2f}kW), live load {} - {}".format(
+                    car_n, self.load_last_period, self.dynamic_load_car_low_kw(), "{:.2f}kW".format(live_load) if live_load is not None else ("unavailable" if live_configured else "not configured"), "not charging" if live_low else "no evidence"
+                )
+            )
+            if not live_low:
+                return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
+            return True, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
         return None, DYNAMIC_LOAD_CAR_LOAD_MINUTES, grid_now
 
     def car_charging_now_reading(self, car_n):
