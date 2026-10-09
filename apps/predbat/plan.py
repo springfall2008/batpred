@@ -4174,10 +4174,12 @@ class Plan:
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - (window_length + window_length_target))
                                 is_combined = True
                             elif export_mode_of(export_limit_target) == EXPORT_MODE_TARGET and window_length_target < orig_length_target:
-                                # Partial combine
+                                # Partial combine - move export time from this window into the target, so
+                                # this window shrinks by what the target gains. Growing it instead pushed
+                                # its start back into the slot before, through any manual override there (#5423)
                                 amount_to_move = min(orig_length_target - window_length_target, window_length)
                                 window_length_target_new = amount_to_move + window_length_target
-                                window_length_new = amount_to_move + window_length
+                                window_length_new = window_length - amount_to_move
                                 self.export_limits_best[window_n] = min(export_limit, export_limit_target, key=export_limit_sort_key)
                                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n]["end"] - window_length_new)
                                 set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - window_length_target_new)
