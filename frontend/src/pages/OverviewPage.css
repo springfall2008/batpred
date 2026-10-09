@@ -678,10 +678,6 @@
   stroke: #374151;
 }
 
-.overview-page:not(.is-night) .overview-grid-point text {
-  fill: #1f2937;
-}
-
 .overview-grid-point circle {
   fill: var(--color-surface);
   stroke: var(--color-flow-grid);
