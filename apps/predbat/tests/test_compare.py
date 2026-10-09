@@ -68,10 +68,54 @@ def _make_compare():
     return cmp, pb
 
 
+def test_run_all_restores_plan_preclip(my_predbat):
+    """run_all() puts back the pre-clip copy of the plan in force, which each tariff's calculate_plan() replaces.
+
+    Left as the last tariff's 48-hour plan, the first re-plan after the midnight comparison scored that plan as the
+    previous one, so it always switched plans whatever metric_min_improvement_plan said (seen live on 9 Oct 2026:
+    previous plan 300.97p against 30.71p when the comparison is not run).
+    """
+    from compare import Compare
+
+    saved_compare_list = my_predbat.args.get("compare_list")
+    saved_preclip = my_predbat.plan_preclip
+    plan_in_force = ([18.08], [{"start": 0, "end": 90, "average": 7.62}], [], [])
+    my_predbat.plan_preclip = plan_in_force
+    my_predbat.args["compare_list"] = [{"id": "test_tariff", "name": "Test tariff"}]
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run: its calculate_plan() replaces plan_preclip with that tariff's plan."""
+        my_predbat.plan_preclip = ([0.0], [{"start": 0, "end": 2880, "average": 30.0}], [], [])
+        return None
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    try:
+        comparison.run_all(fetch_sensor=False)
+        if my_predbat.plan_preclip is not plan_in_force:
+            print("ERROR: run_all() should restore the plan in force's pre-clip copy, got {}".format(my_predbat.plan_preclip))
+            return 1
+        print("PASS: run_all() restores plan_preclip")
+        return 0
+    finally:
+        my_predbat.plan_preclip = saved_preclip
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
 def test_compare(my_predbat):
     """Run all compare unit tests."""
     failed = 0
     print("**** Running compare tests ****\n")
+    failed += test_run_all_restores_plan_preclip(my_predbat)
 
     # ------------------------------------------------------------------
     # T1: apply_hardware_overrides – soc_max override

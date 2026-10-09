@@ -618,6 +618,9 @@ class Compare:
         save_export_window_best = my_predbat.export_window_best
         save_export_limits_best = my_predbat.export_limits_best
         save_charge_limit_best = my_predbat.charge_limit_best
+        # The pre-clip copy of the plan in force, which the next re-plan scores as the previous plan; each tariff's
+        # calculate_plan() replaces it with its own plan
+        save_plan_preclip = my_predbat.plan_preclip
         save_cost_today_sofar = my_predbat.cost_today_sofar
         save_carbon_today_sofar = my_predbat.carbon_today_sofar
         save_iboost_today = my_predbat.iboost_today
@@ -735,6 +738,7 @@ class Compare:
             my_predbat.export_window_best = save_export_window_best
             my_predbat.export_limits_best = save_export_limits_best
             my_predbat.charge_limit_best = save_charge_limit_best
+            my_predbat.plan_preclip = save_plan_preclip
             my_predbat.cost_today_sofar = save_cost_today_sofar
             my_predbat.carbon_today_sofar = save_carbon_today_sofar
             my_predbat.iboost_today = save_iboost_today
