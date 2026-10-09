@@ -11,7 +11,7 @@
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
-from gecloud import GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
+from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import DEVICE_REFRESH_SECONDS, SETTINGS_SLOW_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
 from utils import dp4
 import asyncio
@@ -57,12 +57,9 @@ class MockGECloudDirect(GECloudDirect):
         self.evc_sessions = {}
         self.evc_status_unknown = set()
         self.automatic_evc = False
-        self.evc_control = False
-        self.evc_control_active = False
-        self.evc_control_enabled = True
-        self.evc_control_released = False
-        self.evc_control_state = {}
-        self.evc_control_windows = {}
+        # Unset, as components.py leaves it when apps.yaml does not mention it
+        self.evc_control = None
+        self.charger_control_setup("GECloud", "EV charger", "gecloud", "evc_control_state", "evc_control_enabled", switch_prefix="gecloud")
         self.entity_states = {}
         self.entity_attributes = {}
         self.pending_writes = {}
@@ -131,7 +128,9 @@ class MockGECloudDirect(GECloudDirect):
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
     def get_arg(self, name, default=None, **kwargs):
-        """Mock get_arg"""
+        """Mock get_arg - set_read_only answers from the same flag as the read only switch, as it does in Predbat"""
+        if name == "set_read_only":
+            return self._read_only
         return self.config_args.get(name, default)
 
     def set_arg(self, name, value):
@@ -3456,7 +3455,7 @@ def _test_run_rediscovers_evc_devices(my_predbat):
             print("ERROR: EVC automatic config should re-run once, got {}".format(calls["automatic_evc"]))
             return 1
 
-        ge_cloud.evc_control_state["evc-1"] = "start"
+        ge_cloud.charger_control_state["evc-1"] = True
         api["evc"] = [{"uuid": "evc-2", "alias": "Second"}]
         _reset_rediscovery_calls(calls)
         await ge_cloud.run(seconds=DEVICE_REFRESH_SECONDS * 2, first=False)
@@ -3466,7 +3465,7 @@ def _test_run_rediscovers_evc_devices(my_predbat):
         if "evc-1" in calls["evc_polled"]:
             print("ERROR: the removed charger should not be polled, got {}".format(calls["evc_polled"]))
             return 1
-        for name in ("evc_device", "evc_data", "evc_sessions", "evc_control_state"):
+        for name in ("evc_device", "evc_data", "evc_sessions", "charger_control_state"):
             if "evc-1" in getattr(ge_cloud, name):
                 print("ERROR: {} should no longer hold the removed charger".format(name))
                 return 1
@@ -6324,17 +6323,26 @@ def _test_evc_control(my_predbat):
         outside = tz.localize(datetime(2026, 8, 23, 6, 0))
         plan = {EVC_PLAN_SENSOR: {"planned": [{"start": "08-22 23:00:00", "end": "08-23 05:00:00"}]}}
 
-        # Test 1: control stays off unless it is asked for
+        # Test 1: unset control follows ge_cloud_automatic_evc, and an explicit false keeps it off
         ge = MockGECloudDirect()
         ge.automatic_evc = True
         ge.evc_control_enable()
-        assert ge.evc_control_active is False, "Control should be off without ge_cloud_evc_control"
+        assert ge.charger_control_active is True, "Unset ge_cloud_evc_control should turn on with ge_cloud_automatic_evc"
+        ge = MockGECloudDirect()
+        ge.automatic_evc = True
+        ge.evc_control = False
+        ge.evc_control_enable()
+        assert ge.charger_control_active is False, "An explicit ge_cloud_evc_control: false keeps control off"
+        ge = MockGECloudDirect()
+        ge.evc_control_enable()
+        assert ge.charger_control_active is False, "Unset control stays off without ge_cloud_automatic_evc"
+        assert not any("Warn" in message for message in ge.log_messages), "Unset control is not a request, so its absence is not warned about"
 
-        # Test 2: and refuses to run without the auto-config that maps chargers to cars
+        # Test 2: an explicit request refuses to run without the auto-config that maps chargers to cars
         ge = MockGECloudDirect()
         ge.evc_control = True
         ge.evc_control_enable()
-        assert ge.evc_control_active is False, "Control needs ge_cloud_automatic_evc to know which charger is which car"
+        assert ge.charger_control_active is False, "Control needs ge_cloud_automatic_evc to know which charger is which car"
         assert any("ge_cloud_automatic_evc" in message for message in ge.log_messages), "The reason control is off should be logged"
 
         # Test 3: a planned window starts the charger, and is not re-sent every poll
@@ -6344,27 +6352,27 @@ def _test_evc_control(my_predbat):
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
         ge.entity_attributes = plan
 
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [("evc-001", "start-charge")], "A planned window should start the charge, got {}".format(commands)
 
         commands.clear()
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [], "The same state should not be re-sent, got {}".format(commands)
 
         # Test 4: outside the window the charger is stopped
         commands.clear()
-        await ge.evc_control_charge(outside)
+        await ge.charger_control_apply(outside)
         assert commands == [("evc-001", "stop-charge")], "Outside a window the charge should stop, got {}".format(commands)
 
         # Test 5: read only mode hands the charger back, once
         commands.clear()
         ge._read_only = True
-        await ge.evc_control_tick(outside)
+        await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Releasing should hand a stopped charger back, got {}".format(commands)
-        assert ge.evc_control_released is True, "The release should be remembered"
+        assert ge.charger_control_released is not None, "The release should be remembered"
 
         commands.clear()
-        await ge.evc_control_tick(outside)
+        await ge.charger_control_tick(outside)
         assert commands == [], "A release should happen once, not every cycle"
 
         # Test 6: turning the control switch off releases in the same way
@@ -6373,12 +6381,40 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
         ge.entity_attributes = plan
-        await ge.evc_control_charge(outside)
+        await ge.charger_control_apply(outside)
         commands.clear()
         await ge.switch_event("switch.predbat_gecloud_evc_control", "turn_off")
-        assert ge.evc_control_enabled is False, "The switch should turn control off"
-        await ge.evc_control_tick(outside)
+        assert ge.charger_control_enabled is False, "The switch should turn control off"
+        await ge.charger_control_tick(outside)
         assert commands == [("evc-001", "start-charge")], "Switching control off should release the charger, got {}".format(commands)
+
+        # Test 6b: the guest charging switch releases in the same way, and ends when the guest unplugs -
+        # but not when the owner's car, on the charger when it went on, is unplugged to make way
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.entity_attributes = plan
+        await ge.charger_control_apply(outside)
+        commands.clear()
+        await ge.switch_event("switch.predbat_gecloud_guest_charging", "turn_on")
+        assert ge.charger_control_guest is True, "The guest switch should turn guest charging on"
+        await ge.charger_control_tick(outside)
+        assert commands == [("evc-001", "start-charge")], "Guest charging should release the charger, got {}".format(commands)
+        ge.evc_device["evc-001"]["status"] = "idle"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is True, "The owner's car being unplugged should not end guest charging"
+        ge.evc_device["evc-001"]["status"] = "charging"
+        await ge.charger_control_tick(outside)
+        # A comms blip is not an unplug
+        ge.evc_device["evc-001"]["status"] = "Unavailable"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is True, "An unavailable status should not end guest charging"
+        ge.evc_device["evc-001"]["status"] = "charging"
+        await ge.charger_control_tick(outside)
+        ge.evc_device["evc-001"]["status"] = "idle"
+        await ge.charger_control_tick(outside)
+        assert ge.charger_control_guest is False, "Unplugging the guest's car should end guest charging"
 
         # Test 7: nothing is commanded while no car is plugged in
         commands = []
@@ -6386,7 +6422,7 @@ def _test_evc_control(my_predbat):
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "idle"}}
         ge.entity_attributes = plan
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [], "An empty charger should not be commanded, got {}".format(commands)
 
         # Test 8: nothing is commanded before Predbat has published a plan, so a restart
@@ -6395,7 +6431,7 @@ def _test_evc_control(my_predbat):
         ge = _evc_control_component(commands)
         ge.evc_device_list = ["evc-001"]
         ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [], "With no plan published nothing should be commanded, got {}".format(commands)
 
         # Test 9: charger N is car N by serial order, matching the automatic configuration
@@ -6408,7 +6444,7 @@ def _test_evc_control(my_predbat):
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR], EVC_PLAN_SENSOR_CAR_1: {"planned": []}}
 
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert sorted(commands) == sorted([("evc-second", "start-charge"), ("evc-first", "stop-charge")]), "The lower serial should be car 0, got {}".format(commands)
 
         # Test 10: a charger with no car index yet is left alone rather than stopped.
@@ -6423,8 +6459,51 @@ def _test_evc_control(my_predbat):
         }
         ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR]}
 
-        await ge.evc_control_charge(inside)
+        await ge.charger_control_apply(inside)
         assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
+
+        # Test 11: a command GE Cloud refuses is not recorded as sent, so it is tried again
+        commands = []
+        ge = _evc_control_component(commands)
+        ge.evc_device_list = ["evc-001"]
+        ge.evc_device = {"evc-001": {"serial_number": "EVC100", "status": "charging"}}
+        ge.entity_attributes = plan
+        refused = []
+
+        async def refuse(uuid, command, params):
+            """Refuse the command, as async_send_evc_command reports it: None."""
+            refused.append((uuid, command))
+            return None
+
+        real_send = ge.async_send_evc_command
+        ge.async_send_evc_command = refuse
+        try:
+            await ge.charger_control_apply(outside)
+            assert False, "A refused command should raise"
+        except EVCCommandFailed:
+            pass
+        assert ge.charger_control_state == {}, "A refused stop must not be recorded, got {}".format(ge.charger_control_state)
+
+        ge.async_send_evc_command = real_send
+        await ge.charger_control_apply(outside)
+        assert commands == [("evc-001", "stop-charge")], "The stop should be retried, got {}".format(commands)
+
+        # Test 12: a refused release is not latched as done, so the stopped charger is not stranded
+        commands.clear()
+        ge._read_only = True
+        ge.async_send_evc_command = refuse
+        try:
+            await ge.charger_control_tick(outside)
+            assert False, "A refused release should raise"
+        except EVCCommandFailed:
+            pass
+        assert ge.charger_control_released is None, "A refused release must not be recorded as done"
+        assert ge.charger_control_state == {"evc-001": False}, "Predbat still holds the stopped charger"
+
+        ge.async_send_evc_command = real_send
+        await ge.charger_control_tick(outside)
+        assert commands == [("evc-001", "start-charge")], "The release should be retried, got {}".format(commands)
+        assert ge.charger_control_released is not None
 
         return 0
 
