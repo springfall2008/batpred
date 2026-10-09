@@ -16,11 +16,16 @@ Covers:
   - hardware isolation between tariffs: overrides applied for tariff N must not
     bleed into tariff N+1 in run_all() (regression for the bug where agile_fixed
     reported a final SOC larger than the normal battery size)
+  - run_all() restores every attribute it saves, the plan state calculate_plan() keeps across runs
+    included (regression for plan_preclip left as the last tariff's plan), and plans each tariff from scratch
+  - every attribute calculate_plan() and its optimise passes assign is either restored by run_all() or rebuilt
+    on every run
+  - a re-plan requested during the comparison survives it, and the state is restored even if the config restore raises
 """
 
 import inspect
 
-from compare import Compare
+from compare import Compare, COMPARE_HARDWARE_STATE, COMPARE_PLAN_STATE, COMPARE_RESTORED_STATE, COMPARE_RESTORED_COPIES
 from const import MINUTE_WATT
 
 
@@ -68,10 +73,193 @@ def _make_compare():
     return cmp, pb
 
 
+# Assigned by calculate_plan() but rebuilt on every run before use, so the comparison need not restore them
+CALCULATE_PLAN_REBUILT = (
+    "load_minutes_step",
+    "load_minutes_step10",
+    "load_minutes_step90",
+    "pv_forecast_minute_step",
+    "pv_forecast_minute10_step",
+    "pv_forecast_minute90_step",
+    "prediction",
+    "metric_cloud_coverage",
+    "metric_load_divergence",
+    "plan_last_duration_seconds",
+)
+
+
+def test_run_all_restores_state(my_predbat):
+    """run_all() puts back everything it saves however a tariff's run changed it, resets the hardware values between
+    tariffs, and plans each tariff from scratch.
+
+    Each tariff fetches, plans and predicts on the live instance. Leaving plan_preclip as the last tariff's 48-hour
+    plan made the first re-plan after the midnight comparison score that plan as the plan in force, so it always
+    switched plans whatever metric_min_improvement_plan said (seen live on 9 Oct 2026: 300.97p against 30.71p).
+    """
+    names = COMPARE_RESTORED_STATE + COMPARE_RESTORED_COPIES
+    original = {name: getattr(my_predbat, name) for name in names}
+    saved_compare_list = my_predbat.args.get("compare_list")
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A"}, {"id": "tariff_b", "name": "Tariff B"}]
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+    seen_at_start = []
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run, changing every saved attribute as fetching and planning a tariff can."""
+        seen_at_start.append((my_predbat.plan_valid, all(getattr(my_predbat, name) == original[name] for name in COMPARE_HARDWARE_STATE)))
+        for name in names:
+            setattr(my_predbat, name, ("changed by", name))
+        my_predbat.plan_valid = True
+        return None
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    try:
+        comparison.run_all(fetch_sensor=False)
+        failed = 0
+        not_restored = [name for name in names if getattr(my_predbat, name) != original[name]]
+        if not_restored:
+            print("ERROR: run_all() did not restore {}".format(not_restored))
+            failed = 1
+        if seen_at_start != [(False, True), (False, True)]:
+            print("ERROR: each tariff should start with plan_valid False and the real hardware values, got {}".format(seen_at_start))
+            failed = 1
+        if not failed:
+            print("PASS: run_all() restores all {} saved attributes, resets hardware between tariffs and plans each from scratch".format(len(names)))
+        return failed
+    finally:
+        for name, value in original.items():
+            setattr(my_predbat, name, value)
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
+def test_plan_state_covered(my_predbat):
+    """Every attribute calculate_plan() and the optimise passes it runs assign is restored by the comparison or
+    rebuilt on every run.
+
+    A new piece of plan state that outlives a run (as plan_preclip did) must be added to COMPARE_PLAN_STATE, or the
+    comparison will leave the last tariff's value behind. Read from the source with ast, so plain, augmented,
+    annotated and tuple assignments to self.<name> are all found.
+    """
+    import ast
+    import textwrap
+
+    plan_class = type(my_predbat)
+    methods = ["calculate_plan"] + sorted(name for name in dir(plan_class) if name.startswith("optimise"))
+    assigned = set()
+    for name in methods:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(getattr(plan_class, name))))
+        for node in ast.walk(tree):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else []
+            for target in targets:
+                for part in ast.walk(target):
+                    if isinstance(part, ast.Attribute) and isinstance(part.value, ast.Name) and part.value.id == "self":
+                        assigned.add(part.attr)
+    uncovered = sorted(assigned - set(COMPARE_PLAN_STATE) - set(CALCULATE_PLAN_REBUILT))
+    if uncovered:
+        print("ERROR: calculate_plan() or an optimise pass assigns {} - add each to COMPARE_PLAN_STATE (compare.py) if it outlives the run, or to CALCULATE_PLAN_REBUILT here if it is rebuilt before use".format(uncovered))
+        return 1
+    print("PASS: every attribute calculate_plan() and its {} optimise passes assign is restored or rebuilt".format(len(methods) - 1))
+    return 0
+
+
+def test_run_all_keeps_pending_replan(my_predbat):
+    """A re-plan requested while the comparison runs (a setting or override changed) still invalidates the plan."""
+    saved_compare_list = my_predbat.args.get("compare_list")
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A"}]
+    my_predbat.plan_valid, my_predbat.update_pending = True, False
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run during which the user changes a setting."""
+        my_predbat.update_pending = True
+        return None
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    try:
+        comparison.run_all(fetch_sensor=False)
+        if my_predbat.plan_valid:
+            print("ERROR: a re-plan requested during the comparison should leave the plan invalid")
+            return 1
+        print("PASS: run_all() keeps a re-plan requested during the comparison")
+        return 0
+    finally:
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
+def test_run_all_restores_when_config_restore_raises(my_predbat):
+    """The saved state is put back even when restoring a tariff's config raises."""
+    item = my_predbat.config_index.get("metric_battery_cycle")
+    saved_compare_list = my_predbat.args.get("compare_list")
+    saved_preclip, saved_value = my_predbat.plan_preclip, item["value"]
+    plan_in_force = ([18.08], [{"start": 0, "end": 90, "average": 7.62}], [], [])
+    my_predbat.plan_preclip = plan_in_force
+    my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A", "config": {"metric_battery_cycle": 9.0}}]
+    comparison = Compare.__new__(Compare)
+    comparison.pb = my_predbat
+    comparison.log = my_predbat.log
+    comparison.comparisons = {}
+
+    def run_single(*args, **kwargs):
+        """Stand in for a tariff's run, which replaces the plan."""
+        my_predbat.plan_preclip = ("tariff plan",)
+        return None
+
+    def fetch_config_options():
+        """Fail as a broken config refresh would."""
+        raise ValueError("config refresh failed")
+
+    comparison.run_single = run_single
+    comparison.select_best = lambda *args, **kwargs: None
+    comparison.save_yaml = lambda *args, **kwargs: None
+    comparison.publish_data = lambda *args, **kwargs: None
+    my_predbat.fetch_config_options = fetch_config_options
+    try:
+        try:
+            comparison.run_all(fetch_sensor=False)
+        except ValueError:
+            pass
+        if my_predbat.plan_preclip is not plan_in_force:
+            print("ERROR: run_all() should restore the plan even when the config restore raises, got {}".format(my_predbat.plan_preclip))
+            return 1
+        print("PASS: run_all() restores the saved state when the config restore raises")
+        return 0
+    finally:
+        del my_predbat.fetch_config_options
+        my_predbat.plan_preclip = saved_preclip
+        item["value"] = saved_value
+        if saved_compare_list is None:
+            my_predbat.args.pop("compare_list", None)
+        else:
+            my_predbat.args["compare_list"] = saved_compare_list
+
+
 def test_compare(my_predbat):
     """Run all compare unit tests."""
     failed = 0
     print("**** Running compare tests ****\n")
+    failed += test_run_all_restores_state(my_predbat)
+    failed += test_plan_state_covered(my_predbat)
+    failed += test_run_all_keeps_pending_replan(my_predbat)
+    failed += test_run_all_restores_when_config_restore_raises(my_predbat)
 
     # ------------------------------------------------------------------
     # T1: apply_hardware_overrides – soc_max override
@@ -544,23 +732,13 @@ def test_compare(my_predbat):
         print("PASS T18: bad export override value falls back to the discharge override")
 
     # ------------------------------------------------------------------
-    # T19: run_all() actually saves and restores battery_rate_max_export,
-    #      both mid-loop and at the end, so an export override can't bleed
-    #      into the next tariff (T7 only proves the pattern in isolation).
-    #      Positional checks (T12-style) so the snapshot must sit before the
-    #      tariff loop, not just anywhere in the source.
+    # T19: run_all() saves and restores battery_rate_max_export, after each
+    #      tariff and at the end, so an export override can't bleed into the
+    #      next tariff (T7 only proves the pattern in isolation; the restore
+    #      itself is exercised by test_run_all_restores_state)
     # ------------------------------------------------------------------
-    run_all_source = inspect.getsource(Compare.run_all)
-    loop_idx = run_all_source.find("for tariff in compare_list:")
-    snapshot_idx = run_all_source.find("save_battery_rate_max_export = my_predbat.battery_rate_max_export")
-    if loop_idx < 0 or snapshot_idx < 0:
-        print("ERROR T19: could not locate the tariff loop or the battery_rate_max_export snapshot in run_all() source - test may need updating")
-        failed += 1
-    elif not (snapshot_idx < loop_idx):
-        print("ERROR T19: battery_rate_max_export snapshot must appear before the tariff loop in run_all()")
-        failed += 1
-    elif run_all_source.count("my_predbat.battery_rate_max_export = save_battery_rate_max_export") < 2:
-        print("ERROR T19: run_all() must restore battery_rate_max_export both inside the tariff loop and at the end")
+    if "battery_rate_max_export" not in COMPARE_HARDWARE_STATE or "battery_rate_max_export" not in COMPARE_RESTORED_STATE:
+        print("ERROR T19: battery_rate_max_export must be reset after each tariff (COMPARE_HARDWARE_STATE) and at the end")
         failed += 1
     else:
         print("PASS T19: run_all() snapshots and restores battery_rate_max_export")
@@ -664,12 +842,8 @@ def test_compare(my_predbat):
     #      restores it after it, as it does car_charging_slots, so the live plan
     #      gets its modelled slots back after a comparison (#5245 review)
     # ------------------------------------------------------------------
-    snapshot_idx = run_all_source.find("save_car_charging_now_slots = copy.deepcopy(my_predbat.car_charging_now_slots)")
-    if snapshot_idx < 0 or not (snapshot_idx < loop_idx):
-        print("ERROR T25: car_charging_now_slots must be snapshotted before the tariff loop in run_all()")
-        failed += 1
-    elif run_all_source.find("my_predbat.car_charging_now_slots = save_car_charging_now_slots") < loop_idx:
-        print("ERROR T25: run_all() must restore car_charging_now_slots after the tariff loop")
+    if "car_charging_now_slots" not in COMPARE_RESTORED_COPIES:
+        print("ERROR T25: run_all() must snapshot (deep copy) and restore car_charging_now_slots")
         failed += 1
     else:
         print("PASS T25: run_all() snapshots and restores car_charging_now_slots")
