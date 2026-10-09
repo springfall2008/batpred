@@ -337,6 +337,7 @@ from tests.test_annual_export_sweep import (
 )
 from tests.test_debug_history import test_debug_history
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment, test_debug_history_count_range
+from tests.test_additional_load_forecast import run_additional_load_forecast_tests
 
 # Mock the components and plugin system
 
@@ -529,6 +530,7 @@ def main():
         ("car_charging_now", test_car_charging_now, "car_charging_now holds the battery and feeds the model but never adds a car slot", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
+        ("additional_load_forecast", run_additional_load_forecast_tests, "Additional load forecast tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
         ("manual_soc_max", run_test_manual_soc_max, "Manual SOC maximum (ceiling) target tests (issue #1578)", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
