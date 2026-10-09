@@ -129,6 +129,9 @@ class AlphaESSAPI(ComponentBase):
         battery_rate_max=None,
         api_delay=2,
         min_write_interval=300,
+        startup_write_delay=300,
+        hold_power=ALPHAESS_HOLD_POWER,
+        shutdown_mode="none",
         **kwargs,
     ):
         """Initialise the AlphaESS component from its resolved config args.
@@ -149,6 +152,13 @@ class AlphaESSAPI(ComponentBase):
         self.battery_rate_max_override = float(battery_rate_max) if battery_rate_max else 0.0
         self.api_delay = max(0, float(api_delay or 0))
         self.min_write_interval = max(0, int(min_write_interval or 0))
+        self.startup_write_delay = max(0, int(startup_write_delay or 0))
+        self.startup_write_ready_at = time.monotonic() + self.startup_write_delay
+        self.hold_power = max(1, int(hold_power or ALPHAESS_HOLD_POWER))
+        self.shutdown_mode = str(shutdown_mode or "none").lower()
+        if self.shutdown_mode not in ("none", "self_consumption", "self_consumption_force"):
+            self.log("Warn: AlphaESS shutdown_mode {} is unknown; leaving schedules unchanged on shutdown".format(self.shutdown_mode))
+            self.shutdown_mode = "none"
         self.device_list = []
         self.device_detail = {}
         self.device_values = {}
@@ -1219,7 +1229,8 @@ class AlphaESSAPI(ComponentBase):
         generic callers) by writing discharge power zero. AlphaESS ignores the previous
         translation, discharge scheduling enabled with no periods. Live SMILE G3 testing in
         GH#4725 established that an enabled CHARGE profile with a low target is the working
-        device primitive instead. Synthetic holds use a fixed 10% target and 100 W power.
+        device primitive instead. Synthetic holds use a fixed 10% target and configurable
+        positive power (100 W by default).
 
         A planned hold charge arrives with normal (usually maximum) charge power:
         execute_plan disables its charge-enable switch after the target is reached, raises
@@ -1270,10 +1281,10 @@ class AlphaESSAPI(ComponentBase):
             end = ALPHAESS_TIME_MAX
 
         # Keep the synthetic profile deterministic. Zero power disables charging in
-        # Predbat and may cause AlphaESS to discard the profile, while 100 W is a small,
-        # positive setpoint on the periodic API. The legacy endpoint has no power field,
-        # but still receives the same enabled 10% target and time window.
-        return {"enable": True, "soc": ALPHAESS_HOLD_SOC, "power": ALPHAESS_HOLD_POWER, "start": start, "end": end}
+        # Predbat and may cause AlphaESS to discard the profile. The configurable positive
+        # power is sent by the periodic API; the legacy endpoint has no power field, but
+        # still receives the same enabled 10% target and time window.
+        return {"enable": True, "soc": ALPHAESS_HOLD_SOC, "power": self.hold_power, "start": start, "end": end}
 
     def split_window(self, start, end):
         """Split a window at midnight, returning ((start1, end1), (start2, end2)) in HH:mm.
@@ -1334,7 +1345,7 @@ class AlphaESSAPI(ComponentBase):
         enabled = bool(window.get("enable"))
         # Outside a derived AlphaESS hold profile, zero charge power still means disabled
         # charging/no cross-charging to Predbat. A hold replaces it with the small positive
-        # ALPHAESS_HOLD_POWER because _periodic_entry omits non-positive power and AlphaESS's
+        # configured hold power because _periodic_entry omits non-positive power and AlphaESS's
         # resulting default power is unknown.
         rate = self._as_float(window.get("power"), 0.0)
         if enabled and rate <= 0:
@@ -1637,7 +1648,7 @@ class AlphaESSAPI(ComponentBase):
         """
         return min(ALPHAESS_WRITE_SETTLE_SECONDS, self.min_write_interval)
 
-    def _write_allowed(self, sn, direction, force=False):
+    def _write_allowed(self, sn, direction, force=False, shutdown=False):
         """Return True when a write for one serial and direction may go out now.
 
         The minimum interval treats the documented 24-hour write limit as a real budget.
@@ -1651,7 +1662,8 @@ class AlphaESSAPI(ComponentBase):
         already superseded (GH#4769). The burst is capped at ALPHAESS_WRITE_BURST_MAX so the
         exemption cannot become a write loop that escapes pacing, and only successful writes
         open one - a rejected write applied nothing, so there is nothing to correct and the
-        retry stays paced exactly as before.
+        retry stays paced exactly as before. Shutdown clears are not corrections, so only
+        the explicit force mode may bypass the minimum interval for them.
         """
         if force or not self.min_write_interval:
             return True
@@ -1662,6 +1674,8 @@ class AlphaESSAPI(ComponentBase):
         now = time.time()
         if (now - last) >= self.min_write_interval:
             return True
+        if shutdown:
+            return False
         burst_start = self.write_burst_start.get(key)
         if burst_start is not None and (now - burst_start) < self._write_settle_seconds() and self.write_burst_writes.get(key, 0) < ALPHAESS_WRITE_BURST_MAX:
             return True
@@ -1680,7 +1694,7 @@ class AlphaESSAPI(ComponentBase):
         else:
             self.write_burst_writes[key] = self.write_burst_writes.get(key, 0) + 1
 
-    async def _write_payload(self, sn, direction, endpoint_key, payload, force=False):
+    async def _write_payload(self, sn, direction, endpoint_key, payload, force=False, shutdown=False):
         """Send one payload if it differs from the last applied one and pacing allows.
 
         Returns whether the inverter is now KNOWN TO MATCH this payload, not merely whether
@@ -1690,11 +1704,17 @@ class AlphaESSAPI(ComponentBase):
         rejection - a caller must not read either of those as the inverter matching the plan.
         """
         cache = self.applied_payload.setdefault(sn, {})
-        if not force and self.payloads_equal(cache.get(direction), payload):
+        if (not force or shutdown) and self.payloads_equal(cache.get(direction), payload):
             self.log("Info: AlphaESS {} {} settings unchanged, nothing sent".format(sn, direction))
             return True
-        if not self._write_allowed(sn, direction, force=force):
-            self.log("Info: AlphaESS {} {} change is held by alphaess_min_write_interval ({}s) and will be applied on the next eligible cycle".format(sn, direction, self.min_write_interval))
+        if not shutdown and time.monotonic() < self.startup_write_ready_at:
+            self.log("Info: AlphaESS {} {} change is held for {}s after startup; it will be applied on the next eligible cycle".format(sn, direction, self.startup_write_delay))
+            return False
+        if not self._write_allowed(sn, direction, force=force, shutdown=shutdown):
+            if shutdown:
+                self.log("Warn: AlphaESS {} {} schedule could not be cleared on shutdown because alphaess_min_write_interval ({}s) has not elapsed".format(sn, direction, self.min_write_interval))
+            else:
+                self.log("Info: AlphaESS {} {} change is held by alphaess_min_write_interval ({}s) and will be applied on the next eligible cycle".format(sn, direction, self.min_write_interval))
             return False
         code, _ = await self._post(endpoint_key, body=payload)
         # Stamp every attempt, success or not - not just success and 6053. A persistently
@@ -1773,10 +1793,10 @@ class AlphaESSAPI(ComponentBase):
         Both lists must carry at least one element - an empty list is rejected with 6001
         "time list is null", and omitting the key gets 10001 - so a direction with no plan
         gets a filler period and is disabled via its cycle flag instead. The discharge
-        filler's chargeLimit is the ONLY carrier of the reserve floor on this path (there is
-        no separate standing-floor field, unlike batUseCap on the legacy pair), so it always
-        holds schedule["reserve"] rather than an arbitrary constant - see
-        build_discharge_payload for the same one-field-two-purposes rule on the legacy pair.
+        filler's chargeLimit copies schedule["reserve"] rather than an arbitrary constant,
+        because the API requires a value even when the cycle is disabled. It does not
+        establish an active self-consumption reserve while ctrDisCycle is 0. There is no
+        separate standing-floor field on this path, unlike batUseCap on the legacy pair.
         """
         if hold_charge is _HOLD_NOT_EVALUATED:
             hold_charge = self._hold_charge_window(sn, schedule)
@@ -2174,8 +2194,45 @@ class AlphaESSAPI(ComponentBase):
         self.update_success_timestamp()
         return True
 
+    async def apply_shutdown_self_consumption(self, sn, force=False):
+        """Disable timed charge and discharge on a graceful stop.
+
+        AlphaESS has no cloud working-mode endpoint. The API requires a cutoff value even
+        when timed discharge is disabled, so copy Predbat's last requested reserve; that
+        does not control AlphaESS's separate self-consumption reserve. The inverter's
+        fallback behaviour varies by model. A shutdown write bypasses the startup delay;
+        only the force mode bypasses local write pacing. The cloud may still reject it with 6053.
+        """
+        current = self.local_schedule.get(sn)
+        if not current:
+            self.log("Warn: AlphaESS {} has no local schedule to clear safely on shutdown".format(sn))
+            return False
+        schedule = self._empty_schedule()
+        schedule["reserve"] = current.get("reserve", 10)
+        if self._periodic_ok.get(sn) is True:
+            payload = self.build_periodic_payload(sn, schedule, hold_charge=None)
+            return await self._write_payload(sn, "periodic", "set_time_charge", payload, force=force, shutdown=True)
+        charge_payload = self.build_charge_payload(sn, schedule, hold_charge=None)
+        discharge_payload = self.build_discharge_payload(sn, schedule, hold_charge=None)
+        charge_ok = await self._write_payload(sn, "charge", "update_charge_config", charge_payload, force=force, shutdown=True)
+        if self.api_delay:
+            await asyncio.sleep(self.api_delay)
+        discharge_ok = await self._write_payload(sn, "discharge", "update_discharge_config", discharge_payload, force=force, shutdown=True)
+        return charge_ok and discharge_ok
+
     async def final(self):
-        """Persist state on shutdown so a restart resumes without re-polling."""
+        """Optionally clear schedules, then persist state for the next startup."""
+        if self.shutdown_mode in ("self_consumption", "self_consumption_force") and self.control_enable and not self._is_read_only():
+            for sn in self.device_list:
+                if sn not in self.control_active:
+                    continue
+                try:
+                    if await self.apply_shutdown_self_consumption(sn, force=self.shutdown_mode == "self_consumption_force"):
+                        self.log("Info: AlphaESS {} timed schedules cleared for self-consumption on shutdown".format(sn))
+                    else:
+                        self.log("Warn: AlphaESS {} could not clear all timed schedules on shutdown".format(sn))
+                except Exception as error:
+                    self.log("Warn: AlphaESS {} shutdown schedule clear failed: {}".format(sn, error))
         await self.save_static()
         await self.save_config()
         await self.save_ratings()
