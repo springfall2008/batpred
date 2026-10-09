@@ -56,6 +56,29 @@ def test_octopus_saving_event_type(my_predbat):
     else:
         print("PASS: Happy Hours are withheld from available_events but keep their type when joined")
 
+    # Each Happy Hour is logged as not offered once, not on every poll of the event list
+    api = make_api([happy_joined, happy_offered, power_down], [])
+    log_lines = []
+    api.log = lambda message: log_lines.append(str(message))
+    api.get_saving_session_data()
+    api.get_saving_session_data()
+    happy_logs = [line for line in log_lines if "Not offering Weekend Happy Hour" in line]
+    if len(happy_logs) != 2 or not any("EVENT_56" in line for line in happy_logs) or not any("EVENT_57" in line for line in happy_logs):
+        print("ERROR: Expected each Happy Hour logged once across two polls, got {}".format(happy_logs))
+        failed = True
+    else:
+        print("PASS: Each Happy Hour is logged once")
+
+    # A Happy Hour with no code is still skipped, and does not stop the rest of the events being read
+    uncoded = dict(happy_offered, id=5801, code=None)
+    api = make_api([uncoded, power_down], [])
+    available, _ = api.get_saving_session_data()
+    if [event.get("code") for event in available] != ["EVENT_58"]:
+        print("ERROR: a Happy Hour with no code should be skipped without breaking the event list, got {}".format(available))
+        failed = True
+    else:
+        print("PASS: A Happy Hour with no code is skipped")
+
     # An event with no eventType is unchanged - older API responses must keep working
     untyped = {"id": 5900, "code": "EVENT_59", "rewardPerKwhInOctoPoints": 200, "startAt": "2030-01-07T17:00:00+00:00", "endAt": "2030-01-07T18:00:00+00:00", "targetRegion": []}
     api = make_api([untyped], [])

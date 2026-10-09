@@ -10,6 +10,8 @@
 
 from datetime import timedelta
 from tests.test_infra import reset_rates
+from const import REPEAT_FULL_LOG_SECONDS
+from utils import RepeatLogGate
 
 
 def run_rate_add_io_slots_test(testname, my_predbat, slots, octopus_slot_low_rate, octopus_slot_max, expected_rates, expected_slots_per_day=None):
@@ -145,6 +147,7 @@ def run_rate_add_io_slots_tests(my_predbat):
     saved_args = {key: my_predbat.args[key] for key in ("octopus_slot_low_rate", "octopus_slot_max") if key in my_predbat.args}
     saved_io_adjusted = my_predbat.io_adjusted
     saved_effective = my_predbat.dynamic_load_car_effective
+    saved_slot_log = my_predbat.io_slot_log_gate
     original_forecast_minutes = my_predbat.forecast_minutes
     my_predbat.io_adjusted = {}
     try:
@@ -157,6 +160,7 @@ def run_rate_add_io_slots_tests(my_predbat):
                 my_predbat.args.pop(key, None)
         my_predbat.io_adjusted = saved_io_adjusted
         my_predbat.dynamic_load_car_effective = saved_effective
+        my_predbat.io_slot_log_gate = saved_slot_log
         my_predbat.forecast_minutes = original_forecast_minutes
 
     if failed:
@@ -622,4 +626,53 @@ def run_rate_add_io_slots_cases(my_predbat):
     failed |= run_rate_add_io_slots_test("test25_completed_away_consumes_cap", my_predbat, slots, True, 2, expected_rates)
 
     failed |= run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, TIME_FORMAT)
+    failed |= run_rate_add_io_slots_log_test(my_predbat, midnight_utc, TIME_FORMAT)
+    return failed
+
+
+def run_rate_add_io_slots_log_test(my_predbat, midnight_utc, time_format):
+    """The slot list is logged in full when it changes and at least hourly, and as one line when it repeats."""
+    print("\n**** Test: Intelligent slot list logged only when it changes ****")
+    failed = False
+    slot_start = midnight_utc + timedelta(hours=2)
+    slots = [{"start": slot_start.strftime(time_format), "end": (slot_start + timedelta(minutes=30)).strftime(time_format), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    lines = []
+    # Put back whatever was there: another test may have left its own log on the shared fixture
+    missing = object()
+    previous_log = my_predbat.__dict__.get("log", missing)
+    my_predbat.log = lambda message, *args, **kwargs: lines.append(str(message))
+    try:
+        my_predbat.io_slot_log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+
+        def run(slot_list):
+            """Run rate_add_io_slots and return the slot lines it logged."""
+            lines.clear()
+            my_predbat.rate_add_io_slots(0, {minute: 10.0 for minute in range(-24 * 60, 3 * 24 * 60)}, slot_list)
+            return [line for line in lines if line.startswith("Octopus: Intelligent slot") and "for day" not in line]
+
+        first = run(slots)
+        if len(first) != 1 or "Intelligent slot at" not in first[0]:
+            print("ERROR: the first slot list should be logged in full, got {}".format(first))
+            failed = True
+        repeat = run(slots)
+        if len(repeat) != 1 or "unchanged since logged in full at" not in repeat[0] or "1 half-hour slot lines" not in repeat[0]:
+            print("ERROR: an unchanged slot list should be one line, got {}".format(repeat))
+            failed = True
+        changed = [dict(slots[0], charge_in_kwh=3.0)]
+        if not any("amount 3.0" in line for line in run(changed)):
+            print("ERROR: a changed slot list should be logged in full")
+            failed = True
+        for entry, (logged_at, wall) in list(my_predbat.io_slot_log_gate.logged.items()):
+            my_predbat.io_slot_log_gate.logged[entry] = (logged_at - REPEAT_FULL_LOG_SECONDS, wall)
+        if not any("Intelligent slot at" in line for line in run(changed)):
+            print("ERROR: an unchanged slot list should be logged in full again after an hour")
+            failed = True
+        if run([]):
+            print("ERROR: no slots should log no slot lines, as before")
+            failed = True
+    finally:
+        if previous_log is missing:
+            del my_predbat.log
+        else:
+            my_predbat.log = previous_log
     return failed
