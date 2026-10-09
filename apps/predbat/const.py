@@ -116,6 +116,9 @@ MANUAL_RATE_MAX_MINUTES = 7 * 24 * 60
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
 
+# The apps.yaml services that can be sent the charge/discharge rate as {power} - see utils.services_send_power()
+POWER_SERVICES = ("charge_start_service", "charge_freeze_service", "discharge_start_service", "discharge_freeze_service")
+
 INVERTER_TEST = False  # Run inverter control self test
 
 # Sentinel values for an export window's target SoC/limit (export_limits_best and friends).

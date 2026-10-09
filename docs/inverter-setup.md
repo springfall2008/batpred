@@ -3662,7 +3662,7 @@ The default options passed in are:
 
 - device_id - as defined in `apps.yaml` by **device_id**
 - target_soc - The SoC to charge to
-- power - The charge power to use
+- power - The charge power Predbat has set for this cycle, in watts, including a low power charge: read back from **charge_rate_percent** or a **charge_rate** entity. With `output_charge_control: "power"` and neither set (a plain number in **charge_rate** does not count), it is the rate Predbat last set, provided a start or freeze service sends `{power}` (the maximum until Predbat sets one after a restart)
 - charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
 
@@ -3686,7 +3686,7 @@ The default options passed in are:
 
 - device_id - as defined in `apps.yaml` by **device_id**
 - target_soc - The SoC to discharge to
-- power - The discharge power to use
+- power - The discharge power Predbat has set for this cycle, in watts: read back from **discharge_rate_percent** or a **discharge_rate** entity. With `output_charge_control: "power"` and neither set (a plain number in **discharge_rate** does not count), it is the rate Predbat last set, provided a start or freeze service sends `{power}` (the maximum until Predbat sets one after a restart)
 
 #### discharge_freeze_service
 
