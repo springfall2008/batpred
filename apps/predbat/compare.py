@@ -735,15 +735,18 @@ class Compare:
                 self.save_yaml()
                 self.publish_data()
         finally:
-            # Restore config values overridden by any tariff's fetch_config() call
-            if config_snapshot:
-                for key, orig_value in config_snapshot.items():
-                    item = my_predbat.config_index.get(key)
-                    if item is not None:
-                        item["value"] = orig_value
-                my_predbat.fetch_config_options()
-
-            # Restore original settings
-            for name in COMPARE_RESTORED_STATE + COMPARE_RESTORED_COPIES:
-                setattr(my_predbat, name, saved[name])
-            my_predbat.io_adjusted = io_adjusted_base
+            try:
+                # Restore config values overridden by any tariff's fetch_config() call
+                if config_snapshot:
+                    for key, orig_value in config_snapshot.items():
+                        item = my_predbat.config_index.get(key)
+                        if item is not None:
+                            item["value"] = orig_value
+                    my_predbat.fetch_config_options()
+            finally:
+                # Restore original settings, last so they win over fetch_config_options(), and even if it raised
+                for name in COMPARE_RESTORED_STATE + COMPARE_RESTORED_COPIES:
+                    setattr(my_predbat, name, saved[name])
+                # A re-plan requested while the comparison ran (a setting or override changed) must still happen
+                my_predbat.plan_valid = saved["plan_valid"] and not my_predbat.update_pending
+                my_predbat.io_adjusted = io_adjusted_base
