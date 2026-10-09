@@ -1364,6 +1364,7 @@ class LoadMLComponent(ComponentBase):
                 "training_started": self._training_time_iso(self.training_started_monotonic),
                 "training_last_progress": self._training_time_iso(self.training_progress_monotonic),
                 "training_retry_after": self.training_retry_after.isoformat() if self.training_retry_after else None,
+                "load_ml_source": self.ml_source,
                 "model_version": MODEL_VERSION,
                 "epochs_trained": self.predictor.epochs_trained if self.predictor else 0,
                 "friendly_name": "ML Load Stats",

@@ -14,6 +14,41 @@ Arguments: `<issue-number> [scratch=<dir>]`. The scratch directory is a writable
 
 Fetch it with `gh issue view <number> --json title,body,labels,comments`. Note any labels already applied — never remove a label a human added.
 
+Comments from people other than the reporter ("me too" posts) are evidence by default, but don't assume they are the same problem. If one is clearly a different problem (see `/issue-me-too` step 3 for the bar), leave it out of your analysis. Record it in your comment on its own line as `Looks unrelated to this issue: <comment-url>`, and ask its author to open their own issue.
+
+## 1a. Split gate — one problem per ticket
+
+From the issue text alone, decide whether it reports more than one distinct problem, e.g. a plan that looks wrong *and* an inverter entity that won't update, or two unrelated errors. Several symptoms of one problem, like a wrong plan and the unexpected export it leads to, are one problem. Only take this path when the problems are clearly separate, meaning each could be fixed without touching the other. If unsure, treat it as one problem.
+
+If it is more than one, **stop here**, the same as the evidence gate below: no investigation, no theory, no duplicate search and no priority. Apply `waiting_for_user`, plus a type label only if every problem shares it (else `unclear`). Post the one comment (step 9) with the automated first-pass triage disclosure line, then:
+
+- list the separate problems you see, in one line each, in the reporter's own terms;
+- ask them to open a new issue for each problem after the first, and to trim this ticket down to the first. Name which one stays here;
+- ask them to attach the relevant log/debug files to each new issue (see the list in 1b), because each ticket is triaged separately.
+
+Apply `BOT_TRIAGED` as usual. The reporter's reply wakes a follow-up review, as in 1b.
+
+## 1b. Evidence gate — ask for files before investigating
+
+From the issue text alone, decide whether a proper analysis would need a `predbat.log`, a `predbat_debug.yaml`, or other evidence, and whether the reporter has already attached it. Typical cases that need it: a plan that looks wrong, unexpected charging/exporting, an inverter not doing what Predbat asked, an error or crash, wrong rates or forecasts. Typical cases that don't: a pure question, a feature request, a docs error, or a report whose cause is fully visible in the text or a pasted traceback.
+
+Evidence means the files themselves: a `predbat.log` or `predbat_debug.yaml` you can download and examine. A quoted log excerpt, a screenshot, or someone else's analysis (a `file:line` pointer, a replay result, a theory in the issue text) is not evidence for this gate. Partial log lines are seldom enough, and we always run our own analysis rather than trusting a third party's.
+
+The files do not have to be attached to this ticket. If the issue was spun out of another issue or PR (`split from #N`, `see #N`, a link to a specific comment) and the source already has the log or debug yaml covering this problem, that counts. Check the referenced issue with `gh issue view <N> --json body,comments` for attachments. If it has what is needed, don't ask again: carry on with step 2 and fetch the files from the source ticket, saying in the comment which ticket they came from. Only fall into the gate below if neither this ticket nor its source has the evidence.
+
+If the needed evidence is missing, **stop here** and take the short path instead of steps 2–8:
+
+- Do **not** investigate the code, run tests, read the debug journal, or offer any theory, hypothesis, likely cause or workaround — not even a hedged one. A guess made without the evidence anchors everyone on it.
+- Apply `waiting_for_user`, plus a type label (step 3) only if it is obvious from the text, else `unclear`. Apply a component label (step 6) only if the issue names one. No priority, no duplicate search.
+- Post the one comment (step 9), opening with the automated first-pass triage disclosure line, saying that detailed triage is on hold until the files below are attached, and asking for exactly what is missing:
+    - **If the problem is happening now or will happen again:** a `predbat_debug.yaml` and `predbat.log` captured while it is happening — both from the **Debug** panel on Predbat's web interface. The debug file downloads as `predbat_debug.yaml.txt` and can be attached as-is.
+    - **If the incident is over:** the debug snapshot for that time, from the **Debug** column on the plan's **History** view (Predbat web interface → Plan → History), next to the time slot when the problem happened. With default settings only around the last 48 hours are kept, so ask them to grab it soon. Also ask for a `predbat.log` covering that period, if they still have one.
+    - **Other evidence, only where it fits the report:** logs from the integration involved (e.g. GivTCP, Solis/Solax/Fox, the Octopus integration, the HA core log), their `apps.yaml` renamed to `apps.txt`, screenshots of the plan or HA history graphs of the relevant entities, and when it happened (date, time, timezone).
+    - Link the [debug history docs](https://springfall2008.github.io/batpred/customisation/#debug-history) for the snapshot details.
+- Apply `BOT_TRIAGED` as usual (end of step 9). When the reporter next comments, the daemon clears `waiting_for_user` and queues `/issue-triage-followup`, which does the full investigation if the files have arrived.
+
+If the evidence is already attached, or the issue doesn't need any, carry on with step 2.
+
 ## 2. Fetch attachments
 
 If the body links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory rather than pulling it through WebFetch — a `predbat.log` is routinely tens of MB, well past what WebFetch will return.
@@ -44,6 +79,8 @@ Search existing issues (`gh issue list --search ...`, both open and closed) for 
 
 - High confidence match: label `duplicate`, comment linking the original issue, and close this one.
 - Low confidence: mention "possibly related to #N" in your triage comment; don't close.
+
+Then look for **similar** issues and PRs as well, whether or not they are duplicates: search both open and closed ones for the symptom, the integration and the component it touches (`gh issue list --state all --search ...` and `gh pr list --state all --search ...`). Read the findings in the best matches — what was diagnosed, what was fixed, and what was ruled out — before forming a hypothesis, and link the relevant ones in your triage comment as "related to #N". An issue that shares a symptom or a trigger is not necessarily the same problem: only call it a duplicate when the cause matches, not just the symptom, and treat a past finding as a lead to confirm against current main, not as a conclusion.
 
 ## 5. Investigate against current main
 

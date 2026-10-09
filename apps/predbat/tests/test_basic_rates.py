@@ -117,6 +117,12 @@ def test_basic_rates(my_predbat):
     my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Saturday (day 6)
     old_minutes_now = my_predbat.minutes_now
     my_predbat.minutes_now = 14 * 60  # 14:00 Saturday afternoon
+    # Tests 6 and 7 also assert the third day - pin the forecast length so it lies inside the horizon,
+    # and the future rate offset so any replicated minute is comparable against the tariff's own rates
+    old_forecast_minutes = my_predbat.forecast_minutes
+    old_rate_offset_import = my_predbat.metric_future_rate_offset_import
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.metric_future_rate_offset_import = 0
     dutch_rate = [
         {"start": "07:00:00", "end": "22:00:00", "rate": 14.0, "day_of_week": "1,2,3,4,5"},  # Weekday peak
         {"start": "22:00:00", "end": "07:00:00", "rate": 8.0, "day_of_week": "1,2,3,4,5"},  # Weekday off-peak (spans midnight)
@@ -130,6 +136,13 @@ def test_basic_rates(my_predbat):
 
     # Day 2 (Sunday): All day = 8 (weekend flat rate)
     failed |= assert_rates(results, 24 * 60, 48 * 60, 8)  # All day Sunday = 8
+
+    # Day 3 (Monday): the weekday pattern must survive 48 hours out (issue #5168). basic_rates()
+    # used to seed that day with a write that ignored day_of_week, so the weekend rule, being
+    # processed last, flattened Monday to the weekend rate and erased the weekday peak
+    failed |= assert_rates(results, 48 * 60, 48 * 60 + 7 * 60, 8)  # 00:00-07:00 off-peak
+    failed |= assert_rates(results, 48 * 60 + 7 * 60, 48 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
+    failed |= assert_rates(results, 48 * 60 + 22 * 60, 72 * 60, 8)  # 22:00-24:00 off-peak
 
     # Test 7: Monday (weekday) - peak/off-peak pattern
     print("*** Running test: Simple rate7 - Weekday peak/off-peak pattern")
@@ -148,8 +161,16 @@ def test_basic_rates(my_predbat):
     failed |= assert_rates(results, 24 * 60 + 7 * 60, 24 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
     failed |= assert_rates(results, 24 * 60 + 22 * 60, 48 * 60, 8)  # 22:00-24:00 off-peak
 
+    # Day 3 (Wednesday): same again with midnight on a weekday, where the weekend rule must leave
+    # the third day alone rather than flatten it (issue #5168)
+    failed |= assert_rates(results, 48 * 60, 48 * 60 + 7 * 60, 8)  # 00:00-07:00 off-peak
+    failed |= assert_rates(results, 48 * 60 + 7 * 60, 48 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
+    failed |= assert_rates(results, 48 * 60 + 22 * 60, 72 * 60, 8)  # 22:00-24:00 off-peak
+
     my_predbat.minutes_now = old_minutes_now
     my_predbat.midnight_utc = old_midnight_utc
+    my_predbat.forecast_minutes = old_forecast_minutes
+    my_predbat.metric_future_rate_offset_import = old_rate_offset_import
 
     # Test 8: predbat_manual_api rate override only marks the actually-overridden window in
     # rate_replicate, not the whole day (issue #2578). get_manual_api() returns each override
@@ -267,5 +288,103 @@ def test_basic_rates(my_predbat):
     finally:
         my_predbat.manual_api = old_manual_api
         my_predbat.had_errors = old_had_errors
+
+    # Test 13: the export config from issue #5168 - weekday rules covering the day plus a weekend
+    # catch-all. The weekend rule is processed last, and before the fix its seeding write for the
+    # day beyond the ones basic_rates() modelled ignored day_of_week, so it flattened that day to
+    # the weekend rate and the weekday peaks vanished 48 hours out
+    print("*** Running test: Weekend day_of_week rule must not flatten future weekdays (issue #5168)")
+    saved_midnight_utc = my_predbat.midnight_utc
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-06T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Sunday, so the third day is Tuesday
+    try:
+        weekend_catch_all = [
+            {"start": "00:00:00", "end": "06:59:59", "rate": 11.5, "day_of_week": "1,2,3,4,5"},
+            {"start": "07:00:00", "end": "08:59:59", "rate": 23.0, "day_of_week": "1,2,3,4,5"},
+            {"start": "09:00:00", "end": "16:59:59", "rate": 11.5, "day_of_week": "1,2,3,4,5"},
+            {"start": "17:00:00", "end": "20:59:59", "rate": 23.0, "day_of_week": "1,2,3,4,5"},
+            {"start": "21:00:00", "end": "23:59:59", "rate": 11.5, "day_of_week": "1,2,3,4,5"},
+            {"start": "00:00:00", "end": "23:59:59", "rate": 11.5, "day_of_week": "6,7"},
+        ]
+        results = my_predbat.basic_rates(weekend_catch_all, "export")
+        results, results_replicated = my_predbat.rate_replicate(results, is_import=False, is_gas=False)
+
+        # Day 3 (Tuesday) must keep the weekday peaks. The rules end on :59:59, which floors to the
+        # :59 minute, and the window excludes its end minute - so each rule leaves its final minute
+        # (06:59, 08:59, ...) to rate_replicate(). Assert the interiors, which the rules write
+        failed |= assert_rates(results, 48 * 60, 48 * 60 + 6 * 60 + 59, 11.5)  # 00:00-07:00 off-peak
+        failed |= assert_rates(results, 48 * 60 + 7 * 60, 48 * 60 + 8 * 60 + 59, 23.0)  # 07:00-09:00 peak
+        failed |= assert_rates(results, 48 * 60 + 9 * 60, 48 * 60 + 16 * 60 + 59, 11.5)  # 09:00-17:00 off-peak
+        failed |= assert_rates(results, 48 * 60 + 17 * 60, 48 * 60 + 20 * 60 + 59, 23.0)  # 17:00-21:00 peak
+        failed |= assert_rates(results, 48 * 60 + 21 * 60, 48 * 60 + 23 * 60 + 59, 11.5)  # 21:00-24:00 off-peak
+    finally:
+        my_predbat.midnight_utc = saved_midnight_utc
+
+    # Test 14: every day out to the end of the horizon rate_replicate() covers keeps its own weekday's
+    # pattern, whichever order the rules are listed in. rate_replicate() fills a missing minute from
+    # the same time of day 24 hours earlier and knows nothing about day_of_week, so any day left to
+    # it takes the previous day's pattern - Monday copying Sunday's flat rate, say. The weekday
+    # off-peak differs from the weekend rate so the early hours of the midnight-spanning window are
+    # checked too, and the peak carries a load_scaling to check that write follows the same days
+    print("*** Running test: day_of_week honoured on every day of the horizon, in either rule order (issue #5168)")
+    saved_midnight_utc = my_predbat.midnight_utc
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    saved_rate_offset_import = my_predbat.metric_future_rate_offset_import
+    saved_load_scaling_dynamic = my_predbat.load_scaling_dynamic
+    # rate_replicate() then runs to the end of the fifth day, and replicated minutes stay comparable
+    my_predbat.forecast_minutes = 72 * 60
+    my_predbat.metric_future_rate_offset_import = 0
+    try:
+        weekday_rules = [
+            {"start": "07:00:00", "end": "22:00:00", "rate": 14.0, "day_of_week": "1,2,3,4,5", "load_scaling": 1.5},
+            {"start": "22:00:00", "end": "07:00:00", "rate": 12.0, "day_of_week": "1,2,3,4,5"},
+        ]
+        weekend_rule = [{"rate": 8.0, "day_of_week": "6,7"}]
+        for midnight in ("2025-07-04", "2025-07-05"):  # Friday and Saturday
+            for rules in (weekday_rules + weekend_rule, weekend_rule + weekday_rules):
+                my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime(midnight, "%Y-%m-%d"))
+                my_predbat.load_scaling_dynamic = {}
+                results = my_predbat.basic_rates(rules, "import")
+                results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
+                for day in range(5):
+                    day_start = day * 24 * 60
+                    if (my_predbat.midnight_utc.weekday() + day) % 7 >= 5:
+                        failed |= assert_rates(results, day_start, day_start + 24 * 60, 8.0)
+                        expect_scaling = None
+                    else:
+                        failed |= assert_rates(results, day_start, day_start + 7 * 60, 12.0)
+                        failed |= assert_rates(results, day_start + 7 * 60, day_start + 22 * 60, 14.0)
+                        failed |= assert_rates(results, day_start + 22 * 60, day_start + 24 * 60, 12.0)
+                        expect_scaling = 1.5
+                    scaling = my_predbat.load_scaling_dynamic.get(day_start + 12 * 60)
+                    if scaling != expect_scaling:
+                        print("ERROR: load_scaling at noon on day {} from midnight {} should be {} got {}".format(day, midnight, expect_scaling, scaling))
+                        failed = 1
+    finally:
+        my_predbat.midnight_utc = saved_midnight_utc
+        my_predbat.forecast_minutes = saved_forecast_minutes
+        my_predbat.metric_future_rate_offset_import = saved_rate_offset_import
+        my_predbat.load_scaling_dynamic = saved_load_scaling_dynamic
+
+    # Test 15: yesterday's minutes are filtered against yesterday's weekday. The day offset was
+    # int(minute / 1440), which truncates towards zero, so every minute of yesterday bar its first
+    # was checked against today's weekday instead
+    print("*** Running test: yesterday's rates follow yesterday's day_of_week")
+    saved_midnight_utc = my_predbat.midnight_utc
+    my_predbat.midnight_utc = my_predbat.local_tz.localize(datetime.strptime("2025-07-07T00:00:00", "%Y-%m-%dT%H:%M:%S"))  # Monday, so yesterday is Sunday
+    try:
+        results = my_predbat.basic_rates([{"rate": 14.0, "day_of_week": "1,2,3,4,5"}, {"rate": 8.0, "day_of_week": "6,7"}], "import")
+        failed |= assert_rates(results, -24 * 60, 0, 8.0)
+        failed |= assert_rates(results, 0, 24 * 60, 14.0)
+    finally:
+        my_predbat.midnight_utc = saved_midnight_utc
+
+    # Test 16: a rate_increment rule adds to the rate already there on every day it is stamped on,
+    # including the days past the two modelled explicitly - the seeding write for the third day
+    # used to assign the bare increment there
+    print("*** Running test: rate_increment adds to the base rate on every day")
+    results = my_predbat.basic_rates([{"rate": 10.0}, {"start": "17:00:00", "end": "19:00:00", "rate_increment": 5.0}], "import")
+    for day in range(3):
+        failed |= assert_rates(results, day * 24 * 60 + 17 * 60, day * 24 * 60 + 19 * 60, 15.0)
+        failed |= assert_rates(results, day * 24 * 60 + 19 * 60, day * 24 * 60 + 20 * 60, 10.0)
 
     return failed

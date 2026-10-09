@@ -608,7 +608,7 @@ def compile_log_secret_pattern(secret_values):
     Compile the {value: label} map into a single alternation pattern plus a value->label lookup
     for redact_log_line(), or None when there is nothing to redact.
 
-    Compiled once whenever the value set changes (hass.py caches this alongside the values
+    Compiled once whenever the value set changes (log_secrets.py caches this alongside the values
     themselves) rather than per log line: log() runs on every line, and matching one compiled
     alternation is a single scan of the line regardless of how many secrets there are to check
     for, where re-scanning the line once per value (the naive str.replace() loop) costs O(line
@@ -1767,8 +1767,8 @@ CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
 def parse_car_plan_windows(planned, now, local_tz):
     """Turn one car's published charging plan into a list of localised (start, end) pairs.
 
-    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
-    so the awkward parts stay in one place: the plan carries no year, so each window is
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC,
+    Ohme, Wallbox, the gateway EVC) so the awkward parts stay in one place: the plan carries no year, so each window is
     rebuilt around now - without that, a plan read either side of New Year lands eleven
     months out - and a malformed entry is skipped rather than costing the rest of the plan.
 
@@ -1787,20 +1787,23 @@ def parse_car_plan_windows(planned, now, local_tz):
     parsed = []
     for window in planned or []:
         try:
-            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
-            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            # Parsed with now's year in the string, not stamped on afterwards: strptime without a
+            # year assumes 1900, which has no 29 February, so a leap-day window was dropped
+            start = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["start"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            end = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["end"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            # Shift both ends together so their spacing survives, then close a window whose
+            # end is in January while its start is still in December. Inside the try, as a stale
+            # 29 February entry has no counterpart in the neighbouring year.
+            if start > now + CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year - 1)
+                end = end.replace(year=end.year - 1)
+            elif start < now - CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year + 1)
+                end = end.replace(year=end.year + 1)
+            if end < start:
+                end = end.replace(year=end.year + 1)
         except (KeyError, TypeError, ValueError):
             continue
-        # Shift both ends together so their spacing survives, then close a window whose
-        # end is in January while its start is still in December
-        if start > now + CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year - 1)
-            end = end.replace(year=end.year - 1)
-        elif start < now - CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year + 1)
-            end = end.replace(year=end.year + 1)
-        if end < start:
-            end = end.replace(year=end.year + 1)
         parsed.append((start, end))
     return parsed
 
@@ -1829,6 +1832,14 @@ def in_iboost_slot(minute, iboost_plan):
                 load_amount = abs(kwh / slot_hours)
                 break
     return load_amount
+
+
+def round_out_to_period(start_minutes, end_minutes, period=30):
+    """
+    Round a span of minutes out to whole periods: the start down and the end up, so any overlap with a
+    period takes the whole of it. Octopus prices and bills a dispatch by whole half hours.
+    """
+    return (start_minutes // period) * period, ((end_minutes + period - 1) // period) * period
 
 
 def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):

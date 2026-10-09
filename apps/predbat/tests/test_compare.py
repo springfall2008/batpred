@@ -420,7 +420,7 @@ def test_compare(my_predbat):
 
     cmp.fetch_config = lambda tariff: None
     cmp.apply_hardware_overrides = lambda tariff, pb: None
-    cmp.fetch_rates = lambda tariff, base_import, base_export: "existing"
+    cmp.fetch_rates = lambda tariff, base_import, base_export, io_adjusted_base=None: "existing"
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
@@ -462,7 +462,7 @@ def test_compare(my_predbat):
 
     cmp.fetch_config = lambda tariff: None
     cmp.apply_hardware_overrides = lambda tariff, pb: None
-    cmp.fetch_rates = lambda tariff, base_import, base_export: "existing"
+    cmp.fetch_rates = lambda tariff, base_import, base_export, io_adjusted_base=None: "existing"
     cmp.recompute_car_charging = lambda slots: None
     cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
 
@@ -634,6 +634,87 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T23: non-finite override values are skipped")
+
+    # ------------------------------------------------------------------
+    # T24: recompute_car_charging() drops the live cycle's modelled
+    #      car_charging_now slots - the compared tariff's car plan is rebuilt
+    #      from scratch, so a charging-now slot judged against the live plan
+    #      must not be layered on top of it (#5245 review)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.num_cars = 1
+    pb.car_charging_slots = [[]]
+    pb.car_charging_now_slots = [[{"start": 730, "end": 750, "kwh": 2.4, "octopus": False}]]
+    pb.car_charging_planned = [False]
+    pb.car_charging_now = [False]
+    pb.car_charging_soc = [0.0]
+    pb.car_charging_limit = [50.0]
+    pb.car_charging_battery_size = [100.0]
+    pb.car_charging_exclusive = [False]
+    cmp.recompute_car_charging([[]])
+    if pb.car_charging_now_slots != [[]]:
+        print("ERROR T24: recompute_car_charging() should clear car_charging_now_slots, got {}".format(pb.car_charging_now_slots))
+        failed += 1
+    else:
+        print("PASS T24: recompute_car_charging() clears the live car_charging_now slots")
+
+    # ------------------------------------------------------------------
+    # T25: run_all() snapshots car_charging_now_slots before the tariff loop and
+    #      restores it after it, as it does car_charging_slots, so the live plan
+    #      gets its modelled slots back after a comparison (#5245 review)
+    # ------------------------------------------------------------------
+    snapshot_idx = run_all_source.find("save_car_charging_now_slots = copy.deepcopy(my_predbat.car_charging_now_slots)")
+    if snapshot_idx < 0 or not (snapshot_idx < loop_idx):
+        print("ERROR T25: car_charging_now_slots must be snapshotted before the tariff loop in run_all()")
+        failed += 1
+    elif run_all_source.find("my_predbat.car_charging_now_slots = save_car_charging_now_slots") < loop_idx:
+        print("ERROR T25: run_all() must restore car_charging_now_slots after the tariff loop")
+        failed += 1
+    else:
+        print("PASS T25: run_all() snapshots and restores car_charging_now_slots")
+
+    # ------------------------------------------------------------------
+    # T26: fetch_rates() - a tariff with its own import rates must not inherit the
+    #      live tariff's Intelligent Octopus dispatch markers, while one that reuses
+    #      the live import rates keeps them (#5286). This checks which markers each
+    #      tariff is given, not their effect on the plan - empty rates skip the scans.
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.minutes_now = 0
+    pb.forecast_minutes = 0
+    pb.basic_rates = lambda *args, **kwargs: {}
+    live_markers = {900: True}
+
+    pb.io_adjusted = dict(live_markers)
+    cmp.fetch_rates({"id": "flat", "rates_import": [{"rate": 20.0}]}, {}, {}, live_markers)
+    own_markers = pb.io_adjusted
+
+    pb.io_adjusted = {}
+    cmp.fetch_rates({"id": "existing"}, {}, {}, live_markers)
+    existing_markers = pb.io_adjusted
+
+    # A bad entity id keeps the live import rates, so it keeps their markers too
+    pb.resolve_arg = lambda *args, **kwargs: None
+    pb.io_adjusted = {}
+    cmp.fetch_rates({"id": "bad", "metric_octopus_import": "sensor.missing"}, {}, {}, live_markers)
+    bad_entity_markers = pb.io_adjusted
+
+    run_all_source = inspect.getsource(Compare.run_all)
+    restore_idx = run_all_source.find("my_predbat.io_adjusted = io_adjusted_base")
+    if own_markers:
+        print("ERROR T26: a tariff with its own import rates inherited dispatch markers {}".format(own_markers))
+        failed += 1
+    elif existing_markers != live_markers or existing_markers is live_markers:
+        print("ERROR T26: a tariff reusing the live import rates should get a copy of the live markers, got {}".format(existing_markers))
+        failed += 1
+    elif bad_entity_markers != live_markers:
+        print("ERROR T26: a bad import entity id keeps the live rates, so should keep the live markers, got {}".format(bad_entity_markers))
+        failed += 1
+    elif restore_idx < run_all_source.find("for tariff in compare_list:"):
+        print("ERROR T26: run_all() must restore the live io_adjusted after the tariff loop")
+        failed += 1
+    else:
+        print("PASS T26: only a tariff reusing the live import rates keeps the live dispatch markers")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))

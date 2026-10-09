@@ -158,12 +158,18 @@ pred_bat:
   scheduled_charge_enable:
     - switch.givtcp_{geserial}_enable_charge_schedule
   #  - switch.givtcp2_{geserial2}_enable_charge_schedule
+  scheduled_discharge_enable:
+    - switch.givtcp_{geserial}_enable_discharge_schedule
+  #  - switch.givtcp2_{geserial2}_enable_discharge_schedule
   discharge_start_time:
     - select.givtcp_{geserial}_discharge_start_time_slot_1
   #  - select.givtcp2_{geserial2}_discharge_start_time_slot_1
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
   #  - select.givtcp2_{geserial2}_discharge_end_time_slot_1
+  battery_calibration:
+    - select.givtcp_{geserial}_battery_calibration
+  #  - select.givtcp2_{geserial2}_battery_calibration
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
   pause_mode:
@@ -302,17 +308,22 @@ pred_bat:
     - 'locked'
     - 'plugged in'
 
-  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
-  # The car charging now can be set to a sensor to indicate the car is charging and to plan
-  # for it to charge during this 30 minute slot
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
   #car_charging_now:
-  #  - off
+  #  - sensor.wallbox_portal_charging_power
 
-  # Positive responses for car_charging_now
+  # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
+  # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi
+  # plug_status sensor. If it never matches while the car charges, Predbat cancels the car's Octopus Intelligent
+  # dispatches (switch.predbat_octopus_intelligent_dynamic, On by default) and the house battery can lose their cheap rate.
   car_charging_now_response:
     - 'yes'
     - 'on'
     - 'true'
+    - 'charging'
 
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
@@ -485,4 +496,3 @@ pred_bat:
   #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'

@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.2.0"
+THIS_VERSION = "v9.3.6"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -391,6 +391,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_car_hold_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
@@ -398,6 +399,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.metric_min_improvement_plan = 2.0
         self.export_more_solar = False
         self.export_more_solar_threshold = 1.0
+        self.export_more_solar_warned_reason = None
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_battery_value_export_scaling = 0.8
@@ -430,6 +432,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_free_slots = []
         self.octopus_saving_slots = []
         self.car_charging_slots = []
+        self.car_charging_now_slots = []
         self.reserve = 0
         self.reserve_percent = 0.0
         self.reserve_current = 0
@@ -532,6 +535,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
+        self.octopus_intelligent_trust_slots = True
+        self.octopus_intelligent_dynamic = True
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.dispatch_timeline_last = {}
@@ -544,7 +549,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes_age = 0
         self.load_last_period = 0
         self.load_last_status = "baseline"
-        self.load_last_car_slot = False
+        self.dynamic_load_car_since = {}
+        self.dynamic_load_car_cancelled = {}
+        self.dynamic_load_car_warned = []
+        self.dynamic_load_car_warned_iog_off = False
+        self.dynamic_load_car_warned_dynamic_off = False
+        self.dynamic_load_car_run = {}
+        self.dynamic_load_car_confirmed = {}
+        self.dynamic_load_car_saved = {}
+        self.dynamic_load_car_sensors = {}
+        self.dynamic_load_car_effective = {}
+        self.dynamic_load_car_stripped = 0
+        self.octopus_surplus = set()
         self.battery_capacity_nominal = False
         self.battery_scaling_auto = False
         self.releases = {}
@@ -1086,6 +1102,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
             return
+        self.check_export_more_solar_effective()
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -2067,6 +2084,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
+            # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
+            self.dynamic_load_car_load()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
@@ -2133,6 +2152,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.check_entity_refresh()
         self.validate_config_check_retry()
+        if not self.prediction_started:
+            # A car's charging slots cancelled or resumed by dynamic load - replan now, not in 5 minutes
+            self.dynamic_load_car_poll()
+            # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes
+            self.car_charging_now_poll()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False

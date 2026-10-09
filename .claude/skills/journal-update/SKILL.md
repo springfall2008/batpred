@@ -18,7 +18,7 @@ Arguments: `queue=<dir> limit=<n>`. Every `*.md` directly in that directory is o
 
 Read it end to end before touching anything. You need to know what is already covered — most candidates restate something the journal says, and the right outcome for those is to drop them, or to sharpen the existing entry rather than add a second one.
 
-Note its own "Adding to this file" section: name the symbol rather than the line number, cite the issue number, keep it short.
+Note its own "What belongs here" and "Adding to this file" sections: keep techniques and traps, one-line device or API facts, and short dated findings that explain a class of report; leave per-issue narrative (what was tried, the fix, rejected alternatives) to the PR and issue. Name the symbol rather than the line number, cite the issue number, keep it short.
 
 ## 2. Verify every candidate against current main
 
@@ -32,7 +32,7 @@ For each candidate, check the claim still holds — grep the symbol it names, re
 
 - **Fold it in** — place it in the right table row or section, rewritten in the journal's voice. Say what was verified and how.
 - **Rewrite it** — the observation is real but the explanation was wrong or has been overtaken.
-- **Drop it** — already covered, unverifiable, or fixed since. Dropping is a normal outcome; say so in the PR body with the reason.
+- **Drop it** — already covered, unverifiable, fixed since, or a per-issue narrative that belongs in the PR or issue rather than the journal. Dropping is a normal outcome; say so in the PR body with the reason.
 
 Anything the candidate flagged as suspected rather than verified stays marked that way, or comes out. Do not upgrade a hypothesis to a fact because it reads well.
 
@@ -46,7 +46,7 @@ git log --oneline --since="2 weeks ago" origin/main
 
 Look for merges touching areas the journal makes claims about. For each, ask whether an existing entry is now wrong: a bug it calls "still live" that has been fixed, a line citation that has drifted onto unrelated code, a `confirmed on main (checked ...)` that a later merge has invalidated. Correct those in the same PR, and say plainly in the body which entries changed and why.
 
-If a fix has landed, say so and keep the mechanism — "this was the bug, it was fixed in PR #N" is useful to a reader holding an older log. Do not simply delete the entry.
+If a fix has landed, say so and keep the mechanism — "this was the bug, it was fixed in PR #N" is useful to a reader holding an older log. Cut the entry down to that rather than leaving the full story, and do not simply delete it. Where the code an entry describes has since changed, correct or delete the entry; do not leave it marked stale.
 
 ## 4. Spelling
 

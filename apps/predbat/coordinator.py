@@ -22,16 +22,52 @@ import re
 import secrets
 import threading
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from utils import is_secret_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MAX_STRING = 64
 VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 # Containers whose value is a list of vocabulary tokens
-VOCAB_CONTAINERS = ("functions", "capabilities", "flags", "effects")
+VOCAB_CONTAINERS = ("functions", "flags", "effects")
+
+# The seven INVERTER_DEF fields that describe behaviour rather than whether an entity exists.
+# A record's capabilities dict may hold only these.
+CAPABILITY_KEYS = (
+    "support_charge_freeze",
+    "support_discharge_freeze",
+    "support_feedin_first",
+    "can_span_midnight",
+    "charge_discharge_with_rate",
+    "charge_control_immediate",
+    "target_soc_used_for_discharge",
+)
+
+# INVERTER_DEF presence flags -> the settings that must be bound to a real rw entity for the flag to be
+# True. inverter.py creates a dummy entity for exactly these settings when the flag is False
+# (inverter.py:612-655), and turns has_timed_pause off at runtime when no pause_mode entity exists.
+PRESENCE_FLAGS = {
+    "has_charge_enable_time": ("scheduled_charge_enable",),
+    "has_discharge_enable_time": ("scheduled_discharge_enable",),
+    "has_reserve_soc": ("reserve",),
+    "has_target_soc": ("charge_limit",),
+    "has_idle_time": ("idle_start_time", "idle_end_time"),
+    "has_timed_pause": ("pause_mode",),
+}
+
+# The value a protocol field takes when the setting it is read from is not bound at all, so the field
+# does not apply to this device. current_dp matches inverter.py's own .get() default.
+NOT_APPLICABLE_DEFAULTS = {
+    "charge_time_entity_is_option": True,
+    "charge_time_format": "HH:MM:SS",
+    "clock_time_format": "%Y-%m-%dT%H:%M:%S",
+    "current_dp": 1,
+}
+
+ACCESS_VALUES = ("rw", "r")
 
 SECTION_SPEC = {
     "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials"), "sub_records": ()},
@@ -64,6 +100,13 @@ def _clean_number(value):
     return None
 
 
+def _clean_percent(value):
+    """A percentage above 0 and up to 100, or None. Bools are refused, unlike _clean_number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if 0 < value <= 100 else None
+
+
 def _clean_token(value):
     """A vocabulary token (lower case, no spaces), or None."""
     return value if isinstance(value, str) and VOCAB_RE.match(value) else None
@@ -72,6 +115,22 @@ def _clean_token(value):
 def _clean_scalar(value):
     """Any scalar, for account_ids - the container pseudonymises whatever it holds, so its type is open."""
     return value if isinstance(value, (str, int, float, bool)) else None
+
+
+def _clean_bool(value):
+    """A True/False fact, or None. Numbers are refused: 1 is not a capability statement."""
+    return value if isinstance(value, bool) else None
+
+
+def _clean_descriptor_value(value):
+    """A descriptor's fixed stand-in value: a number, a bool, or a string passing the info-string guard.
+
+    entities is published unredacted in dumps users post to public issues, so a stand-in string is held
+    to the same length cap and "@" ban as an info string - free text cannot ride in as a "value".
+    """
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    return _clean_string(value)
 
 
 MAX_OPTIONS = 256
@@ -98,32 +157,48 @@ def _clean_measure_or_tokens(value):
     return None
 
 
-# Descriptor field name -> cleaner. entity_id is required and handled separately in
-# _clean_descriptor, since every other field is optional and dropped rather than disqualifying.
+# Descriptor field name -> cleaner. access, entity_id and value are required/alternative fields and are
+# handled in _clean_descriptor; every field here is optional and dropped rather than disqualifying.
 DESCRIPTOR_FIELD_CLEANERS = {
     "domain": _clean_token,
-    "access": _clean_token,
     "unit": _clean_string,
     "device_class": _clean_string,
     "min": _clean_number,
     "max": _clean_number,
     "step": _clean_number,
+    "step_percent_of_capacity": _clean_percent,
     "precision": _clean_number,
     "options": _clean_option_list,
     "format": _clean_string,
+    "invert": _clean_bool,
 }
 
 
 def _clean_descriptor(value):
-    """One entity descriptor: entity_id required verbatim, every other field cleaned by its own declared type.
+    """One entity descriptor: access required, exactly one of entity_id and value, every other field cleaned by its own declared type.
 
     entities is a "clear" container, republished unredacted into debug dumps users post to public
     GitHub issues, so a field is kept only if it fits its type - free text cannot ride in on unit,
     device_class or options just because the container's name sounds safe.
+
+    access says whether Predbat writes the setting ("rw") or only reads it ("r"); the coordinator will
+    configure from it, so a descriptor without one is dropped rather than guessed. entity_id binds the
+    setting to an HA entity; value is a fixed stand-in where no entity exists (a PV-less inverter's
+    pv_power of 0). Both, or neither, is ambiguous and dropped.
     """
-    if not isinstance(value, dict) or not isinstance(value.get("entity_id"), str):
+    if not isinstance(value, dict) or value.get("access") not in ACCESS_VALUES:
         return None
-    kept = {"entity_id": value["entity_id"]}
+    has_entity = isinstance(value.get("entity_id"), str)
+    has_value = value.get("value") is not None
+    if has_entity == has_value:
+        return None
+    if has_entity:
+        kept = {"entity_id": value["entity_id"], "access": value["access"]}
+    else:
+        stand_in = _clean_descriptor_value(value["value"])
+        if stand_in is None:
+            return None
+        kept = {"value": stand_in, "access": value["access"]}
     for field, cleaner in DESCRIPTOR_FIELD_CLEANERS.items():
         if field in value and value[field] is not None:
             cleaned = cleaner(value[field])
@@ -140,7 +215,11 @@ CONTAINER_SPEC = {
     "ratings": ("clear", _clean_number),
     "coverage": ("clear", _clean_measure_or_tokens),
     "entities": ("clear", _clean_descriptor),
+    "capabilities": ("clear", _clean_bool),
 }
+
+# Containers whose keys are a closed set - anything else is dropped and logged
+CONTAINER_KEYS = {"capabilities": CAPABILITY_KEYS}
 
 # Container name sets derived from CONTAINER_SPEC's own class tags rather than hardcoded, so a
 # container added there later is redacted correctly with nothing extra to keep in sync - a
@@ -185,6 +264,11 @@ class Redactor:
     key, which is rewritten by exact match only - see _substitute_key), and a value inside
     hardware_ids is only shape-flagged when it is nothing BUT digits, since a letter-prefixed
     vendor serial with a long digit tail is that container's entire declared purpose.
+
+    A hardware serial is not secret, so a serial a record declares - hardware_ids.serial or an
+    entry in the structural serials list - is clear wherever it appears as a whole token, however
+    many digits it has (Solis, Deye and Sunsynk serials are nothing but digits): in hardware_ids,
+    in a device_id built from it, in a duplicate_serial observation. See _collect_serials.
     """
 
     # Minimum length of an original before it is substituted inside other strings; below this a
@@ -193,10 +277,22 @@ class Redactor:
     # a false-positive rewrite of unrelated data.
     MIN_SUBSTITUTE = 6
 
-    def __init__(self, salt, log=None):
-        """Hold the installation salt and an optional logger for misfiled values."""
+    def __init__(self, salt, log=None, warned=None):
+        """Hold the installation salt, an optional logger for misfiled values, and the set of
+        warnings already logged - owned by the caller so a warning is logged once per process
+        rather than on every redaction (every debug dump and publish)."""
         self.salt = salt
         self.log = log
+        self.warned = warned if warned is not None else set()
+        # Shape-guard hits, held until the walk is done - see _flush_warnings
+        self._pending_warnings = []
+        # device_id of the record being walked, so a warning is deduplicated per record rather
+        # than per field - see _flush_warnings
+        self._record_device_id = None
+        # Every variant of an account identifier noted from a pseudonym container or an
+        # identity-derived device_id: a guard hit wholly explained by one of these is the
+        # redaction working as designed, not a misfiling, so it is not warned about
+        self._identity_variants = set()
         self.originals = {}
         # Subset of self.originals eligible for substring replacement inside a VALUE (never a
         # dict key - see _substitute_key) - true identifiers: account_ids values, an
@@ -206,13 +302,15 @@ class Redactor:
         # unrelated text it happens to share a substring with.
         self.substring_ok = set()
         self._substring_order = []
+        # Whole-token patterns for every serial the document's records declare - see _collect_serials
+        self._serial_patterns = []
 
     def token(self, value):
         """The stable pseudonym for one value under this installation's salt."""
         digest = hashlib.sha256((self.salt + str(value)).encode("utf-8")).hexdigest()
         return "#" + digest[:8]
 
-    def _note(self, value, substring=False):
+    def _note(self, value, substring=False, identity=False):
         """Record an original so it can later be swapped for its token wherever it appears.
 
         Builds the FULL variant set (see _numeric_variants/_identifier_variants) before minting
@@ -237,7 +335,8 @@ class Redactor:
         replacement inside a VALUE (never a dict key - see _substitute_key); otherwise each is
         only ever matched by whole-string equality. Registering a variant here unconditionally,
         even one shorter than MIN_SUBSTITUTE, is safe: nothing is ever matched against it below
-        that floor - see _exact_match/_substitute_text.
+        that floor - see _exact_match/_substitute_text. identity=True marks the value as an account
+        identifier reported where one belongs - see _flush_warnings.
         """
         text = str(value)
         variants = {text} | self._numeric_variants(text)
@@ -249,6 +348,8 @@ class Redactor:
             self.originals[variant] = token
             if substring:
                 self.substring_ok.add(variant)
+            if identity:
+                self._identity_variants.add(variant)
         return token
 
     def _identifier_variants(self, text):
@@ -290,6 +391,88 @@ class Redactor:
             variants.add(sign + body[:-2])
         return variants
 
+    @staticmethod
+    def _declared_serials(record):
+        """The serials one record declares for itself: hardware_ids.serial and every entry in serials."""
+        declared = set()
+        hardware_ids = record.get("hardware_ids")
+        if isinstance(hardware_ids, dict) and hardware_ids.get("serial") not in (None, ""):
+            declared.add(str(hardware_ids["serial"]))
+        serials = record.get("serials")
+        if isinstance(serials, list):
+            declared |= {str(serial) for serial in serials if serial not in (None, "")}
+        return declared
+
+    def _collect_serials(self, node):
+        """Every serial any record in the document declares, anywhere in it.
+
+        Collected before the walk so the shape guard can leave a serial readable wherever it
+        turns up - a device_id built from it, the duplicate_serial observation that names it -
+        not only inside the record that declared it.
+        """
+        found = set()
+        if isinstance(node, dict):
+            found |= self._declared_serials(node)
+            for value in node.values():
+                found |= self._collect_serials(value)
+        elif isinstance(node, list):
+            for entry in node:
+                found |= self._collect_serials(entry)
+        return found
+
+    def _strip_serials(self, text):
+        """`text` with every declared serial removed where it stands as a whole token.
+
+        Whole-token only - bounded by a non-alphanumeric character or the string's ends, matched
+        case-insensitively as entity ids fold case - so "solis:1031260253072197" and
+        "sensor.predbat_solis_1031260253072197_soc" lose the serial, but a short serial that
+        happens to sit inside a longer number does not split that number's digit run and let a
+        misfiled MPAN through.
+        """
+        for pattern in self._serial_patterns:
+            text = pattern.sub("", text)
+        return text
+
+    def _pseudonym_values(self, node):
+        """Every value held in a pseudonym container (account_ids) anywhere in this record."""
+        values = set()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in PSEUDONYM_CONTAINERS and isinstance(value, dict):
+                    values |= {str(entry) for entry in value.values()}
+                else:
+                    values |= self._pseudonym_values(value)
+        elif isinstance(node, list):
+            for entry in node:
+                values |= self._pseudonym_values(entry)
+        return values
+
+    @staticmethod
+    def _whole_token(text):
+        """A case-insensitive pattern matching `text` only where it stands as a whole token.
+
+        Bounded by a non-alphanumeric character or the string's ends, so "2306178123" is found in
+        "deye:2306178123" and "sensor.predbat_solis_2306178123_soc" but not inside "inv98765432".
+        """
+        return re.compile(r"(?<![0-9A-Za-z]){}(?![0-9A-Za-z])".format(re.escape(text)), re.IGNORECASE)
+
+    def _serial_derived(self, record):
+        """Whether a record's device_id is built from its own serial rather than from an account identifier.
+
+        True only when a serial the record declares stands in the device_id as a whole token and
+        none of the record's own pseudonym values does - whole tokens both ways, as the shape
+        guard matches serials (see _strip_serials). A serial merely sitting inside a longer token
+        is coincidence, not construction; and an account id counts however short it is, since one
+        under MIN_SUBSTITUTE is not otherwise caught by the substring pass. Deye's "deye:{serial}"
+        beside a station id in account_ids is serial-derived; Octopus's "octopus:{mpan}" declares
+        no serial and a device_id that embeds an account id does, so both stay identity-derived
+        exactly as before.
+        """
+        device_id = record["device_id"]
+        if not any(self._whole_token(serial).search(device_id) for serial in self._declared_serials(record)):
+            return False
+        return not any(self._whole_token(value).search(device_id) for value in self._pseudonym_values(record) if value)
+
     def _misfiled(self, value, strict_numeric=False):
         """Whether a value looks like an identifier rather than a measurement, a vendor code, or ordinary text.
 
@@ -307,6 +490,10 @@ class Redactor:
         industry-standard shape: "HV2160123456") is that container's entire declared purpose, not
         a misfiling; a BARE all-digit string there is still genuinely suspicious, since an MPAN
         misfiled where a serial belongs looks exactly like one.
+
+        A serial some record declares is never a misfiling: it is removed (as a whole token - see
+        _strip_serials) before any of the above is judged, so a declared all-digit serial and a
+        device_id built from one stay readable while anything left beside them is still checked.
         """
         if isinstance(value, bool):
             return False
@@ -315,8 +502,10 @@ class Redactor:
                 integer_part = abs(int(value))
             except (ValueError, OverflowError):
                 return False
+            if not self._strip_serials(str(integer_part)):
+                return False
             return len(str(integer_part)) >= 10
-        text = str(value)
+        text = self._strip_serials(str(value))
         if "@" in text:
             return True
         stripped = SEPARATOR_RE.sub("", text)
@@ -332,11 +521,14 @@ class Redactor:
 
     def _guard_scalar(self, container, name, value):
         """Pseudonymise one scalar value if it looks misfiled or sits under a location-named field, logging where it was found."""
-        if not (self._misfiled(value, strict_numeric=(container == "hardware_ids")) or self._is_location_key(name)):
+        strict_numeric = container == "hardware_ids"
+        location = self._is_location_key(name)
+        if not (location or self._misfiled(value, strict_numeric=strict_numeric)):
             return value
-        if self.log:
-            label = container if container == name else "{}.{}".format(container, name)
-            self.log("Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label))
+        label = container if container == name else "{}.{}".format(container, name)
+        message = "Warn: Coordinator: {} looks like an identifier in a clear container - pseudonymised".format(label)
+        # A location-named field is flagged by its name, whatever the value, so it is always warned about
+        self._pending_warnings.append((message, None if location else value, strict_numeric, self._record_device_id))
         return self._note(value, substring=True)
 
     def _guard_value(self, container, name, value):
@@ -369,11 +561,65 @@ class Redactor:
         file, exactly what this guard exists to keep out of the debug dump attached to the same
         public issue. Matches _guard_scalar, which never logs the raw value it pseudonymises either.
         """
-        if not self._misfiled(name, strict_numeric=(container == "hardware_ids")):
+        strict_numeric = container == "hardware_ids"
+        if not self._misfiled(name, strict_numeric=strict_numeric):
             return name
-        if self.log:
-            self.log("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container))
+        self._pending_warnings.append(("Warn: Coordinator: {} key looks like an identifier - pseudonymised".format(container), name, strict_numeric, self._record_device_id))
         return self._note(name, substring=True)
+
+    def _flush_warnings(self):
+        """Log the shape-guard hits that are genuinely misfiled values, each at most once per process.
+
+        Runs after the walk, once every account identifier in the document has been noted, so a
+        hit can be judged against all of them whatever order the records were walked in. A value
+        that stops looking like an identifier once those are removed - Octopus's
+        "octopus:{mpan}" device_id, a programme's cross-link to it, a station id echoed as a
+        number - is the redaction working as designed: it is still pseudonymised, but warning
+        about it on every debug dump is noise, not advice. The message itself never holds the
+        value (see _guard_key), so it is deduplicated on the message plus the pseudonym of the
+        record's device_id: a second record misfiling the same field is a new leak and warns
+        too, while the same record on the next dump does not.
+        """
+        if not self._pending_warnings:
+            return
+        identities = [self._whole_token(identity) for identity in sorted(self._identity_variants, key=len, reverse=True)]
+        for message, value, strict_numeric, device_id in self._pending_warnings:
+            if value is not None and self._explained_by_identity(value, identities, strict_numeric):
+                continue
+            key = (message, None if device_id is None else self.token(device_id))
+            if key in self.warned:
+                continue
+            self.warned.add(key)
+            if self.log:
+                self.log(message)
+        self._pending_warnings = []
+
+    def _explained_by_identity(self, value, identities, strict_numeric):
+        """Whether a shape-guard hit is wholly an account identifier reported where one belongs.
+
+        `identities` are whole-token patterns (see _whole_token), so a short identifier never
+        splits a longer number's digit run and hides a genuine misfiling. A number is judged by
+        its integer part, as _misfiled does, and is only explained when that IS an identifier -
+        a numeric echo - since stripping digits out of it would rewrite it into something else.
+        """
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            try:
+                text = str(abs(int(value)))
+            except (ValueError, OverflowError):
+                return False
+            return any(identity.fullmatch(text) for identity in identities)
+        # Replaced by a non-digit, non-separator placeholder, not removed: removing it would join
+        # the digit runs either side of it into one that looks like an identifier
+        remaining = str(value)
+        for identity in identities:
+            remaining = identity.sub("|", remaining)
+        return not self._misfiled(remaining, strict_numeric=strict_numeric)
+
+    def _embeds_account_id(self, record):
+        """Whether a record's device_id carries one of its own account identifiers as a whole token."""
+        return any(self._whole_token(value).search(record["device_id"]) for value in self._pseudonym_values(record) if value)
 
     def _has_pseudonym_container(self, node):
         """Whether a pseudonym container (account_ids) sits anywhere in this record - the record
@@ -414,13 +660,16 @@ class Redactor:
         CONTAINER_SPEC.
         """
         if isinstance(node, dict):
-            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node):
-                self._note(node["device_id"], substring=True)
+            if isinstance(node.get("device_id"), str) and self._has_pseudonym_container(node) and not self._serial_derived(node):
+                self._note(node["device_id"], substring=True, identity=self._embeds_account_id(node))
+            outer_device_id = self._record_device_id
+            if isinstance(node.get("device_id"), str):
+                self._record_device_id = node["device_id"]
             out = {}
             for key, value in node.items():
                 if key in PSEUDONYM_CONTAINERS:
-                    out[key] = {self._guard_key(key, name): self._note(entry, substring=True) for name, entry in value.items()}
-                elif key in CLEAR_CONTAINERS:
+                    out[key] = {self._guard_key(key, name): self._note(entry, substring=True, identity=True) for name, entry in value.items()}
+                elif key in CLEAR_CONTAINERS and isinstance(value, dict):
                     out[key] = {self._guard_key(key, name): self._guard_value(key, name, entry) for name, entry in value.items()}
                 elif key in VOCAB_CONTAINERS:
                     # Vocabulary lists are clear too, and a token is free-form enough (digits
@@ -428,6 +677,7 @@ class Redactor:
                     out[key] = [self._guard_scalar(key, "token", entry) for entry in value]
                 else:
                     out[key] = self._walk(value, container=key)
+            self._record_device_id = outer_device_id
             return out
         if isinstance(node, list):
             return [self._walk(entry, container=container) for entry in node]
@@ -527,7 +777,11 @@ class Redactor:
         otherwise be free to corrupt it with.
         """
         generated = catalogue.get("generated")
+        # Longest first, so a serial that contains a shorter one is removed whole
+        serials = sorted(self._collect_serials(catalogue), key=len, reverse=True)
+        self._serial_patterns = [self._whole_token(serial) for serial in serials]
         walked = self._walk(catalogue)
+        self._flush_warnings()
         self._substring_order = sorted(self.substring_ok, key=len, reverse=True)
         substituted = self._substitute(walked)
         if "generated" in catalogue:
@@ -559,6 +813,8 @@ class Coordinator:
         # the original startup-barrier assemble() call).
         self.assembled = None
         self.salt = None
+        # Redaction warnings already logged - see Redactor._flush_warnings
+        self.redaction_warned = set()
 
     def report(self, component_name, report):
         """Validate and store one component's discovery report, replacing any previous one."""
@@ -736,7 +992,7 @@ class Coordinator:
         dicts under a lock briefly held to copy self.reports, so redoing it on every debug dump or
         publish() call - its only two callers - costs milliseconds, not a measurable resource.
         """
-        return Redactor(self.load_salt(), log=self.log).redact(self.assemble())
+        return Redactor(self.load_salt(), log=self.log, warned=self.redaction_warned).redact(self.assemble())
 
     def catalogue_raw(self):
         """The assembled catalogue, unredacted. In-process diagnostics only - never write this anywhere.
@@ -804,12 +1060,16 @@ def _validate_container(container_name, value, component_name, section, log):
     if not isinstance(value, dict):
         return None
     _, cleaner = CONTAINER_SPEC[container_name]
+    allowed = CONTAINER_KEYS.get(container_name)
     out = {}
     for key, entry in value.items():
         if not isinstance(key, str):
             continue
         if is_secret_key(key):
             log("Warn: Coordinator: {} {} field '{}' looks like a credential - refused".format(component_name, section, key))
+            continue
+        if allowed is not None and key not in allowed:
+            log("Warn: Coordinator: {} {}.{} is not a recognised key - dropped".format(component_name, container_name, key))
             continue
         cleaned = cleaner(entry)
         if cleaned is None:
@@ -950,6 +1210,139 @@ def inverter_record(
             continue
         record[name] = value
     return record
+
+
+def _bound_entity(entities, name, access=None):
+    """The descriptor binding `name` to a real HA entity (not a value stand-in), optionally of one access, or None."""
+    descriptor = entities.get(name)
+    if not isinstance(descriptor, dict) or not isinstance(descriptor.get("entity_id"), str):
+        return None
+    if access is not None and descriptor.get("access") != access:
+        return None
+    return descriptor
+
+
+def _decimal_places(step):
+    """How many decimal places a numeric step has: 0.1 -> 1, 1 -> 0, 0.05 -> 2. None if it is not a number."""
+    try:
+        exponent = Decimal(str(step)).normalize().as_tuple().exponent
+    except (InvalidOperation, ValueError):
+        return None
+    return max(0, -exponent) if isinstance(exponent, int) else None
+
+
+def inverter_definition(record, write_and_poll_sleep, base=None):
+    """Rebuild an INVERTER_DEF-shaped definition for one inverter from its discovery record.
+
+    Returns (definition, gaps, not_applicable). definition is always a new dict: base, when given, is
+    copied and never written to - inverter.py:381-389 applies apps.yaml's `inverter:` override by
+    writing into the shared INVERTER_DEF[type] row, so two inverters of one type end up sharing the last
+    one's override, and this must not repeat that.
+
+    Sources, per the vocabulary spec (docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md):
+    the seven CAPABILITY_KEYS from record["capabilities"]; the PRESENCE_FLAGS and the two GE mode flags
+    from which settings record["entities"] binds to a real rw entity; the protocol fields from those
+    entities' descriptors; write_and_poll_sleep from the component. A field it cannot work out - a
+    missing capability, or a bound entity lacking the format/unit/domain it needs - is listed in gaps
+    and keeps base's value (or is left out without a base). A protocol field whose source setting is not
+    bound at all does not apply to this device: it takes NOT_APPLICABLE_DEFAULTS' value (or base's) and
+    is listed in not_applicable, not in gaps.
+    """
+    definition = dict(base) if base else {}
+    gaps = []
+    not_applicable = []
+    capabilities = record.get("capabilities") if isinstance(record.get("capabilities"), dict) else {}
+    entities = record.get("entities") if isinstance(record.get("entities"), dict) else {}
+
+    if not definition.get("name"):
+        definition["name"] = record.get("inverter_type")
+
+    for key in CAPABILITY_KEYS:
+        if isinstance(capabilities.get(key), bool):
+            definition[key] = capabilities[key]
+        else:
+            gaps.append(key)
+
+    for flag, settings in PRESENCE_FLAGS.items():
+        definition[flag] = all(_bound_entity(entities, setting, access="rw") is not None for setting in settings)
+
+    mode = _bound_entity(entities, "inverter_mode", access="rw")
+    definition["has_ge_inverter_mode"] = mode is not None and mode.get("domain") == "select"
+    definition["has_ge_eco_toggle"] = mode is not None and mode.get("domain") == "switch"
+    definition.setdefault("has_mqtt_api", False)
+
+    def not_applicable_field(field):
+        """Mark a protocol field as not applying to this device and give it its default."""
+        not_applicable.append(field)
+        definition.setdefault(field, NOT_APPLICABLE_DEFAULTS[field])
+
+    start = _bound_entity(entities, "charge_start_time")
+    if start is None:
+        not_applicable_field("charge_time_entity_is_option")
+        not_applicable_field("charge_time_format")
+    else:
+        if start.get("domain"):
+            definition["charge_time_entity_is_option"] = start["domain"] == "select"
+        else:
+            gaps.append("charge_time_entity_is_option")
+        if start.get("format"):
+            definition["charge_time_format"] = start["format"]
+        else:
+            gaps.append("charge_time_format")
+
+    clock = _bound_entity(entities, "inverter_time")
+    if clock is None:
+        not_applicable_field("clock_time_format")
+    elif clock.get("format"):
+        definition["clock_time_format"] = clock["format"]
+    else:
+        gaps.append("clock_time_format")
+
+    if _bound_entity(entities, "soc_kw") is not None:
+        definition["soc_units"] = "kWh"
+    elif _bound_entity(entities, "soc_percent") is not None:
+        definition["soc_units"] = "%"
+    else:
+        gaps.append("soc_units")
+
+    rate = _bound_entity(entities, "charge_rate")
+    if rate is None and _bound_entity(entities, "charge_rate_percent") is not None:
+        # GE Cloud's percentage-rate models: charge_rate is left unbound and charge_rate_percent is
+        # written instead, which inverter.py still treats as power control
+        definition["output_charge_control"] = "power"
+        not_applicable_field("current_dp")
+    elif rate is None:
+        definition["output_charge_control"] = "none"
+        not_applicable_field("current_dp")
+    elif rate.get("unit") == "W":
+        definition["output_charge_control"] = "power"
+        not_applicable_field("current_dp")
+    elif rate.get("unit") == "A":
+        definition["output_charge_control"] = "current"
+        places = _decimal_places(rate.get("step")) if rate.get("step") is not None else None
+        if places is None:
+            gaps.append("current_dp")
+        else:
+            definition["current_dp"] = places
+    else:
+        gaps.append("output_charge_control")
+        not_applicable_field("current_dp")
+    # charge_rate's step stands for both rates - an inverter holding them coarsely holds both alike. Most
+    # inverters have no such step, so its absence is not a gap: base's value stands, else none
+    if rate is not None and rate.get("step_percent_of_capacity"):
+        definition["rate_step_percent_of_capacity"] = rate["step_percent_of_capacity"]
+    else:
+        definition.setdefault("rate_step_percent_of_capacity", 0)
+
+    definition["time_button_press"] = _bound_entity(entities, "schedule_write_button", access="rw") is not None
+
+    count = 1
+    while _bound_entity(entities, "load_power_{}".format(count)) is not None:
+        count += 1
+    definition["num_load_entities"] = count
+
+    definition["write_and_poll_sleep"] = write_and_poll_sleep
+    return definition, gaps, not_applicable
 
 
 def validate_report(report, component_name, log):

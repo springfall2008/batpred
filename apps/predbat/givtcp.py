@@ -92,6 +92,10 @@ GIVTCP_POLL_SECONDS = 60
 # restart. Only endpoints not already being managed are probed, and only ever to add them.
 GIVTCP_REDISCOVER_SECONDS = 3600
 
+# GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
+# rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
+GIVTCP_RATE_STEP_PERCENT_OF_CAPACITY = 1
+
 # control name -> (domain, GivTCPRest write method name, HA entity attributes)
 GIVTCP_CONTROLS = {
     "charge_rate": ("number", "set_charge_rate", {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-charging", "min": 0, "max": 20000, "step": 100}),
@@ -367,6 +371,49 @@ GIVTCP_AUTO_CONFIG_VOLTAGE_KEYS = [
     "battery_voltage",
 ]
 
+# The behaviour of a GivTCP-driven GivEnergy inverter, as the discovery record's capabilities: the
+# seven behaviour keys of the GE INVERTER_DEF row, stated here rather than read back from it so the
+# completeness test proves the record can stand in for the row (vocabulary spec section 1.1).
+GIVTCP_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": True,
+    "support_feedin_first": False,
+    "can_span_midnight": True,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": False,
+}
+
+# Settings automatic_config() binds that the discovery record leaves out, because inverter.py
+# replaces the binding with a dummy entity for a GE inverter: its row has has_discharge_enable_time
+# False, so inverter.py:620-622 never reads or writes the published scheduled_discharge_enable switch.
+GIVTCP_RECORD_DUMMIED_KEYS = ("scheduled_discharge_enable",)
+
+# Every setting automatic_config() can bind for one inverter, in its own key lists, less the ones
+# the record leaves out. build_discovery() keeps the ones actually published for that inverter.
+GIVTCP_RECORD_KEYS = [
+    key
+    for key in (
+        GIVTCP_AUTO_CONFIG_KEYS
+        + GIVTCP_AUTO_CONFIG_POWER_KEYS
+        + GIVTCP_AUTO_CONFIG_VOLTAGE_KEYS
+        + GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
+        + GIVTCP_AUTO_CONFIG_SCHEDULE_KEYS
+        + GIVTCP_AUTO_CONFIG_SCALING_KEYS
+        + GIVTCP_AUTO_CONFIG_CHARGE_ENABLE_KEYS
+        + GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS
+        + GIVTCP_AUTO_CONFIG_PAUSE_MODE_KEYS
+        + GIVTCP_AUTO_CONFIG_PAUSE_SLOT_KEYS
+    )
+    if key not in GIVTCP_RECORD_DUMMIED_KEYS
+]
+
+# The shape of the inverter_time sensor's value: publish_data() passes GivTCP's Invertor_Time
+# through unchanged, and GivTCP reports it as ISO 8601 with an offset ("2024-12-30T13:07:22+00:00"
+# in both the v2 and v3 captures under coverage/cases). The GE row's clock_time_format stays
+# "%H:%M:%S" - it also serves installs that do not use this component (spec D13).
+GIVTCP_INVERTER_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
 
 class GivTCPComponent(ComponentBase):
     """
@@ -376,6 +423,10 @@ class GivTCPComponent(ComponentBase):
     apps.yaml arg - the same key and shape Inverter itself used to read directly, so an existing
     user's apps.yaml needs no changes to pick this component up.
     """
+
+    # The GE INVERTER_DEF row's write_and_poll_sleep: GivTCP applies a write on its own poll cycle,
+    # so inverter.py waits longer before reading a setting back than it does for a cloud API.
+    WRITE_AND_POLL_SLEEP = 10
 
     def initialize(self, rest_urls, automatic=True):
         rest_urls = rest_urls if isinstance(rest_urls, list) else [rest_urls]
@@ -411,6 +462,11 @@ class GivTCPComponent(ComponentBase):
         # published points the arg at a non-existent entity, and get_arg then returns its default
         # instead of the user's own apps.yaml value.
         self.published_discovery = {}
+        # What each key held before automatic_config() first claimed it. A capability-gated claim is
+        # made on the fleet as it stands, which can include gap slots whose endpoint has not answered
+        # yet; if that endpoint turns out to lack the capability, the re-run hands the key back to
+        # this value rather than leaving the stale claim in place until restart.
+        self.claimed_from = {}
         # publish_data() runs every poll; the unsupported-model notice is per inverter and only
         # worth saying once rather than every 60 seconds for the life of the process
         self.discharge_target_warned = {}
@@ -484,7 +540,14 @@ class GivTCPComponent(ComponentBase):
         self.refresh_discovery()
 
         if rediscover:
+            fleet_before = len(self.discovered)
             await self.rediscover()
+            if len(self.discovered) > fleet_before:
+                # automatic_config() below gates each discovery key on every managed inverter having
+                # published it, and the adopted inverter has not been published yet this cycle. Without
+                # this every such gate fails on the re-run and the key is handed back to apps.yaml for
+                # the whole fleet, with nothing to re-run it once the next poll does publish.
+                await self.publish_data()
 
         # Re-runs when the fleet has grown. Deliberately not when it shrinks: self.discovered is
         # append-only, because dropping an inverter that stopped answering would rebuild Predbat's
@@ -515,9 +578,8 @@ class GivTCPComponent(ComponentBase):
             if not data:
                 continue
             rest.inverter.rest_data = data
-            # Appended, never inserted. The order of self.discovered is Predbat's inverter
-            # numbering, so moving an existing entry would repoint a running inverter at different
-            # physical hardware mid-flight.
+            # The order of self.discovered carries no meaning: automatic_config() fills Predbat
+            # inverter n from REST endpoint n whatever order the endpoints answered in (#5209).
             self.discovered.append(n)
             self.identified.add(n)
             self.log(
@@ -774,34 +836,55 @@ class GivTCPComponent(ComponentBase):
                 continue
         return largest
 
-    def _keep_configured_tail(self, key, values, fleet_size):
+    def _per_endpoint_values(self, key, make, fleet_size):
         """
-        values for the inverters discovered here, followed by whatever is already configured for
-        any inverter beyond them.
+        One value per Predbat inverter, where Predbat inverter n is always REST endpoint n.
 
-        The discovered inverters take the leading slots; the rest of the fleet is configured some
-        other way, and replacing the whole list with only this component's entities left those
-        inverters pointing at nothing (#5029). A scalar value applies to every index, so it is
-        broadcast into the tail rather than dropped; a configured list shorter than the fleet is
-        left short rather than padded with a made-up entry - Inverter fills its own dummies in for
-        the keys that need one, and inventing a type or an entity here is how the inverter that is
-        not ours ends up mis-driven.
+        A discovered endpoint's slot gets make(n). Every other slot keeps whatever is already
+        configured for it. Filling the slots positionally from self.discovered instead meant an
+        endpoint that was down at startup shifted every later inverter's entities down one slot,
+        while per-inverter settings that are not auto-configured (inverter_limit_charge and the
+        like) stayed where they were - one physical inverter then got driven by two Predbat
+        inverters and another by none, and adopting the late endpoint on re-probe turned the shift
+        into a rotation (#5209).
+
+        Past the last discovered endpoint the rest of the fleet is configured some other way, and
+        replacing the whole list with only this component's entities left those inverters pointing
+        at nothing (#5029). A scalar value applies to every index, so it is broadcast rather than
+        dropped; a configured list shorter than the fleet is left short there rather than padded
+        with a made-up entry - Inverter fills its own dummies in for the keys that need one, and
+        inventing a type or an entity for an inverter that is not ours is how it ends up mis-driven.
+        A slot below the last discovered endpoint cannot be left out without renumbering everything
+        after it, and it is one of our own endpoints that has not answered yet, so where nothing is
+        configured for it, it gets make(n) - what it will be once it does.
         """
-        if fleet_size <= len(values):
-            return values
         configured = self._configured_value(key)
-        if configured is None:
-            return values
-        if not isinstance(configured, list):
+        if configured is not None and not isinstance(configured, list):
             configured = [configured] * fleet_size
-        return values + configured[len(values) : fleet_size]
+        last_discovered = max(self.discovered)
+        values = []
+        for n in range(fleet_size):
+            if n in self.discovered:
+                values.append(make(n))
+            elif configured is not None and n < len(configured):
+                values.append(configured[n])
+            elif n < last_discovered:
+                values.append(make(n))
+            else:
+                break
+        return values
 
     async def automatic_config(self):
         """Point Predbat's standard entity-based apps.yaml keys at the entities this component publishes."""
         # What gets claimed is driven by the endpoints that answered discovery, not by the length of
-        # the configured givtcp_rest list - claiming an entity for a URL with nothing behind it
-        # would have Predbat plan and execute against a phantom battery. The fleet size can still
-        # come out larger than that, but only where the user asked for it: see n_inverters below.
+        # the configured givtcp_rest list: no slot is claimed past the highest endpoint that
+        # answered, so the template's trailing placeholder URLs never become inverters. Below that
+        # endpoint Predbat inverter n has to be REST endpoint n (#5209), so a slot whose endpoint has
+        # not answered is claimed too - with the user's own configuration where there is one, and
+        # otherwise with the entities that endpoint will publish once it does. Until then Predbat
+        # plans that inverter without live data, which is the cost of not renumbering the fleet
+        # around it; the warning below says so. Past the highest endpoint the fleet can still come
+        # out larger, but only where the user asked for it: see n_inverters below.
         if not self.automatic:
             self.log("Info: GivTCP: givtcp_automatic is off - publishing entities but leaving apps.yaml to you")
             return
@@ -812,15 +895,29 @@ class GivTCPComponent(ComponentBase):
             return
 
         n_discovered = len(discovered)
-        # The fleet only ever grows here. An inverter this component cannot discover - another
-        # vendor's, or one configured by hand - is still part of the fleet, so writing the
+        # Predbat inverter n is REST endpoint n, so the fleet reaches at least the highest endpoint
+        # that answered. It only ever grows here: an inverter this component cannot discover -
+        # another vendor's, or one configured by hand - is still part of the fleet, so writing the
         # discovered count over a larger configured num_inverters dropped it from Predbat entirely
         # (#5029).
-        n_inverters = max(n_discovered, self._configured_num_inverters())
+        n_covered = max(discovered) + 1
+        n_inverters = max(n_covered, self._configured_num_inverters())
         self.log("GivTCP: configuring Predbat for {} discovered inverter(s)".format(n_discovered))
-        if n_inverters > n_discovered:
-            self.log("Info: GivTCP: {} inverter(s) are configured and {} answered here - leaving inverter {} onwards as configured".format(n_inverters, n_discovered, n_discovered))
-        self.set_arg_auto("inverter_type", self._keep_configured_tail("inverter_type", ["GE" for _ in range(n_discovered)], n_inverters))
+        # The two kinds of slot that did not answer are treated differently by _per_endpoint_values(),
+        # so they are reported separately: a gap below the highest endpoint that answered is bound
+        # to its own endpoint's entities wherever nothing is configured for it, a slot past it is
+        # only ever left as configured.
+        gap = [n for n in range(n_covered) if n not in discovered]
+        tail = list(range(n_covered, n_inverters))
+        if gap:
+            self.log(
+                "Warn: GivTCP: no inverter has answered yet at {} - Predbat inverter(s) {} keep their own slot and are bound to that endpoint's entities wherever nothing is configured for them, so they are planned without live data until it answers. Remove the URL from givtcp_rest if that inverter no longer exists.".format(
+                    ", ".join(self.rest[n].inverter.rest_api for n in gap), ", ".join(str(n) for n in gap)
+                )
+            )
+        if tail:
+            self.log("Info: GivTCP: {} inverter(s) are configured and {} answered here - leaving inverter(s) {} as configured".format(n_inverters, n_discovered, ", ".join(str(n) for n in tail)))
+        self.set_arg_auto("inverter_type", self._per_endpoint_values("inverter_type", lambda n: "GE", n_inverters))
         self.set_arg_auto("num_inverters", n_inverters)
 
         keys = list(GIVTCP_AUTO_CONFIG_KEYS)
@@ -879,11 +976,22 @@ class GivTCPComponent(ComponentBase):
             else:
                 self.log("Info: GivTCP: the battery pause time slots are not reported by every inverter - leaving pause_start_time/pause_end_time to your apps.yaml config")
 
+        # A key claimed on an earlier run whose gate has since failed - typically a late endpoint
+        # adopted on re-probe that lacks the capability the earlier fleet had - goes back to what it
+        # held before. Left alone, its gap-slot entry points at an entity that endpoint will never
+        # publish, so get_arg returns its default instead of the user's own apps.yaml value.
+        for key in [key for key in self.claimed_from if key not in keys]:
+            self.log("Info: GivTCP: {} is no longer supported by every managed inverter - handing it back to your apps.yaml config".format(key))
+            self.set_arg(key, self.claimed_from.pop(key))
+
         for key in keys:
+            if key not in self.claimed_from:
+                previous = self._configured_value(key)
+                self.claimed_from[key] = list(previous) if isinstance(previous, list) else previous
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
             if key == "battery_scaling":
-                self.set_arg_auto(key, self._keep_configured_tail(key, [self._entity_id("sensor", n, "battery_dod_soh") for n in discovered], n_inverters))
+                self.set_arg_auto(key, self._per_endpoint_values(key, lambda n: self._entity_id("sensor", n, "battery_dod_soh"), n_inverters))
                 continue
             # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
             # write, so renumbering would route the surviving inverter's writes at a dead client.
@@ -891,7 +999,7 @@ class GivTCPComponent(ComponentBase):
             # overwrite=False on the history-bearing energy totals leaves a sensor the user named
             # themselves in place, so its recorded history survives - set_arg_auto still fills the
             # key in when they named nothing.
-            self.set_arg_auto(key, self._keep_configured_tail(key, [self._entity_id(domain, n, key) for n in discovered], n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
+            self.set_arg_auto(key, self._per_endpoint_values(key, lambda n, domain=domain, key=key: self._entity_id(domain, n, key), n_inverters), overwrite=key not in GIVTCP_AUTO_CONFIG_USER_WINS_KEYS)
 
     def _discovery_descriptor(self, n, name, domain, access, attrs, max_battery_rate):
         """
@@ -934,11 +1042,43 @@ class GivTCPComponent(ComponentBase):
         elif options:
             descriptor["options"] = options
         if name in ("charge_rate", "discharge_rate"):
+            descriptor["step_percent_of_capacity"] = GIVTCP_RATE_STEP_PERCENT_OF_CAPACITY
             if max_battery_rate:
                 descriptor["max"] = max_battery_rate
             else:
                 descriptor.pop("max", None)
         return descriptor
+
+    def _record_entities(self, n, max_battery_rate):
+        """
+        The discovery record's entity map for inverter n: each setting automatic_config() binds, keyed by that setting.
+
+        Walks the same key lists automatic_config() does (GIVTCP_RECORD_KEYS) and forms each entity id
+        with the same _entity_id() call, so the two cannot drift. A key is kept only when
+        publish_data() actually published its entity for this inverter (see _discovery_descriptor).
+        battery_scaling is bound to the combined battery_dod_soh sensor, exactly as automatic_config()
+        binds it, and inverter_time carries the format its value is published in.
+
+        The record describes this device alone (spec D10 and D11). automatic_config()'s fleet-wide
+        gates - a key claimed only when every discovered inverter published it or runs GivTCP v3 -
+        and the user's givtcp_rest_power_ignore opt-out are not applied here; the coordinator that
+        configures from records applies them.
+        """
+        entities = {}
+        for key in GIVTCP_RECORD_KEYS:
+            if key == "battery_scaling":
+                descriptor = self._discovery_descriptor(n, "battery_dod_soh", "sensor", "r", GIVTCP_SENSORS["battery_dod_soh"], max_battery_rate)
+            elif key in GIVTCP_CONTROLS:
+                domain, _, attrs = GIVTCP_CONTROLS[key]
+                descriptor = self._discovery_descriptor(n, key, domain, "rw", attrs, max_battery_rate)
+            else:
+                descriptor = self._discovery_descriptor(n, key, "sensor", "r", GIVTCP_SENSORS[key], max_battery_rate)
+            if descriptor is None:
+                continue
+            if key == "inverter_time":
+                descriptor["format"] = GIVTCP_INVERTER_TIME_FORMAT
+            entities[key] = descriptor
+        return entities
 
     def build_discovery(self):
         """
@@ -950,15 +1090,14 @@ class GivTCPComponent(ComponentBase):
         "givtcp:{rest_api}" when the inverter reports no serial - the same fallback identity
         publish_data()'s own identity entities would show as "Unknown".
 
-        Entity descriptors are built from GIVTCP_CONTROLS/GIVTCP_SENSORS, but only for an entity
-        publish_data() actually published this run (see _discovery_descriptor) - many of them are
-        conditional there on GivTCP version, register support or a non-None reading (the pause
-        entities and discharge_target_soc need rest_v3 and, for the latter, a supported model;
-        charge_limit_enable and the two scheduled_*_enable switches need their register reported at
-        all; most of the discovery/energy sensors are published only when GivTCP actually reports
-        that field), so the catalogue never lists a control or sensor as present when no such HA
-        entity exists. capabilities records the same probes automatic_config() gates its own
-        auto-configuration decisions on.
+        entities holds every setting automatic_config() binds for the inverter (_record_entities),
+        only where publish_data() actually published the entity this run, so the catalogue never
+        lists a control or sensor that does not exist in Home Assistant. capabilities is the GE
+        inverter's behaviour (GIVTCP_CAPABILITIES). flags record the per-inverter probes: rest_v3
+        (GivTCP v3, which the pause and export-target controls need) and reports_soh (battery state
+        of health reported, which battery_scaling needs). ratings use Predbat's setting names:
+        soc_max (the design capacity in kWh, only as GivTCP reports it), battery_rate_max and
+        inverter_limit (W).
 
         Reporting is independent of self.automatic: the catalogue records what hardware is
         physically there, not whether this component wired Predbat's apps.yaml to it - that
@@ -972,34 +1111,13 @@ class GivTCPComponent(ComponentBase):
             device_id = "givtcp:{}".format(known_serial or rest.inverter.rest_api)
 
             max_battery_rate = rest.max_battery_rate()
-            entities = {}
-            for name, (domain, _, attrs) in GIVTCP_CONTROLS.items():
-                descriptor = self._discovery_descriptor(n, name, domain, "rw", attrs, max_battery_rate)
-                if descriptor is not None:
-                    entities[name] = descriptor
-            for name, attrs in GIVTCP_SENSORS.items():
-                descriptor = self._discovery_descriptor(n, name, "sensor", "r", attrs, max_battery_rate)
-                if descriptor is not None:
-                    entities[name] = descriptor
+            entities = self._record_entities(n, max_battery_rate)
 
-            # Same probes automatic_config() gates its own decisions on - see
-            # GIVTCP_AUTO_CONFIG_DISCHARGE_TARGET_KEYS/PAUSE_MODE_KEYS/PAUSE_SLOT_KEYS/SCALING_KEYS/
-            # CHARGE_ENABLE_KEYS above. Recorded here regardless of self.automatic or of whether the
-            # rest of the discovered fleet also qualifies - automatic_config() requires every
-            # discovered inverter to agree before claiming a key; this reports what is true of THIS
-            # inverter alone.
-            capabilities = []
+            flags = []
             if rest.rest_v3:
-                capabilities.append("rest_v3")
-                capabilities.append("discharge_target")
-                if rest.pause_mode_supported:
-                    capabilities.append("pause_mode")
-                if rest.pause_slots_supported:
-                    capabilities.append("pause_slots")
+                flags.append("rest_v3")
             if rest.battery_soh() is not None:
-                capabilities.append("soh")
-            if rest.charge_target_enabled is not None:
-                capabilities.append("charge_enable")
+                flags.append("reports_soh")
 
             info = {}
             model = rest.inverter_type()
@@ -1010,12 +1128,18 @@ class GivTCPComponent(ComponentBase):
             if rest.givtcp_version and rest.givtcp_version != "Unknown":
                 info["givtcp_version"] = rest.givtcp_version
 
+            # Ratings are figures the device reports (spec D14). soc_max is one only when GivTCP
+            # reports Battery_Capacity_kWh itself: publish_data()'s fallback, the nominal Ah scaled by
+            # an assumed 51.2V pack voltage, is Predbat's derivation, so it stays an entity binding only.
             ratings = {}
-            design_capacity = rest.battery_capacity_kwh() or rest.nominal_capacity()
-            if design_capacity:
-                ratings["battery_kwh"] = design_capacity
+            reported_capacity = rest.battery_capacity_kwh()
+            if reported_capacity:
+                ratings["soc_max"] = reported_capacity
             if max_battery_rate:
-                ratings["max_charge_w"] = max_battery_rate
+                ratings["battery_rate_max"] = max_battery_rate
+            max_inverter_rate = rest.max_inverter_rate()
+            if max_inverter_rate:
+                ratings["inverter_limit"] = max_inverter_rate
 
             inverters.append(
                 inverter_record(
@@ -1023,7 +1147,8 @@ class GivTCPComponent(ComponentBase):
                     inverter_type="GE",
                     composition="direct",
                     functions=["solar", "battery"],
-                    capabilities=capabilities,
+                    capabilities=dict(GIVTCP_CAPABILITIES),
+                    flags=flags,
                     hardware_ids={"serial": known_serial} if known_serial else None,
                     info=info,
                     ratings=ratings,

@@ -18,8 +18,8 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
-from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS, DISPATCH_SOURCE_CHARGER_SCHEDULE
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, round_out_to_period, filter_payment_method, is_edge_block_body, token_mint_backoff_seconds, TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS
 from component_base import ComponentBase
 from mock_base import MockBase as SharedMockBase
 import aiohttp
@@ -58,6 +58,7 @@ CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
+IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -356,6 +357,73 @@ intelligent_settings_mutation_schedule = """{{
 }}"""
 
 
+def dispatch_slots_signature(octopus_slots, now_utc, include_energy=True):
+    """
+    Build a single change-detection signature value for Octopus Intelligent dispatch slots, grouped per car.
+
+    Returns an opaque tuple intended only to be compared for equality against another signature - callers
+    should not index into it. Per-car grouping is preserved inside so a slot moving between cars still
+    registers as a change. Timestamps are normalised to the parsed instant so equivalent values in different
+    formats (+0000 vs +00:00 vs Z) do not register as a change; an unparseable value falls back to its raw
+    string (and never raises) so a genuine change is still detected without breaking the update cycle.
+
+    An in-progress dispatch has its start advanced to now and its charge_in_kwh scaled to the remaining time
+    on every component refresh (see async_get_intelligent_devices). Comparing the raw slots would therefore
+    report a change on every poll throughout an active charging window. For a slot active at now_utc the
+    signature keeps only the stable fields (window end, source, location); genuine changes - new/removed
+    slots, a moved window end, a revised future slot, a future slot becoming active - still alter it.
+
+    Shared by Octopus.octopus_slots_signature() (fetch's replan check) and OctopusAPI (its dispatch-change
+    replan request), so the two agree on what counts as a change.
+
+    include_energy=False compares a future slot's energy only as decode_octopus_slot() classifies it -
+    unknown (None, sized from the slot duration), some energy, or none (no car slot) - rather than its
+    exact kWh. OctopusAPI's replan request uses this so Octopus revising a future slot's energy does not
+    replan on every 2 minute poll; fetch's check keeps the exact kWh, so the plan still picks the revised
+    energy up on its next scheduled cycle.
+    """
+
+    def parse(value):
+        """Parse a slot timestamp, or None if empty or unparseable."""
+        if not value:
+            return None
+        try:
+            return str2time(value)
+        except (ValueError, TypeError):
+            return None
+
+    def energy(value):
+        """The slot energy as compared - exact, or only as None / some / none when include_energy is off."""
+        if include_energy or value is None:
+            return value
+        try:
+            return abs(float(value)) > 0
+        except (ValueError, TypeError):
+            return False
+
+    signature = []
+    for car_slots in octopus_slots:
+        car_signature = []
+        for slot in car_slots:
+            start = slot.get("start")
+            end = slot.get("end")
+            source = slot.get("source")
+            location = slot.get("location")
+            start_dt = parse(start)
+            end_dt = parse(end)
+            # Normalise to the parsed instant where possible, else keep the raw string
+            start_key = start_dt if start_dt is not None else start
+            end_key = end_dt if end_dt is not None else end
+            in_progress = start_dt is not None and end_dt is not None and start_dt <= now_utc < end_dt
+            if in_progress:
+                # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
+                car_signature.append(("active", end_key, source, location))
+            else:
+                car_signature.append((start_key, end_key, energy(slot.get("charge_in_kwh", slot.get("kwh"))), source, location))
+        signature.append(tuple(car_signature))
+    return tuple(signature)
+
+
 class OctopusEnergyApiClient:
     """Low-level async HTTP client for Octopus Energy REST and GraphQL APIs.
 
@@ -553,15 +621,24 @@ class OctopusAPI(ComponentBase):
         self.token_mint_blocked_until = None
         self.token_mint_block_count = 0
         self.token_mint_backoff_logged_at = None
+        # Set by async_read_response() when a GraphQL response is a rate limit, so the retry loop does not re-read it
+        self.last_read_rate_limited = False
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        # Signature of the dispatches last published, so a poll that changes them can request a replan
+        self.intelligent_dispatch_signature = None
         # Active device IDs automatic_config() last wired the car slots to - None until it has run.
         # run() compares this against the live set so a device appearing, disappearing or being
         # suspended re-wires the slots without waiting for a restart (issue #4648).
         self.intelligent_config_devices = None
+        # Who held the car slots when automatic_config() last ran, so run() re-wires them when that changes
+        self.intelligent_config_owner = None
+        # The slot entities automatic_config() last wired the car slots to, so it only ever clears wiring
+        # that is still its own - None until it has wired any
+        self.intelligent_config_slots = None
         self.tariff_fetched_at = None
         self.device_fetched_at = None
         self.sensor_updated_at = None
@@ -695,6 +772,19 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: Live intelligent devices changed from {} to {}, reconfiguring car slots".format(self.intelligent_config_devices, active_devices))
                 self.automatic_config(self.tariffs)
                 self.refresh_discovery()
+            elif sensor_due and getattr(self.base, "car_slot_owner", None) != self.intelligent_config_owner:
+                slot_owner = getattr(self.base, "car_slot_owner", None)
+                if self.car_slots_released_to_us(slot_owner, active_devices):
+                    # Another component has given the car slots up - the Ohme component does once it
+                    # finds Octopus Intelligent is driving the car and not the charger (#5402). The
+                    # device set has not moved, so nothing else would wire them
+                    self.log("OctopusAPI: Car slots released by the {} component, reconfiguring car slots".format(self.intelligent_config_owner))
+                    self.automatic_config(self.tariffs)
+                    self.refresh_discovery()
+                else:
+                    # Taken by another component, or given up with nothing here to wire them to: note
+                    # the owner and leave the wiring to whoever has it
+                    self.intelligent_config_owner = slot_owner
 
         # Unconditional and outside the "if self.automatic:" block above (unlike the two calls
         # inside it, which exist only to refresh the report in the SAME cycle a wiring change
@@ -1085,6 +1175,22 @@ class OctopusAPI(ComponentBase):
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
+    def car_slots_released_to_us(self, slot_owner, active_devices):
+        """
+        Has another component given up the car slots for this one to wire to its own dispatches.
+
+        Only when there is something to wire them to: a live, non-suspended Intelligent device on a
+        tariff that is still Intelligent. A component also lets go when there are no dispatches to
+        be had from anyone - every device suspended, or the tariff no longer Intelligent, where
+        self.intelligent_devices is not refreshed and still holds the old device - and has then
+        wired the slots to something of its own, which must not be overwritten or cleared (#5405 review).
+        """
+        if slot_owner and slot_owner != "octopus":
+            return False
+        if not active_devices:
+            return False
+        return self.is_intelligent_go_tariff(self.tariffs.get("import", {}).get("tariffCode"))
+
     def get_active_intelligent_device_ids(self):
         """
         Return the sorted list of live intelligent device IDs that are not suspended.
@@ -1217,7 +1323,7 @@ class OctopusAPI(ComponentBase):
         # Default saving session rate in octopoints/kWh
         # octopus_saving_session_rate is in p/kWh, convert to octopoints
         octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)
-        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100)  # 100p/kWh default
+        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100.0)  # 100p/kWh default
         default_octopoints = default_rate_pence * octopoints_per_penny
 
         if not has_joined:
@@ -1375,20 +1481,31 @@ class OctopusAPI(ComponentBase):
                 slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
                 ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
                 limit_list.append(self.get_entity_name("number", "intelligent_target_soc", index=index_suffix))
-            self.set_arg("octopus_intelligent_slot", slot_list)
-            self.set_arg("octopus_ready_time", ready_list)
-            self.set_arg("octopus_charge_limit", limit_list)
-            # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
-            num_cars = self.get_arg("num_cars", 0)
-            if num_cars < len(active_devices):
-                self.set_arg("num_cars", len(active_devices))
-            if active_devices:
-                self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
+            # With no active device left the wiring is cleared - but only wiring that is still what
+            # was put there from here. The slots are not claimed while nothing owns them, so another
+            # component may have wired them to something of its own since: the Ohme component does,
+            # to the charger's own schedule, when the device it was following is suspended
+            current_slots = self.get_arg("octopus_intelligent_slot", default=None, indirect=False)
+            if not active_devices and (not self.intelligent_config_slots or current_slots != self.intelligent_config_slots):
+                self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
-                self.log("OctopusAPI: No active intelligent devices remain, cleared the car slot wiring")
+                self.set_arg("octopus_intelligent_slot", slot_list)
+                self.set_arg("octopus_ready_time", ready_list)
+                self.set_arg("octopus_charge_limit", limit_list)
+                self.intelligent_config_slots = slot_list
+                # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
+                num_cars = self.get_arg("num_cars", 0)
+                if num_cars < len(active_devices):
+                    self.set_arg("num_cars", len(active_devices))
+                if active_devices:
+                    self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
+                else:
+                    self.log("OctopusAPI: No active intelligent devices remain, cleared the car slot wiring")
 
         # Record the device set this wiring was built for so run() can spot it changing later
         self.intelligent_config_devices = self.get_active_intelligent_device_ids()
+        # And who held the car slots, so run() can wire them once another component lets go of them
+        self.intelligent_config_owner = slot_owner
 
     def _current_standing_charge_p(self, direction):
         """
@@ -2044,14 +2161,16 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: Aborting retry loop due to shutdown")
                 return None
 
+            self.last_read_rate_limited = False
             data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
             if data_as_json is not None:
                 return data_as_json
             else:
-                # 401/403 are definitive for this response. aiohttp caches the body, so
-                # re-reading the same response cannot change the outcome - it would only
-                # duplicate log lines and sleep through the backoff for nothing.
-                if response.status in [401, 403]:
+                # 401/403 and a rate limit (KT-CT-1199) are definitive for this response. aiohttp
+                # caches the body, so re-reading the same response cannot change the outcome - it
+                # would only duplicate log lines and sleep through the backoff for nothing (a
+                # rate-limited request logged five warnings and stalled ~35s before giving up).
+                if response.status in [401, 403] or self.last_read_rate_limited:
                     self.failures_total += 1
                     return None
                 if attempt < max_retries - 1:
@@ -2091,7 +2210,8 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: OctopusAPI: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        # Check for rate limit errors - these should return None immediately (no retry)
+        # Check for rate limit errors - these return None immediately, and async_read_response_retry()
+        # does not re-read them (last_read_rate_limited): re-reading the same response cannot help
         if ("graphql" in url) and data_as_json and ("errors" in data_as_json):
             for error in data_as_json.get("errors", []):
                 error_code = error.get("extensions", {}).get("errorCode")
@@ -2099,9 +2219,7 @@ class OctopusAPI(ComponentBase):
                     msg = f'Warn: OctopusAPI: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
                     record_api_call("octopus", False, "rate_limit")
-                    # Don't sleep if shutting down
-                    if not self.api_stop:
-                        await asyncio.sleep(5)  # Sleep briefly to avoid hammering
+                    self.last_read_rate_limited = True
                     return None
 
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
@@ -2458,20 +2576,7 @@ class OctopusAPI(ComponentBase):
                                 # Genuine charging is still cached below via the metered completedDispatches feed
                                 # (location=AT_HOME).
                                 #
-                                # If the slot is already in progress, trim the elapsed portion before appending: advance
-                                # its start to now and scale charge_in_kwh to the remaining time. decode_octopus_slot does
-                                # not trim a started slot when charge_in_kwh > 0, so without this the already-delivered
-                                # energy would be double counted, inflating predicted car SoC/cost for the active window.
-                                start_date_time = parse_date_time(start)
-                                end_date_time = parse_date_time(end)
-                                if start_date_time and end_date_time and start_date_time < self.now_utc_exact < end_date_time:
-                                    total_minutes = (end_date_time - start_date_time).total_seconds() / 60
-                                    remaining_minutes = (end_date_time - self.now_utc_exact).total_seconds() / 60
-                                    if total_minutes > 0:
-                                        if delta is not None:
-                                            delta = dp4(delta * remaining_minutes / total_minutes)
-                                            dispatch["charge_in_kwh"] = delta
-                                        dispatch["start"] = self.now_utc_exact.strftime(DATE_TIME_STR_FORMAT)
+                                self.trim_started_dispatch(dispatch, self.now_utc_exact)
                                 planned.append(dispatch)
                             for completedDispatch in completedDispatches:
                                 start = completedDispatch.get("start", None)
@@ -2496,6 +2601,23 @@ class OctopusAPI(ComponentBase):
                                         break
                                 if not found:
                                     completed.append(dispatch)
+                        else:
+                            # The dispatch query failed (e.g. rate limited). Keep the last known planned dispatches,
+                            # as a failed settings query keeps its settings: publishing an empty list dropped the car's
+                            # slots and dispatch rates until the next poll, and the change requested a replan without them.
+                            # Planned dispatches are never pruned, so drop any that have ended since, and re-trim the one
+                            # in progress so the energy delivered since the last poll is not counted again.
+                            now = self.now_utc_exact
+                            planned = []
+                            for cached in self.intelligent_devices.get(IntelligentdeviceID, {}).get("planned_dispatches", []):
+                                cached_end = parse_date_time(cached.get("end"))
+                                if cached_end and cached_end <= now:
+                                    continue
+                                dispatch = dict(cached)
+                                self.trim_started_dispatch(dispatch, now)
+                                planned.append(dispatch)
+                            if planned:
+                                self.log("Warn: OctopusAPI: Dispatch fetch failed for intelligent device {}, reusing the last known planned dispatches".format(IntelligentdeviceID))
 
                         # Sort by start time
                         planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
@@ -2513,15 +2635,39 @@ class OctopusAPI(ComponentBase):
                 return None
         return results
 
+    def trim_started_dispatch(self, dispatch, now):
+        """
+        Trim the elapsed portion of a planned dispatch that is already in progress at now: advance its start
+        to now and scale charge_in_kwh to the remaining time. decode_octopus_slot does not trim a started slot
+        when charge_in_kwh > 0, so without this the already-delivered energy would be double counted,
+        inflating predicted car SoC/cost for the active window.
+
+        Also used on a cached dispatch reused after a failed fetch: its start was already advanced to the
+        previous poll and its energy scaled to match, so the same proportion trims it again correctly.
+        """
+        start_date_time = parse_date_time(dispatch.get("start"))
+        end_date_time = parse_date_time(dispatch.get("end"))
+        if start_date_time and end_date_time and start_date_time < now < end_date_time:
+            total_minutes = (end_date_time - start_date_time).total_seconds() / 60
+            remaining_minutes = (end_date_time - now).total_seconds() / 60
+            if total_minutes > 0:
+                delta = dispatch.get("charge_in_kwh")
+                if delta is not None:
+                    dispatch["charge_in_kwh"] = dp4(delta * remaining_minutes / total_minutes)
+                dispatch["start"] = now.strftime(DATE_TIME_STR_FORMAT)
+
     async def async_intelligent_update_sensor(self, account_id):
         """
         Update the intelligent device sensor
         """
         intelligent_devices = self.get_intelligent_devices()
         if not intelligent_devices:
+            # The last car going removes its dispatches, which the plan must pick up
+            self.intelligent_dispatch_replan_check([])
             return
 
-        for device_id in intelligent_devices:
+        dispatch_slots = []
+        for device_id in sorted(intelligent_devices):
             device = intelligent_devices[device_id]
             device_index = self.device_id_to_index_suffix(device_id)
             planned = device.get("planned_dispatches", [])
@@ -2538,6 +2684,7 @@ class OctopusAPI(ComponentBase):
                         active_event = True
             dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **device}
             self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=device_index), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+            dispatch_slots.append(planned + completed)
 
             weekday_target_time = device.get("weekday_target_time", None)
             weekday_target_soc = device.get("weekday_target_soc", None)
@@ -2556,6 +2703,37 @@ class OctopusAPI(ComponentBase):
                 self.get_entity_name("select", "intelligent_target_time", index=device_index), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus"
             )
             self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc", index=device_index), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
+
+        self.intelligent_dispatch_replan_check(dispatch_slots)
+
+    def intelligent_dispatch_replan_check(self, dispatch_slots):
+        """
+        Request a replan when the dispatches, one list per device, differ from the last poll's.
+
+        Nothing else starts a plan cycle when they change - fetch only compares them once a cycle is already
+        running, so a new or withdrawn dispatch waited up to 5 minutes (or relied on the entity being on the
+        watch list). Only dispatches still to end count: completed records arriving, up to an hour after a
+        dispatch, and the 5-day prune cannot change the plan ahead. The first poll after startup is not
+        compared, as that cycle runs anyway. A future dispatch's energy counts only as unknown, some or none
+        (include_energy=False): a revised amount is left to the next scheduled cycle rather than replanning
+        on every poll.
+        """
+        now = self.now_utc_exact
+        upcoming = []
+        for slots in dispatch_slots:
+            device_slots = []
+            for slot in slots:
+                try:
+                    ended = parse_date_time(slot.get("end")) <= now
+                except (ValueError, TypeError, AttributeError):
+                    ended = False
+                if not ended:
+                    device_slots.append(slot)
+            upcoming.append(device_slots)
+        signature = dispatch_slots_signature(upcoming, now, include_energy=False)
+        if self.intelligent_dispatch_signature is not None and signature != self.intelligent_dispatch_signature:
+            self.request_replan("Octopus Intelligent dispatches changed")
+        self.intelligent_dispatch_signature = signature
 
     async def async_get_account(self, account_id):
         """
@@ -2938,24 +3116,6 @@ class Octopus:
         pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
-    def add_now_to_octopus_slot(self, car_n, octopus_slots, now_utc):
-        """
-        For intelligent charging, add in if the car is charging now as a low rate slot (workaround for Ohme)
-        """
-        if car_n < len(self.car_charging_now) and self.car_charging_now[car_n]:
-            minutes_start_slot = int(self.minutes_now / 30) * 30
-            minutes_end_slot = minutes_start_slot + 30
-            slot_start_date = self.midnight_utc + timedelta(minutes=minutes_start_slot)
-            slot_end_date = self.midnight_utc + timedelta(minutes=minutes_end_slot)
-            slot = {}
-            slot["start"] = slot_start_date.strftime(TIME_FORMAT)
-            slot["end"] = slot_end_date.strftime(TIME_FORMAT)
-            slot["source"] = "car_charging_now"
-            slot["kwh"] = self.car_charging_rate[car_n] * 30 / 60  # Scale to 30 minute slot
-            octopus_slots.append(slot)
-            self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
-        return octopus_slots
-
     def octopus_slots_signature(self, octopus_slots):
         """
         Build a single change-detection signature value for the intelligent dispatch slots.
@@ -2974,36 +3134,7 @@ class Octopus:
         the stable fields (window end, source, location); genuine changes - new/removed slots, a
         moved window end, a revised future slot, a future slot becoming active - still alter it.
         """
-        signature = []
-        for car_slots in octopus_slots:
-            car_signature = []
-            for slot in car_slots:
-                start = slot.get("start")
-                end = slot.get("end")
-                source = slot.get("source")
-                location = slot.get("location")
-                start_dt = self._parse_slot_time(start)
-                end_dt = self._parse_slot_time(end)
-                # Normalise to the parsed instant where possible, else keep the raw string
-                start_key = start_dt if start_dt is not None else start
-                end_key = end_dt if end_dt is not None else end
-                in_progress = start_dt is not None and end_dt is not None and start_dt <= self.now_utc < end_dt
-                if in_progress:
-                    # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
-                    car_signature.append(("active", end_key, source, location))
-                else:
-                    car_signature.append((start_key, end_key, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
-            signature.append(tuple(car_signature))
-        return tuple(signature)
-
-    def _parse_slot_time(self, value):
-        """Parse a slot timestamp string into a datetime, returning None if empty or unparseable."""
-        if not value:
-            return None
-        try:
-            return str2time(value)
-        except (ValueError, TypeError):
-            return None
+        return dispatch_slots_signature(octopus_slots, self.now_utc)
 
     def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
         """
@@ -3175,13 +3306,16 @@ class Octopus:
         rate_max_base. That is deliberate: Octopus's 6-hour guarantee is a daily allowance and a
         completed dispatch consumes it like any other.
 
-        :param source: Dispatch source, e.g. smart-charge, bump-charge or BOOST
+        :param source: Dispatch source, e.g. smart-charge, bump-charge, BOOST or charger-schedule
         :param location: Dispatch location label - AT_HOME, AWAY, UNABLE_TO_IDENTIFY or blank
         :param end_minutes: Dispatch end time in minutes from midnight
         :return: True if the dispatch is eligible for the off-peak rate
         """
         # Ignore bump-charge slots as their cost won't change
         if source == "bump-charge" or source == "BOOST":
+            return False
+        # A charger's own schedule on a tariff with no dispatch rate: car load only, never a cheap slot
+        if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
             return False
         if end_minutes <= self.minutes_now:
             return True
@@ -3428,6 +3562,72 @@ class Octopus:
         self.dispatch_unconfirmed_last[car_n] = dedup_key
         self.log("Octopus: Note: car {} dispatch active at {} but the car is not charging - import in this slot may be billed at the full rate, needs reconciling against the bill (GH#5080)".format(car_n, self.time_abs_str(slot)))
 
+    def split_slot_by_rate(self, start_minutes, end_minutes, kwh):
+        """
+        Split a car slot wherever the import rate changes, as (start, end, kwh, rate) chunks.
+
+        For a slot billed at the normal tariff rate rather than a dispatch rate - a charger's own
+        schedule (see DISPATCH_SOURCE_CHARGER_SCHEDULE). Such a session commonly runs for hours and
+        crosses rate bands, so pricing all of it at the rate it starts on would give the car a rate
+        of its own that differs from the house rate for the rest of the slot (car_charge_slot_rate()).
+        kWh is apportioned to each chunk by its share of the slot's duration.
+        """
+        span = end_minutes - start_minutes
+        if span <= 0:
+            return []
+        chunks = []
+        chunk_start = start_minutes
+        rate = self.rate_import.get(start_minutes, self.rate_min_base)
+        for minute in range(start_minutes + 1, end_minutes):
+            minute_rate = self.rate_import.get(minute, rate)
+            if minute_rate != rate:
+                chunks.append((chunk_start, minute, kwh * (minute - chunk_start) / span, rate))
+                chunk_start = minute
+                rate = minute_rate
+        chunks.append((chunk_start, end_minutes, kwh * (end_minutes - chunk_start) / span, rate))
+        return chunks
+
+    def reprice_charger_schedule_slots(self):
+        """
+        Price the charger schedule slots in the car plan against this cycle's import rates.
+
+        load_octopus_slots() runs before the rates are built - the Intelligent dispatches it reads are
+        what the rates are built from - so it can only price a slot on the previous cycle's rate_import:
+        empty on the first cycle after a restart, a day out on the first after midnight, and behind
+        whenever new rates arrive. An Intelligent slot does not care, it is priced at the dispatch
+        rate. A charger schedule is priced at the tariff, so each of its slots is split and priced
+        again here, once the rates are known.
+
+        Done in place rather than by building the slots again, so that what dynamic_load_car_check()
+        has cancelled in between stays cancelled.
+        """
+        for car_n in range(min(self.num_cars, len(self.car_charging_slots))):
+            slots = self.car_charging_slots[car_n]
+            if not any(slot.get("tariff_rate", False) for slot in slots):
+                continue
+            new_slots = []
+            for slot in slots:
+                span = slot["end"] - slot["start"]
+                if not slot.get("tariff_rate", False) or span <= 0:
+                    new_slots.append(slot)
+                    continue
+                kwh_left = slot["kwh"]
+                for chunk_start, chunk_end, chunk_kwh, rate in self.split_slot_by_rate(slot["start"], slot["end"], slot["kwh"]):
+                    kwh_left -= chunk_kwh
+                    new_slot = slot.copy()
+                    new_slot["start"] = chunk_start
+                    new_slot["end"] = chunk_end
+                    new_slot["kwh"] = chunk_kwh
+                    new_slot["average"] = rate
+                    new_slot["cost"] = dp2(rate * chunk_kwh)
+                    if "soc" in slot:
+                        # The slot's own figure is the car at its end, so each part stops short by what follows it
+                        new_slot["soc"] = dp2(max(slot["soc"] - max(kwh_left, 0) * self.car_charging_loss, 0))
+                    if "kwh_cancelled" in slot:
+                        new_slot["kwh_cancelled"] = slot["kwh_cancelled"] * (chunk_end - chunk_start) / span
+                    new_slots.append(new_slot)
+            self.car_charging_slots[car_n] = new_slots
+
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
         Turn octopus slots into charging plan
@@ -3505,7 +3705,11 @@ class Octopus:
             # approximation (real draw isn't perfectly uniform across the slot) but matches how
             # rate_add_io_slots() below treats rate as uniform per 30-min block too.
             chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
-            if octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
+            # Marked so reprice_charger_schedule_slots() can find them again once this cycle's rates are built
+            charger_schedule = source == DISPATCH_SOURCE_CHARGER_SCHEDULE
+            if charger_schedule:
+                chunks = self.split_slot_by_rate(start_minutes, end_minutes, kwh)
+            elif octopus_slot_low_rate and self.dispatch_billed_off_peak(source, location, end_minutes):
                 slot_block_start = (start_minutes // 30) * 30
                 num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
                 day_offset = (start_minutes - 720) // (24 * 60)
@@ -3538,6 +3742,14 @@ class Octopus:
                 # Emission is future-only, so dispatch_billed_off_peak()'s completed-dispatch exemption
                 # (#4946) can never apply here - a plain location test is equivalent and is kept as-is.
                 if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
+                    if octopus_intelligent_consider_full and start_minutes < self.minutes_now:
+                        # A dispatch in progress: only its remaining span and energy are still to come, so cap the
+                        # car's need from now, not from the dispatch's original start. The Octopus API component
+                        # already trims a running dispatch (trim_started_dispatch()); octopus_intelligent_slot doesn't.
+                        # Done after the slot-cap chunking above, which counts the dispatch from its real start.
+                        kwh = kwh * (end_minutes - self.minutes_now) / (end_minutes - start_minutes)
+                        kwh_original = kwh
+                        start_minutes = self.minutes_now
                     kwh_expected = kwh * self.car_charging_loss
                     if octopus_intelligent_consider_full:
                         kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
@@ -3559,6 +3771,8 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
+                        if charger_schedule:
+                            new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
 
                         if end_minutes_original > end_minutes:
@@ -3570,6 +3784,8 @@ class Octopus:
                             new_slot["cost"] = 0.0
                             new_slot["soc"] = dp2(car_soc)
                             new_slot["octopus"] = True
+                            if charger_schedule:
+                                new_slot["tariff_rate"] = True
                             new_slots.append(new_slot)
 
                     else:
@@ -3582,6 +3798,8 @@ class Octopus:
                         new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
+                        if charger_schedule:
+                            new_slot["tariff_rate"] = True
                         new_slots.append(new_slot)
         return new_slots
 
@@ -3601,6 +3819,10 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
+        # Dynamic load has seen this car in its slot but not charging: none of its dispatches from now
+        # on get the cheap rate (see dynamic_load_car_check()). Elapsed minutes keep theirs - they record
+        # what the tariff charged, and today's cost is built from them. None when the car is not cancelled.
+        strip_from = self.dynamic_load_car_strip_from(car_n)
 
         if octopus_slots:
             # Add in IO slots
@@ -3623,8 +3845,7 @@ class Octopus:
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
-                    start_minutes = (start_minutes // plan_interval_minutes) * plan_interval_minutes
-                    end_minutes = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
+                    start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes, plan_interval_minutes)
                     start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
                     end_minutes = min(end_minutes, self.forecast_minutes)
 
@@ -3637,6 +3858,12 @@ class Octopus:
                             # the previous cycle's data here. (On main these were the same object, so this
                             # is behaviour-preserving there and simply avoids the staleness this PR adds.)
                             assumed_price = rates.get(start_minutes, self.rate_min)
+
+                        if strip_from is not None and minute >= strip_from:
+                            continue  # Car is not charging, its dispatch is not trusted as cheap
+
+                        if minute in self.octopus_surplus:
+                            continue  # No car needs this dispatch minute, see octopus_surplus_minutes()
 
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
@@ -3662,16 +3889,27 @@ class Octopus:
                         slot_start = (minute // 30) * 30
 
                         # At the start of each 30-min slot, decide if we can add it
+                        apply_rate = False
                         if minute % 30 == 0:
                             if slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
-                                rates[minute] = assumed_price
+                                apply_rate = True
                             else:
                                 assumed_price = self.rate_max_base
                         else:
                             # For minutes within a 30-min slot, only apply if the slot was added
-                            if slot_start in slots_added_set:
+                            apply_rate = slot_start in slots_added_set
+
+                        if apply_rate:
+                            # Mark the minutes this dispatch made cheaper in io_adjusted, as the Octopus Energy
+                            # integration's feed does with is_intelligent_adjusted, so the plan treats them as a
+                            # dispatch that may still move or vanish. A minute already off-peak by tariff is
+                            # certain, so it keeps its own rate and stays unmarked. rate_min_base is rounded by
+                            # dp2 but the tariff feed is not, so allow for that: an off-peak 5.2314p is not
+                            # lowered by the 5.23p dispatch (#5392).
+                            if assumed_price < rates.get(minute, assumed_price) - IO_RATE_TOLERANCE:
+                                self.io_adjusted[minute] = True
                                 rates[minute] = assumed_price
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
@@ -3688,12 +3926,139 @@ class Octopus:
 
         return rates
 
+    def in_iog_fixed_window(self, minute):
+        """
+        Whether minute falls in the fixed 23:30-05:30 Intelligent Go window, cheap by tariff rather than by
+        dispatch, so no dispatch decision ever changes its rate.
+        """
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        window_start = window["start"][0] * 60 + window["start"][1]
+        window_end = window["end"][0] * 60 + window["end"][1]
+        minute_of_day = minute % (24 * 60)
+        return minute_of_day >= window_start or minute_of_day < window_end
+
+    def octopus_surplus_from(self):
+        """
+        The first minute the car-need gate can withhold: the half hour after the current one, as the car may
+        already have charged in the current one, making the whole period cheap.
+        """
+        return (self.minutes_now // 30 + 1) * 30
+
+    def octopus_surplus_changed(self, previous):
+        """
+        Whether this cycle's surplus differs from the previous cycle's, so the plan must be recomputed. Only the
+        part of the previous surplus still ahead is compared, so time passing alone isn't a change.
+        """
+        start = self.octopus_surplus_from()
+        return {minute for minute in previous if minute >= start} != self.octopus_surplus
+
+    def octopus_surplus_minutes(self):
+        """
+        Future Octopus Intelligent dispatch minutes no car can use, when octopus_intelligent_consider_full is on.
+
+        load_octopus_slots() already ends each car's slots where the car reaches its limit, so a dispatch
+        minute no car still needs is one no car will draw in, and Octopus only bills a dispatch cheap when
+        the car charges in it (#4482). Its cheap rate is withheld from the house battery's plan the same way
+        a cancelled car's is (see dynamic_load_car_strip_feed_rates()).
+
+        Decided per car, then shared, as the rates are shared: a minute stays cheap if any car can still use
+        it before the point that car's own cheap rate ends (dynamic_load_car_strip_from()). A car can use
+        - its needed slots - with kWh left, or kWh kept in kwh_cancelled for a cancelled car. A dispatch in
+          progress is capped from now (see load_octopus_slots()), so this holds mid-dispatch too;
+        - every dispatch, for a car not modelled from its Octopus slots this cycle (e.g. ignored while unplugged).
+
+        Rounded out to whole 30 minute rate periods, from the half hour after the current one (the car may have
+        charged earlier in it, making the whole period cheap) and outside the fixed window.
+        """
+        if not self.octopus_intelligent_consider_full:
+            return set()
+        dispatch_minutes = set()
+        usable_minutes = set()
+        next_period = self.octopus_surplus_from()
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            car_slots = self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []
+            modelled = any(slot.get("octopus", False) for slot in car_slots)
+            strip_from = self.dynamic_load_car_strip_from(car_n)
+            usable_until = strip_from if strip_from is not None else float("inf")
+            for slot in self.octopus_slots[car_n]:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
+                dispatch_minutes.update(range(max(start_minutes, next_period), end_minutes))
+                if not modelled:
+                    usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
+            for slot in car_slots:
+                if slot.get("kwh", 0) > 0 or slot.get("kwh_cancelled", 0) > 0:
+                    start_minutes, end_minutes = round_out_to_period(slot["start"], slot["end"])
+                    usable_minutes.update(range(start_minutes, min(end_minutes, usable_until)))
+        return {minute for minute in dispatch_minutes - usable_minutes if not self.in_iog_fixed_window(minute)}
+
+    def dynamic_load_car_strip_feed_rates(self, rates):
+        """
+        Remove an Octopus Intelligent discount the rate feed itself delivered for a dispatch of a car that
+        dynamic load has cancelled (see dynamic_load_car_check()).
+
+        The feed marks dispatch minutes as is_intelligent_adjusted (self.io_adjusted) and has already
+        lowered their price, so unlike rate_add_io_slots()'s own overlay there is nothing to withhold -
+        the price has to be overwritten. Called before the rates are replicated and snapshotted, so
+        nothing downstream sees the discount.
+
+        A minute is set back to rate_max_base, and loses its io_adjusted marker, only when it is from now
+        onwards, outside the fixed 23:30-05:30 window (cheap by tariff, not by dispatch), covered by a
+        cancelled car's dispatch and not covered by a dispatch of any car still trusted - the rates are
+        shared by every car. The rest of a half hour a cancelled car was seen charging in is still trusted
+        (see dynamic_load_car_strip_from()), whatever another cancelled car's dispatch covers.
+        """
+        cancelled_cars = [car_n for car_n in range(self.num_cars) if self.dynamic_load_car_effective.get(car_n, False)]
+        if (not cancelled_cars and not self.octopus_surplus) or not self.io_adjusted:
+            self.dynamic_load_car_stripped = 0
+            return rates
+
+        # Rounded out to whole 30 minute rate periods: the feed marks and prices whole periods, and
+        # rate_add_io_slots() likewise treats any overlap with a period as the whole period
+        cancelled_minutes = set()
+        trusted_minutes = set()
+        for car_n in range(min(self.num_cars, len(self.octopus_slots))):
+            strip_from = self.dynamic_load_car_strip_from(car_n)
+            for slot in self.octopus_slots[car_n]:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_minutes, end_minutes = round_out_to_period(start_minutes, end_minutes)
+                start_minutes = max(start_minutes, self.minutes_now)
+                if strip_from is None:
+                    trusted_minutes.update(range(start_minutes, end_minutes))
+                else:
+                    trusted_minutes.update(range(start_minutes, min(end_minutes, strip_from)))
+                    cancelled_minutes.update(range(max(start_minutes, strip_from), end_minutes))
+
+        stripped = 0
+        stripped_surplus = 0
+        for minute in sorted((cancelled_minutes - trusted_minutes) | self.octopus_surplus):
+            if not self.io_adjusted.get(minute, False):
+                continue
+            if self.in_iog_fixed_window(minute):
+                continue
+            rates[minute] = self.rate_max_base
+            del self.io_adjusted[minute]
+            stripped += 1
+            if minute in self.octopus_surplus:
+                stripped_surplus += 1
+        # The feed is re-read every cycle, so the same minutes are stripped again each time - log only
+        # when that changes, not every 5 minutes for the length of a cancellation
+        if stripped and stripped != self.dynamic_load_car_stripped:
+            self.log("Octopus Intelligent: removed the dispatch rate from {} minutes - {} of cars {} which are not charging, {} no car needs".format(stripped, stripped - stripped_surplus, cancelled_cars, stripped_surplus))
+        self.dynamic_load_car_stripped = stripped
+        return rates
+
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
         """
         Fetch the Octopus rates from the sensor
 
         :param entity_id: The entity_id of the sensor
-        :param adjust_key: The key use to find Octopus Intelligent adjusted rates
+        :param adjust_key: The key use to find Octopus Intelligent adjusted rates. self.io_adjusted is only
+            replaced when this is given, so a fetch without it (export, gas) keeps the import's markers
         """
         data_all = []
         rate_data = {}
@@ -3758,7 +4123,11 @@ class Octopus:
                 rate_key = "price"
                 from_key = "from"
                 to_key = "till"
-            rate_data, self.io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
+            rate_data, io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
+            # A fetch without adjust_key has no markers to give, so it must not wipe the ones an earlier
+            # import fetch found (#5286)
+            if adjust_key:
+                self.io_adjusted = io_adjusted
 
         return rate_data
 
@@ -3843,7 +4212,8 @@ class Octopus:
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
-            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0)
+            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0.0)
+            join_lead_hours = self.get_arg("octopus_saving_auto_join_lead_hours", 0)
 
             joined_events = []
             available_events = []
@@ -3910,6 +4280,10 @@ class Octopus:
                         if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
                             self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
                             continue
+                        # If a lead hours is set, skip joining session until we are within that many hours of the start time
+                        if join_lead_hours and (start_time - timedelta(hours=join_lead_hours)) > self.now_utc:
+                            self.log("Octopus: Delaying join of saving event code {} {}-{} - not within configured lead hours ({}) of start of event".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), join_lead_hours))
+                            continue
                         if code:  # Join the new Octopus saving event and send an alert if successfully joined
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
@@ -3953,7 +4327,7 @@ class Octopus:
 
             # Default saving session rate for when octopoints_per_kwh is not available
             # (e.g. new flexibility API events that don't report reward rates)
-            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0)
+            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0.0)
 
             if joined_events:
                 for event in joined_events:
