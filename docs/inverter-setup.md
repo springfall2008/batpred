@@ -64,7 +64,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
-   | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
+   | [Victron](#victron) | [Victron GX](https://www.home-assistant.io/integrations/victron_gx/) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -3496,11 +3496,328 @@ rest_command:
 
 ## Victron
 
-This is at an early stage of development, see GitHub discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
+There is no Victron inverter type in Predbat yet. A Victron MultiPlus-II or Quattro with a Cerbo GX (Venus OS) running the ESS assistant can still be controlled, using Home Assistant to translate what Predbat wants into Cerbo settings.
+Background and the discussion behind this section: [#798](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846).
 
-The Victron inverter type is configured with `has_charge_enable_time: false` and `has_discharge_enable_time: false` (only `has_target_soc: true`) - Predbat has no way to enable or disable a charge/discharge window on a Victron/Cerbo system, in any Predbat mode. All it can do is write a target SoC percentage.
+Three working routes have been described by users. Pick one:
 
-This means Predbat can only actually cause charging or discharging if a charge/discharge schedule is already permanently enabled on the Victron/Cerbo side (e.g. covering all day, or whatever hours you want available) - Predbat then just moves the target SoC up or down within that always-open window: raising the target causes charging, lowering it causes discharging, and leaving it at the current SoC holds. There's currently no way to have Predbat also switch a schedule on and off for you.
+| Route | What Predbat drives | Predbat sees | Suits |
+| ----- | ------------------- | ------------ | ----- |
+| [A. Target SoC](#victron-route-a-target-soc) (template [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml)) | ESS minimum SoC and max charge current, via two helpers | SK base type, target SoC in %, charge rate in A | the simplest set-up; no forced battery export |
+| [B. Grid setpoint and ESS limits](#victron-route-b-grid-setpoint-and-ess-limits) | AC power setpoint, ESS max charge and inverter power | a custom type with charge/discharge services | full charge, discharge and freeze modes |
+| [C. Follow predbat.status](#victron-route-c-follow-predbatstatus) | AC setpoint, max charge current, max inverter power | its own status, mirrored by Node-RED | those who prefer Node-RED flows |
+
+The idea behind freeze export is the same in all three: **block battery charging and leave everything else open.** The battery then covers the house load, while solar surplus goes to the grid instead of into the battery. Routes A and C do this with the ESS max charge current, route B with the ESS max charge power limit (see the note under route A on why the current may be the safer choice).
+
+Route A is the one the template implements, and is described in full below. Routes B and C were contributed in [#2846](https://github.com/springfall2008/batpred/issues/2846) by their users and are summarised from there.
+
+### Victron: before you start (all routes)
+
+- **ESS mode: Optimised (without BatteryLife)** - `select.gx_device_ess_mode` = `optimized_no_battery_life`. In *Optimised with BatteryLife* the minimum SoC you write is only a lower bound: the Cerbo keeps its own, moving **Active SoC limit** next to it and that is what applies. Your written value reads back unchanged, so nothing looks wrong, but the battery may stop discharging at 75-80% in the evening. Put the Active SoC limit sensor next to the ESS minimum SoC on a dashboard: as long as the two move together, Predbat is in control.
+- **Dynamic ESS off** (`select.gx_device_dess_mode`), otherwise two optimisers fight over the same settings.
+- **Predbat mode: *Control charge* or *Control charge & discharge*** - not *Control SOC only*. With no charge window to open, *Control SOC only* never sets a charge target and nothing charges ([#4337](https://github.com/springfall2008/batpred/issues/4337)). *Control charge & discharge* is needed for freeze export.
+- **Load sensor**: Venus OS assumes the MultiPlus is on L1. On a multi-phase supply with the MultiPlus on another phase, the Victron per-phase consumption figures are wrong (totals are right). Give Predbat a `load_power` you calculate yourself, e.g. grid + PV + battery AC power.
+- **Settings stay written.** Whatever Home Assistant writes to the Cerbo stays there when Predbat or Home Assistant stops: a minimum SoC left at 80% means no discharging, a charge current left at 0 means no charging from solar, a setpoint left at 24,000 W means charging from the grid all day. Whichever route you choose, build in a fallback to a safe state when Predbat stops calculating (route A below shows one).
+
+### Victron route A: target SoC
+
+On a Victron ESS the **minimum SoC is also the charge target**. Raise it above the current SoC and the MultiPlus charges from the grid up to that level and holds it; lower it and the battery may discharge again. No charge schedule needs to be enabled on the Cerbo for this. Predbat only has to write one percentage, plus a charge current of 0 for freeze export.
+
+#### Victron route A: apps.yaml
+
+Copy [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) over your `apps.yaml` and edit it for your system. The key points:
+
+- `inverter_type: SK` - borrowed because the Sunsynk capability profile matches a Victron ESS (no charge or discharge window, target SoC only, charge control in amps). It does not mean Predbat thinks you have a Sunsynk.
+- An `inverter:` block that turns **`support_charge_freeze` and `support_discharge_freeze`** back on. The SK profile has both disabled, and Predbat then switches freeze charge and freeze export off every cycle, whatever you set in Home Assistant. The only trace is in the log: *Inverter does not support discharge freeze - disabled*. Check the log for that line after every Predbat update.
+- `charge_limit`, `timed_charge_current` and `timed_discharge_current` point at **helpers, not at the Cerbo**. Predbat's `reset_inverter()` writes a target of 100% on every start and every change of `select.predbat_mode` or `switch.predbat_set_read_only`. On most inverters that means "may charge to 100%"; on a Victron it means "never go below 100%". Predbat overwrites it within the same cycle, so with a short delay in between it never reaches the Cerbo.
+- `battery_min_soc` set to the same floor as your ESS settings. Predbat clamps every target to it; the default is 4%.
+- Power limits (`battery_rate_max`, `inverter_limit`) as literal watts.
+
+Create these helpers (Settings, Devices & services, Helpers, Number):
+
+| Helper | Range | Step | Written by | Read by |
+| ------ | ----- | ---- | ---------- | ------- |
+| `input_number.predbat_target_soc` | 0-100 | 1 | Predbat (`charge_limit`) | the target SoC automation below |
+| `input_number.predbat_charge_current_request` | 0-200 | 1 | Predbat (`timed_charge_current`) | the charge current automation below |
+| `input_number.predbat_discharge_current_request` | 0-200 | 1 | Predbat (`timed_discharge_current`) | nothing, it only has to exist |
+
+#### Victron route A: is Predbat running?
+
+The automations below only pass Predbat's values to the Cerbo while Predbat is actually calculating, and fall back to a safe state otherwise. Create a template sensor helper (Settings, Devices & services, Helpers, Template, Sensor) called **Predbat state**, giving `sensor.predbat_state`:
+
+```jinja
+{%- set s = states.predbat.status -%}
+{%- set ls = as_datetime(states('predbat.last_started')) -%}
+{%- if s is none or ls is none -%}unknown
+{%- elif s.last_updated < ls -%}{{ 'stalled' if (now() - ls).total_seconds() > 900 else 'restarting' }}
+{%- elif (now() - s.last_updated).total_seconds() > 900 -%}stalled
+{%- else -%}ready
+{%- endif -%}
+```
+
+- **ready** - `predbat.status` was updated after the last start (the first cycle has finished) and is less than 15 minutes old. It is updated every cycle (5 minutes), so 15 minutes is three missed cycles.
+- **restarting** - Predbat has started but not finished a cycle.
+- **stalled** - no update for 15 minutes, or a restart that has not finished a cycle within 15 minutes.
+- **unknown** - the `predbat.*` entities do not exist. Predbat creates them over the API, so they are missing for a short while after a Home Assistant restart.
+
+#### Victron route A: target SoC to ESS minimum SoC
+
+Copies the target to the Cerbo once it has been stable for a minute, which keeps the transient 100% from `reset_inverter()` away. It rewrites the value every 5 minutes (writing the same value is harmless), so a missed trigger or a restart cannot leave a wrong value behind. Clamped between 10 and 100: change both numbers to your own floor.
+
+```yaml
+alias: Predbat target SoC to Victron ESS minimum SoC
+description: Translates Predbat's target SoC into the Cerbo ESS minimum SoC, with a safe state when Predbat is not running
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: input_number.predbat_target_soc
+    for:
+      minutes: 1
+  - trigger: time_pattern
+    minutes: /5
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to:
+      - restarting
+      - stalled
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: ready
+    for:
+      minutes: 1
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: unknown
+    for:
+      minutes: 15
+actions:
+  - choose:
+      - alias: Predbat entities missing for 15 minutes - release the battery
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+            for:
+              minutes: 15
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_min_soc_limit
+            data:
+              value: 10
+      - alias: Predbat entities not back yet (e.g. after an HA restart) - keep the last value
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+        sequence:
+          - stop: Waiting for Predbat
+      - alias: Predbat restarting or stalled - release the battery
+        conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.predbat_state
+                state: ready
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_min_soc_limit
+            data:
+              value: 10
+      - alias: Ready for less than a minute, or target not yet stable - wait
+        conditions:
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: sensor.predbat_state
+                    state: ready
+                    for:
+                      minutes: 1
+              - condition: template
+                value_template: "{{ (now() - states.input_number.predbat_target_soc.last_changed).total_seconds() < 60 }}"
+        sequence:
+          - stop: Not stable yet
+    default:
+      - action: number.set_value
+        target:
+          entity_id: number.gx_device_ess_min_soc_limit
+        data:
+          value: "{{ [[states('input_number.predbat_target_soc') | float(10) | round(0) | int, 10] | max, 100] | min }}"
+```
+
+If your ESS is not in *Optimised (without BatteryLife)*, the Cerbo may silently ignore values that are not a multiple of 5. Fix the ESS mode rather than rounding (see above).
+
+#### Victron route A: freeze export through the charge current
+
+During a freeze slot Predbat writes 0 to `timed_charge_current`. This automation sets `number.gx_device_ess_max_charge_current` to 0 for that, and to -1 (unlimited) for any other value. The amp value itself is deliberately not passed on: Predbat derives it from `battery_rate_max` and the battery voltage, which would throttle normal charging slightly below what the charger can do.
+
+Why the charge **current** and not `number.gx_device_ess_max_charge_power_limit`: on the system this was tested on (AC-coupled PV), the charge power limit at 0 still let the battery take 285 W of solar surplus; the charge current limit at 0 brought it down to 26 W within a minute. Check with a meter on your own system.
+
+```yaml
+alias: Predbat charge current to Victron max charge current
+description: Translates Predbat's freeze (charge current 0) into the Cerbo max charge current, with a safe state when Predbat is not running
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: input_number.predbat_charge_current_request
+    for:
+      seconds: 30
+  - trigger: time_pattern
+    minutes: /5
+  - trigger: state
+    entity_id: sun.sun
+    to: below_horizon
+    id: sunset
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to:
+      - restarting
+      - stalled
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: ready
+    for:
+      seconds: 30
+  - trigger: state
+    entity_id: sensor.predbat_state
+    to: unknown
+    for:
+      minutes: 15
+actions:
+  - choose:
+      - alias: Sunset - always release (daily safety net)
+        conditions:
+          - condition: trigger
+            id: sunset
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Predbat entities missing for 15 minutes - release
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+            for:
+              minutes: 15
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Predbat entities not back yet - keep the last value
+        conditions:
+          - condition: state
+            entity_id: sensor.predbat_state
+            state: unknown
+        sequence:
+          - stop: Waiting for Predbat
+      - alias: Predbat restarting or stalled - release
+        conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: sensor.predbat_state
+                state: ready
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+      - alias: Ready for less than 30 seconds, or value not yet stable - wait
+        conditions:
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: sensor.predbat_state
+                    state: ready
+                    for:
+                      seconds: 30
+              - condition: template
+                value_template: "{{ (now() - states.input_number.predbat_charge_current_request.last_changed).total_seconds() < 30 }}"
+        sequence:
+          - stop: Not stable yet
+      - alias: Freeze - block charging
+        conditions:
+          - condition: numeric_state
+            entity_id: input_number.predbat_charge_current_request
+            below: 1
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: 0
+      - alias: No freeze - unlimited
+        conditions:
+          - condition: numeric_state
+            entity_id: input_number.predbat_charge_current_request
+            above: 0
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.gx_device_ess_max_charge_current
+            data:
+              value: -1
+```
+
+Measured end to end (Predbat v9.3.3, 1 October 2026): Predbat entered *Freeze exporting* at 10:05:14, the max charge current went to 0 at 10:06:00; Predbat returned to *Demand* at 10:25:13 and the current went back to -1 at 10:25:43.
+
+#### Victron route A: Predbat settings
+
+- To plan freeze export: *Control charge & discharge*, **switch.predbat_set_export_freeze** on, and optionally **switch.predbat_export_more_solar** on.
+- To prevent forced battery export (for example when your export tariff only pays a bonus on solar): set **input_number.predbat_metric_min_improvement_export** high (e.g. 50) and keep **input_number.predbat_metric_min_improvement_export_freeze** low (e.g. 0.1). Forced export then has to gain more than that per slot before it is planned. This is an economic threshold, not a lock.
+- **Do not use switch.predbat_set_read_only** on this route: entering read-only runs `reset_inverter()`, which writes a 100% target ([#5303](https://github.com/springfall2008/batpred/issues/5303)). To stop Predbat steering, turn the two automations off instead.
+
+#### Victron route A: known limitations
+
+- [#5303](https://github.com/springfall2008/batpred/issues/5303) - `reset_inverter()` writes a 100% target, which on a Victron is a minimum. The one-minute delay in the automation above keeps it from the Cerbo.
+- [#5302](https://github.com/springfall2008/batpred/issues/5302) - freeze export with the battery at exactly 100% calls `discharge_stop_service` instead of `discharge_freeze_service`. This route does not use the services, so it is not affected (the charge current of 0 is written as normal); it matters if you build a route on the freeze services.
+- Predbat cannot write the ESS minimum SoC as a reserve; `reserve` in `apps.yaml` only tells Predbat where the floor is.
+- `sensor.gx_device_dc_battery_state` flips between charging and idle every few seconds around zero power; do not use it as a "battery is charging" indicator.
+
+### Victron route B: grid setpoint and ESS limits
+
+Described by @Lanmate in [#2846](https://github.com/springfall2008/batpred/issues/2846) (Cerbo GX, MultiPlus-II 48/15000, AC-coupled PV, Victron GX entity names) and reported working in all modes. Predbat uses a custom inverter type with `charge_start_service`, `charge_stop_service`, `charge_freeze_service`, `discharge_start_service`, `discharge_stop_service` and `discharge_freeze_service`, each calling a script or automation that sets three values. Inverter mode stays *On* and the ESS mode *Optimised (without BatteryLife)* throughout.
+
+| Mode | Service | `number.gx_device_ac_power_setpoint` | `..._ess_max_charge_power_limit` | `..._ess_max_inverter_power_limit` |
+| ---- | ------- | ------------------------------------ | -------------------------------- | ---------------------------------- |
+| Demand | charge / discharge stop | 0 (or a small positive value) | -1 | -1 |
+| Charging | charge start | your supply limit, e.g. 24000 | -1 | -1 |
+| Exporting | discharge start | minus your export limit, e.g. -8500 | -1 | -1 |
+| Freeze charging | charge freeze | 0 | -1 | 0 |
+| Freeze exporting | discharge freeze | 0 | 0 | -1 |
+
+Avoid switching the inverter mode to *Charger only* or *Inverter only* for these modes: *Charger only* leaves the house without power if the grid fails, and each mode change switches relays in the inverter. For freeze exporting, see the note under route A about charge current versus charge power: on some systems a max charge **power** of 0 does not stop charging from AC-coupled solar.
+
+### Victron route C: follow predbat.status
+
+Described by @WesSec in [#2846](https://github.com/springfall2008/batpred/issues/2846): Predbat writes nothing to the inverter, and a Node-RED flow reads `predbat.status` and sets three values. This route does not touch the ESS minimum SoC.
+
+| predbat.status | AC setpoint | Max charge current | Max inverter power |
+| -------------- | ----------- | ------------------ | ------------------ |
+| Charging | e.g. 24000 W | charge limit | 0 |
+| Hold battery | e.g. 50 W | charge limit | 0 |
+| Exporting | minus export limit | 0 | discharge limit |
+| Freeze exporting | e.g. 50 W | 0 | discharge limit |
+| Demand / anything else | e.g. 50 W | charge limit | discharge limit |
+
+Charging is not stopped at a target SoC; Predbat's next calculation changes the status instead. This route allows for more extensive integration, for instance lowering the charge and discharge limits on battery temperature and passing them to Predbat through the [manual API](manual-api.md), so the plan matches the real limits.
 
 ## I want to add an unsupported inverter to Predbat
 

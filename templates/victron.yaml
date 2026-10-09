@@ -1,0 +1,160 @@
+# ------------------------------------------------------------------
+# This is an example configuration, please modify it
+#
+# Victron MultiPlus-II / Quattro with a Cerbo GX (Venus OS), ESS assistant,
+# controlled through the "target SoC" route described in the Victron section
+# of docs/inverter-setup.md. Read that section first: this template does NOT
+# work on its own, it needs two helpers and two Home Assistant automations
+# that translate what Predbat writes into Cerbo settings.
+#
+# Entity names are those of the Home Assistant core "Victron GX" integration
+# (victron_gx) with the Cerbo device left at its default name, giving
+# number.gx_device_*, sensor.gx_device_* and select.gx_device_*.
+# Adjust them if your device or integration is named differently.
+#
+# Tested on: MultiPlus-II 48/5000/70-50, Cerbo GX (Venus OS v3.79),
+# 16 kWh LFP battery with a CAN BMS (DVCC on), AC-coupled PV, single phase,
+# Predbat v9.3.3.
+# ------------------------------------------------------------------
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  # Sets the prefix for all created entities in HA - only change if you want to run more than one instance
+  prefix: predbat
+
+  # Timezone to work in
+  timezone: Europe/London
+
+  # Template configuration - delete this next line once you have modified it
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
+  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or € c
+  currency_symbols:
+    - '£'
+    - 'p'
+
+  # Number of threads to use in plan calculation
+  threads: auto
+
+  # Sets the maximum period of zero load before the gap is filled, default 30 minutes
+  load_filter_threshold: 30
+
+  #
+  # Sensors, more than one can be specified and they will be summed up automatically
+  #
+  # Incrementing kWh sensors. A meter total that never resets (e.g. a P1 / smart meter reading) is fine.
+  load_today:
+    - sensor.house_load_today # your own daily load kWh sensor, see the note on load_power below
+  import_today:
+    - sensor.grid_import_today
+  export_today:
+    - sensor.grid_export_today
+  pv_today:
+    - sensor.pv_energy_today
+
+  num_inverters: 1
+
+  # There is no Victron inverter type in Predbat. SK (Sunsynk) is used as the base type because its
+  # capability profile matches a Victron ESS: no charge or discharge window to open, only a target SoC
+  # to write, and charge control in amps.
+  # Do not leave inverter_type empty: Predbat would then assume a GivEnergy inverter and its limits.
+  inverter_type: SK
+
+  # The SK profile has both freeze capabilities disabled, and Predbat then switches freeze charge and
+  # freeze export off every cycle. Keys in this block override the base profile.
+  # After every Predbat update, check the log does not show "Inverter does not support ... freeze".
+  inverter:
+    name: "Victron MultiPlus-II"
+    support_charge_freeze: true
+    support_discharge_freeze: true
+
+  # Power limits are literal watts. battery_rate_max is the charger limit of the MultiPlus, not the battery
+  # (e.g. 70 A x 51.2 V = 3,580 W for a 48/5000/70-50); inverter_limit is its continuous AC rating.
+  battery_rate_max: 3500
+  inverter_limit: 4000
+  inverter_reserve_max: 100
+
+  # Battery size in kWh, and the floor that matches the minimum SoC you use in the ESS settings
+  soc_max:
+    - 16.0
+  reserve:
+    - 10
+  # Predbat clamps every target SoC it writes to this value. Without it the default is 4%.
+  battery_min_soc:
+    - 10
+
+  # Optional: coldest cell temperature, if your BMS exposes it, plus a charge curve (C rate per °C)
+  #battery_temperature:
+  #  - sensor.battery_minimum_cell_temperature
+  #battery_temperature_charge_curve:
+  #  20: 0.50
+  #  10: 0.30
+  #  5: 0.12
+  #  0: 0.00
+
+  # Power sensors. Mind the signs: Predbat expects battery_power positive when discharging and
+  # grid_power negative when importing - invert where your sensors do the opposite.
+  battery_power:
+    - sensor.gx_device_dc_battery_power
+  battery_power_invert:
+    - true
+  grid_power:
+    - sensor.grid_power # your grid meter, or the Victron grid meter
+  grid_power_invert:
+    - false
+  pv_power:
+    - sensor.pv_power # for AC-coupled PV use the PV inverter's own sensor
+  # Use a load you calculate yourself (grid + PV + battery AC). Venus OS assumes the MultiPlus is on L1:
+  # on a multi-phase supply with the MultiPlus on another phase, its per-phase consumption is wrong.
+  load_power:
+    - sensor.house_load_power
+  soc_percent:
+    - sensor.gx_device_dc_battery_charge
+
+  # **** Start of outputs - these are helpers, NOT Cerbo entities ****
+  #
+  # On a Victron ESS the minimum SoC is also the charge target: raise it above the current SoC and the
+  # MultiPlus charges from the grid up to it and holds; lower it and the battery may discharge again.
+  # Predbat writes its target SoC to a helper, and an automation copies it to
+  # number.gx_device_ess_min_soc_limit (see the docs). Do not point charge_limit at the Cerbo directly:
+  # reset_inverter() briefly writes 100 on every Predbat restart or mode change, which on a Victron means
+  # "never go below 100%".
+  charge_limit:
+    - input_number.predbat_target_soc
+
+  # SK controls in amps. During a freeze slot Predbat writes 0 here; a second automation turns that into
+  # number.gx_device_ess_max_charge_current = 0 (solar surplus goes to the grid instead of the battery),
+  # and -1 (unlimited) for any other value. Both keys must exist, or Predbat reports a write error every cycle.
+  timed_charge_current:
+    - input_number.predbat_charge_current_request
+  timed_discharge_current:
+    - input_number.predbat_discharge_current_request # nothing reads this, it only has to exist
+
+  # **** End of outputs ****
+
+  # Solcast cloud interface via the Solcast integration (recommended)
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # Total DC size of your array in kWp
+  #pv_array_kwp: 9.6
+
+  # Energy rates - set one of these. See the energy rates documentation for all options
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  #metric_octopus_import: 'sensor.your_import_rate'
+  #metric_octopus_export: 'sensor.your_export_rate'
+
+  # Days of history to use for the load prediction
+  days_previous:
+    - 7
+
+  # No car charging. Without this Predbat looks for car charger sensors.
+  num_cars: 0
