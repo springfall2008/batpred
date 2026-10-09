@@ -33,6 +33,10 @@ from const import (
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
     CAR_CHARGING_NOW_POWER_W,
+    CAR_ENERGY_LOAD_CHECK_WINDOW,
+    CAR_ENERGY_LOAD_CHECK_MIN_KWH,
+    CAR_ENERGY_LOAD_CHECK_RATIO,
+    CAR_ENERGY_LOAD_CHECK_WINDOWS,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
@@ -1098,6 +1102,7 @@ class Fetch:
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
+        self.check_car_energy_reported_load()
 
         # Log current values
         self.log("Current data so far today: load {}kWh, import {}kWh, export {}kWh, PV {}kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
@@ -3443,3 +3448,47 @@ class Fetch:
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
+
+    def car_energy_exceeds_load_windows(self):
+        """
+        Count the windows over the last day in which car_charging_energy recorded clearly more than the house load.
+
+        A load sensor that includes the charger can never read less than the charger's own energy over the same window,
+        so each such window is evidence it does not (see CAR_ENERGY_LOAD_CHECK_* in const.py). Both series are the raw
+        incrementing data, indexed in minutes back from now - load_minutes has nothing subtracted from it yet.
+
+        The window in progress is left out: a cloud-polled load sensor can be many minutes behind the charger's, so it
+        reads short there. A window with no load at all is skipped - a house always draws something, so a flat stretch
+        is the load sensor missing data (the history is padded, so missing minutes read as no increment), not evidence.
+        """
+        windows = 0
+        window = CAR_ENERGY_LOAD_CHECK_WINDOW
+        for start in range(window, 24 * 60 + window, window):
+            car_energy = sum(self.get_from_incrementing(self.car_charging_energy, minute) for minute in range(start, start + window))
+            load_energy = sum(self.get_from_incrementing(self.load_minutes, minute) for minute in range(start, start + window))
+            if load_energy > 0 and car_energy >= CAR_ENERGY_LOAD_CHECK_MIN_KWH and car_energy > load_energy * CAR_ENERGY_LOAD_CHECK_RATIO:
+                windows += 1
+        return windows
+
+    def check_car_energy_reported_load(self):
+        """
+        Warn when car_energy_reported_load is On but the load sensor evidently does not include the car charger (GH#5318,
+        from #5317). Warned once, and not again until no window shows it: the windows move with now, so a borderline count
+        can dip below the threshold and back from one cycle to the next.
+
+        With the switch On, Predbat subtracts car_charging_energy from the load history and, for an Octopus Intelligent car
+        without a car_charging_now sensor, reads low house load as the car not charging. Against a load sensor that excludes
+        the charger, the first empties the load history and the second cancels dispatches that are really charging.
+        """
+        windows = 0
+        if self.car_energy_reported_load and self.car_charging_energy and self.load_minutes:
+            windows = self.car_energy_exceeds_load_windows()
+            if windows >= CAR_ENERGY_LOAD_CHECK_WINDOWS and not self.car_energy_reported_load_warned:
+                self.log(
+                    "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor cannot include that charging, "
+                    "but switch.predbat_car_energy_reported_load is On. If car_charging_energy is only the car charger, turn the switch Off, and set car_charging_now to the charger's "
+                    "charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
+                )
+                self.car_energy_reported_load_warned = True
+        if windows == 0:
+            self.car_energy_reported_load_warned = False
