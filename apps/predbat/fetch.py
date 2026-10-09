@@ -1562,7 +1562,8 @@ class Fetch:
                     if car_n < len(self.car_charging_manual_soc) and not self.car_charging_manual_soc[car_n]:
                         self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
                 if rate:
-                    # Take the max as Octopus over reports
+                    # Octopus's figure only ever raises the configured rate, never lowers it. Where Octopus's catalogue
+                    # gives the charger more than one power, the component passes on the lowest (catalogue_value(), #5438)
                     self.log("Car {} rate from Octopus is {}kW and configured rate {}".format(car_n, rate, self.car_charging_rate[car_n]))
                     self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
 
