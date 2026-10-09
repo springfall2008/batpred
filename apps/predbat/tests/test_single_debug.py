@@ -42,18 +42,8 @@ def _dump_state_before_plan(my_predbat, filename):
         json.dump(state, handle, indent=2, sort_keys=True)
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
-    print("**** Running debug test {} ****\n".format(debug_file))
-    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
-    # debug_cases regression suite exercise the same code path and produce the same result.
-    re_do_rates = redo
-    reset_load_model = redo
-    reload_octopus_slots = redo
-    load_override = 1.0
-    my_predbat.load_user_config()
-    failed = False
-
-    print("**** Test {} ****".format(test_name))
+def restore_debug_state(my_predbat, debug_file):
+    """Reset the shared fixture and load a debug yaml into it, leaving it ready to plan from."""
     reset_inverter(my_predbat)
     # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
     # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
@@ -76,6 +66,94 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
     my_predbat.args["threads"] = 0
+
+
+def apply_overrides(my_predbat, overrides):
+    """Set each name=value override on the instance after a debug yaml is restored (--override), rejecting unknown names."""
+    for name, value in (overrides or {}).items():
+        if not hasattr(my_predbat, name):
+            raise ValueError("Unknown setting {} for --override".format(name))
+        print("Override: {} = {} (was {})".format(name, value, getattr(my_predbat, name)))
+        setattr(my_predbat, name, value)
+
+
+def rebuild_load_pv_models(my_predbat, load_override=1.0):
+    """Rebuild the stepped load and PV models from the history and forecasts now held on the instance."""
+    my_predbat.load_minutes_step = my_predbat.step_data_history(
+        my_predbat.load_minutes,
+        my_predbat.minutes_now,
+        forward=False,
+        scale_today=my_predbat.load_inday_adjustment,
+        scale_fixed=my_predbat.load_scaling * load_override,
+        type_load=True,
+        load_forecast=my_predbat.load_forecast,
+        load_scaling_dynamic=my_predbat.load_scaling_dynamic,
+        cloud_factor=my_predbat.metric_load_divergence,
+        load_adjust=my_predbat.manual_load_adjust,
+        load_baseline=my_predbat.dynamic_load_baseline,
+    )
+    my_predbat.load_minutes_step10 = my_predbat.step_data_history(
+        my_predbat.load_minutes,
+        my_predbat.minutes_now,
+        forward=False,
+        scale_today=my_predbat.load_inday_adjustment,
+        scale_fixed=my_predbat.load_scaling10 * load_override,
+        type_load=True,
+        load_forecast=my_predbat.load_forecast,
+        load_scaling_dynamic=my_predbat.load_scaling_dynamic,
+        cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
+        load_adjust=my_predbat.manual_load_adjust,
+        load_baseline=my_predbat.dynamic_load_baseline,
+    )
+    my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
+    my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
+        my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
+    )
+
+
+def rescan_rate_windows(my_predbat):
+    """Re-derive the rate thresholds and the candidate charge/export windows for the instance's current time."""
+    # Set rate thresholds
+    if my_predbat.rate_import or my_predbat.rate_export:
+        print("Set rate thresholds")
+        my_predbat.set_rate_thresholds()
+        print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
+
+    # Find discharging windows
+    if my_predbat.rate_export:
+        my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
+        print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
+        # Update threshold automatically
+        if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
+            my_predbat.rate_export_cost_threshold = export_lowest
+
+    # Find charging windows
+    if my_predbat.rate_import:
+        # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
+        # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
+        # so a debug.yaml replay could never catch a regression in the split)
+        pv_light_dark = my_predbat.calc_pv_light_dark()
+        print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
+        my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
+        # Update threshold automatically
+        if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
+            my_predbat.rate_import_cost_threshold = highest
+
+
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False, overrides=None):
+    print("**** Running debug test {} ****\n".format(debug_file))
+    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
+    # debug_cases regression suite exercise the same code path and produce the same result.
+    re_do_rates = redo
+    reset_load_model = redo
+    reload_octopus_slots = redo
+    load_override = 1.0
+    my_predbat.load_user_config()
+    failed = False
+
+    print("**** Test {} ****".format(test_name))
+    restore_debug_state(my_predbat, debug_file)
+    apply_overrides(my_predbat, overrides)
     # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
@@ -136,31 +214,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Charge scaling 10 {} load scaling 10 {}".format(my_predbat.charge_scaling10, my_predbat.load_scaling10))
 
     if re_do_rates:
-        # Set rate thresholds
-        if my_predbat.rate_import or my_predbat.rate_export:
-            print("Set rate thresholds")
-            my_predbat.set_rate_thresholds()
-            print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
-
-        # Find discharging windows
-        if my_predbat.rate_export:
-            my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
-            print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
-            # Update threshold automatically
-            if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
-                my_predbat.rate_export_cost_threshold = export_lowest
-
-        # Find charging windows
-        if my_predbat.rate_import:
-            # Find charging window - mirrors fetch.py's fetch_sensor_data(), including the dawn
-            # light/dark split (#4699: this reimplementation used to omit pv_light_dark entirely,
-            # so a debug.yaml replay could never catch a regression in the split)
-            pv_light_dark = my_predbat.calc_pv_light_dark()
-            print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
-            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export, pv_light_dark=pv_light_dark)
-            # Update threshold automatically
-            if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
-                my_predbat.rate_import_cost_threshold = highest
+        rescan_rate_windows(my_predbat)
     else:
         print("don't re-do rates")
 
@@ -182,36 +236,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # plan regression when the plans are identical.
     if reset_load_model:
         print("Reset load model")
-        my_predbat.load_minutes_step = my_predbat.step_data_history(
-            my_predbat.load_minutes,
-            my_predbat.minutes_now,
-            forward=False,
-            scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling * load_override,
-            type_load=True,
-            load_forecast=my_predbat.load_forecast,
-            load_scaling_dynamic=my_predbat.load_scaling_dynamic,
-            cloud_factor=my_predbat.metric_load_divergence,
-            load_adjust=my_predbat.manual_load_adjust,
-            load_baseline=my_predbat.dynamic_load_baseline,
-        )
-        my_predbat.load_minutes_step10 = my_predbat.step_data_history(
-            my_predbat.load_minutes,
-            my_predbat.minutes_now,
-            forward=False,
-            scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling10 * load_override,
-            type_load=True,
-            load_forecast=my_predbat.load_forecast,
-            load_scaling_dynamic=my_predbat.load_scaling_dynamic,
-            cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
-            load_adjust=my_predbat.manual_load_adjust,
-            load_baseline=my_predbat.dynamic_load_baseline,
-        )
-        my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
-        my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
-            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
-        )
+        rebuild_load_pv_models(my_predbat, load_override)
 
     pv_step = my_predbat.pv_forecast_minute_step
     pv10_step = my_predbat.pv_forecast_minute10_step

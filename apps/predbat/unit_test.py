@@ -80,6 +80,9 @@ from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
+from tests.replay_forward import replay_forward, summarise, chart_replay, soc_rms_error, parse_override
+from tests.test_replay_forward import run_replay_forward_tests
+from tests.test_dummy_inverter import run_dummy_inverter_tests
 from tests.test_saving_session import (
     test_saving_session,
     test_saving_session_null_octopoints,
@@ -706,6 +709,8 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("dummy_inverter", run_dummy_inverter_tests, "Simulated inverter and battery component (model physics, controls, automatic config)", False),
+        ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
         ("log_replay_inputs", run_log_replay_inputs_tests, "Replay-input log lines (forecasts, rates, plan state, cars, inverter)", False),
         ("memory_release", run_memory_release_tests, "glibc malloc_trim()/arena cap helper tests", False),
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
@@ -804,6 +809,11 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--replay_log", action="store", help="With --debug_file: replay this Predbat log forwards from the debug yaml and compare each re-plan's export windows with the log's")
+    parser.add_argument("--replay_until", action="store", help="With --replay_log: stop the replay at the first HH:MM after the yaml (the next day if that time has passed)")
+    parser.add_argument("--replay_simulate", action="store_true", help="With --replay_log: simulate the battery under the replayed plan from actual PV and load, instead of taking SoC from the log")
+    parser.add_argument("--override", action="append", help="With --debug_file: override a setting after restoring the yaml, as name=value (repeatable), for what-if replays")
+    parser.add_argument("--replay_chart", action="store", help="With --replay_log: also write a PNG chart of SoC and the live vs replayed export plan to this file")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
@@ -895,8 +905,27 @@ def main():
         )
         sys.exit(0)
 
+    overrides = dict(parse_override(text) for text in (args.override or []))
+    if args.debug_file and args.replay_log:
+        rows = replay_forward(my_predbat, args.debug_file, args.replay_log, until=args.replay_until, simulate=args.replay_simulate, overrides=overrides)
+        if args.replay_chart:
+            chart_replay(rows, args.replay_chart, title="Replay of {} from {}".format(os.path.basename(args.replay_log), os.path.basename(args.debug_file)))
+            print("Wrote replay chart to {}".format(args.replay_chart))
+        for after in (False, True):
+            if after and not any(row.get("after_version_change") for row in rows):
+                break
+            label = " after the version change" if after else ""
+            replanned, identical, same_start = summarise(rows, after_version_change=after)
+            print("Replay: adopted plans{} - of {} re-plans, {} identical to the log and {} with the same first export window start".format(label, replanned, identical, same_start))
+            replanned, identical, same_start = summarise(rows, logged="logged_candidate", replayed="replayed_candidate", after_version_change=after)
+            print("Replay: candidate plans{} - of {} re-plans, {} identical to the log and {} with the same first export window start".format(label, replanned, identical, same_start))
+        rms = soc_rms_error(rows)
+        if rms is not None:
+            print("Replay: simulated SoC differs from the logged SoC by {:.2f}% RMS over {} runs".format(rms, len(rows)))
+        sys.exit(0)
+
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
     # Collect tests to run based on arguments
