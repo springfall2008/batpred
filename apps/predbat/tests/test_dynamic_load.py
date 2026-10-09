@@ -65,7 +65,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     # test_dynamic_load_car.py), so it can withhold an Intelligent dispatch's cheap rate too
     print("Test 2: Low load case leaves the car slots to dynamic_load_car_check()")
     my_predbat.load_last_status = "baseline"  # Reset status
-    my_predbat.load_last_period = 2.0  # 2kW - low load (< battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000 and < car_charging_threshold * 0.9)
+    my_predbat.load_last_period = 2.0  # 2kW - low load (< battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000 and < car_charging_threshold * 0.85)
 
     my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
     my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 45, "kwh": 8.0}]
