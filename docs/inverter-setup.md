@@ -1905,7 +1905,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
 
     - sensor.sigen_plant_available_max_discharging_capacity
-    - sensor.sigen_plant_daily_consumed_energy
+    - sensor.sigen_plant_daily_load_consumption
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
@@ -1913,7 +1913,12 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_max_active_power
 
-- The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
+- Turn on **switch.sigen_plant_remote_ems_controlled_by_home_assistant** ("Remote EMS (Controlled by Home Assistant)"). While it is off the plant ignores **select.sigen_plant_remote_ems_control_mode** entirely and runs its own logic,
+so none of the mode changes made by the automations below take effect. The cut-off and limit numbers are still obeyed without it, which can make a setup look partly working.
+
+- The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface.
+They deliberately have no `initial:` value, so Home Assistant restores their last state on a restart. With `initial:` they are reset on every restart without a state change,
+so the automations below don't fire and the plant can be left in a mode, or at a rate limit, that no longer matches what Predbat sees.
 
 ```yaml
 input_select:
@@ -1925,13 +1930,11 @@ input_select:
       - "Freeze Charging"
       - "Discharging"
       - "Freeze Discharging"
-    initial: "Demand"
     icon: mdi:battery-unknown
 
 input_number:
   charge_rate:
     name: Battery charge rate
-    initial: 6950
     min: 0
     max: 20000
     step: 1
@@ -1940,7 +1943,6 @@ input_number:
 
   discharge_rate:
     name: Battery discharge rate
-    initial: 8000
     min: 0
     max: 20000
     step: 1
@@ -1959,8 +1961,26 @@ Add the following automations to `automations.yaml` (or configure via the UI):
     - trigger: state
       entity_id:
         - input_select.predbat_requested_mode
+    # Re-apply the mode after a Home Assistant restart, and when Remote EMS is switched back on (by you,
+    # or after another service turned it off), as the plant may be in a different mode by then.
+    # Without the restart trigger, a restart at the end of a force export can leave the plant on
+    # "Command Discharging" if Predbat already wants "Demand": Predbat sees nothing to change, writes
+    # nothing, and the battery keeps exporting past its target.
+    - trigger: homeassistant
+      event: start
+    - trigger: state
+      entity_id:
+        - switch.sigen_plant_remote_ems_controlled_by_home_assistant
+      from: "off"
+      to: "on"
   conditions: []
   actions:
+    # After a restart, give the Sigenergy integration time to load before writing to it
+    - wait_template: >-
+        {{ states('select.sigen_plant_remote_ems_control_mode') not in ['unknown', 'unavailable']
+           and states('sensor.sigen_plant_battery_state_of_charge') | is_number }}
+      timeout: "00:05:00"
+      continue_on_timeout: true
     - action: select.select_option
       metadata: {}
       target:
@@ -1987,7 +2007,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         # discharge_cut_off_state_of_charge is pinned once here, to current SoC minus a small
         # margin, not a hardcoded value and not continuously re-pinned. Sigenergy has confirmed a
         # firmware bug: if this is set above current SoC, the inverter actively imports from grid
-        # to reach it - even with grid_import_limitation at 0 below - so the target must never sit
+        # to reach it - even if grid_import_limitation is set to 0 - so the target must never sit
         # above SoC. Setting it once, fixed, is what actually implements "frozen": any real deficit
         # against that fixed point (house load, or even the inverter's own standby losses) gets
         # corrected by grid import back up to the target, rather than the target chasing SoC
@@ -2009,12 +2029,11 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
               data_template:
-                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(100)) - 0.25, 0] | max }}"
-            - action: number.set_value
-              target:
-                entity_id: number.sigen_plant_grid_import_limitation
-              data:
-                value: 0
+                # If SoC can't be read this falls back to 0 (no discharge block) - never to a high
+                # value, which would trigger the forced-import bug described above
+                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(0)) - 0.25, 0] | max }}"
+        # grid_import_limitation is deliberately not set to 0 in either freeze mode - see the note
+        # after these automations.
         # Freeze Discharging
         # Docs:
         #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
@@ -2045,12 +2064,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
               data:
                 value: 0
-            - action: number.set_value
-              target:
-                entity_id: number.sigen_plant_grid_import_limitation
-              data:
-                value: 0
-        # If neither of the above conditions are met, set the limits to the input numbers
+        # Any other mode: clear the freeze cut-offs and restore the import limit
         - conditions:
           - condition: not
             conditions:
@@ -2083,13 +2097,19 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.charge_rate
+  conditions:
+  # Don't write a 0kW limit just because the input number is briefly unavailable
+  - condition: template
+    value_template: "{{ trigger.to_state.state | is_number }}"
   actions:
   - action: number.set_value
     target:
       entity_id: number.sigen_plant_ess_max_charging_limit
     data:
+      # The plant-level rated power caps the request; if that sensor is briefly unavailable the
+      # 99 fallback means no cap rather than a 0kW limit
       value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
-        states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
+        states(''sensor.sigen_plant_ess_rated_charging_power'') | float(99)] | min}}'
   mode: single
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
@@ -2098,33 +2118,77 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.discharge_rate
+  conditions:
+  # Don't write a 0kW limit just because the input number is briefly unavailable
+  - condition: template
+    value_template: "{{ trigger.to_state.state | is_number }}"
   actions:
   - action: number.set_value
     target:
       entity_id: number.sigen_plant_ess_max_discharging_limit
     data:
       value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
-        states(''sensor.sigen_inverter_ess_rated_discharging_power'') | float] | min}}'
+        states(''sensor.sigen_plant_ess_rated_discharging_power'') | float(99)] | min}}'
   mode: single
 ```
 
-*Note:* Some Sigenergy Predbat users have reported that their Sigenergy modbus integration has created some of the entities that Predbat requires with different names
-so you may need to adapt the above automations and `apps.yaml` (or rename your entities) to match:
+*Note:* The rate automations cap the requested rate at the **plant**-level rated power, **sensor.sigen_plant_ess_rated_charging_power** and **sensor.sigen_plant_ess_rated_discharging_power**,
+which are also what the template's `battery_rate_max` uses and match the plant-level limits being written. Per-inverter versions, where your integration creates them, are named without the "-ing"
+(e.g. sensor.sigen_inverter_ess_rated_charge_power); earlier versions of this page mixed the two spellings, giving entity names that don't exist.
+Make sure both are enabled: if one is missing or disabled the automation runs without a cap. If you don't have sensor.sigen_plant_daily_load_consumption,
+look for sensor.sigen_plant_daily_consumed_energy (the name earlier versions of this page used) and use that in `apps.yaml` instead.
 
-- sensor.sigen_inverter_ess_rated_discharging_power is instead named sensor.sigen_inverter_ess_rated_discharge_power
-- sensor.sigen_inverter_ess_rated_charging_power is sensor.sigen_inverter_ess_rated_charge_power
-- sensor.sigen_plant_daily_consumed_energy is sensor.sigen_plant_daily_load_consumption
+*Note:* If you rename **input_number.charge_rate** / **input_number.discharge_rate**, change them in `apps.yaml` **and** in the triggers and templates of the rate automations.
+If the two disagree the automations never fire, and nothing reports it: the plant simply stays at whatever limit it last had, so Predbat's rate changes (including setting a rate of 0 to hold the battery) never reach the inverter.
 
-*Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
+*Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first automation to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 
-*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even with **grid_import_limitation** set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
+*Important:* Earlier versions of this page set **grid_import_limitation** to 0 in both freeze modes. That is no longer recommended (see [batpred#4911](https://github.com/springfall2008/batpred/issues/4911)): the freeze is
+enforced by the charge and discharge cut-offs, not by the import limit, and a 0kW import limit contradicts Freeze Charging's own definition (house load beyond solar is met from the grid).
+It also stalls a Sigenergy EV charger (EVAC/EVDC) behind the plant's CT clamp, which the plant throttles to the import limit - and one of the times Predbat uses Freeze Charging is to hold the battery while the car charges.
+If you are updating from the older automation, set **number.sigen_plant_grid_import_limitation** back to your supply limit once, as a freeze mode may have left it at 0.
 
-The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (0.25 percentage points) below the pinned value exists to cover possible imprecision in that one reading - not ongoing noise tolerance, since the pin is fixed rather than re-sampled, so only the single initial reading matters. It still matters because the underlying mechanism only ever corrects one way: a reading that's a hair low at the moment of pinning would cost a real, if tiny, import to "correct" a gap that was never really there, while a reading that's a hair high costs nothing - so even a one-off imprecise read isn't self-cancelling without some margin.
+*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even if **grid_import_limitation** is set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
+
+The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (0.25 percentage points) below the pinned value exists to cover possible imprecision in that one reading - not ongoing noise tolerance, since the pin is fixed rather than re-sampled, so only the single initial reading matters. (The pin is also re-taken if the automation re-runs during Freeze Charging - after a Home Assistant restart, or when Remote EMS is switched back on - which is a rare, one-off reset rather than continuous tracking.) It still matters because the underlying mechanism only ever corrects one way: a reading that's a hair low at the moment of pinning would cost a real, if tiny, import to "correct" a gap that was never really there, while a reading that's a hair high costs nothing - so even a one-off imprecise read isn't self-cancelling without some margin.
 
 The margin is clamped at 0 (`[value, 0] | max`) rather than allowed to go negative. This isn't just tidiness: `discharge_cut_off_state_of_charge` is an unsigned 16-bit Modbus register on the wire, and the integration's own write encoding has no guard against a negative value - it would silently wrap around into a huge, nonsensical raw value rather than being rejected. At very low SoC (below the margin) an unclamped template could produce exactly that.
 
 See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and the wider [Sigenergy setup discussion](https://github.com/springfall2008/batpred/issues/2077) for the full investigation, including a more advanced (currently experimental, untested) variant that ratchets the target up in response to confirmed solar surplus over each period rather than using a fixed one-off value.
+
+*Optional:* other services that control the plant can turn **switch.sigen_plant_remote_ems_controlled_by_home_assistant** off and not turn it back on. On one user's system this happened after an Axle VPP event,
+and again after connecting a cloud service to the Sigenergy account, with nothing in Home Assistant recording why. While it is off the plant ignores Predbat's mode changes (on that occasion for 7 hours,
+running the battery empty overnight). This watchdog notifies you and turns it back on, and the mode automation above then re-applies Predbat's current mode.
+Note that it will also undo a deliberate switch-off - disable the watchdog first if you want Remote EMS off for a while.
+
+```yaml
+- id: predbat_sigenergy_remote_ems_watchdog
+  alias: "Predbat Sigenergy Remote EMS Watchdog"
+  description: "Turn Remote EMS back on if something else has turned it off"
+  mode: single
+  triggers:
+    - trigger: time_pattern
+      minutes: /30
+  conditions:
+    - condition: state
+      entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+      state: "off"
+    # If you take part in Axle VPP events, uncomment this so the watchdog doesn't take control back
+    # from Axle in the middle of an event:
+    # - condition: state
+    #   entity_id: binary_sensor.predbat_axle_event
+    #   state: "off"
+  actions:
+    - action: persistent_notification.create
+      data:
+        notification_id: sigenergy_remote_ems_watchdog
+        title: Sigenergy not in Remote EMS mode
+        message: "Remote EMS was off at {{ now().strftime('%H:%M') }} - turning it back on."
+    - action: switch.turn_on
+      target:
+        entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+```
 
 ## Sigenergy Cloud
 
