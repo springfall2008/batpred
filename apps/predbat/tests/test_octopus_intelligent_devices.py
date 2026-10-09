@@ -1322,12 +1322,18 @@ def test_car_slots_rewired_when_owner_changes(my_predbat):
     api.report_discovery = lambda report: None
     own_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix(device_id))
 
-    # Ohme holds the car slots on the first cycle, so Octopus leaves them alone
+    # Ohme holds the car slots on the first cycle. The claim covers the ready time and charge limit:
+    # the dispatch sensor is still wired, as the record of the completed dispatches (#5413)
     my_predbat.car_slot_owner = "ohme"
     my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    my_predbat.args["octopus_ready_time"] = "select.predbat_ohme_target_time"
+    my_predbat.args["octopus_charge_limit"] = "number.predbat_ohme_target_percent"
     asyncio.run(api.run(seconds=0, first=True))
-    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
-        print(f"ERROR: expected the Ohme wiring left alone while claimed, got {my_predbat.args.get('octopus_intelligent_slot')}")
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_entity]:
+        print(f"ERROR: expected the dispatch sensor wired while claimed, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+    if my_predbat.args.get("octopus_ready_time") != "select.predbat_ohme_target_time" or my_predbat.args.get("octopus_charge_limit") != "number.predbat_ohme_target_percent":
+        print(f"ERROR: expected the Ohme ready time and charge limit left alone while claimed, got {my_predbat.args.get('octopus_ready_time')} {my_predbat.args.get('octopus_charge_limit')}")
         failed += 1
 
     # Ohme lets go and clears its wiring. Nothing about the devices has changed...
@@ -1391,8 +1397,9 @@ def test_car_slots_not_taken_without_a_device_to_wire(my_predbat):
         return api
 
     def release_and_run(api, cycles=2):
-        """The Ohme component lets go, keeping the slots on its own entity, then sensor refreshes follow"""
+        """The Ohme component lets go, taking the slots for its own schedule, then sensor refreshes follow"""
         my_predbat.car_slot_owner = None
+        my_predbat.args["octopus_intelligent_slot"] = ohme_entity
         for cycle in range(cycles):
             api.sensor_updated_at = None
             asyncio.run(api.run(seconds=120 * (cycle + 1), first=False))

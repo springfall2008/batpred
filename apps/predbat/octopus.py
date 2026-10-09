@@ -1459,10 +1459,12 @@ class OctopusAPI(ComponentBase):
         # Another component may have claimed the car slots - the Ohme component does when it is
         # set to take the Intelligent slots from the charger instead. This method re-runs whenever
         # the tariff or device set moves, so without this check it would quietly take them back.
+        # The claim is on the ready time and charge limit only. The dispatch sensor is still wired
+        # here: it is Octopus's record of what was dispatched, which the other component reads its
+        # completed slots from while supplying the planned ones itself (#5413).
         slot_owner = getattr(self.base, "car_slot_owner", None)
-        if slot_owner and slot_owner != "octopus":
-            self.log("OctopusAPI: Car slots are wired by the {} component, leaving them alone".format(slot_owner))
-        elif devices or self.intelligent_config_devices:
+        other_owner = bool(slot_owner and slot_owner != "octopus")
+        if devices or self.intelligent_config_devices:
             # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
             # account) aren't actively charging, so exclude them from the entity lists and from
             # the num_cars count below - otherwise a stale suspended device can silently push
@@ -1490,8 +1492,11 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
                 self.set_arg("octopus_intelligent_slot", slot_list)
-                self.set_arg("octopus_ready_time", ready_list)
-                self.set_arg("octopus_charge_limit", limit_list)
+                if other_owner:
+                    self.log("OctopusAPI: Car ready time and charge limit are wired by the {} component, leaving them alone".format(slot_owner))
+                else:
+                    self.set_arg("octopus_ready_time", ready_list)
+                    self.set_arg("octopus_charge_limit", limit_list)
                 self.intelligent_config_slots = slot_list
                 # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
                 num_cars = self.get_arg("num_cars", 0)
