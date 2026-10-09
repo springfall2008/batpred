@@ -420,6 +420,22 @@ If rate_high_threshold is set to a non-zero value this will set the threshold ab
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
 
+Both thresholds, automatic or set by you, ignore an event price that is above the tariff's own rate (an Octopus saving session
+or Axle event reward): those slots count at the tariff's own rate when the thresholds are worked out, so the event does not
+stretch the range and pull ordinary-price slots in or out. A free or discounted import session still counts as a cheap slot,
+and a rate override you put on an event slot (rates_import_override, rates_export_override or a manual rate) is kept.
+The event rates themselves are still used when planning.
+
+In automatic mode (rate_low_threshold 0), when a saving session or Axle event pays more for export, or charges more for
+import, than the tariff's most expensive import rate, the plan is also offered every import slot priced no higher than that
+rate before the last such event starts. The battery can then be charged ahead of the event to export into it or to cover the
+house through it. The low rate sensors (`binary_sensor.predbat_low_rate_slot` and the `predbat.low_rate_*` sensors) and
+car charging plans still use only the tariff's own cheap slots.
+
+Predbat does not widen a rate_low_threshold you set for an event. With a manual threshold it will not charge the battery
+above that threshold ahead of an event, even when doing so would make money. Set rate_low_threshold to 0 (automatic) if
+you want those pre-event charges.
+
 **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Default 0p/kWh. Sets a pence per kWh offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
