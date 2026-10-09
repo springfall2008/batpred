@@ -3493,8 +3493,9 @@ chart.render();
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 1, required=False))
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
-            # Get temperature prediction data and limit to 48 hours forward
-            temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune_future=True, prune_future_days=2, prune=True, prune_past_days=7)
+            # Match the temperature chart to the configured forecast duration.
+            forecast_hours = max(int(self.get_arg("forecast_hours", 48)), 24)
+            temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune_future=True, prune_future_days=forecast_hours / 24.0, prune=True, prune_past_days=7)
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
