@@ -30,6 +30,7 @@ from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 SENSOR = "binary_sensor.car_charging_now_test"
 LOAD_POWER = ["sensor.load_power_test_0", "sensor.load_power_test_1"]
+LOAD_POWER_EXTRA = "sensor.load_power_test_bypass"
 
 STATE_FIELDS = (
     "num_cars",
@@ -1244,6 +1245,8 @@ def _run_live_load(my_predbat):
     """
     failed = False
     dispatch = [{"start": 840, "end": 900, "kwh": 7.0, "octopus": True}]
+    had_inverter_type = "inverter_type" in my_predbat.args
+    saved_inverter_type = my_predbat.args.get("inverter_type", None)
     try:
         print("Test 60: a low 5 minute figure with live load at the car's rate does not cancel")
         _reset(my_predbat)
@@ -1344,8 +1347,50 @@ def _run_live_load(my_predbat):
         _cycle(my_predbat, 865, slots=dispatch)
         _cycle(my_predbat, 870, slots=dispatch)
         failed |= _check("t66 live 5.0kW cancels", _kwh(my_predbat) == [0], "kwh {}".format(_kwh(my_predbat)))
+
+        # Solis splits the house load across load_power (main) and load_power_1 (bypass/backup), and the
+        # inverter sums the two - a car on the bypass side shows only on the second (#5462 review)
+        print("Test 67: an inverter's extra load_power_1 sensor is part of the live load")
+        _reset(my_predbat)
+        _sensor(my_predbat, None)
+        my_predbat.car_energy_reported_load = True
+        my_predbat.car_charging_threshold = 6.0 / 60.0
+        my_predbat.battery_rate_max_discharge = 8.0 / 60.0
+        my_predbat.load_last_period = 0.6
+        my_predbat.args["inverter_type"] = "GS"
+        my_predbat.args["load_power_1"] = [LOAD_POWER_EXTRA]
+        _load_power(my_predbat, [400])
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = 7200
+        _cycle(my_predbat, 845, slots=dispatch)
+        changed = _cycle(my_predbat, 850, slots=dispatch)
+        failed |= _check("t67 not cancelled", (not changed) and _kwh(my_predbat) == [7.0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        failed |= _check("t67 total", my_predbat.dynamic_load_car_live_load() == (True, 7.6), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+        # An unreadable extra sensor leaves no total
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = "unavailable"
+        failed |= _check("t67 unavailable extra", my_predbat.dynamic_load_car_live_load() == (True, None), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+        _cycle(my_predbat, 855, slots=dispatch)
+        failed |= _check("t67 no evidence", my_predbat.dynamic_load_car_since.get(0) is None and _kwh(my_predbat) == [7.0], "since {}".format(my_predbat.dynamic_load_car_since.get(0)))
+        # Both low cancels
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = 100
+        _cycle(my_predbat, 860, slots=dispatch)
+        _cycle(my_predbat, 865, slots=dispatch)
+        failed |= _check("t67 both low cancels", _kwh(my_predbat) == [0], "kwh {}".format(_kwh(my_predbat)))
+        # The extra sensor left out of apps.yaml counts as nothing, as the inverter reads it
+        my_predbat.args.pop("load_power_1", None)
+        failed |= _check("t67 extra not set", my_predbat.dynamic_load_car_live_load() == (True, 0.4), "live {}".format(my_predbat.dynamic_load_car_live_load()))
+        # An inverter type with one load sensor does not read load_power_1 at all
+        my_predbat.args["load_power_1"] = [LOAD_POWER_EXTRA]
+        my_predbat.ha_interface.dummy_items[LOAD_POWER_EXTRA] = 7200
+        my_predbat.args["inverter_type"] = "GE"
+        failed |= _check("t67 single load sensor type", my_predbat.dynamic_load_car_live_load() == (True, 0.4), "live {}".format(my_predbat.dynamic_load_car_live_load()))
     finally:
         _load_power(my_predbat, None)
+        my_predbat.args.pop("load_power_1", None)
+        my_predbat.ha_interface.dummy_items.pop(LOAD_POWER_EXTRA, None)
+        if had_inverter_type:
+            my_predbat.args["inverter_type"] = saved_inverter_type
+        else:
+            my_predbat.args.pop("inverter_type", None)
     return failed
 
 

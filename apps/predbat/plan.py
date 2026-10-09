@@ -61,6 +61,7 @@ from utils import (
     is_entity_id,
     round_out_to_period,
 )
+from config import INVERTER_DEF
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
@@ -393,6 +394,10 @@ class Plan:
         or None when any of them has no reading ("unknown", "unavailable", missing from HA) - part of the
         load is not the load. configured is False when load_power is not set at all.
 
+        Summed as Inverter.update_status() sums it: load_power plus the inverter type's extra load_power_N
+        sensors (Solis reports the bypass load on load_power_1), where one left out of apps.yaml counts as
+        nothing, then load_power_invert.
+
         Read from the sensors rather than the inverters: dynamic_load_car_check() runs before
         fetch_inverter_data(), where their load_power is still the previous cycle's.
         """
@@ -402,11 +407,20 @@ class Plan:
         if not isinstance(entities, list):
             entities = [entities]
         total = 0.0
-        for inverter_n, entity_id in enumerate(entities):
-            try:
-                power = float(self.resolve_arg("load_power", entity_id, default=None, quiet=True, required_unit="W"))
-            except (ValueError, TypeError):
-                return True, None
+        for inverter_n in range(len(entities)):
+            inverter_type = self.get_arg("inverter_type", "GE", indirect=False, index=inverter_n)
+            num_load_entities = INVERTER_DEF.get(inverter_type, {}).get("num_load_entities", 1)
+            power = 0.0
+            for arg in ["load_power"] + ["load_power_{}".format(extra_n) for extra_n in range(1, num_load_entities)]:
+                value = self.args.get(arg, None)
+                if isinstance(value, list):
+                    value = value[inverter_n] if inverter_n < len(value) else None
+                if not value:
+                    continue
+                try:
+                    power += float(self.resolve_arg(arg, value, default=None, quiet=True, required_unit="W"))
+                except (ValueError, TypeError):
+                    return True, None
             if self.get_arg("load_power_invert", default=False, index=inverter_n):
                 power = -power
             total += power
