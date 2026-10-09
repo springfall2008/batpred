@@ -508,8 +508,6 @@ class Inverter:
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
-        # Whether a start or freeze service sends the rate as {power} - see rate_without_entity()
-        self.inv_services_send_power = services_send_power(self.base.args)
         self.inv_charge_control_immediate = INVERTER_DEF[self.inverter_type]["charge_control_immediate"]
         self.inv_current_dp = INVERTER_DEF[self.inverter_type].get("current_dp", 1)
         self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
@@ -2110,13 +2108,13 @@ class Inverter:
         """
         Whether Predbat holds this inverter's charge or discharge rate itself, having nowhere else to store it.
 
-        True for a "power" inverter that is sent its rate as {power} by a start or freeze service, with
+        True for a "power" inverter that is sent its rate as {power} by a start or freeze service in this direction, with
         neither a rate entity nor a rate percentage for this direction: a script-driven inverter such as
         the Solax SX4 template (#3311). Without those services nothing applies a rate Predbat held, so
         reading one back would claim a rate the inverter never got. "current" inverters get a rate entity
         of their own, and a "none" inverter (Sofar over MQTT, Solar Assistant, Tesla) is left as it was.
         """
-        if self.inv_output_charge_control != "power" or not self.inv_services_send_power:
+        if self.inv_output_charge_control != "power" or not services_send_power(self.base.args, direction):
             return False
         # get_current_*_rate() reads the percentage whenever the key is present, so this does too
         if direction + "_rate_percent" in self.base.args:

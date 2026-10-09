@@ -291,6 +291,15 @@ def test_services_send_power(test_name, my_predbat):
         ("stop service only", {"charge_stop_service": "script.stop"}, False),
     ):
         failed |= _check(test_name, label, services_send_power(args), expect)
+    # Per direction: a {power} on the charge hooks says nothing about the discharge side, and the reverse
+    charge_only = {"charge_start_service": {"service": "script.rate", "power": "{power}"}, "discharge_start_service": {"service": "switch.turn_on", "entity_id": "switch.x"}}
+    for label, args, direction, expect in (
+        ("charge-only {power}, charge", charge_only, "charge", True),
+        ("charge-only {power}, discharge", charge_only, "discharge", False),
+        ("discharge freeze {power}, discharge", {"discharge_freeze_service": "script.hold"}, "discharge", True),
+        ("discharge freeze {power}, charge", {"discharge_freeze_service": "script.hold"}, "charge", False),
+    ):
+        failed |= _check(test_name, label, services_send_power(args, direction), expect)
     return failed
 
 
@@ -328,6 +337,25 @@ def test_rate_entity_still_read(test_name, my_predbat):
     return failed
 
 
+def test_rate_held_per_direction(test_name, my_predbat):
+    """Only the direction whose services send {power} holds a rate itself; the other reads back as before."""
+    print("**** Running Test: {} ****".format(test_name))
+    inv = _build_script_inverter(my_predbat)
+    saved = {key: my_predbat.args.get(key) for key in ("charge_start_service", "discharge_start_service")}
+    my_predbat.args["charge_start_service"] = {"service": "script.rate", "power": "{power}"}
+    my_predbat.args["discharge_start_service"] = {"service": "switch.turn_on", "entity_id": "switch.x"}
+    try:
+        failed = False
+        failed |= _check(test_name, "charge held (its service sends {power})", inv.rate_without_entity("charge"), True)
+        failed |= _check(test_name, "discharge not held (its services do not)", inv.rate_without_entity("discharge"), False)
+        # Setting a discharge rate records nothing, so it still reads back as the battery maximum
+        inv.rate_last_set["discharge"] = 1234
+        failed |= _check(test_name, "discharge read back as before", inv.get_current_discharge_rate(), RATE_MAX)
+    finally:
+        my_predbat.args.update(saved)
+    return failed
+
+
 def run_inverter_rate_no_entity_tests(my_predbat):
     """Run the no-rate-entity read-back tests; each rebuilds the inverter and its args."""
     try:
@@ -338,6 +366,7 @@ def run_inverter_rate_no_entity_tests(my_predbat):
         failed |= test_rate_entity_still_read("inverter_rate_no_entity_entity_read", my_predbat)
         failed |= test_register_small_rate_not_rewritten("inverter_rate_no_entity_register_small_rate", my_predbat)
         failed |= test_services_send_power("inverter_rate_no_entity_services_send_power", my_predbat)
+        failed |= test_rate_held_per_direction("inverter_rate_no_entity_per_direction", my_predbat)
         failed |= test_queue_immediate("inverter_rate_no_entity_queue_immediate", my_predbat)
         failed |= test_number_in_rate_entry_is_not_an_entity("inverter_rate_no_entity_number_entry", my_predbat)
         failed |= test_rate_not_held_without_power_services("inverter_rate_no_entity_no_power_services", my_predbat)

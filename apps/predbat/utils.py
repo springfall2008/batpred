@@ -892,14 +892,19 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
-def services_send_power(args):
+def services_send_power(args, direction=None):
     """
     Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    With a direction ("charge" or "discharge") only that direction's services count, as a rate sent
+    to a charge hook says nothing about what the discharge side was given.
 
     A service given by name alone is passed every default option, power included. A template entry
     passes only the keys it lists, so it sends the rate only where one of its values references {power}.
     """
     for service in POWER_SERVICES:
+        if direction and not service.startswith(direction + "_"):
+            continue
         templates = args.get(service)
         if not templates:
             continue
