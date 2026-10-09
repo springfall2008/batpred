@@ -41,7 +41,37 @@ from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
+import ast
 import copy
+
+
+# Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
+REPLAY_CAR_FIELDS = (
+    "car_charging_planned",
+    "car_charging_now",
+    "car_charging_soc",
+    "car_charging_soc_next",
+    "car_charging_limit",
+    "car_charging_limit_model",
+    "car_charging_battery_size",
+    "car_charging_slots",
+    "car_energy_reported_load",
+)
+# The inverter's programmed state as fetched each cycle, which the plan and prediction start from
+REPLAY_INVERTER_FIELDS = (
+    "charge_window",
+    "charge_limit",
+    "export_window",
+    "export_limits",
+    "isCharging",
+    "isCharging_Target",
+    "isExporting",
+    "isExporting_Target",
+    "reserve",
+    "reserve_current",
+    "battery_rate_max_charge",
+    "battery_rate_max_discharge",
+)
 
 
 class Fetch:
@@ -905,7 +935,245 @@ class Fetch:
             load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
-    def fetch_pv_forecast_and_dawn(self):
+    def log_replay_changed(self, attribute, signature_of, build, what):
+        """Log the line build() returns when signature_of() differs from the signature last logged under attribute.
+
+        The shared core of the "Replay input:" lines that are logged only on a change. The signature is recorded
+        before the line is built, so a value that cannot be logged warns once per change rather than every cycle,
+        and is logged again when it next changes. Both are computed inside the try, as either can fail on bad data.
+        Never raises - these run every cycle on the main loop, and a logging fault must not stop the plan.
+        """
+        try:
+            signature = signature_of()
+            if signature == getattr(self, attribute, None):
+                return
+            setattr(self, attribute, signature)
+            self.log(build())
+        except Exception as e:
+            self.log("Warn: Unable to log the {} for replay: {}".format(what, e))
+
+    def replay_clock(self, minute):
+        """A minute from midnight as HH:MM, for the start of a "Replay input:" line."""
+        return (self.midnight_utc + timedelta(minutes=minute)).strftime("%H:%M")
+
+    def log_replay_pv_forecast(self):
+        """Log the PV forecast whenever it changes, so a log can be replayed against the forecast the plan really used.
+
+        A debug yaml holds the forecast at one moment, and Solcast refreshes it during the day. step_data_history()
+        sums every minute of the forecast across the plan, so p50, p10 and p90 are each logged per minute, exactly,
+        as runs of [kWh per minute, minutes] (None where the forecast has no value). The line is written only on a
+        change, while the plan's horizon moves on with the clock, so it covers from now to the end of the forecast
+        rather than to the end of today's plan. One line per change. Never raises - this runs every cycle on the main loop, and a logging fault must
+        not stop the plan.
+        """
+        series = (self.pv_forecast_minute or {}, self.pv_forecast_minute10 or {}, self.pv_forecast_minute90 or {})
+
+        def build():
+            """The PV forecast line, from now to the end of the forecast."""
+            start = self.minutes_now
+            end = max([start + self.forecast_minutes + self.plan_interval_minutes] + [max(values) + 1 for values in series if values])
+            parts = []
+            for name, values in zip(("p50", "p10", "p90"), series):
+                runs = []
+                for minute in range(start, end):
+                    value = values.get(minute)
+                    value = None if value is None else float(value)
+                    if runs and runs[-1][0] == value:
+                        runs[-1][1] += 1
+                    else:
+                        runs.append([value, 1])
+                parts.append("{} [{}]".format(name, ", ".join("[{}, {}]".format(None if value is None else repr(value), count) for value, count in runs)))
+            return "Replay input: PV forecast changed, per-minute kWh runs from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        self.log_replay_changed("replay_pv_signature", lambda: hash(tuple(tuple(sorted(values.items())) for values in series)), build, "PV forecast")
+
+    def log_replay_ml_forecast(self, results):
+        """Log the Load ML predictions whenever they change, so a log can be replayed against them.
+
+        The predictions come from a model retrained in the background, so a replay cannot re-derive them; they are
+        an input, like the PV forecast. They are logged as read from the sensor, before Predbat converts and
+        re-anchors them, so that code still runs in a replay. Evenly spaced timestamps are logged as a start, a step
+        and the values; anything else as the full mapping. Never raises - this runs every cycle on the main loop.
+        """
+        if not isinstance(results, dict):
+            return
+        items = []
+
+        def signature_of():
+            """Sort the predictions (inside the logger's try, as mixed keys cannot be sorted) and hash them."""
+            items[:] = sorted(results.items())
+            return hash(tuple((str(key), str(value)) for key, value in items))
+
+        def build():
+            """The ML forecast line: a start, a step and the values when the timestamps are evenly spaced, else the mapping."""
+            try:
+                times = [str2time(str(key)) for key, _ in items]
+                steps = {int((after - before).total_seconds() // 60) for before, after in zip(times, times[1:])}
+            except (ValueError, TypeError):
+                steps = set()
+            if items and len(steps) == 1:
+                return "Replay input: ML load forecast changed, from {} every {} minutes kWh [{}]".format(items[0][0], steps.pop(), ", ".join(repr(float(value)) for _, value in items))
+            return "Replay input: ML load forecast changed, kWh {!r}".format(dict(items))
+
+        self.log_replay_changed("replay_ml_signature", signature_of, build, "ML load forecast")
+
+    def log_replay_load_forecast(self):
+        """Log the load forecast the plan will use this cycle, so a log can be replayed against it.
+
+        The forecast is rebuilt every cycle from a history that the load_power fill re-cuts each time, so it cannot
+        be reproduced from a debug yaml. step_data_history() reads load_forecast at the start of each 5-minute step
+        and the minute after it, so those two cumulative-from-midnight values are what the line must reproduce, for
+        every step the plan builds. One line per cycle. Never raises - this runs every cycle on the main loop.
+
+        The forecasts are rounded to 0.1 Wh (dp4 kWh), so they are logged compactly as whole tenths of a Wh: the
+        cumulative value at the first step, then for each step "energy in the 5 minutes/energy in its first minute"
+        in Wh. The replay rebuilds each value as tenths / 10000, which is exactly the float the plan used. Where any
+        value is missing or not a whole tenth of a Wh (another forecast source), the cumulative kWh values are logged
+        in full instead.
+        """
+        try:
+            if not self.load_forecast:
+                # The plan then uses the load history alone, so a replay must drop any forecast it still holds.
+                # Logged when the forecast becomes empty, not every cycle, as many setups have no forecast at all.
+                self.log_replay_changed("replay_load_empty", lambda: True, lambda: "Replay input: load forecast empty", "load forecast")
+                return
+            self.replay_load_empty = None
+            start = self.minutes_now
+            steps = list(range(start, start + self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP))
+            # The value at each step, the minute after it, and the start of the step after the last
+            minutes = sorted(set(steps + [minute + 1 for minute in steps] + [steps[-1] + PREDICT_STEP]))
+            values = {minute: self.load_forecast.get(minute) for minute in minutes}
+            tenths = {}
+            for minute, value in values.items():
+                if value is None or round(value * 10000) / 10000 != value:
+                    tenths = None
+                    break
+                tenths[minute] = round(value * 10000)
+            when = self.replay_clock(start)
+            if tenths is not None:
+
+                def wh(count):
+                    """A count of tenths of a Wh as Wh text that reads back to the same count."""
+                    return "{:.1f}".format(count / 10)
+
+                parts = ["{}/{}".format(wh(tenths[minute + PREDICT_STEP] - tenths[minute]), wh(tenths[minute + 1] - tenths[minute])) for minute in steps]
+                self.log("Replay input: load from {} base {} Wh, Wh/5min [{}]".format(when, wh(tenths[start]), ", ".join(parts)))
+                return
+
+            def exact(minute):
+                """The forecast's value at minute as text that reads back as the same float, or None."""
+                value = self.load_forecast.get(minute)
+                return None if value is None else repr(float(value))
+
+            pairs = ["[{}, {}]".format(exact(minute), exact(minute + 1)) for minute in steps]
+            self.log("Replay input: load forecast, cumulative kWh at each 5-minute step and the minute after from {} [{}]".format(when, ", ".join(pairs)))
+        except Exception as e:
+            self.log("Warn: Unable to log the load forecast for replay: {}".format(e))
+
+    def log_replay_rates(self):
+        """Log the import and export rates, and the base curves beside them, whenever they change.
+
+        Rates arrive from outside after a debug yaml is written - the next day's Agile prices, a new futurerate
+        prediction - so a replay needs them as an input. Each series is logged from now as [minutes from now, rate]
+        at every change of rate, followed by the minute it runs to, at full precision. Never raises - this runs
+        every cycle on the main loop.
+        """
+        series = (("import", self.rate_import), ("export", self.rate_export), ("import_base", self.rate_import_base), ("export_base", self.rate_export_base))
+
+        def build():
+            """The rates line: each series as change points from now, then the minute it runs to."""
+            start = self.minutes_now
+            parts = []
+            for name, rates in series:
+                points = []
+                last = None
+                minutes = sorted(minute for minute in (rates or {}) if minute >= start)
+                for minute in minutes:
+                    if rates[minute] != last:
+                        last = rates[minute]
+                        points.append([minute - start, last])
+                parts.append("{} {} {}".format(name, points, minutes[-1] + 1 - start if minutes else 0))
+            return "Replay input: rates changed, from {} {}".format(self.replay_clock(start), " ".join(parts))
+
+        self.log_replay_changed("replay_rates_signature", lambda: hash(tuple(tuple(sorted((rates or {}).items())) for _, rates in series)), build, "rates")
+
+    def log_replay_inverter(self):
+        """Log the inverter's programmed state whenever it changes: the windows it holds now, whether it is charging or
+        exporting and to what target, the reserve and the battery rate limits.
+
+        The plan treats a window the inverter is already running specially, and the prediction starts from the rates
+        and reserve in force, so a replay needs them as they were. Logged as one dict whose repr reads back exactly with
+        ast.literal_eval. Never raises - this runs every cycle on the main loop.
+        """
+        self.log_replay_fields("inverter", REPLAY_INVERTER_FIELDS, "replay_inverter_text")
+
+    def log_replay_cars(self):
+        """Log the car state the plan reads whenever it changes, so a log can be replayed across a car plugging in.
+
+        Plugging in, an Octopus Intelligent dispatch plan or a SoC reading all change the car's load in the plan,
+        and a debug yaml holds them at one moment only. The per-car lists are logged as one dict whose repr reads
+        back exactly with ast.literal_eval. Never raises - this runs every cycle on the main loop.
+        """
+        if not self.num_cars:
+            return
+        self.log_replay_fields("cars", REPLAY_CAR_FIELDS, "replay_cars_text")
+
+    def log_replay_fields(self, label, fields, attribute):
+        """Log fields as one "Replay input: <label> changed" dict, on a change, checking that its repr reads back."""
+        state = {name: getattr(self, name, None) for name in fields}
+
+        def build():
+            """The line, once its dict is known to read back exactly with ast.literal_eval."""
+            text = repr(state)
+            ast.literal_eval(text)
+            return "Replay input: {} changed {}".format(label, text)
+
+        self.log_replay_changed(attribute, lambda: repr(state), build, label + " state")
+
+    def log_replay_baseline(self):
+        """Log the dynamic load baseline the plan will use, when it changes.
+
+        dynamic_load() raises the load in the current slot or two to the load just measured when it is high, and
+        step_data_history() adds that floor to all three load scenarios, so a replay needs it as it was. Usually
+        empty. Logged as a dict of minute to kWh whose repr reads back exactly.
+        """
+        baseline = dict(self.dynamic_load_baseline or {})
+        self.log_replay_changed("replay_baseline_text", lambda: repr(baseline), lambda: "Replay input: dynamic load baseline {!r}".format(baseline), "dynamic load baseline")
+
+    def log_replay_state(self):
+        """Log the values the plan starts from this cycle at full precision.
+
+        The human-readable lines round them (SoC to 0.01 kWh, the in-day adjustment to 0.01%), and that rounding is
+        enough to flip a plan that is within a fraction of a penny of another. Never raises - this runs every cycle
+        on the main loop.
+        """
+        try:
+
+            def exact(value):
+                """Shortest text that reads back as the same float, or None."""
+                return None if value is None else repr(float(value))
+
+            self.log(
+                "Replay input: state soc_kw {} soc_max {} inday {} cost_today {} load_today {} import_today {} export_today {} pv_today {} charge_rate_now {} discharge_rate_now {} battery_temperature {} iboost_today {} load_forecast_only {}".format(
+                    exact(self.soc_kw),
+                    exact(self.soc_max),
+                    exact(self.load_inday_adjustment),
+                    exact(self.cost_today_sofar),
+                    exact(self.load_minutes_now),
+                    exact(self.import_today_now),
+                    exact(self.export_today_now),
+                    exact(self.pv_today_now),
+                    exact(self.charge_rate_now),
+                    exact(self.discharge_rate_now),
+                    exact(self.battery_temperature),
+                    exact(self.iboost_today),
+                    exact(self.load_forecast_only),
+                )
+            )
+        except Exception as e:
+            self.log("Warn: Unable to log the state for replay: {}".format(e))
+
+    def fetch_pv_forecast_and_dawn(self, save=True):
         """
         Fetch the PV forecast, compute the dawn light/dark split from it, and publish the dawn
         binary_sensor - as one call so the ordering that #4699 regressed on (the split must be
@@ -917,6 +1185,9 @@ class Fetch:
             pv_light_dark: dict as returned by calc_pv_light_dark(), also stored on self.pv_light_dark.
         """
         self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
+        # Not for a tariff comparison run (save=False), whose forecast is not the one the live plan uses
+        if save:
+            self.log_replay_pv_forecast()
 
         # Stored on self, not just local, so it can be used elsewhere rather than only by the
         # window split below.
@@ -1024,7 +1295,7 @@ class Fetch:
         # Fetch ML forecast if enabled
         load_ml_forecast = {}
         if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
-            load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc)
+            load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc, save=save)
             if load_ml_forecast:
                 self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
 
@@ -1287,6 +1558,9 @@ class Fetch:
             self.log("Warning: No export rate data provided")
             self.record_status(message="Error: No export rate data provided", had_errors=True)
         self.rate_export = export_rates
+        # Not for the tariff comparison, which fetches with save off and would log every tariff it tries
+        if save:
+            self.log_replay_rates()
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -1296,7 +1570,7 @@ class Fetch:
         # self.pv_forecast_minute to locate dawn - it was previously fetched further down in this
         # function, after the dawn calculation had already run against the freshly-reset empty dict
         # from the top of fetch_sensor_data(), so the dawn split could never actually trigger (#4699).
-        pv_light_dark = self.fetch_pv_forecast_and_dawn()
+        pv_light_dark = self.fetch_pv_forecast_and_dawn(save=save)
 
         # Find discharging windows
         if self.rate_export:
@@ -1324,6 +1598,8 @@ class Fetch:
 
         # Work out car plan?
         self.fetch_sensor_data_car_planning()
+        if save:
+            self.log_replay_cars()
         # Publish the car plan
         self.publish_car_plan()
 
@@ -1374,6 +1650,9 @@ class Fetch:
         # load_ml_forecast is this cycle's own fetch result from earlier in this function, so there is
         # no cross-cycle state that could leave a stale "ML was active" reading behind (#4762 review).
         self.apply_load_ml_forecast_history(self.now_utc, load_ml_forecast)
+
+        if save:
+            self.log_replay_load_forecast()
 
         # Load today vs actual
         if self.load_minutes:
@@ -2669,7 +2948,7 @@ class Fetch:
                 )
             )
 
-    def fetch_ml_load_forecast(self, now_utc):
+    def fetch_ml_load_forecast(self, now_utc, save=True):
         """
         Fetches ML load forecast from sensor
         and returns it as a minute_data dictionary
@@ -2677,6 +2956,8 @@ class Fetch:
         # Use ML Model for load prediction
         load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
         if load_ml_forecast:
+            if save:
+                self.log_replay_ml_forecast(load_ml_forecast)
             self.log("Loading ML load forecast from sensor.{}_load_ml_forecast".format(self.prefix))
             # Convert format from dict to array
             if isinstance(load_ml_forecast, dict):

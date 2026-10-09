@@ -1963,6 +1963,11 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
+        if publish:
+            # Exactly as the plan uses it (None when divergence is off): the human-readable line rounds the percentage,
+            # which can round the other way. Not for a tariff comparison run (publish=False).
+            self.log("Replay input: load divergence {!r}".format(self.metric_load_divergence))
+            self.log_replay_baseline()
 
         # Clamp the three load scalings so load_scaling90 <= load_scaling <= load_scaling10 always
         # holds: the PV90 case can never end up with more load than the central case, and the PV10
