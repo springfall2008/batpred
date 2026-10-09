@@ -1,0 +1,54 @@
+# Day-ahead spot price tariff (spotprice component)
+#
+# Gives Predbat dynamic import (and optionally export) rates for any European bidding zone with a
+# spot-linked tariff, without needing a supplier-specific integration. Merge the keys below into your
+# existing pred_bat section in apps.yaml - this file is not a complete configuration on its own.
+#
+# import rate = (spot EUR/MWh / 10 + spotprice_markup + charge zone) x (1 + spotprice_vat)
+#
+# Markup, charge zones and export rates are in your minor currency unit per kWh (e.g. euro cents)
+# and exclude VAT. See docs/components.md for every option.
+pred_bat:
+  timezone: Europe/Berlin
+  currency_symbols:
+    - '€'
+    - 'c'
+
+  # Price source (default energycharts): entsoe (needs a free ENTSO-E token, falls back to Energy-Charts),
+  # energycharts (no key needed) or tibber (Tibber's own end-user price, needs a Tibber token)
+  spotprice_provider: energycharts
+  # Bidding zone, e.g. DE-LU, AT, NL, BE, FR, DK1, SE3, NO1, IE-SEM (ENTSO-E only)
+  spotprice_zone: DE-LU
+  # spotprice_entsoe_token: !secret entsoe_token
+  # spotprice_tibber_token: !secret tibber_token
+
+  # Supplier markup plus any flat grid fees and levies, per kWh, excluding VAT
+  spotprice_markup: 18.5
+  # VAT as a fraction (0.19 = 19%)
+  spotprice_vat: 0.19
+
+  # Optional time-of-day grid fees (e.g. Germany's section 14a module 3), local time, excluding VAT.
+  # The first matching entry wins; days is optional (mon..sun, or 1-7 with Monday = 1). Times outside every zone add 0.
+  # "to" at or before "from" wraps past midnight, so to: "00:00" runs up to midnight.
+  # spotprice_charge_zones:
+  #   - from: "00:00"
+  #     to: "06:00"
+  #     charge: 2.5
+  #   - from: "17:00"
+  #     to: "21:00"
+  #     charge: 14.0
+  #     days: [mon, tue, wed, thu, fri]
+  #   - from: "06:00"
+  #     to: "17:00"
+  #     charge: 9.0
+  #   - from: "21:00"
+  #     to: "00:00"
+  #     charge: 9.0
+
+  # Export: fixed (feed-in tariff) or spot (spot + export markup, no VAT);
+  # leave it out to keep your own rates_export
+  spotprice_export_mode: fixed
+  spotprice_export_rate: 7.94
+  # spotprice_export_markup: -0.4
+  # Pay nothing for export in any interval where the spot price is negative (Germany's Solarspitzengesetz)
+  spotprice_export_zero_on_negative: true

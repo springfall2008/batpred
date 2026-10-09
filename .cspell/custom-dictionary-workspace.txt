@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 3hy
 aaaabbbbccccdddd
+acknowledgementdocument
 acks
 activepower
 adata
@@ -50,6 +51,7 @@ Backpropagate
 backpropagation
 backsteps
 backtest
+baltics
 Basepath
 bathighcap
 Batpred
@@ -66,6 +68,7 @@ boostable
 Bottlecap
 brickatius
 britkat1980
+bundesnetzagentur
 bwignore
 byok
 cadata
@@ -190,6 +193,7 @@ endt
 Energi
 Energidata
 Energidataservice
+energycharts
 energydataservice
 energythroughput
 enho
@@ -200,6 +204,8 @@ enphase
 enphaseenergy
 Enpower
 entrez
+entso
+entsoe
 epod
 epvtoday
 errno
@@ -385,6 +391,7 @@ meterpoint
 meterpower
 metricb
 metricmid
+mibel
 microinverters
 middlebox
 middleboxes
@@ -515,6 +522,7 @@ pseudonymised
 pseudonymises
 psum
 pthread
+publicationdocument
 pvbat
 pvenergytotal
 pvlib
@@ -598,6 +606,7 @@ slugified
 slugifies
 slugify
 slugifying
+smard
 snakeviz
 snprintf
 socb
@@ -608,6 +617,7 @@ sofar
 SolarEdge
 solarman
 solarnet
+solarspitzengesetz
 solarsynk
 solarsynkv
 Solax
@@ -620,6 +630,7 @@ sourcery
 Southwell
 sparkline
 spki
+spotprice
 springfall
 starthour
 startminute
@@ -655,6 +666,7 @@ testname
 thirdparty
 threadpool
 threadpoolctl
+tibber
 timea
 timeb
 timec

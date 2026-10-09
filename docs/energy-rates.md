@@ -16,6 +16,7 @@ There are a number of different ways of configuring your Energy rates in `apps.y
 - [Octopus Energy Integration](#octopus-energy-home-assistant-integration), Predbat getting Octopus rates from the Octopus Energy integration
 - [Octopus Rates URL's](#octopus-rates-url), configuring Predbat to directly use the correct URL's for your Octopus tariff (not recommended as can stop working when you change tariff)
 - [Kraken component](#kraken-integration-for-edf-or-eonnext), Predbat getting rates directly from Kraken for EDF or Eon.Next customers
+- [Day-ahead spot price component](#day-ahead-spot-price-tariffs-europe), Predbat building dynamic rates for any European bidding zone from ENTSO-E, Energy-Charts or Tibber
 - [Energidataservice Integration](#energidataservice-integration), Predbat getting rates from the Energidataservice integration
 - [Strømligning Integration](#strømligning-integration), Predbat getting rates from the Strømligning integration
 - [Spot rates](#other-energy-spot-rate-sensor-integrations), Predbat retrieves spot rates from correctly formatted import and export rate sensors
@@ -299,6 +300,28 @@ The following entries are required for the Kraken component in `apps.yaml`:
 ```
 
 Full details of what to configure are given in the [component documentation](components.md#kraken-energy-kraken)
+
+## Day-ahead spot price tariffs (Europe)
+
+If you are on a dynamic tariff that follows the day-ahead spot market (common in Germany, Austria, the Netherlands, Belgium, the Nordics and elsewhere in Europe),
+the `spotprice` component can build your rates directly from the market price with no supplier-specific integration:
+
+```text
+import rate = (spot price / 10 + markup + time-of-day grid fee) x (1 + VAT)
+```
+
+Spot prices come from the ENTSO-E Transparency Platform (free token) with Energy-Charts as a keyless fallback, or if you buy from Tibber its own price can be used.
+Export can be a fixed feed-in tariff or spot-linked, optionally paying nothing when the spot price is negative.
+The component sets `metric_octopus_import` and `metric_octopus_export` for you.
+
+```yaml
+  spotprice_provider: energycharts
+  spotprice_zone: DE-LU
+  spotprice_markup: 18.5
+  spotprice_vat: 0.19
+```
+
+See the [spotprice component](components.md#day-ahead-spot-price-tariff-spotprice) for all options.
 
 ## Energidataservice Integration
 
