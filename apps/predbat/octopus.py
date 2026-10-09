@@ -58,11 +58,12 @@ OCTOPUS_MAX_RETRIES = 5
 CATALOGUE_FRESH_MINUTES = 24 * 60
 CATALOGUE_STALE_MINUTES = 25 * 60
 # Logged by log_catalogue_ambiguity() when the catalogue gives a make and model more than one value (issue #5438).
-# A charge point's power only ever raises input_number.predbat_car_charging_rate (fetch.py), so that is what decides
+# A charge point's power only ever raises input_number.{prefix}_car_charging_rate (fetch.py), so that is what decides
 # the rate; a vehicle's battery size from Octopus replaces car_charging_battery_size, so there is no setting to change.
+# {prefix} is the entity prefix in use (apps.yaml prefix, "predbat" by default).
 CATALOGUE_AMBIGUOUS_CHARGER = (
     "Octopus's catalogue lists charge point {device} at more than one power ({values} {unit}) and Predbat can't tell which yours is,"
-    " so it uses the lowest, {value} {unit}, unless input_number.predbat_car_charging_rate (_1, _2 for further cars) is higher. Set that to your charger's rate"
+    " so it uses the lowest, {value} {unit}, unless input_number.{prefix}_car_charging_rate (_1, _2 for further cars) is higher. Set that to your charger's rate"
 )
 CATALOGUE_AMBIGUOUS_VEHICLE = (
     "Octopus's catalogue lists vehicle {device} with more than one battery size ({values} {unit}) and Predbat can't tell which yours is,"
@@ -2491,7 +2492,8 @@ class OctopusAPI(ComponentBase):
 
         Args:
             message (str): What was looked up and what the user can do about it, formatted with the
-                device ({device}), the values ({values}), the one in use ({value}) and the unit ({unit})
+                device ({device}), the values ({values}), the one in use ({value}), the unit ({unit}) and
+                the entity prefix in use ({prefix})
             make (str): The device's make
             model (str): The device's model
             values (list): The distinct values the catalogue gave, from catalogue_value()
@@ -2504,7 +2506,7 @@ class OctopusAPI(ComponentBase):
         if key in self.catalogue_ambiguity_logged:
             return
         self.catalogue_ambiguity_logged.add(key)
-        self.log("Warn: OctopusAPI: " + message.format(device="{} '{}'".format(make, model), values=", ".join("{:g}".format(v) for v in values), value="{:g}".format(value), unit=unit))
+        self.log("Warn: OctopusAPI: " + message.format(device="{} '{}'".format(make, model), values=", ".join("{:g}".format(v) for v in values), value="{:g}".format(value), unit=unit, prefix=self.prefix))
 
     async def async_get_vehicle_catalogue(self):
         """

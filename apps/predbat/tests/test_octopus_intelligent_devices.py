@@ -8,7 +8,7 @@ import copy
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, OCTOPUS_CAR_ENTITY_SPEC
+from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, OCTOPUS_CAR_ENTITY_SPEC, CATALOGUE_AMBIGUOUS_CHARGER
 
 
 def test_octopus_intelligent_devices_wrapper(my_predbat):
@@ -1706,6 +1706,14 @@ async def test_intelligent_devices_ambiguous_catalogue(my_predbat):
     check(
         zappi_warning.startswith("Warn:") and "(7.4, 22 kW)" in zappi_warning and "the lowest, 7.4 kW" in zappi_warning and "input_number.predbat_car_charging_rate" in zappi_warning,
         "the zappi warning should list both powers, the one used and the setting to change: {!r}".format(zappi_warning),
+    )
+    # The setting is named with the entity prefix in use, which apps.yaml can change from "predbat"
+    custom = _make_catalogue_api(my_predbat, "ambiguous-catalogue-prefix", [])
+    custom.prefix = "house2"
+    custom.log_catalogue_ambiguity(CATALOGUE_AMBIGUOUS_CHARGER, "Myenergi", "zappi (all models)", [7.4, 22.0], 7.4, "kW")
+    check(
+        len(custom.logged) == 1 and "input_number.house2_car_charging_rate" in custom.logged[0] and "predbat_car_charging_rate" not in custom.logged[0],
+        "with prefix house2 the warning should name input_number.house2_car_charging_rate: {}".format(custom.logged),
     )
     ev6_warning = next((message for message in warnings if "EV6" in message), "")
     check(
