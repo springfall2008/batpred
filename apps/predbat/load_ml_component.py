@@ -21,6 +21,7 @@ every 30 minutes.
 
 import asyncio
 import os
+import time
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
 from utils import get_now_from_cumulative, dp2, dp4, minute_data
@@ -33,6 +34,17 @@ import numpy as np
 # Training intervals
 RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
 PREDICTION_INTERVAL_SECONDS = 30 * 60  # 30 minutes between predictions
+
+# Training runs as a background task outside run()'s run_timeout, because a first curriculum on
+# slow hardware can legitimately take longer than any fixed cap - and a cancelled run is thrown
+# away, so a cap it always exceeds means that model never exists. It is judged on progress instead:
+# no completed epoch for this long means it is stuck.
+TRAINING_STALL_SECONDS = 2 * 60 * 60
+# A run still progressing after this long is logged once, so slow training is visible, not silent
+TRAINING_SLOW_WARN_SECONDS = 2 * 60 * 60
+# Wait after a run that failed or was abandoned before trying again, rather than relaunching the
+# same doomed run every minute
+TRAINING_RETRY_SECONDS = 30 * 60
 
 # Database schema version - increment when the saved format changes to force a clean rebuild
 DATABASE_VERSION = 1
@@ -95,7 +107,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_curriculum_max_passes = 4  # Max intermediate passes (0 = no limit)
         self.load_ml_database_days = load_ml_database_days
         self.ml_validation_holdout_hours = 48
-        self.run_timeout = 2 * 60 * 60  # 2 hours timeout for the whole run to prevent runaway execution
+        self.run_timeout = 2 * 60 * 60  # 2 hours timeout for one run() - training is not under it, see TRAINING_STALL_SECONDS
 
         # Data state
         self.load_data = None
@@ -120,6 +132,22 @@ class LoadMLComponent(ComponentBase):
         self.last_train_time = None
         self.initial_training_done = False
         self.database_history_loaded = False
+
+        # In-flight training state. training_task is the background task run() launches training as.
+        # training_running is owned by the worker thread (it clears it when the synchronous
+        # curriculum truly returns, not when the awaiting task goes away), and training_cancelled is
+        # the component's own cancel signal for a run that has been given up on - see _do_training.
+        # The time.monotonic() stamps and flags feed _watch_training's stall and slow-run checks -
+        # monotonic so a host suspend or clock step is not read as a stall - and
+        # training_retry_after holds off a new run after one fails.
+        self.training_task = None
+        self.training_running = False
+        self.training_cancelled = False
+        self.training_started_monotonic = None
+        self.training_progress_monotonic = None
+        self.training_stalled = False
+        self.training_slow_warned = False
+        self.training_retry_after = None
 
         # Predictions cache
         self.current_predictions = {}
@@ -170,8 +198,28 @@ class LoadMLComponent(ComponentBase):
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
     def is_calculating(self):
-        """Return whether the component is currently calculating predictions."""
-        return self.load_ml_calculating
+        """Return whether the component is currently doing NumPy-heavy work.
+
+        training_running is part of the answer because training runs in a background thread long
+        after the run() that launched it has cleared load_ml_calculating.
+        """
+        return self.load_ml_calculating or self.training_running
+
+    def training_in_flight(self):
+        """Return True while a training run's task or worker thread has not finished.
+
+        Both, because either can outlive the other: the thread keeps going after its task is
+        cancelled at shutdown, and the task has work of its own before and after the thread.
+        """
+        return self.training_running or (self.training_task is not None and not self.training_task.done())
+
+    def training_status(self):
+        """Return idle, training or stalled, for the stats sensor."""
+        if self.training_stalled:
+            return "stalled"
+        if self.training_in_flight():
+            return "training"
+        return "idle"
 
     def get_from_incrementing(self, data, index, step, backwards=True):
         """
@@ -717,15 +765,28 @@ class LoadMLComponent(ComponentBase):
             self.api_started = True
             return True
 
+        # A run launched by an earlier tick may have finished, swapping in a new model, or still be
+        # going. It trains a clone, so this tick's own fetch and prediction are free to proceed.
+        training_finished = self._collect_training()
+        training_in_flight = self.training_in_flight()
+        stall_flagged = self._watch_training() if training_in_flight else False
+        if not training_in_flight:
+            # Cleared here rather than when the task is collected: a thread can outlive its task
+            self.training_stalled = False
+        retry_wait = self.training_retry_after is not None and self.now_utc < self.training_retry_after
+
         # Determine if training is needed
         is_initial = not self.initial_training_done
 
         # Retrain if the model is older than the retrain interval (rather than on a fixed tick)
         retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else RETRAIN_INTERVAL_SECONDS
-        should_train = not first and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
+        should_train = not first and not training_in_flight and not retry_wait and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
 
-        # Fetch fresh load data periodically (every N minutes)
-        should_fetch = first or should_train or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
+        # Fetch fresh load data periodically (every N minutes), and straight after a training run
+        # lands so its model is published on current data rather than data fetched before a run
+        # that may have taken hours - one that crossed midnight would otherwise publish yesterday's
+        # daily total as today's baseline.
+        should_fetch = first or should_train or training_finished or stall_flagged or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
 
         # Load database
         if not self.database_history_loaded and self.load_ml_database_days:
@@ -752,6 +813,15 @@ class LoadMLComponent(ComponentBase):
         if is_initial:
             if should_train:
                 self.log("ML Component: Starting initial training")
+            elif training_in_flight or retry_wait:
+                # Nothing to predict with until the first run lands, but the component itself is
+                # working: the run is watched by _watch_training and a failure has logged its retry.
+                # The stats sensor still carries the run's progress, a stall or the retry time.
+                if should_fetch:
+                    self._update_model_status()
+                    self._publish_entity()
+                self.update_success_timestamp()
+                return True
             else:
                 self.log("ML Component: Initial training is required, delaying until component has started")
                 return True
@@ -759,7 +829,12 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: Starting fine-tune training (2h interval), model age is {} hours".format(retrain_age_seconds / 3600.0))
         elif should_fetch:
             # If not training either then no need to print anything
-            self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
+            if training_in_flight:
+                self.log("ML Component: Training in progress, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
+            elif retry_wait:
+                self.log("ML Component: Training will be retried after {}, model age is {} hours".format(self.training_retry_after.strftime(TIME_FORMAT), dp2(retrain_age_seconds / 3600.0)))
+            else:
+                self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
 
         if should_train or should_fetch:
             # Set load_ml_calculating across all NumPy-heavy work (training + predict + save). This used
@@ -768,25 +843,23 @@ class LoadMLComponent(ComponentBase):
             # via is_calculating() and logged by calculate_plan().
             if self.base.prediction_started:
                 self.log("ML Component: Waiting for current prediction cycle to complete before running ML work")
-                while self.base.prediction_started:
+                # api_stop is part of the condition because a plan cycle is itself minutes long: a
+                # stop landing while one runs would otherwise be held here until it finished, which
+                # is the same delay class #5075 set out to remove.
+                while self.base.prediction_started and not self.api_stop:
                     await asyncio.sleep(0.5)
             try:
                 self.load_ml_calculating = True
 
-                if should_train:
-                    self.log("ML Component: Doing training...")
-                    await self._do_training(is_initial)
+                if self.api_stop:
+                    # A prediction cycle or a new training run would just add their own delay to the
+                    # stop we are already answering
+                    self.log("ML Component: Stopping, skipping this cycle's ML work")
+                    should_fetch = False
+                    should_train = False
 
-                    # Training can run for many minutes, during which the data fetched above
-                    # goes stale - both the lookback window feeding the prediction and the
-                    # load_minutes_now baseline still refer to the pre-training time. Re-fetch
-                    # so everything is anchored to the current time again. Without this a
-                    # training run that straddles midnight publishes yesterday's daily total
-                    # as today's baseline, inflating the forecast by a whole day of load.
-                    stale_minutes = (self.now_utc - self.last_data_fetch).total_seconds() / 60.0 if self.last_data_fetch else 0
-                    if stale_minutes >= PREDICT_STEP:
-                        self.log("ML Component: Data is {:.0f} minutes stale after training, re-fetching before prediction".format(stale_minutes))
-                        await self._do_fetch()
+                if should_train:
+                    self._start_training(is_initial)
 
                 # Update model validity status
                 self._update_model_status()
@@ -795,7 +868,7 @@ class LoadMLComponent(ComponentBase):
                     # Get predictions for the current cycle (will be used by fetch.py to publish forecast entity)
                     self._get_predictions(self.now_utc, self.midnight_utc)
 
-                    # Publish entity with current state
+                    # Publish entity with current state, including whether training is running
                     self._publish_entity()
                     self.log("ML Component: Prediction cycle completed")
 
@@ -945,19 +1018,106 @@ class LoadMLComponent(ComponentBase):
             self.export_rates_data = None
             self.data_ready = False
 
+    def training_stop_requested(self):
+        """Return True when this training run has been cancelled, so the worker thread abandons it.
+
+        Three sources, because a training run outlives its task: api_stop for an ordinary shutdown,
+        fatal_error because ComponentBase.start() exits on it without ever calling stop(), and
+        training_cancelled for a run given up on while the component carries on - one that stalled,
+        or whose task was cancelled - where api_stop is still False, so without it the worker
+        thread would train on unwatched.
+        """
+        return self.api_stop or self.fatal_error or self.training_cancelled
+
+    def _start_training(self, is_initial):
+        """Launch a training run as a background task on this component's loop, without awaiting it.
+
+        Awaiting it would put the run under run()'s run_timeout, and the watchdog would cancel - and
+        so throw away - any curriculum longer than that, which a first run on slow hardware can
+        legitimately be, every time, so that model would never exist. It trains a clone, so later
+        ticks keep predicting from the live model meanwhile, and _watch_training judges it on
+        progress instead of a deadline.
+        """
+        self.training_started_monotonic = time.monotonic()
+        self.training_progress_monotonic = self.training_started_monotonic
+        self.training_stalled = False
+        self.training_slow_warned = False
+        self.training_retry_after = None
+        self.log("ML Component: Doing training...")
+        self.training_task = asyncio.ensure_future(self._do_training(is_initial))
+
+    def _training_progress(self):
+        """Per-epoch heartbeat from the worker thread, for _watch_training's stall check."""
+        self.training_progress_monotonic = time.monotonic()
+
+    def _watch_training(self):
+        """Check an in-flight training run for a stall, and log one that is slow but progressing.
+
+        A run with no completed epoch for TRAINING_STALL_SECONDS is told to abandon itself and
+        flagged on the stats sensor. The live model keeps serving either way. A thread stuck inside a
+        single epoch will not see the request until it gets out, so the flag stays up until it does.
+
+        Returns:
+            True when this call newly flagged a stall, so the caller can publish it
+        """
+        if self.training_stalled:
+            return False
+
+        now = time.monotonic()
+        silent_seconds = now - self.training_progress_monotonic if self.training_progress_monotonic is not None else 0
+        if silent_seconds >= TRAINING_STALL_SECONDS:
+            self.training_stalled = True
+            self.training_cancelled = True
+            self.log("Error: ML Component: Training has made no progress for {} minutes, asking it to abandon the run - the current model stays in use".format(int(silent_seconds // 60)))
+            return True
+
+        running_seconds = now - self.training_started_monotonic if self.training_started_monotonic is not None else 0
+        if running_seconds >= TRAINING_SLOW_WARN_SECONDS and not self.training_slow_warned:
+            self.training_slow_warned = True
+            self.log("Warn: ML Component: Training has been running for {:.1f} hours and is still progressing (last epoch {:.0f} minutes ago)".format(running_seconds / 3600.0, silent_seconds / 60.0))
+        return False
+
+    def _training_time_iso(self, monotonic_stamp):
+        """Render a time.monotonic() stamp from the in-flight run as a wall-clock ISO time, or None."""
+        if monotonic_stamp is None or not self.training_in_flight():
+            return None
+        return (datetime.now(timezone.utc) - timedelta(seconds=time.monotonic() - monotonic_stamp)).isoformat()
+
+    def _collect_training(self):
+        """Clear a finished training task, returning True when one has finished since the last tick."""
+        task = self.training_task
+        if task is None or not task.done():
+            return False
+        self.training_task = None
+        if not task.cancelled() and task.exception() is not None:
+            # _do_training catches its own exceptions, so this is a bug in that handling - report
+            # it rather than letting it vanish with the task
+            self.log("Error: ML Component: Training task failed: {}".format(task.exception()))
+        return True
+
+    def _schedule_training_retry(self):
+        """Hold off the next training run after one that failed or was abandoned."""
+        self.training_retry_after = self.now_utc + timedelta(seconds=TRAINING_RETRY_SECONDS)
+        self.log("ML Component: Will retry training after {}".format(self.training_retry_after.strftime(TIME_FORMAT)))
+
     async def _do_training(self, is_initial):
         """
-        Perform model training.
+        Perform one model training run, as the background task _start_training launches.
+
+        Trains a clone of the live predictor on a worker thread and swaps it in only if the run
+        succeeds, scheduling a retry if it fails or is abandoned.
 
         Args:
             is_initial: True for full training, False for fine-tuning
         """
         # Snapshot data under the lock so we can release it before the CPU-bound
-        # training call.  predictor.train() can take 30-120 seconds on slow hardware
-        # and must NOT run while holding data_lock or the asyncio event loop will freeze.
+        # training call.  A curriculum run is many passes of many epochs and routinely takes
+        # minutes, so it must NOT run while holding data_lock, and must not run on the event
+        # loop either - see the to_thread call below.
         async with self.data_lock:
             if not self.load_data:
                 self.log("Warn: ML Component: No data for training")
+                self._schedule_training_retry()
                 return
 
             if self.load_data_age_days < 3:
@@ -974,33 +1134,49 @@ class LoadMLComponent(ComponentBase):
             time_decay = min(self.ml_time_decay_days, self.load_data_age_days)
             holdout_hours = self.ml_validation_holdout_hours
             patience = self.ml_patience_initial if is_initial else self.ml_patience_update
-            max_intermediate_passes = self.ml_curriculum_max_passes
             window_days = self.ml_curriculum_window_days
-            step_days = self.ml_curriculum_step_days
-        # Lock released - event loop is free during training
-
-        try:
+            # The initial curriculum walks the window out in fixed wider steps with a capped pass
+            # count rather than following the configured fine-tune sizing, so the first model is
+            # built from the oldest data forward without the run growing unbounded with history.
             if is_initial:
-                # Curriculum: progressively expand the training window from oldest week
-                # forward so the model learns gradually from historical structure.
-                val_mae = self.predictor.train_curriculum(
-                    load_data_snap,
-                    now_utc_snap,
-                    pv_minutes=pv_data_snap,
-                    temp_minutes=temp_data_snap,
-                    import_rates=import_rates_snap,
-                    export_rates=export_rates_snap,
-                    epochs=epochs,
-                    time_decay_days=time_decay,
-                    validation_holdout_hours=holdout_hours,
-                    patience=patience,
-                    curriculum_window_days=window_days,
-                    curriculum_step_days=5,
-                    max_intermediate_passes=8,
-                    progress_callback=self.update_success_timestamp,
-                )
+                step_days = 5
+                max_intermediate_passes = 8
             else:
-                val_mae = self.predictor.train_curriculum(
+                step_days = self.ml_curriculum_step_days
+                max_intermediate_passes = self.ml_curriculum_max_passes
+        # Lock released
+
+        # Train a clone, not the live predictor. Training mutates the model in place for the whole
+        # run, so the live one would be part-trained and racing the thread for anything that reads
+        # it in the meantime, and left part-trained by a run that is abandoned, fails or raises.
+        # The clone replaces it only once a run succeeds; otherwise it is simply dropped. It is
+        # taken on the worker thread, keeping the deep copy off the loop and inside the error
+        # handling below.
+        live_predictor = self.predictor
+
+        # Tracks whether the stop hook ever actually answered True during this run. train() and
+        # train_curriculum() both return None for "aborted" and for "every pass failed", so reading
+        # the hook again after the fact would file a genuine data failure as an abandonment whenever
+        # a stop happened to land in between - and then never count the error or warn about it.
+        stop_signalled = {"tripped": False}
+
+        def stop_hook():
+            """Answer the trainer's abort question, remembering a True so the caller can tell why."""
+            if self.training_stop_requested():
+                stop_signalled["tripped"] = True
+                return True
+            return False
+
+        def run_training():
+            """Run the curriculum on this worker thread, owning the in-flight flag for its lifetime.
+
+            The flag is raised and cleared here rather than in the awaiting coroutine because a
+            cancelled coroutine never reaches its own cleanup, while this thread always finishes.
+            """
+            self.training_running = True
+            try:
+                trainee = live_predictor.clone()
+                return trainee, trainee.train_curriculum(
                     load_data_snap,
                     now_utc_snap,
                     pv_minutes=pv_data_snap,
@@ -1014,10 +1190,40 @@ class LoadMLComponent(ComponentBase):
                     curriculum_window_days=window_days,
                     curriculum_step_days=step_days,
                     max_intermediate_passes=max_intermediate_passes,
-                    progress_callback=self.update_success_timestamp,
+                    progress_callback=self._training_progress,
+                    stop_callback=stop_hook,
                 )
+            finally:
+                self.training_running = False
+
+        self.training_cancelled = False
+        try:
+            # Run the curriculum on a worker thread. It is synchronous, CPU-bound and minutes long,
+            # so calling it directly would pin this component's event loop for its whole duration:
+            # api_stop would go unnoticed and a shutdown landing mid-training would sit waiting on
+            # this component's thread (#5075).
+            try:
+                trainee, val_mae = await asyncio.to_thread(run_training)
+            except asyncio.CancelledError:
+                # Cancelling this task - the component's loop being torn down at shutdown, say -
+                # does nothing to the worker thread already inside train_curriculum. Trip our own
+                # stop signal so the thread abandons itself at its next epoch check instead of
+                # training on unwatched, then let the cancellation propagate.
+                self.training_cancelled = True
+                self.log("Warn: ML Component: Training task was cancelled - asking the training thread to abandon the run")
+                raise
+
+            if val_mae is None and stop_signalled["tripped"]:
+                # Abandoned on purpose, not a failure. The part-trained clone is dropped, and the
+                # live model is exactly as it was before the run
+                self.log("ML Component: Training abandoned because the run stalled, was cancelled or the component is stopping")
+                if not self.api_stop and not self.fatal_error:
+                    self._schedule_training_retry()
+                return
 
             if val_mae is not None:
+                self.predictor = trainee
+                self.training_retry_after = None
                 self.last_train_time = datetime.now(timezone.utc)
                 self.initial_training_done = True
 
@@ -1036,10 +1242,12 @@ class LoadMLComponent(ComponentBase):
                     self.predictor.save(self.model_filepath)
             else:
                 self.log("Warn: ML Component: Training failed")
+                self._schedule_training_retry()
 
         except Exception as e:
             self.log("Error: ML Component: Training exception: {}".format(e))
             self.log("Error: " + traceback.format_exc())
+            self._schedule_training_retry()
 
     def _update_model_status(self):
         """Update model validity status based on current state."""
@@ -1152,6 +1360,10 @@ class LoadMLComponent(ComponentBase):
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours is not None else None,
                 "training_days": self.load_data_age_days,
                 "status": self.model_status,
+                "training_status": self.training_status(),
+                "training_started": self._training_time_iso(self.training_started_monotonic),
+                "training_last_progress": self._training_time_iso(self.training_progress_monotonic),
+                "training_retry_after": self.training_retry_after.isoformat() if self.training_retry_after else None,
                 "load_ml_source": self.ml_source,
                 "model_version": MODEL_VERSION,
                 "epochs_trained": self.predictor.epochs_trained if self.predictor else 0,

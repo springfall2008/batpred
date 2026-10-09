@@ -10,6 +10,7 @@
 # fmt: on
 
 from utils import dp4
+import copy
 import numpy as np
 from datetime import datetime, timezone, timedelta
 import tempfile
@@ -55,7 +56,19 @@ def test_load_ml(my_predbat=None):
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("curriculum_training", _test_curriculum_training, "Curriculum training with progressive window expansion"),
         ("training_progress_callback", _test_training_progress_callback, "Training reports liveness through progress_callback"),
-        ("component_alive_during_training", _test_component_marks_itself_alive_during_training, "Component keeps its success timestamp fresh while training"),
+        ("training_progress_reported", _test_component_records_training_progress, "Component records training progress from every epoch"),
+        ("training_stop_callback", _test_training_stops_on_stop_callback, "Training abandons a run when the stop hook trips"),
+        ("training_off_event_loop", _test_component_training_does_not_block_event_loop, "Component training leaves its event loop free to run"),
+        ("training_abandoned_on_stop", _test_component_training_abandons_run_on_stop, "Component abandons an in-flight training run when stopping"),
+        ("clone_is_independent", _test_clone_is_independent, "Training a clone leaves the original model untouched"),
+        ("training_swaps_clone_on_success", _test_component_training_swaps_in_clone_only_on_success, "Component swaps in its trained clone only when the run succeeds"),
+        ("untrained_model_not_valid", _test_untrained_model_is_not_valid, "A model that never completed a training does not read as valid"),
+        ("training_task_cancel", _test_component_training_survives_task_cancel, "A cancelled training task stops the training thread instead of orphaning it"),
+        ("training_in_background", _test_component_training_runs_in_background, "run() trains in the background and keeps predicting meanwhile"),
+        ("initial_training_published", _test_component_initial_training_is_published, "Ticks during a first training run keep the stats sensor current"),
+        ("training_stall_and_slow", _test_component_training_stall_and_slow_run, "A slow training run is logged once and a stalled one abandoned and reported"),
+        ("training_retry_backoff", _test_component_training_retry_backoff, "A failed training run is retried after a backoff, not on the next tick"),
+        ("training_failure_not_abandon", _test_component_training_failure_is_not_reported_as_abandoned, "An all-passes-failed run is reported as a failure, not an abandonment"),
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
@@ -1111,6 +1124,8 @@ def _test_component_run_data_merge():
         result = await component.run(seconds=30, first=False)
 
         assert result is True, "Second run should return True"
+        assert component.training_task is not None, "Training should be launched as a background task on the second run"
+        await component.training_task
         assert training_call_count[0] == 1, f"Initial training should run on second run, ran {training_call_count[0]} times"
         assert component.initial_training_done is True, "initial_training_done should be True after second run"
         assert save_call_count[0] == 1, f"save_database_history should be called once after second run, called {save_call_count[0]} times"
@@ -1135,7 +1150,7 @@ def _test_component_run_data_merge():
         # last_train_time = 30 min ago (set in mock_do_training to component.now_utc of Run 2).
         # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) -> should_train=False.
         # seconds % PREDICTION_INTERVAL_SECONDS == 0 -> should_fetch=True.
-        # Expect: fetch+predict+save only, no training.
+        # Expect: fetch+predict+save only, no training (the finished run's task is collected).
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_3, 7, 3.0, None, None, None, None))
 
         result = await component.run(seconds=PREDICTION_INTERVAL_SECONDS, first=False)
@@ -1143,6 +1158,7 @@ def _test_component_run_data_merge():
         assert result is True, "Third run should return True"
         assert training_call_count[0] == 1, f"Training should NOT run again on third run (model too fresh), ran {training_call_count[0]} times total"
         assert save_call_count[0] == 2, f"save_database_history should be called again on third run, called {save_call_count[0]} times"
+        assert component.training_task is None, "The finished training task should be collected by the next run"
 
         print("    PASS: Run 3: fetch-only cycle (model fresh), save called without retraining")
 
@@ -2747,9 +2763,9 @@ def _test_component_stale_midnight_baseline():
 
     print("    PASS: Missing snapshot timestamp falls back to the stored baseline")
 
-    # Re-fetch after a long training run must re-anchor the baseline before predicting
+    # The tick after a long training run must re-fetch, re-anchoring the baseline before predicting
     async def run_stale_refetch():
-        """Drive run() through a training cycle that leaves the fetched data stale."""
+        """Drive run() through a training run that crosses midnight, then the tick that collects it."""
         fetch_times = []
 
         async def mock_fetch_load_data():
@@ -2763,6 +2779,7 @@ def _test_component_stale_midnight_baseline():
             mock_base.now_utc = datetime(2026, 1, 2, 0, 15, 0, tzinfo=timezone.utc)
             mock_base.midnight_utc = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
             mock_base.minutes_now = 15
+            component.last_train_time = mock_base.now_utc
 
         component._fetch_load_data = mock_fetch_load_data
         component._do_training = mock_do_training
@@ -2783,6 +2800,10 @@ def _test_component_stale_midnight_baseline():
         mock_base.dashboard_calls = []
 
         await component.run(0, False)
+        await component.training_task
+        mock_base.dashboard_calls = []
+        # Not a 30-minute boundary, so only the finished training run can make this tick fetch
+        await component.run(60, False)
 
         assert len(fetch_times) == 2, f"Expected a second fetch after training, got {len(fetch_times)} fetches"
         assert fetch_times[1].day == 2, f"Second fetch should happen after midnight, got {fetch_times[1]}"
@@ -3377,20 +3398,19 @@ def _test_training_progress_callback():
     return True
 
 
-def _test_component_marks_itself_alive_during_training():
-    """_do_training must hand the trainer the component's own timestamp updater.
+class _SelfCloningFake:
+    """Base for fake predictors: clone() hands back the fake itself, so a test sees the calls _do_training makes."""
 
-    Driven through the real _do_training rather than by calling train_curriculum directly - a test
-    that passes the callback itself proves only that the test passes it, and would keep passing if
-    load_ml_component stopped wiring it up. That regression is invisible until a training run
-    silently crosses the liveness window again hours later.
-    """
+    def clone(self):
+        """Return this fake, standing in for the independent copy a real predictor would return."""
+        return self
+
+
+def _make_training_component(predictor, now_utc):
+    """Build a bare LoadMLComponent wired up with just the attributes _do_training reads."""
     import asyncio
 
     from load_ml_component import LoadMLComponent
-
-    now_utc = datetime.now(timezone.utc)
-    recorded = {}
 
     class FakeBase:
         """Minimal stand-in for the PredBat instance the component reads through."""
@@ -3398,32 +3418,18 @@ def _test_component_marks_itself_alive_during_training():
         def __init__(self):
             """Expose only what _do_training touches."""
             self.now_utc = now_utc
+            self.fatal_error = False
 
         def log(self, msg, **kwargs):
             """Swallow component logging."""
             return None
 
-    class FakePredictor:
-        """Captures the kwargs the component passes, and pulses the callback like a real run."""
-
-        def train_curriculum(self, *args, **kwargs):
-            """Record every call's progress callback and fire it once, as an epoch would.
-
-            Every call, not just the last: with is_initial the component runs the initial curriculum
-            and then a fine-tune pass, so keeping only the most recent kwargs would let an unwired
-            first call hide behind a correctly wired second one.
-            """
-            callback = kwargs.get("progress_callback")
-            recorded.setdefault("calls", []).append(callback)
-            if callback:
-                callback()
-            return 0.05
-
     component = LoadMLComponent.__new__(LoadMLComponent)
     component.base = FakeBase()
     component.log = component.base.log
+    component.api_stop = False
     component.last_success_timestamp = None
-    component.predictor = FakePredictor()
+    component.predictor = predictor
     component.data_lock = asyncio.Lock()
     component.load_data = {1: 0.1}
     component.load_data_age_days = 10
@@ -3446,20 +3452,718 @@ def _test_component_marks_itself_alive_during_training():
     component.model_status = "not_initialized"
     component.last_train_time = None
     component.initial_training_done = False
+    component.run_timeout = 2 * 60 * 60
+    component.load_ml_calculating = False
+    component.training_running = False
+    component.training_cancelled = False
+    component.training_task = None
+    component.training_started_monotonic = None
+    component.training_progress_monotonic = None
+    component.training_stalled = False
+    component.training_slow_warned = False
+    component.training_retry_after = None
+    return component
 
-    # Both paths, because _do_training picks a different train_curriculum call site for each - the
-    # initial curriculum or the fine-tune - and wiring only one of them up leaves the other able to
-    # blow past the liveness window unnoticed
+
+def _test_component_records_training_progress():
+    """_do_training must hand the trainer the component's own progress recorder.
+
+    _watch_training judges an in-flight run on how recently an epoch completed, so a run whose
+    epochs go unreported reads as stalled and is abandoned. Driven through the real _do_training
+    rather than by calling train_curriculum directly - a test that passes the callback itself proves
+    only that the test passes it, and would keep passing if load_ml_component stopped wiring it up.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    recorded = {}
+
+    class FakePredictor(_SelfCloningFake):
+        """Captures the kwargs the component passes, and pulses the callback like a real run."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record every call's progress callback and fire it once, as an epoch would.
+
+            Every call, not just the last: with is_initial the component runs the initial curriculum
+            and then a fine-tune pass, so keeping only the most recent kwargs would let an unwired
+            first call hide behind a correctly wired second one.
+            """
+            callback = kwargs.get("progress_callback")
+            recorded.setdefault("calls", []).append(callback)
+            if callback:
+                callback()
+            return 0.05
+
+    component = _make_training_component(FakePredictor(), now_utc)
+
+    # Both paths, because _do_training sizes the initial curriculum and the fine-tune differently,
+    # and wiring only one of them up leaves the other able to blow past the liveness window unnoticed
     for is_initial in (False, True):
         recorded.clear()
-        component.last_success_timestamp = None
+        component.training_progress_monotonic = None
         asyncio.run(component._do_training(is_initial=is_initial))
 
         calls = recorded.get("calls", [])
         assert len(calls) == 1, f"is_initial={is_initial}: expected exactly 1 train_curriculum call, got {len(calls)}"
         for n, callback in enumerate(calls):
             assert callback is not None, f"_do_training(is_initial={is_initial}) call {n + 1} must pass a progress_callback to train_curriculum"
-            assert callback == component.update_success_timestamp, f"is_initial={is_initial} call {n + 1}: the callback must be the component's own update_success_timestamp, not some other hook"
-        assert component.last_success_timestamp is not None, f"is_initial={is_initial}: firing the callback must move last_success_timestamp so components.is_alive() sees a recent success"
+            assert callback == component._training_progress, f"is_initial={is_initial} call {n + 1}: the callback must be the component's own _training_progress, not some other hook"
+        assert component.training_progress_monotonic is not None, f"is_initial={is_initial}: firing the callback must record progress, or _watch_training flags a working run as stalled"
+
+    return True
+
+
+def _test_component_training_does_not_block_event_loop():
+    """_do_training must leave the component's event loop free while training runs (#5075).
+
+    train_curriculum() is synchronous and minutes long, so calling it straight from the coroutine
+    pins the loop for the whole run: api_stop goes unnoticed and the run_timeout watchdog can never
+    fire. The handshake here is deterministic rather than timed - the fake trainer blocks until a
+    task scheduled on the loop releases it - so a loop that cannot run at all fails on the timeout
+    instead of on a stopwatch.
+    """
+    import asyncio
+    import threading
+
+    now_utc = datetime.now(timezone.utc)
+    # Two round trips, each gated on the trainer having reached that point. A single one-shot event
+    # released unconditionally would pass spuriously: any earlier await in _do_training that happens
+    # to yield once sets it before the trainer is entered, after which a regression back to a
+    # synchronous loop-pinning call still finds it set. Each of these is only set by a loop task
+    # that ran *after* the trainer said it was inside the call.
+    trainer_reached = [threading.Event(), threading.Event()]
+    loop_released = [threading.Event(), threading.Event()]
+    observed = {}
+
+    class BlockingPredictor(_SelfCloningFake):
+        """Blocks inside training the way a real curriculum pass does."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Hand control to the loop twice from inside the 'run', then finish it."""
+            released = []
+            for round_index in range(2):
+                trainer_reached[round_index].set()
+                released.append(loop_released[round_index].wait(timeout=10.0))
+            observed["loop_ran_during_training"] = all(released)
+            return 0.05
+
+    component = _make_training_component(BlockingPredictor(), now_utc)
+
+    async def scenario():
+        """Queue a loop task, train, and see whether the task ever got a chance to run."""
+
+        async def releaser():
+            """Answer each of the trainer's handshakes, giving up rather than spinning forever."""
+            for round_index in range(2):
+                for _ in range(200000):
+                    if trainer_reached[round_index].is_set():
+                        break
+                    await asyncio.sleep(0)
+                else:
+                    observed["gave_up_on_round"] = round_index
+                    return
+                loop_released[round_index].set()
+            observed["loop_answered_both_rounds"] = True
+
+        task = asyncio.create_task(releaser())
+        await component._do_training(is_initial=False)
+        await task
+
+    asyncio.run(scenario())
+
+    assert observed.get("loop_ran_during_training") is True, "the event loop made no progress while training ran - training is still running on the loop, so a shutdown landing mid-training cannot be answered"
+    assert observed.get("loop_answered_both_rounds") is True, "a loop task did not run between the trainer's two handshakes, so the loop is not being serviced for the duration of the training call"
+
+    return True
+
+
+def _test_component_training_abandons_run_on_stop():
+    """_do_training must let a stopping component abandon an in-flight training run (#5075).
+
+    Freeing the loop is not enough on its own: the component's thread only exits once run() returns,
+    so a curriculum that cannot be interrupted still holds the shutdown for as long as it takes to
+    finish. The component has to hand the trainer a stop hook that tracks api_stop, and must read the
+    resulting None as an abandoned run rather than a failed one - a partial model must not be saved
+    or published, and must not stamp last_train_time and so suppress the next real run.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    observed = {}
+
+    class StoppablePredictor(_SelfCloningFake):
+        """Polls the stop hook the way a real pass does, and abandons the run once it trips."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record the hook's answer either side of the component being asked to stop."""
+            stop_callback = kwargs.get("stop_callback")
+            observed["hook"] = stop_callback
+            if stop_callback is None:
+                return 0.05
+            observed["before_stop"] = stop_callback()
+            component.api_stop = True
+            observed["after_stop"] = stop_callback()
+            return None if observed["after_stop"] else 0.05
+
+    component = _make_training_component(StoppablePredictor(), now_utc)
+    asyncio.run(component._do_training(is_initial=False))
+
+    assert observed.get("hook") is not None, "_do_training must pass a stop_callback to train_curriculum, or an in-flight run cannot be abandoned on shutdown"
+    assert observed.get("before_stop") is False, "the stop hook must report False while the component is still running"
+    assert observed.get("after_stop") is True, "the stop hook must report True once api_stop is set, so the run abandons itself"
+    assert component.model_valid is False, "an abandoned run must not be published as a valid model"
+    assert component.initial_training_done is False, "an abandoned run must not count as a completed training"
+    assert component.last_train_time is None, "an abandoned run must not stamp last_train_time, or the retrain interval skips the next real run"
+
+    return True
+
+
+def _test_clone_is_independent():
+    """Training a clone must leave the original model exactly as it was.
+
+    The component trains a clone so the live model keeps serving, whole, while a run is in flight
+    and survives an abandoned, failed or raising run untouched. That only holds if no array is
+    shared: _adam_update changes the weights and moments in place, so a shallow copy would train
+    the live model too.
+    """
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(11)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+
+    predictor = LoadPredictor(learning_rate=0.01)
+    assert predictor.train(load_data, now_utc, epochs=2, patience=3) is not None, "the baseline run must succeed so there is a model to clone"
+    before = {field: copy.deepcopy(getattr(predictor, field)) for field in LoadPredictor.TRAINING_STATE_FIELDS}
+
+    trainee = predictor.clone()
+    assert trainee is not predictor, "clone() must return a new object"
+    assert trainee.log == predictor.log, "the clone must log through the same function"
+    other_data = {minute: value * 3.0 for minute, value in load_data.items()}
+    assert trainee.train(other_data, now_utc, is_initial=False, epochs=2, patience=3) is not None, "the clone must be trainable"
+
+    for field, original in before.items():
+        current = getattr(predictor, field)
+        if isinstance(original, list):
+            for n, (now_value, then_value) in enumerate(zip(current, original)):
+                assert np.array_equal(now_value, then_value), f"training the clone changed the original's {field}[{n}]"
+        elif isinstance(original, np.ndarray):
+            assert np.array_equal(current, original), f"training the clone changed the original's {field}"
+        else:
+            assert current == original, f"training the clone changed the original's {field}: {original} -> {current}"
+    assert not all(np.array_equal(a, b) for a, b in zip(trainee.weights, predictor.weights)), "the clone's weights should have moved during its own training"
+
+    return True
+
+
+def _test_component_training_swaps_in_clone_only_on_success():
+    """_do_training must replace the live predictor only with a clone whose run succeeded.
+
+    An abandoned run must leave the live model as it was - same object, same weights - rather than
+    part-trained, and so must a run that raises. A successful run must swap the trained clone in.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(13)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+
+    live = LoadPredictor(learning_rate=0.01)
+    assert live.train(load_data, now_utc, epochs=2, patience=3) is not None, "the baseline run must succeed so there is a live model"
+    live_weights = [w.copy() for w in live.weights]
+
+    component = _make_training_component(live, now_utc)
+    component.load_data = load_data
+    component.load_data_age_days = 7
+    component.ml_epochs_update = 3
+    logged = []
+    component.log = logged.append
+
+    # Abandoned: a stop lands after the first epoch
+    def stop_after_first_epoch():
+        """Stand in for a shutdown arriving mid-run."""
+        component.api_stop = True
+
+    component._training_progress = stop_after_first_epoch
+    asyncio.run(component._do_training(is_initial=False))
+    assert component.predictor is live, "an abandoned run must not swap its part-trained clone in"
+    for n, (now_value, then_value) in enumerate(zip(live.weights, live_weights)):
+        assert np.array_equal(now_value, then_value), f"an abandoned run must leave the live model's layer {n} weights untouched"
+    assert component.last_train_time is None, "an abandoned run must not stamp last_train_time"
+
+    # Raising: the trainee fails part way, after the live model has been cloned
+    class RaisingTrainee:
+        """A clone whose training blows up."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Fail the way a NumPy error mid-epoch would."""
+            raise FloatingPointError("simulated failure mid-epoch")
+
+    class RaisingPredictor:
+        """A live model whose clone fails to train."""
+
+        def clone(self):
+            """Hand back a trainee that raises."""
+            return RaisingTrainee()
+
+    raising_live = RaisingPredictor()
+    component.predictor = raising_live
+    component.api_stop = False
+    asyncio.run(component._do_training(is_initial=False))
+    assert component.predictor is raising_live, "a run that raises must not replace the live model"
+    assert any("Training exception" in msg for msg in logged), "a raising run must be logged as an exception"
+
+    # Successful: the trained clone replaces the live model, which itself was never touched
+    component.predictor = live
+    component._training_progress = lambda: None
+    asyncio.run(component._do_training(is_initial=False))
+    assert component.predictor is not live, "a successful run must swap its trained clone in"
+    assert component.last_train_time is not None, "a successful run must stamp last_train_time"
+    for n, (now_value, then_value) in enumerate(zip(live.weights, live_weights)):
+        assert np.array_equal(now_value, then_value), f"training must never touch the live model's layer {n} weights, only its clone's"
+
+    return True
+
+
+def _test_untrained_model_is_not_valid():
+    """A model whose weights exist but which has never completed a training must not read as active.
+
+    _initialize_weights() sets model_initialized before the first epoch, so an initial run abandoned
+    part-way leaves random He-initialised weights behind. model_trained is the separate signal that
+    a training actually landed - kept apart from training_timestamp, which a model saved before
+    timestamps were stored legitimately lacks while still being a properly trained model.
+    """
+    predictor = LoadPredictor(learning_rate=0.01)
+    predictor.model_initialized = True
+    predictor.weights = [np.zeros((1, 1), dtype=np.float32)]
+    predictor.training_timestamp = None
+    predictor.validation_mae = None
+
+    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (False, "not_trained"), "a model that has never completed a training must not be published as valid"
+
+    # A legacy saved model has no timestamp but has been trained, and must keep serving forecasts
+    predictor.model_trained = True
+    assert predictor.is_valid(validation_threshold=2.0, max_age_hours=48) == (True, None), "a trained model without an embedded timestamp must still be valid"
+
+    return True
+
+
+def _make_run_component(predictor, now_utc):
+    """Build a training component that run() can drive to the point of launching a fine-tune.
+
+    The fetch, model status, prediction and publish steps are stubbed to record that they ran, so a
+    test can tell which of them a tick did.
+    """
+    component = _make_training_component(predictor, now_utc)
+    component.base.midnight_utc = now_utc
+    component.base.prediction_started = False
+    component.ml_enable = True
+    component.database_history_loaded = True
+    component.load_ml_database_days = 0
+    component.data_ready = True
+    component.ml_min_days = 1
+    component.initial_training_done = True
+    component.touched = []
+    component.logged = []
+    component.log = component.logged.append
+
+    async def fake_fetch(*args, **kwargs):
+        """Record a fetch."""
+        component.touched.append("fetch")
+
+    component._do_fetch = fake_fetch
+    component._update_model_status = lambda *args, **kwargs: component.touched.append("status")
+    component._get_predictions = lambda *args, **kwargs: component.touched.append("predict")
+    component._publish_entity = lambda *args, **kwargs: component.touched.append("publish")
+    return component
+
+
+async def _wait_for_event(event, timeout=10.0):
+    """Yield to the loop until a threading.Event is set or the timeout passes; return whether it was set."""
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not event.is_set() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    return event.is_set()
+
+
+def _test_component_training_runs_in_background():
+    """run() must launch training as a background task and keep predicting while it runs.
+
+    Awaiting the run would put it under run()'s run_timeout, and the watchdog would cancel - and so
+    throw away - any curriculum longer than that, which a first run on slow hardware can
+    legitimately be, so that model would never exist. Because the run trains a clone, ticks in the
+    meantime keep refreshing the forecast from the live model; they must just not start a second
+    run. Once it finishes, the next tick must publish from fresh data.
+    """
+    import asyncio
+    import threading
+    from load_ml_component import PREDICTION_INTERVAL_SECONDS
+
+    now_utc = datetime.now(timezone.utc)
+    entered = threading.Event()
+    release = threading.Event()
+    observed = {"calls": 0}
+
+    class BlockingPredictor(_SelfCloningFake):
+        """Stays 'in training' until the test releases it."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Block until released, then report a successful run."""
+            observed["calls"] += 1
+            entered.set()
+            observed["released"] = release.wait(timeout=10.0)
+            return 0.05
+
+    component = _make_run_component(BlockingPredictor(), now_utc)
+
+    async def scenario():
+        """Launch, tick while training, finish, then tick again."""
+        observed["launch_result"] = await component.run(PREDICTION_INTERVAL_SECONDS, first=False)
+        observed["launch_touched"] = list(component.touched)
+        observed["entered"] = await _wait_for_event(entered)
+        observed["status_while_training"] = component.training_status()
+
+        component.touched.clear()
+        observed["busy_result"] = await component.run(PREDICTION_INTERVAL_SECONDS, first=False)
+        observed["busy_touched"] = list(component.touched)
+
+        release.set()
+        await component.training_task
+
+        component.touched.clear()
+        observed["after_result"] = await component.run(60, first=False)
+        observed["after_touched"] = list(component.touched)
+
+    asyncio.run(scenario())
+
+    full_cycle = ["fetch", "status", "predict", "publish"]
+    assert observed["launch_result"] is True, "the tick that launches training must succeed"
+    assert observed["entered"], "the training run must start in the background after run() returns"
+    assert observed["launch_touched"] == full_cycle, f"the launching tick must still predict and publish, got {observed['launch_touched']}"
+    assert observed["status_while_training"] == "training", f"training_status must report the run in flight, got {observed['status_while_training']}"
+    assert observed["busy_result"] is True, "a tick during training must succeed"
+    assert observed["busy_touched"] == full_cycle, f"a 30-minute tick during training must keep refreshing the forecast from the live model, got {observed['busy_touched']}"
+    assert observed["calls"] == 1, f"a tick during training must not start a second run, got {observed['calls']} runs"
+    assert observed.get("released") is True, "the trainer must have been released by the test, not timed out"
+    assert component.last_train_time is not None, "the background run must record its completion"
+    assert observed["after_result"] is True, "the tick after training must succeed"
+    assert observed["after_touched"] == full_cycle, f"the tick after training must re-fetch and publish the new model even off the 30-minute boundary, got {observed['after_touched']}"
+    assert component.training_task is None and component.training_status() == "idle", "the finished task must be collected"
+
+    return True
+
+
+def _test_component_initial_training_is_published():
+    """Ticks during a first training run must keep the stats sensor current, with no model yet.
+
+    There is nothing to predict with until the first run lands, so these ticks skip the prediction
+    cycle - but a first run on slow hardware is exactly the long one whose progress, or stall, the
+    sensor is there to show, so they must still publish on the usual 30-minute cycle, and the
+    component must stay alive.
+    """
+    import asyncio
+    import threading
+    from load_ml_component import PREDICTION_INTERVAL_SECONDS
+
+    now_utc = datetime.now(timezone.utc)
+    release = threading.Event()
+
+    class BlockingPredictor(_SelfCloningFake):
+        """Stays 'in training' until the test releases it."""
+
+        model_initialized = False
+
+        def train_curriculum(self, *args, **kwargs):
+            """Block until released."""
+            release.wait(timeout=10.0)
+            return None
+
+    component = _make_run_component(BlockingPredictor(), now_utc)
+    component.initial_training_done = False
+    observed = {}
+
+    async def scenario():
+        """Launch the first run, then tick on and off the 30-minute boundary."""
+        await component.run(PREDICTION_INTERVAL_SECONDS, first=False)
+        component.touched.clear()
+        component.last_success_timestamp = None
+        await component.run(PREDICTION_INTERVAL_SECONDS, first=False)
+        observed["boundary"] = list(component.touched)
+        observed["alive"] = component.last_success_timestamp is not None
+        component.touched.clear()
+        await component.run(60, first=False)
+        observed["off_boundary"] = list(component.touched)
+        release.set()
+        await component.training_task
+
+    asyncio.run(scenario())
+
+    assert observed["boundary"] == ["fetch", "status", "publish"], f"a 30-minute tick during the first run must publish its status without predicting, got {observed['boundary']}"
+    assert observed["alive"], "a tick during the first run must keep the component alive"
+    assert observed["off_boundary"] == [], f"ticks between 30-minute boundaries must not publish, got {observed['off_boundary']}"
+
+    return True
+
+
+def _test_component_training_stall_and_slow_run():
+    """An in-flight run is judged on progress: a slow one is logged once, a stalled one abandoned.
+
+    No run_timeout covers the background run, so this is the only thing that notices one stuck
+    inside the trainer. A stall must be logged as an error, ask the thread to abandon, and show on
+    the stats sensor until the run actually ends.
+    """
+    import asyncio
+    import time
+    from load_ml_component import TRAINING_STALL_SECONDS, TRAINING_SLOW_WARN_SECONDS
+
+    now_utc = datetime.now(timezone.utc)
+    component = _make_run_component(_SelfCloningFake(), now_utc)
+    component.last_train_time = now_utc  # No fine-tune due, so the ticks below only watch
+    component.training_running = True  # The worker thread is inside the trainer
+    now_monotonic = time.monotonic()
+
+    # Slow but progressing: past the warning threshold, last epoch a few minutes ago
+    component.training_started_monotonic = now_monotonic - TRAINING_SLOW_WARN_SECONDS - 60
+    component.training_progress_monotonic = now_monotonic - 5 * 60
+    for _ in range(2):
+        assert asyncio.run(component.run(60, first=False)) is True, "a tick during a slow run is not an error"
+    slow_warnings = [msg for msg in component.logged if "still progressing" in msg]
+    assert len(slow_warnings) == 1, f"a slow run must be logged exactly once, got {slow_warnings}"
+    assert component.training_stalled is False and component.training_cancelled is False, "a run that is still progressing must be left to finish"
+
+    # Stalled: no epoch for longer than the stall window
+    component.training_progress_monotonic = now_monotonic - TRAINING_STALL_SECONDS - 60
+    component.touched.clear()
+    for _ in range(2):
+        assert asyncio.run(component.run(60, first=False)) is True, "a tick during a stalled run is not itself an error"
+    stall_errors = [msg for msg in component.logged if msg.startswith("Error:") and "no progress" in msg]
+    assert len(stall_errors) == 1, f"a stall must be logged as an error exactly once, got {stall_errors}"
+    assert component.training_stalled is True, "a run with no progress for the stall window must be flagged"
+    assert component.training_stop_requested() is True, "the trainer's stop hook must answer True once the run is stalled"
+    assert component.training_status() == "stalled", "the stats sensor must show the stall"
+    assert component.touched.count("publish") == 1, f"the stall must be published straight away, once, even off the 30-minute boundary, got {component.touched}"
+
+    # The stuck thread finally gets out: the tick that collects its task clears the flag
+    async def thread_exits():
+        """Finish the run's task and tick."""
+        component.training_running = False
+        component.training_task = asyncio.get_running_loop().create_future()
+        component.training_task.set_result(None)
+        return await component.run(60, first=False)
+
+    assert asyncio.run(thread_exits()) is True, "the tick that collects a stalled run must succeed"
+    assert component.training_stalled is False and component.training_status() == "idle", "once the stalled run has ended the sensor must stop reporting a stall"
+
+    return True
+
+
+def _test_component_training_retry_backoff():
+    """A failed run must be retried after TRAINING_RETRY_SECONDS, not relaunched on the next tick.
+
+    Now that a run's failure returns straight to a free loop, a run that fails every time - or one
+    abandoned for stalling - would otherwise be relaunched every minute.
+    """
+    import asyncio
+    from load_ml_component import TRAINING_RETRY_SECONDS
+
+    now_utc = datetime.now(timezone.utc)
+    calls = {"count": 0}
+
+    class FailingPredictor(_SelfCloningFake):
+        """Fails its first two runs without being asked to stop, then succeeds."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Report every pass failed, until the third run."""
+            calls["count"] += 1
+            return 0.05 if calls["count"] >= 3 else None
+
+    component = _make_run_component(FailingPredictor(), now_utc)
+
+    async def scenario():
+        """Fail once, tick inside the backoff, then tick after it."""
+        await component.run(60, first=False)
+        await component.training_task
+        await component.run(60, first=False)
+        calls["inside_backoff"] = calls["count"]
+        component.base.now_utc = now_utc + timedelta(seconds=TRAINING_RETRY_SECONDS + 60)
+        await component.run(60, first=False)
+        calls["retry_after_while_retrying"] = component.training_retry_after
+        await component.training_task
+        component.base.now_utc = now_utc + timedelta(seconds=2 * TRAINING_RETRY_SECONDS + 120)
+        await component.run(60, first=False)
+        await component.training_task
+
+    asyncio.run(scenario())
+
+    assert calls["inside_backoff"] == 1, f"a failed run must not be relaunched inside the backoff, got {calls['inside_backoff']} runs"
+    assert calls["count"] == 3, f"a failed run must be retried each time its backoff has passed, got {calls['count']} runs"
+    assert calls["retry_after_while_retrying"] is None, "launching the retry must clear the retry time, or the sensor shows a retry pending while it runs"
+    assert component.training_retry_after is None, "a successful run must leave no retry pending"
+    assert any("Will retry training" in msg for msg in component.logged), "the retry time must be logged"
+
+    return True
+
+
+def _test_component_training_survives_task_cancel():
+    """A cancelled training task must stop the training thread, not orphan it (#5075 follow-up).
+
+    Cancelling the task - the component's loop being torn down at shutdown, say - reaches the
+    coroutine awaiting to_thread, not the worker thread already inside train_curriculum. api_stop
+    need not be set on that path, so without the component's own cancel signal the thread would
+    train on unwatched. And until it finishes, run() must not start a second curriculum alongside
+    it: the two would compete for the CPU, and the new run would reset the cancel signal and tell
+    the orphan to carry on.
+    """
+    import asyncio
+    import threading
+    import time
+    from load_ml_component import PREDICTION_INTERVAL_SECONDS
+
+    now_utc = datetime.now(timezone.utc)
+    entered = threading.Event()
+    allow_exit = threading.Event()
+    observed = {"calls": 0}
+
+    class CancelWatchPredictor(_SelfCloningFake):
+        """Polls the stop hook until it trips, then holds the thread open so the guard can be seen."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Record that the hook tripped, and stay 'in training' until released."""
+            stop_callback = kwargs.get("stop_callback")
+            observed["calls"] += 1
+            entered.set()
+            for _ in range(1000):
+                if stop_callback():
+                    observed["hook_tripped"] = True
+                    break
+                time.sleep(0.01)
+            allow_exit.wait(timeout=10.0)
+            return None
+
+    component = _make_run_component(CancelWatchPredictor(), now_utc)
+
+    async def scenario():
+        """Cancel the training coroutine mid-run, then tick with a retrain due."""
+        task = asyncio.ensure_future(component._do_training(is_initial=False))
+        for _ in range(200000):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0)
+        assert entered.is_set(), "the trainer was never entered, so there is nothing to cancel"
+
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            observed["cancelled"] = True
+
+        # The worker thread is still inside train_curriculum here, so is_calculating() has to get
+        # its answer from it, and a tick with a retrain due (last_train_time is None) must not
+        # start a second training
+        component.load_ml_calculating = False
+        observed["calculating_while_orphaned"] = component.is_calculating()
+        observed["orphan_tick"] = await component.run(PREDICTION_INTERVAL_SECONDS, first=False)
+        observed["orphan_tick_task"] = component.training_task
+        allow_exit.set()
+
+        for _ in range(1000):
+            if not component.training_running:
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+
+    assert observed.get("cancelled") is True, "cancelling the training task must propagate out of _do_training rather than being swallowed"
+    assert component.training_cancelled is True, "a cancelled run must raise the component's own cancel signal, or the worker thread never learns to abandon"
+    assert observed.get("hook_tripped") is True, "the stop hook must report True after the coroutine is cancelled, so the orphaned training thread abandons its run"
+    assert observed["calls"] == 1, f"a second training must not start while the previous worker thread is still running, got {observed['calls']} calls"
+    assert observed.get("orphan_tick") is True and observed.get("orphan_tick_task") is None, "a tick during an orphaned run must succeed without launching a new training task"
+    assert observed.get("calculating_while_orphaned") is True, "is_calculating() must still report True while an orphaned training thread is doing NumPy work"
+    assert component.training_running is False, "the worker thread must clear training_running when it returns, or training never runs again"
+    assert component.last_train_time is None, "a cancelled run must not stamp last_train_time"
+
+    return True
+
+
+def _test_component_training_failure_is_not_reported_as_abandoned():
+    """A genuinely failed training must be reported as a failure even if a stop lands afterwards.
+
+    train_curriculum() returns None both for "aborted" and for "every pass failed", so re-reading
+    api_stop after the fact files a real data problem as an abandonment - and then never warns about
+    it or counts the error. The component has to remember whether its stop hook actually answered
+    True during the run.
+    """
+    import asyncio
+
+    now_utc = datetime.now(timezone.utc)
+    logged = []
+
+    class FailingPredictor(_SelfCloningFake):
+        """Fails every pass without the stop hook ever tripping, then a stop lands at the end."""
+
+        def train_curriculum(self, *args, **kwargs):
+            """Return the all-passes-failed None, with api_stop set just as the run finishes."""
+            component.api_stop = True
+            return None
+
+    component = _make_training_component(FailingPredictor(), now_utc)
+    component.log = lambda msg, **kwargs: logged.append(msg)
+
+    asyncio.run(component._do_training(is_initial=False))
+
+    joined = " | ".join(logged)
+    assert "Training failed" in joined, f"an all-passes-failed run must still be reported as a failure, logged: {joined}"
+    assert "Training abandoned" not in joined, f"a run whose stop hook never tripped must not be filed as an abandonment, logged: {joined}"
+    assert component.last_train_time is None, "a failed run must not stamp last_train_time"
+
+    return True
+
+
+def _test_training_stops_on_stop_callback():
+    """train() and train_curriculum() must abandon a run when the stop hook trips.
+
+    Deliberately a separate hook from progress_callback, which is barred from aborting a run: this
+    one is the caller explicitly asking training to give up. A hook that raises still must not.
+    """
+    now_utc = datetime.now(timezone.utc)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+
+    # train() checks at the top of every epoch, so a hook that trips part-way ends the run there
+    epochs_completed = []
+    checks = {"count": 0}
+
+    def stop_on_third_check():
+        """Run two full epochs, then ask training to stop."""
+        checks["count"] += 1
+        return checks["count"] >= 3
+
+    predictor = LoadPredictor(learning_rate=0.01)
+    val_mae = predictor.train(load_data, now_utc, epochs=10, patience=10, progress_callback=lambda: epochs_completed.append(1), stop_callback=stop_on_third_check)
+    assert val_mae is None, "an abandoned run must report None so the caller neither saves nor publishes a partial model"
+    assert len(epochs_completed) == 2, f"training should stop at the epoch the hook first trips, so 2 epochs complete, got {len(epochs_completed)}"
+
+    # A hook that raises must not abort the run, same rule the progress hook follows
+    def bad_stop():
+        """Blow up the way a badly behaved caller's hook might."""
+        raise RuntimeError("stop hook blew up")
+
+    predictor_bad = LoadPredictor(learning_rate=0.01)
+    val_mae_bad = predictor_bad.train(load_data, now_utc, epochs=3, patience=3, stop_callback=bad_stop)
+    assert val_mae_bad is not None, "training must survive a stop hook that raises"
+
+    # Curriculum abandons the whole run rather than carrying on into the next pass
+    load_data_28 = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
+    passes_started = []
+    predictor_c = LoadPredictor(learning_rate=0.01)
+    predictor_c.train = lambda *args, **kwargs: passes_started.append(1)
+    curriculum_mae = predictor_c.train_curriculum(load_data_28, now_utc, epochs=3, patience=3, curriculum_window_days=7, curriculum_step_days=7, stop_callback=lambda: True)
+    assert curriculum_mae is None, "a curriculum abandoned before its first pass must return None"
+    assert passes_started == [], "no pass should be started once the stop hook has tripped"
+
+    # Omitting the hook must stay valid - every existing caller relies on that
+    predictor_none = LoadPredictor(learning_rate=0.01)
+    assert predictor_none.train(load_data, now_utc, epochs=2, patience=3) is not None, "training without a stop hook must be unaffected"
 
     return True
