@@ -1,0 +1,2725 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Wallbox Component Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Wallbox Component Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-10-05-wallbox-component.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Wallbox Component Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="wallbox-component-implementation-plan">Wallbox Component Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add a <code>wallbox</code> cloud component to Predbat that monitors every Wallbox charger on an account, wires them into car charging, exposes manual controls, and can pause/resume each charger from Predbat's car plan.</p>
+<p><strong>Architecture:</strong> One new file, <code>apps/predbat/wallbox.py</code>, in the shape of <code>myenergi.py</code>: a <code>WallboxTransport</code> that owns the tokens and every <code>aiohttp</code> call, a pure <code>normalise_charger()</code> that turns a status payload into a <code>WallboxCharger</code> dataclass, and a <code>WallboxAPI(ComponentBase)</code> that polls, publishes, handles control events, auto-configures and runs plan-led control. The component never touches <code>aiohttp</code>; the transport never touches Predbat.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>aiohttp</code> (already a dependency, <code>&gt;=3.12</code>), Predbat's <code>ComponentBase</code>, <code>MockBase</code>, <code>predbat_metrics.record_api_call</code>, <code>utils.parse_car_plan_windows</code>, the Storage component.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-10-05-wallbox-component-design.md</code> — read it before starting. This plan argues from it.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>No new dependency. Do not import <code>wallbox</code>, <code>requests</code> or <code>aenum</code>.</li>
+<li>Auth host <code>https://user-api.wall-box.com/</code>, API host <code>https://api.wall-box.com/</code>. Sign in and refresh send the header <code>Partner: wallbox</code>.</li>
+<li>Config keys are exactly: <code>wallbox_username</code>, <code>wallbox_password</code>, <code>wallbox_automatic</code> (default <code>True</code>), <code>wallbox_control</code> (default <code>False</code>), <code>wallbox_poll_seconds</code> (default <code>120</code>, rounded to a multiple of 60, clamped to 60–1800). There is no <code>wallbox_enable_controls</code>.</li>
+<li>Entity names are <code>{prefix}_wallbox_{charger_id}_…</code>; the global switch is <code>switch.{prefix}_wallbox_control</code>. Every entity is published with <code>dashboard_item(..., app="wallbox")</code>.</li>
+<li>No state-of-charge sensor and no <code>car_charging_soc</code> wiring: a Type 2 connector cannot report it.</li>
+<li>Resume is sent only to a Paused charger (status 178, 182). Never to Scheduled or Waiting. Predbat never unlocks a charger.</li>
+<li>Component log lines start <code>Info: wallbox:</code>, <code>Warn: wallbox:</code> or <code>Error: wallbox:</code>.</li>
+<li>Every function and class needs a docstring (<code>interrogate</code> enforces 100%). Line length up to 250. British English in docs and comments.</li>
+<li>Variable names <code>lower_case_with_underscores</code>.</li>
+<li>Before editing an existing symbol (<code>COMPONENT_LIST</code>, <code>APPS_SCHEMA</code>, <code>TEST_REGISTRY</code>) run GitNexus <code>impact({target: "&lt;symbol&gt;", direction: "upstream"})</code> and report the blast radius; before each commit run GitNexus <code>detect_changes()</code>. This is a repository rule in <code>CLAUDE.md</code>.</li>
+<li>Tests are slow. Always write test output to a file and read the file; never pipe a test run straight into <code>grep</code>.</li>
+<li>Work on a branch, not <code>main</code>: <code>git checkout -b feat/wallbox-component</code> before Task 1.</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<p>Inputs the spec implies but does not spell out. Each has a test in the task named.</p>
+<ol>
+<li>A status payload with <code>null</code> or missing numbers (<code>charging_power: null</code>, no <code>config_data</code>) — the charger is still published with zeros, never an exception. → Task 3.</li>
+<li>One charger's status call fails while another's succeeds — the healthy charger is still published, charger N is still car N, and control skips the stale one. → Task 5.</li>
+<li>A charger with no matching car slot sensor (more chargers than planned cars, or Predbat has not planned yet) — it is left alone, not treated as "outside a window" and paused. → Task 8.</li>
+<li>A password containing <code>:</code> or non-ASCII characters — the Basic header is still built correctly as UTF-8. → Task 1.</li>
+<li>A number entity set to a non-numeric or out-of-range value — ignored or clamped, no API call with a bad value. → Task 6.</li>
+</ol>
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/wallbox.py</code> (create)</td>
+<td>Transport, normaliser, component, CLI</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_wallbox.py</code> (create)</td>
+<td>All unit tests, one <code>test_wallbox()</code> entry point</td>
+</tr>
+<tr>
+<td><code>apps/predbat/unit_test.py</code> (modify)</td>
+<td>Import and <code>TEST_REGISTRY</code> line</td>
+</tr>
+<tr>
+<td><code>apps/predbat/components.py</code> (modify)</td>
+<td><code>COMPONENT_LIST["wallbox"]</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/config.py</code> (modify)</td>
+<td>Five <code>APPS_SCHEMA</code> keys</td>
+</tr>
+<tr>
+<td><code>apps/predbat/config/apps.yaml</code> (modify)</td>
+<td>Commented example block</td>
+</tr>
+<tr>
+<td><code>docs/components.md</code>, <code>docs/car-charging.md</code>, <code>docs/apps-yaml.md</code>, <code>docs/devices.md</code> (modify)</td>
+<td>User documentation</td>
+</tr>
+<tr>
+<td><code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.github/copilot-instructions.md</code> (modify)</td>
+<td>Component count and name lists</td>
+</tr>
+</tbody>
+</table>
+<p>How to run the tests (used by every task):</p>
+<pre><code class="language-bash">cd coverage
+./run_all --test wallbox &gt; /tmp/wallbox_test.log 2&gt;&amp;1; tail -30 /tmp/wallbox_test.log
+</code></pre>
+<p>A pass ends with the <code>test_wallbox</code> summary and no traceback. A failure shows a traceback in the log file.</p>
+<hr />
+<h3 id="task-1-transport-authentication-and-reads">Task 1: Transport — authentication and reads</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/wallbox.py</code>
+- Create: <code>apps/predbat/tests/test_wallbox.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import near line 278, registry near line 709, next to the <code>myenergi</code> lines)</p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>WallboxError</code>, <code>WallboxAuthError</code>, <code>WallboxRateLimitError</code>, <code>WallboxPermissionError</code>, <code>WallboxApiError</code>; <code>basic_auth_header(username, password) -&gt; str</code>; <code>WallboxTransport(log, username, password)</code> with <code>async authenticate()</code>, <code>async list_chargers() -&gt; list</code>, <code>async get_status(charger_id) -&gt; dict</code>, and the internal <code>async _api(method, path, body=None, write=False) -&gt; dict</code> that Task 4 builds on.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_wallbox.py</code>:</p>
+<pre><code class="language-python"># fmt: off
+# pylint: disable=line-too-long
+&quot;&quot;&quot;
+Unit tests for the Wallbox EV charger integration
+&quot;&quot;&quot;
+
+import asyncio
+import datetime
+import os
+import sys
+import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import aiohttp
+import pytz
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tests.test_infra import run_async
+from mock_base import MockBase
+
+from wallbox import (
+    WALLBOX_API_URL,
+    WALLBOX_AUTH_URL,
+    WallboxApiError,
+    WallboxAuthError,
+    WallboxRateLimitError,
+    WallboxTransport,
+    basic_auth_header,
+)
+
+
+def _response(json_data=None, status=200, json_error=None):
+    &quot;&quot;&quot;Build a mock aiohttp response usable as an async context manager.&quot;&quot;&quot;
+    response = MagicMock()
+    response.status = status
+    if json_error is not None:
+        response.json = AsyncMock(side_effect=json_error)
+    else:
+        response.json = AsyncMock(return_value=json_data)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+    return response
+
+
+def _session(responses):
+    &quot;&quot;&quot;Build a mock aiohttp session whose request() returns the next queued response.
+
+    A queued exception instance is raised instead. Returns (session, calls), where calls
+    records the method, URL, headers and JSON body of every request in order.
+    &quot;&quot;&quot;
+    calls = []
+    queue = list(responses)
+
+    def _request(method, url, **kwargs):
+        &quot;&quot;&quot;Record the request, then return or raise the next queued item.&quot;&quot;&quot;
+        calls.append({&quot;method&quot;: method, &quot;url&quot;: url, &quot;headers&quot;: kwargs.get(&quot;headers&quot;) or {}, &quot;json&quot;: kwargs.get(&quot;json&quot;)})
+        item = queue.pop(0) if queue else _response({})
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    session = MagicMock()
+    session.request = _request
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session, calls
+
+
+def _auth_payload(token=&quot;jwt-1&quot;, refresh=&quot;refresh-1&quot;, life=3600, refresh_life=86400):
+    &quot;&quot;&quot;Build a sign in response whose TTLs are absolute epoch milliseconds, as Wallbox sends them.&quot;&quot;&quot;
+    now = time.time()
+    return {&quot;data&quot;: {&quot;attributes&quot;: {&quot;token&quot;: token, &quot;refresh_token&quot;: refresh, &quot;ttl&quot;: int((now + life) * 1000), &quot;refresh_token_ttl&quot;: int((now + refresh_life) * 1000)}}}
+
+
+MOCK_GROUPS = {&quot;result&quot;: {&quot;groups&quot;: [{&quot;chargers&quot;: [{&quot;id&quot;: 202}, {&quot;id&quot;: 101}]}, {&quot;chargers&quot;: []}]}}
+
+
+def test_basic_auth_header():
+    &quot;&quot;&quot;The Basic header is UTF-8, so a colon or accented character in the password survives.&quot;&quot;&quot;
+    assert basic_auth_header(&quot;user@example.com&quot;, &quot;secret&quot;) == &quot;Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ=&quot;
+    # base64 of &quot;a:pä:ss&quot; encoded as UTF-8
+    assert basic_auth_header(&quot;a&quot;, &quot;pä:ss&quot;) == &quot;Basic YTpww6Q6c3M=&quot;
+    print(&quot;  ✓ Basic auth header is built as UTF-8&quot;)
+
+
+def test_transport_signs_in_then_lists_chargers():
+    &quot;&quot;&quot;The first call signs in with Basic auth and the Partner header, then uses the bearer token.&quot;&quot;&quot;
+    session, calls = _session([_response(_auth_payload()), _response(MOCK_GROUPS)])
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        chargers = run_async(transport.list_chargers())
+
+    assert chargers == [202, 101], chargers
+    assert calls[0][&quot;url&quot;] == WALLBOX_AUTH_URL + &quot;users/signin&quot;
+    assert calls[0][&quot;headers&quot;][&quot;Authorization&quot;] == basic_auth_header(&quot;user@example.com&quot;, &quot;secret&quot;)
+    assert calls[0][&quot;headers&quot;][&quot;Partner&quot;] == &quot;wallbox&quot;
+    assert calls[1][&quot;url&quot;] == WALLBOX_API_URL + &quot;v3/chargers/groups&quot;
+    assert calls[1][&quot;headers&quot;][&quot;Authorization&quot;] == &quot;Bearer jwt-1&quot;
+    print(&quot;  ✓ Transport signs in then lists chargers&quot;)
+
+
+def test_transport_reuses_a_valid_token():
+    &quot;&quot;&quot;A token with life left is reused: two reads make one sign in.&quot;&quot;&quot;
+    session, calls = _session([_response(_auth_payload()), _response({&quot;status_id&quot;: 193}), _response({&quot;status_id&quot;: 161})])
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        first = run_async(transport.get_status(101))
+        second = run_async(transport.get_status(101))
+
+    assert first == {&quot;status_id&quot;: 193} and second == {&quot;status_id&quot;: 161}
+    assert [call[&quot;url&quot;] for call in calls] == [WALLBOX_AUTH_URL + &quot;users/signin&quot;, WALLBOX_API_URL + &quot;chargers/status/101&quot;, WALLBOX_API_URL + &quot;chargers/status/101&quot;]
+    print(&quot;  ✓ A valid token is reused&quot;)
+
+
+def test_transport_refreshes_an_expired_token():
+    &quot;&quot;&quot;An expired token with a live refresh token is refreshed with a bearer call, not a sign in.&quot;&quot;&quot;
+    session, calls = _session([_response(_auth_payload(token=&quot;jwt-2&quot;)), _response({&quot;status_id&quot;: 193})])
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+    transport.token = &quot;jwt-1&quot;
+    transport.token_expiry = time.time() - 10
+    transport.refresh_token = &quot;refresh-1&quot;
+    transport.refresh_expiry = time.time() + 3600
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        run_async(transport.get_status(101))
+
+    assert calls[0][&quot;url&quot;] == WALLBOX_AUTH_URL + &quot;users/refresh-token&quot;
+    assert calls[0][&quot;headers&quot;][&quot;Authorization&quot;] == &quot;Bearer refresh-1&quot;
+    assert calls[0][&quot;headers&quot;][&quot;Partner&quot;] == &quot;wallbox&quot;
+    assert calls[1][&quot;headers&quot;][&quot;Authorization&quot;] == &quot;Bearer jwt-2&quot;
+    print(&quot;  ✓ An expired token is refreshed&quot;)
+
+
+def test_transport_signs_in_when_the_refresh_is_rejected():
+    &quot;&quot;&quot;A 401 on refresh means the refresh token was revoked: fall back to a full sign in.&quot;&quot;&quot;
+    session, calls = _session([_response({}, status=401), _response(_auth_payload(token=&quot;jwt-3&quot;)), _response({&quot;status_id&quot;: 193})])
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+    transport.token = &quot;jwt-1&quot;
+    transport.token_expiry = time.time() - 10
+    transport.refresh_token = &quot;refresh-1&quot;
+    transport.refresh_expiry = time.time() + 3600
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        run_async(transport.get_status(101))
+
+    assert [call[&quot;url&quot;] for call in calls] == [WALLBOX_AUTH_URL + &quot;users/refresh-token&quot;, WALLBOX_AUTH_URL + &quot;users/signin&quot;, WALLBOX_API_URL + &quot;chargers/status/101&quot;]
+    assert calls[2][&quot;headers&quot;][&quot;Authorization&quot;] == &quot;Bearer jwt-3&quot;
+    print(&quot;  ✓ A rejected refresh falls back to sign in&quot;)
+
+
+def test_transport_bad_credentials():
+    &quot;&quot;&quot;A 403 on sign in is an auth error, recorded with reason auth_error.&quot;&quot;&quot;
+    session, _ = _session([_response({}, status=403)])
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;wrong&quot;)
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;) as mock_record:
+        try:
+            run_async(transport.list_chargers())
+            raise AssertionError(&quot;Expected WallboxAuthError&quot;)
+        except WallboxAuthError:
+            pass
+    assert mock_record.call_args.kwargs.get(&quot;reason&quot;) == &quot;auth_error&quot;
+    print(&quot;  ✓ Bad credentials raise WallboxAuthError&quot;)
+
+
+def test_transport_retries_once_after_a_revoked_token():
+    &quot;&quot;&quot;A 401 on a data call drops the token, signs in again and retries the call once.&quot;&quot;&quot;
+    session, calls = _session([_response({}, status=401), _response(_auth_payload(token=&quot;jwt-9&quot;)), _response({&quot;status_id&quot;: 193})])
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+    transport.token = &quot;jwt-1&quot;
+    transport.token_expiry = time.time() + 3600
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        status = run_async(transport.get_status(101))
+
+    assert status == {&quot;status_id&quot;: 193}
+    assert calls[1][&quot;url&quot;] == WALLBOX_AUTH_URL + &quot;users/signin&quot;
+    assert calls[2][&quot;headers&quot;][&quot;Authorization&quot;] == &quot;Bearer jwt-9&quot;
+    print(&quot;  ✓ A revoked token is replaced and the call retried once&quot;)
+
+
+def test_transport_rate_limit_and_failures():
+    &quot;&quot;&quot;429 is its own error; a 500, a timeout, a dropped connection and a non-JSON body are API errors.&quot;&quot;&quot;
+    cases = [
+        (_response({}, status=429), WallboxRateLimitError, &quot;rate_limit&quot;),
+        (_response({}, status=500), WallboxApiError, &quot;server_error&quot;),
+        (_response({}, status=404), WallboxApiError, &quot;client_error&quot;),
+        (asyncio.TimeoutError(), WallboxApiError, &quot;connection_error&quot;),
+        (aiohttp.ClientError(&quot;boom&quot;), WallboxApiError, &quot;connection_error&quot;),
+        (_response(json_error=ValueError(&quot;not json&quot;)), WallboxApiError, &quot;decode_error&quot;),
+        (_response([&quot;not&quot;, &quot;a&quot;, &quot;dict&quot;]), WallboxApiError, &quot;decode_error&quot;),
+    ]
+    for item, expected, reason in cases:
+        session, _ = _session([item])
+        transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+        transport.token = &quot;jwt-1&quot;
+        transport.token_expiry = time.time() + 3600
+        with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;) as mock_record:
+            try:
+                run_async(transport.get_status(101))
+                raise AssertionError(&quot;Expected {}&quot;.format(expected.__name__))
+            except expected:
+                pass
+        assert mock_record.call_args.kwargs.get(&quot;reason&quot;) == reason, (expected, mock_record.call_args)
+    print(&quot;  ✓ Rate limit and failures map to the right errors and metric reasons&quot;)
+
+
+def test_wallbox(my_predbat=None):
+    &quot;&quot;&quot;Run every Wallbox test.&quot;&quot;&quot;
+    print(&quot;=&quot; * 70)
+    print(&quot;Wallbox tests&quot;)
+    print(&quot;=&quot; * 70)
+    test_basic_auth_header()
+    test_transport_signs_in_then_lists_chargers()
+    test_transport_reuses_a_valid_token()
+    test_transport_refreshes_an_expired_token()
+    test_transport_signs_in_when_the_refresh_is_rejected()
+    test_transport_bad_credentials()
+    test_transport_retries_once_after_a_revoked_token()
+    test_transport_rate_limit_and_failures()
+    print(&quot;=&quot; * 70)
+    return False
+</code></pre>
+<p>In <code>apps/predbat/unit_test.py</code>, add next to the <code>myenergi</code> import and registry lines:</p>
+<pre><code class="language-python">from tests.test_wallbox import test_wallbox
+</code></pre>
+<pre><code class="language-python">    (&quot;wallbox&quot;, test_wallbox, &quot;Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Run the test command from "How to run the tests".
+Expected: a traceback ending <code>ModuleNotFoundError: No module named 'wallbox'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Create <code>apps/predbat/wallbox.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Wallbox EV charger cloud API library.
+# The API is the one the Home Assistant wallbox integration and the wallbox PyPI
+# library use; it is reimplemented here over aiohttp.
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+
+&quot;&quot;&quot;Wallbox EV charger integration.
+
+Monitors every charger on a Wallbox account, wires them into Predbat's car charging
+inputs, exposes pause/resume, lock, charging current and Eco-Smart controls, and can
+pause and resume each charger from Predbat's own car charging plan.
+&quot;&quot;&quot;
+
+import asyncio
+import base64
+import time
+
+import aiohttp
+
+from predbat_metrics import record_api_call
+
+WALLBOX_AUTH_URL = &quot;https://user-api.wall-box.com/&quot;
+WALLBOX_API_URL = &quot;https://api.wall-box.com/&quot;
+
+API_TIMEOUT = 30
+USER_AGENT = &quot;Predbat&quot;
+
+# A token is treated as expired this long before Wallbox says it is, so a call never
+# leaves with a token that dies in flight
+TOKEN_MARGIN_SECONDS = 120
+
+
+class WallboxError(Exception):
+    &quot;&quot;&quot;Base class for every Wallbox API failure.&quot;&quot;&quot;
+
+
+class WallboxAuthError(WallboxError):
+    &quot;&quot;&quot;Wallbox rejected the credentials or the token.&quot;&quot;&quot;
+
+
+class WallboxRateLimitError(WallboxError):
+    &quot;&quot;&quot;Wallbox answered 429, too many requests.&quot;&quot;&quot;
+
+
+class WallboxPermissionError(WallboxError):
+    &quot;&quot;&quot;Wallbox refused a write because the account lacks admin rights over the charger.&quot;&quot;&quot;
+
+
+class WallboxApiError(WallboxError):
+    &quot;&quot;&quot;Any other failure: a bad status, a timeout, a dropped connection or an unreadable body.&quot;&quot;&quot;
+
+
+def basic_auth_header(username, password):
+    &quot;&quot;&quot;Build an HTTP Basic Authorization header value, encoded as UTF-8.&quot;&quot;&quot;
+    token = base64.b64encode(&quot;{}:{}&quot;.format(username, password).encode(&quot;utf-8&quot;)).decode(&quot;ascii&quot;)
+    return &quot;Basic &quot; + token
+
+
+class WallboxTransport:
+    &quot;&quot;&quot;Owns the Wallbox tokens and performs every HTTP call.&quot;&quot;&quot;
+
+    def __init__(self, log, username, password):
+        &quot;&quot;&quot;Store the credentials and start with no token.&quot;&quot;&quot;
+        self.log = log
+        self.username = username
+        self.password = password
+        self.token = None
+        self.refresh_token = None
+        # Absolute expiry times, in epoch seconds
+        self.token_expiry = 0
+        self.refresh_expiry = 0
+
+    def _clear_tokens(self):
+        &quot;&quot;&quot;Forget both tokens so the next call signs in from scratch.&quot;&quot;&quot;
+        self.token = None
+        self.refresh_token = None
+        self.token_expiry = 0
+        self.refresh_expiry = 0
+
+    def _store_tokens(self, payload):
+        &quot;&quot;&quot;Take the tokens and their expiry times from a sign in or refresh response.&quot;&quot;&quot;
+        try:
+            attributes = payload[&quot;data&quot;][&quot;attributes&quot;]
+            self.token = attributes[&quot;token&quot;]
+            self.refresh_token = attributes.get(&quot;refresh_token&quot;)
+            # Wallbox sends absolute expiry times in epoch milliseconds
+            self.token_expiry = float(attributes[&quot;ttl&quot;]) / 1000.0
+            self.refresh_expiry = float(attributes.get(&quot;refresh_token_ttl&quot;, 0)) / 1000.0
+        except (KeyError, TypeError, ValueError) as exc:
+            self._clear_tokens()
+            raise WallboxApiError(&quot;unexpected sign in response from Wallbox&quot;) from exc
+
+    async def _call(self, method, url, headers, body=None, write=False):
+        &quot;&quot;&quot;Perform one HTTP request and return its decoded JSON object.
+
+        Args:
+            method: The HTTP method.
+            url: The full URL.
+            headers: The request headers.
+            body: A JSON-serialisable body, or None.
+            write: True for a control call. A 403 is then a rights problem rather than
+                bad credentials, and an empty response body is accepted.
+        &quot;&quot;&quot;
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.request(method, url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                    status = response.status
+                    if status == 429:
+                        record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;rate_limit&quot;)
+                        raise WallboxRateLimitError(&quot;Wallbox rate limit reached calling {}&quot;.format(url))
+                    if status == 403 and write:
+                        record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;auth_error&quot;)
+                        raise WallboxPermissionError(&quot;Wallbox refused {} - the account needs admin rights over the charger&quot;.format(url))
+                    if status in (401, 403):
+                        record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;auth_error&quot;)
+                        raise WallboxAuthError(&quot;Wallbox rejected the credentials for {}&quot;.format(url))
+                    if status &lt; 200 or status &gt;= 300:
+                        record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;server_error&quot; if status &gt;= 500 else &quot;client_error&quot;)
+                        raise WallboxApiError(&quot;HTTP {} from {}&quot;.format(status, url))
+                    try:
+                        payload = await response.json(content_type=None)
+                    except (ValueError, aiohttp.ContentTypeError) as exc:
+                        if write:
+                            payload = {}
+                        else:
+                            record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;decode_error&quot;)
+                            raise WallboxApiError(&quot;unreadable response from {}&quot;.format(url)) from exc
+                    if not isinstance(payload, dict):
+                        if write:
+                            payload = {}
+                        else:
+                            record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;decode_error&quot;)
+                            raise WallboxApiError(&quot;unexpected response from {}&quot;.format(url))
+                    record_api_call(&quot;wallbox&quot;, success=True)
+                    return payload
+        except asyncio.TimeoutError as exc:
+            record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;connection_error&quot;)
+            raise WallboxApiError(&quot;timed out calling {}&quot;.format(url)) from exc
+        except aiohttp.ClientError as exc:
+            record_api_call(&quot;wallbox&quot;, success=False, reason=&quot;connection_error&quot;)
+            raise WallboxApiError(&quot;request to {} failed: {}&quot;.format(url, exc)) from exc
+
+    async def authenticate(self):
+        &quot;&quot;&quot;Make sure there is a usable token: reuse it, refresh it, or sign in.&quot;&quot;&quot;
+        now = time.time()
+        if self.token and self.token_expiry - TOKEN_MARGIN_SECONDS &gt; now:
+            return
+        if self.refresh_token and self.refresh_expiry - TOKEN_MARGIN_SECONDS &gt; now:
+            headers = {&quot;Authorization&quot;: &quot;Bearer {}&quot;.format(self.refresh_token), &quot;Partner&quot;: &quot;wallbox&quot;, &quot;Accept&quot;: &quot;application/json&quot;, &quot;User-Agent&quot;: USER_AGENT}
+            try:
+                self._store_tokens(await self._call(&quot;GET&quot;, WALLBOX_AUTH_URL + &quot;users/refresh-token&quot;, headers))
+                return
+            except WallboxAuthError:
+                self.log(&quot;Info: wallbox: the refresh token was rejected, signing in again&quot;)
+        self._clear_tokens()
+        headers = {&quot;Authorization&quot;: basic_auth_header(self.username, self.password), &quot;Partner&quot;: &quot;wallbox&quot;, &quot;Accept&quot;: &quot;application/json&quot;, &quot;User-Agent&quot;: USER_AGENT}
+        self._store_tokens(await self._call(&quot;GET&quot;, WALLBOX_AUTH_URL + &quot;users/signin&quot;, headers))
+
+    def _headers(self):
+        &quot;&quot;&quot;The headers every data call carries.&quot;&quot;&quot;
+        return {
+            &quot;Authorization&quot;: &quot;Bearer {}&quot;.format(self.token),
+            &quot;Accept&quot;: &quot;application/json&quot;,
+            &quot;Content-Type&quot;: &quot;application/json;charset=UTF-8&quot;,
+            &quot;User-Agent&quot;: USER_AGENT,
+        }
+
+    async def _api(self, method, path, body=None, write=False):
+        &quot;&quot;&quot;Perform one authenticated data call, signing in again once if the token was revoked.&quot;&quot;&quot;
+        await self.authenticate()
+        try:
+            return await self._call(method, WALLBOX_API_URL + path, self._headers(), body=body, write=write)
+        except WallboxAuthError:
+            # The token was revoked before its stated expiry. Start again once.
+            self._clear_tokens()
+            await self.authenticate()
+            return await self._call(method, WALLBOX_API_URL + path, self._headers(), body=body, write=write)
+
+    async def list_chargers(self):
+        &quot;&quot;&quot;Return the id of every charger on the account, across all groups.&quot;&quot;&quot;
+        payload = await self._api(&quot;GET&quot;, &quot;v3/chargers/groups&quot;)
+        charger_ids = []
+        result = payload.get(&quot;result&quot;)
+        groups = result.get(&quot;groups&quot;) if isinstance(result, dict) else None
+        for group in groups or []:
+            for charger in (group or {}).get(&quot;chargers&quot;) or []:
+                if isinstance(charger, dict) and charger.get(&quot;id&quot;) is not None:
+                    charger_ids.append(charger[&quot;id&quot;])
+        return charger_ids
+
+    async def get_status(self, charger_id):
+        &quot;&quot;&quot;Return the raw status payload of one charger.&quot;&quot;&quot;
+        return await self._api(&quot;GET&quot;, &quot;chargers/status/{}&quot;.format(charger_id))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Run the test command. Expected: eight <code>✓</code> lines and no traceback.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py apps/predbat/unit_test.py
+git commit -m &quot;feat(wallbox): transport with sign in, token refresh and charger reads&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-command-line-mode-and-payload-capture-needs-the-maintainers-charger">Task 2: Command line mode and payload capture (needs the maintainer's charger)</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (append the CLI)
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code> (add the captured fixtures)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>WallboxTransport.list_chargers()</code>, <code>.get_status()</code>.
+- Produces: <code>python3 wallbox.py --username … --password … [--raw]</code>; test constants <code>MOCK_STATUS_CHARGING</code>, <code>MOCK_STATUS_READY</code>, <code>MOCK_STATUS_PAUSED</code> used by later tasks through the <code>_status()</code> helper defined in Task 3.</p>
+<p>This task has a human step. The command line code is <code># pragma: no cover</code>, as in <code>myenergi.py</code>, so it has no unit test; its test is the live run.</p>
+<ul>
+<li>[ ] <strong>Step 1: Add the command line mode</strong></li>
+</ul>
+<p>Add <code>import argparse</code> and <code>import json</code> to the imports of <code>wallbox.py</code>, and append:</p>
+<pre><code class="language-python">async def run_wallbox_cli(args):  # pragma: no cover
+    &quot;&quot;&quot;Sign in, list the chargers and print each one's status against the live API.&quot;&quot;&quot;
+    transport = WallboxTransport(print, args.username, args.password)
+    charger_ids = await transport.list_chargers()
+    if not charger_ids:
+        print(&quot;No chargers found on this account&quot;)
+        return
+    print(&quot;Chargers: {}&quot;.format(charger_ids))
+    for charger_id in charger_ids:
+        payload = await transport.get_status(charger_id)
+        if args.raw:
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        else:
+            print(&quot;{}: status_id={} power={}kW added_energy={}kWh&quot;.format(charger_id, payload.get(&quot;status_id&quot;), payload.get(&quot;charging_power&quot;), payload.get(&quot;added_energy&quot;)))
+
+
+def main():  # pragma: no cover
+    &quot;&quot;&quot;Main function for command line execution.&quot;&quot;&quot;
+    parser = argparse.ArgumentParser(description=&quot;Test the Wallbox API&quot;)
+    parser.add_argument(&quot;--username&quot;, required=True, help=&quot;Wallbox account email address&quot;)
+    parser.add_argument(&quot;--password&quot;, required=True, help=&quot;Wallbox account password&quot;)
+    parser.add_argument(&quot;--raw&quot;, action=&quot;store_true&quot;, help=&quot;Print each charger's full status payload as JSON&quot;)
+    args = parser.parse_args()
+    asyncio.run(run_wallbox_cli(args))
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Capture real payloads (maintainer)</strong></li>
+</ul>
+<p>From <code>apps/predbat/</code>, run this three times: with the car charging, with the car unplugged, and with the car plugged in and charging paused from the Wallbox app.</p>
+<pre><code class="language-bash">python3 wallbox.py --username &lt;email&gt; --password &lt;password&gt; --raw &gt; /tmp/wallbox_charging.json
+</code></pre>
+<p>Expected: <code>Chargers: [&lt;id&gt;]</code> followed by a JSON object containing at least <code>status_id</code>, <code>charging_power</code>, <code>added_energy</code>, <code>max_available_power</code>, <code>name</code> and a <code>config_data</code> object with <code>max_charging_current</code>, <code>locked</code>, <code>serial_number</code>, <code>part_number</code> and <code>software</code>.</p>
+<p>Also confirm the sign in worked with <code>User-Agent: Predbat</code>. If Wallbox rejects it (the sign in fails but the same credentials work in the Wallbox app), change <code>USER_AGENT</code> to <code>"HomeAssistantWallboxPlugin/1.0.0"</code> and record that in <code>tools/debug-journal.md</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the captures as fixtures</strong></li>
+</ul>
+<p>Add the three payloads to <code>test_wallbox.py</code> as <code>MOCK_STATUS_CHARGING</code>, <code>MOCK_STATUS_READY</code> and <code>MOCK_STATUS_PAUSED</code>, below <code>MOCK_GROUPS</code>. Before pasting, replace the charger id with <code>101</code>, <code>serial_number</code> with <code>"900001"</code>, <code>name</code> with <code>"Garage"</code>, and delete any field holding an address, a location, an email, a user id or a token. Keep every other field exactly as captured, including ones this plan never reads.</p>
+<ul>
+<li>[ ] <strong>Step 4: Check the capture against the spec</strong></li>
+</ul>
+<p>Compare the captured field names with spec section 2.3. If a field the spec reads is missing or named differently (for example <code>max_charging_current</code> is not under <code>config_data</code>), stop and report it: the normaliser in Task 3 and the spec both need correcting before going on. Record the paused capture's <code>status_id</code>; it must be 178 or 182, and if it is anything else, stop and report it, because spec section 2.4 is then wrong.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): command line mode and captured status fixtures&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-normaliser-and-status-table">Task 3: Normaliser and status table</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code>
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>WALLBOX_STATUS</code> (dict of status id to <code>(text, connected)</code>), <code>CHARGING_STATUS_IDS = (193, 194, 195)</code>, <code>PAUSED_STATUS_IDS = (178, 182)</code>, <code>ECO_SMART_OPTIONS = ["off", "eco_mode", "full_solar"]</code>, and</p>
+<pre><code class="language-python">@dataclass
+class WallboxCharger:
+    charger_id: str           # str(id), used in entity names
+    name: str
+    serial: str
+    part_number: str
+    software_version: str
+    status_id: int
+    status: str               # the Home Assistant wording
+    connected: bool
+    charging: bool
+    paused: bool
+    locked: bool
+    power_w: float
+    session_energy_kwh: float
+    max_charging_current: int
+    max_available_current: int
+    eco_smart: Optional[str]  # one of ECO_SMART_OPTIONS, or None when unsupported
+
+def normalise_charger(charger_id, payload) -&gt; WallboxCharger
+</code></pre>
+<ul>
+<li>
+<p>Test helper produced for later tasks: <code>_status(status_id=193, power=7.2, energy=4.5, locked=False, max_current=32, eco=None, name="Garage") -&gt; dict</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to the <code>from wallbox import (...)</code> list: <code>CHARGING_STATUS_IDS</code>, <code>PAUSED_STATUS_IDS</code>, <code>WALLBOX_STATUS</code>, <code>WallboxCharger</code>, <code>normalise_charger</code>. Add:</p>
+<pre><code class="language-python">def _status(status_id=193, power=7.2, energy=4.5, locked=False, max_current=32, eco=None, name=&quot;Garage&quot;):
+    &quot;&quot;&quot;Build a status payload in the shape Wallbox returns, for the fields Predbat reads.&quot;&quot;&quot;
+    config = {&quot;max_charging_current&quot;: max_current, &quot;locked&quot;: locked, &quot;serial_number&quot;: &quot;900001&quot;, &quot;part_number&quot;: &quot;PLP1-0-2-4-9-002-E&quot;, &quot;software&quot;: {&quot;currentVersion&quot;: &quot;5.5.10&quot;}}
+    if eco is not None:
+        config[&quot;ecosmart&quot;] = eco
+    return {&quot;status_id&quot;: status_id, &quot;charging_power&quot;: power, &quot;added_energy&quot;: energy, &quot;max_available_power&quot;: 32, &quot;name&quot;: name, &quot;config_data&quot;: config}
+
+
+def test_normalise_charging():
+    &quot;&quot;&quot;A charging payload gives watts, session energy and the identity fields.&quot;&quot;&quot;
+    charger = normalise_charger(101, _status())
+    assert charger.charger_id == &quot;101&quot;
+    assert charger.name == &quot;Garage&quot; and charger.serial == &quot;900001&quot;
+    assert charger.part_number == &quot;PLP1-0-2-4-9-002-E&quot; and charger.software_version == &quot;5.5.10&quot;
+    assert charger.status == &quot;Charging&quot; and charger.status_id == 193
+    assert charger.connected is True and charger.charging is True and charger.paused is False
+    assert charger.power_w == 7200.0, charger.power_w
+    assert charger.session_energy_kwh == 4.5
+    assert charger.max_charging_current == 32 and charger.max_available_current == 32
+    assert charger.locked is False and charger.eco_smart is None
+    print(&quot;  ✓ A charging payload is normalised&quot;)
+
+
+def test_normalise_status_table():
+    &quot;&quot;&quot;Every status code maps to the documented text, connected, charging and paused flags.&quot;&quot;&quot;
+    expected = {
+        193: (&quot;Charging&quot;, True, True, False), 194: (&quot;Charging&quot;, True, True, False), 195: (&quot;Charging&quot;, True, True, False),
+        196: (&quot;Discharging&quot;, True, False, False),
+        178: (&quot;Paused&quot;, True, False, True), 182: (&quot;Paused&quot;, True, False, True),
+        177: (&quot;Scheduled&quot;, True, False, False), 179: (&quot;Scheduled&quot;, True, False, False),
+        164: (&quot;Waiting&quot;, True, False, False),
+        180: (&quot;Waiting for car demand&quot;, True, False, False), 181: (&quot;Waiting for car demand&quot;, True, False, False),
+        183: (&quot;Waiting in queue by Power Sharing&quot;, True, False, False), 184: (&quot;Waiting in queue by Power Sharing&quot;, True, False, False),
+        185: (&quot;Waiting in queue by Power Boost&quot;, True, False, False), 186: (&quot;Waiting in queue by Power Boost&quot;, True, False, False),
+        187: (&quot;Waiting MID failed&quot;, True, False, False), 188: (&quot;Waiting MID safety margin exceeded&quot;, True, False, False),
+        189: (&quot;Waiting in queue by Eco-Smart&quot;, True, False, False),
+        210: (&quot;Locked, car connected&quot;, True, False, False),
+        165: (&quot;Locked&quot;, False, False, False), 209: (&quot;Locked&quot;, False, False, False),
+        161: (&quot;Ready&quot;, False, False, False), 162: (&quot;Ready&quot;, False, False, False),
+        0: (&quot;Disconnected&quot;, False, False, False), 163: (&quot;Disconnected&quot;, False, False, False),
+        166: (&quot;Updating&quot;, False, False, False),
+        14: (&quot;Error&quot;, False, False, False), 15: (&quot;Error&quot;, False, False, False),
+    }
+    assert set(expected) == set(WALLBOX_STATUS), set(expected) ^ set(WALLBOX_STATUS)
+    for status_id, (text, connected, charging, paused) in expected.items():
+        charger = normalise_charger(101, _status(status_id=status_id))
+        assert (charger.status, charger.connected, charger.charging, charger.paused) == (text, connected, charging, paused), status_id
+    unknown = normalise_charger(101, _status(status_id=999))
+    assert (unknown.status, unknown.connected, unknown.charging, unknown.paused) == (&quot;Unknown&quot;, False, False, False)
+    print(&quot;  ✓ Every status code maps to the right state&quot;)
+
+
+def test_normalise_eco_smart():
+    &quot;&quot;&quot;Eco-Smart is None when unsupported, off when disabled, otherwise the mode.&quot;&quot;&quot;
+    assert normalise_charger(101, _status()).eco_smart is None
+    assert normalise_charger(101, _status(eco={&quot;enabled&quot;: False, &quot;mode&quot;: 0})).eco_smart == &quot;off&quot;
+    assert normalise_charger(101, _status(eco={&quot;enabled&quot;: True, &quot;mode&quot;: 0})).eco_smart == &quot;eco_mode&quot;
+    assert normalise_charger(101, _status(eco={&quot;enabled&quot;: True, &quot;mode&quot;: 1})).eco_smart == &quot;full_solar&quot;
+    assert normalise_charger(101, _status(eco={&quot;enabled&quot;: True})).eco_smart is None
+    print(&quot;  ✓ Eco-Smart mode is normalised&quot;)
+
+
+def test_normalise_handles_bad_values():
+    &quot;&quot;&quot;Null numbers, a missing config block and a non-dict payload give safe defaults, never an exception.&quot;&quot;&quot;
+    charger = normalise_charger(101, {&quot;status_id&quot;: None, &quot;charging_power&quot;: None, &quot;added_energy&quot;: &quot;junk&quot;, &quot;config_data&quot;: None})
+    assert charger.status == &quot;Disconnected&quot; and charger.connected is False
+    assert charger.power_w == 0.0 and charger.session_energy_kwh == 0.0
+    assert charger.max_charging_current == 0 and charger.max_available_current == 0
+    assert charger.name == &quot;Wallbox 101&quot; and charger.serial == &quot;&quot; and charger.locked is False
+
+    empty = normalise_charger(101, &quot;not a dict&quot;)
+    assert empty.status == &quot;Disconnected&quot; and empty.power_w == 0.0
+
+    truthy_lock = normalise_charger(101, _status(locked=1))
+    assert truthy_lock.locked is True
+    print(&quot;  ✓ Bad values normalise to safe defaults&quot;)
+
+
+def test_normalise_captured_payloads():
+    &quot;&quot;&quot;The payloads captured from a real charger normalise to the states they were captured in.&quot;&quot;&quot;
+    charging = normalise_charger(101, MOCK_STATUS_CHARGING)
+    assert charging.charging is True and charging.power_w &gt; 0
+    ready = normalise_charger(101, MOCK_STATUS_READY)
+    assert ready.connected is False and ready.power_w == 0.0
+    paused = normalise_charger(101, MOCK_STATUS_PAUSED)
+    assert paused.paused is True and paused.connected is True
+    print(&quot;  ✓ Captured payloads normalise to their real states&quot;)
+</code></pre>
+<p>Add all five to <code>test_wallbox()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Expected: <code>ImportError: cannot import name 'CHARGING_STATUS_IDS' from 'wallbox'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Add <code>from dataclasses import dataclass</code> and <code>from typing import Optional</code> to the imports. Add above <code>class WallboxError</code>:</p>
+<pre><code class="language-python"># Status id to (text, car connected). The text is the Home Assistant wallbox integration's
+# wording, so states match what existing users already see. A None status id means the
+# charger reported nothing, which Wallbox treats as disconnected.
+WALLBOX_STATUS = {
+    0: (&quot;Disconnected&quot;, False),
+    14: (&quot;Error&quot;, False),
+    15: (&quot;Error&quot;, False),
+    161: (&quot;Ready&quot;, False),
+    162: (&quot;Ready&quot;, False),
+    163: (&quot;Disconnected&quot;, False),
+    164: (&quot;Waiting&quot;, True),
+    165: (&quot;Locked&quot;, False),
+    166: (&quot;Updating&quot;, False),
+    177: (&quot;Scheduled&quot;, True),
+    178: (&quot;Paused&quot;, True),
+    179: (&quot;Scheduled&quot;, True),
+    180: (&quot;Waiting for car demand&quot;, True),
+    181: (&quot;Waiting for car demand&quot;, True),
+    182: (&quot;Paused&quot;, True),
+    183: (&quot;Waiting in queue by Power Sharing&quot;, True),
+    184: (&quot;Waiting in queue by Power Sharing&quot;, True),
+    185: (&quot;Waiting in queue by Power Boost&quot;, True),
+    186: (&quot;Waiting in queue by Power Boost&quot;, True),
+    187: (&quot;Waiting MID failed&quot;, True),
+    188: (&quot;Waiting MID safety margin exceeded&quot;, True),
+    189: (&quot;Waiting in queue by Eco-Smart&quot;, True),
+    193: (&quot;Charging&quot;, True),
+    194: (&quot;Charging&quot;, True),
+    195: (&quot;Charging&quot;, True),
+    196: (&quot;Discharging&quot;, True),
+    209: (&quot;Locked&quot;, False),
+    210: (&quot;Locked, car connected&quot;, True),
+}
+CHARGING_STATUS_IDS = (193, 194, 195)
+PAUSED_STATUS_IDS = (178, 182)
+
+ECO_SMART_OFF = &quot;off&quot;
+ECO_SMART_ECO = &quot;eco_mode&quot;
+ECO_SMART_FULL_SOLAR = &quot;full_solar&quot;
+ECO_SMART_OPTIONS = [ECO_SMART_OFF, ECO_SMART_ECO, ECO_SMART_FULL_SOLAR]
+
+
+def _to_float(value, default=0.0):
+    &quot;&quot;&quot;Convert a value to float, returning the default when it is missing or not a number.&quot;&quot;&quot;
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value, default=0):
+    &quot;&quot;&quot;Convert a value to int, returning the default when it is missing or not a number.&quot;&quot;&quot;
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass
+class WallboxCharger:
+    &quot;&quot;&quot;One charger's state, normalised from a Wallbox status payload.&quot;&quot;&quot;
+
+    charger_id: str
+    name: str
+    serial: str
+    part_number: str
+    software_version: str
+    status_id: int
+    status: str
+    connected: bool
+    charging: bool
+    paused: bool
+    locked: bool
+    power_w: float
+    session_energy_kwh: float
+    max_charging_current: int
+    max_available_current: int
+    eco_smart: Optional[str]
+
+
+def normalise_charger(charger_id, payload):
+    &quot;&quot;&quot;Turn one status payload into a WallboxCharger, with safe defaults for anything missing.&quot;&quot;&quot;
+    if not isinstance(payload, dict):
+        payload = {}
+    config = payload.get(&quot;config_data&quot;)
+    if not isinstance(config, dict):
+        config = {}
+    software = config.get(&quot;software&quot;)
+    if not isinstance(software, dict):
+        software = {}
+
+    status_id = payload.get(&quot;status_id&quot;)
+    if status_id is None:
+        status_id = 0
+    status_id = _to_int(status_id, -1)
+    status, connected = WALLBOX_STATUS.get(status_id, (&quot;Unknown&quot;, False))
+
+    eco_smart = None
+    eco_block = config.get(&quot;ecosmart&quot;)
+    if isinstance(eco_block, dict) and eco_block.get(&quot;mode&quot;) is not None:
+        if not eco_block.get(&quot;enabled&quot;):
+            eco_smart = ECO_SMART_OFF
+        elif _to_int(eco_block.get(&quot;mode&quot;), 0) == 1:
+            eco_smart = ECO_SMART_FULL_SOLAR
+        else:
+            eco_smart = ECO_SMART_ECO
+
+    return WallboxCharger(
+        charger_id=str(charger_id),
+        name=str(payload.get(&quot;name&quot;) or &quot;Wallbox {}&quot;.format(charger_id)),
+        serial=str(config.get(&quot;serial_number&quot;) or &quot;&quot;),
+        part_number=str(config.get(&quot;part_number&quot;) or &quot;&quot;),
+        software_version=str(software.get(&quot;currentVersion&quot;) or &quot;&quot;),
+        status_id=status_id,
+        status=status,
+        connected=connected,
+        charging=status_id in CHARGING_STATUS_IDS,
+        paused=status_id in PAUSED_STATUS_IDS,
+        locked=bool(config.get(&quot;locked&quot;)),
+        power_w=round(_to_float(payload.get(&quot;charging_power&quot;)) * 1000.0, 1),
+        session_energy_kwh=_to_float(payload.get(&quot;added_energy&quot;)),
+        max_charging_current=_to_int(config.get(&quot;max_charging_current&quot;)),
+        max_available_current=_to_int(payload.get(&quot;max_available_power&quot;)),
+        eco_smart=eco_smart,
+    )
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Expected: five more <code>✓</code> lines, no traceback. If <code>test_normalise_captured_payloads</code> fails, the real payload differs from the spec: stop and report, do not bend the test.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): normalise charger status payloads&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-transport-control-calls">Task 4: Transport — control calls</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (methods on <code>WallboxTransport</code>)
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>WallboxTransport._api(method, path, body=None, write=False)</code>, <code>ECO_SMART_OPTIONS</code>.
+- Produces, all returning the response dict: <code>async pause(charger_id)</code>, <code>async resume(charger_id)</code>, <code>async resume_schedule(charger_id)</code>, <code>async set_locked(charger_id, locked: bool)</code>, <code>async set_max_charging_current(charger_id, amps: int)</code>, <code>async set_eco_smart(charger_id, mode: str)</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add <code>WallboxPermissionError</code> to the import list. Add:</p>
+<pre><code class="language-python">def _signed_in_transport():
+    &quot;&quot;&quot;A transport that already holds a valid token, so each test sees only the call it makes.&quot;&quot;&quot;
+    transport = WallboxTransport(print, &quot;user@example.com&quot;, &quot;secret&quot;)
+    transport.token = &quot;jwt-1&quot;
+    transport.token_expiry = time.time() + 3600
+    return transport
+
+
+def test_transport_control_requests():
+    &quot;&quot;&quot;Each control sends exactly the method, URL and body the Wallbox API expects.&quot;&quot;&quot;
+    eco_body = lambda enabled, mode: {&quot;data&quot;: {&quot;attributes&quot;: {&quot;enabled&quot;: enabled, &quot;mode&quot;: mode}, &quot;type&quot;: &quot;eco_smart&quot;}}
+    cases = [
+        (lambda t: t.pause(101), &quot;POST&quot;, &quot;v3/chargers/101/remote-action&quot;, {&quot;action&quot;: 2}),
+        (lambda t: t.resume(101), &quot;POST&quot;, &quot;v3/chargers/101/remote-action&quot;, {&quot;action&quot;: 1}),
+        (lambda t: t.resume_schedule(101), &quot;POST&quot;, &quot;v3/chargers/101/remote-action&quot;, {&quot;action&quot;: 9}),
+        (lambda t: t.set_locked(101, True), &quot;PUT&quot;, &quot;v2/charger/101&quot;, {&quot;locked&quot;: 1}),
+        (lambda t: t.set_locked(101, False), &quot;PUT&quot;, &quot;v2/charger/101&quot;, {&quot;locked&quot;: 0}),
+        (lambda t: t.set_max_charging_current(101, 16), &quot;PUT&quot;, &quot;v2/charger/101&quot;, {&quot;maxChargingCurrent&quot;: 16}),
+        (lambda t: t.set_eco_smart(101, &quot;off&quot;), &quot;PUT&quot;, &quot;v4/chargers/101/eco-smart&quot;, eco_body(0, 0)),
+        (lambda t: t.set_eco_smart(101, &quot;eco_mode&quot;), &quot;PUT&quot;, &quot;v4/chargers/101/eco-smart&quot;, eco_body(1, 0)),
+        (lambda t: t.set_eco_smart(101, &quot;full_solar&quot;), &quot;PUT&quot;, &quot;v4/chargers/101/eco-smart&quot;, eco_body(1, 1)),
+    ]
+    for action, method, path, body in cases:
+        session, calls = _session([_response({})])
+        with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+            run_async(action(_signed_in_transport()))
+        assert len(calls) == 1, calls
+        assert (calls[0][&quot;method&quot;], calls[0][&quot;url&quot;], calls[0][&quot;json&quot;]) == (method, WALLBOX_API_URL + path, body), calls[0]
+        assert calls[0][&quot;headers&quot;][&quot;Content-Type&quot;] == &quot;application/json;charset=UTF-8&quot;
+    print(&quot;  ✓ Control calls send the right method, URL and body&quot;)
+
+
+def test_transport_control_refused_for_rights():
+    &quot;&quot;&quot;A 403 on a write is a rights problem, not bad credentials, and is not retried behind a sign in.&quot;&quot;&quot;
+    session, calls = _session([_response({}, status=403)])
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        try:
+            run_async(_signed_in_transport().set_locked(101, True))
+            raise AssertionError(&quot;Expected WallboxPermissionError&quot;)
+        except WallboxPermissionError:
+            pass
+    assert len(calls) == 1, &quot;A rights refusal must not trigger a sign in and retry&quot;
+    print(&quot;  ✓ A 403 on a write raises WallboxPermissionError&quot;)
+
+
+def test_transport_control_accepts_an_empty_body():
+    &quot;&quot;&quot;Eco-Smart answers with no JSON body; that is a success, not a decode error.&quot;&quot;&quot;
+    session, _ = _session([_response(json_error=ValueError(&quot;empty&quot;))])
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        assert run_async(_signed_in_transport().set_eco_smart(101, &quot;off&quot;)) == {}
+    print(&quot;  ✓ A control call with an empty body succeeds&quot;)
+
+
+def test_transport_rejects_an_unknown_eco_smart_mode():
+    &quot;&quot;&quot;An Eco-Smart mode that is not one of the three options never reaches the API.&quot;&quot;&quot;
+    session, calls = _session([])
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session), patch(&quot;wallbox.record_api_call&quot;):
+        try:
+            run_async(_signed_in_transport().set_eco_smart(101, &quot;turbo&quot;))
+            raise AssertionError(&quot;Expected WallboxApiError&quot;)
+        except WallboxApiError:
+            pass
+    assert calls == []
+    print(&quot;  ✓ An unknown Eco-Smart mode is rejected locally&quot;)
+</code></pre>
+<p>Add all four to <code>test_wallbox()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Expected: <code>AttributeError: 'WallboxTransport' object has no attribute 'pause'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Add next to the other constants:</p>
+<pre><code class="language-python"># remote-action codes, from the Wallbox portal
+REMOTE_ACTION_RESUME = 1
+REMOTE_ACTION_PAUSE = 2
+REMOTE_ACTION_RESUME_SCHEDULE = 9
+</code></pre>
+<p>Add to <code>WallboxTransport</code>:</p>
+<pre><code class="language-python">    async def _remote_action(self, charger_id, action):
+        &quot;&quot;&quot;Send one remote-action code to a charger.&quot;&quot;&quot;
+        return await self._api(&quot;POST&quot;, &quot;v3/chargers/{}/remote-action&quot;.format(charger_id), body={&quot;action&quot;: action}, write=True)
+
+    async def pause(self, charger_id):
+        &quot;&quot;&quot;Pause the charging session. Only has an effect while the charger is charging.&quot;&quot;&quot;
+        return await self._remote_action(charger_id, REMOTE_ACTION_PAUSE)
+
+    async def resume(self, charger_id):
+        &quot;&quot;&quot;Resume a paused charging session. Has no effect on a Scheduled or Waiting charger.&quot;&quot;&quot;
+        return await self._remote_action(charger_id, REMOTE_ACTION_RESUME)
+
+    async def resume_schedule(self, charger_id):
+        &quot;&quot;&quot;Hand the charger back to its own schedule and Eco-Smart mode after a manual stop.&quot;&quot;&quot;
+        return await self._remote_action(charger_id, REMOTE_ACTION_RESUME_SCHEDULE)
+
+    async def set_locked(self, charger_id, locked):
+        &quot;&quot;&quot;Lock or unlock the charger.&quot;&quot;&quot;
+        return await self._api(&quot;PUT&quot;, &quot;v2/charger/{}&quot;.format(charger_id), body={&quot;locked&quot;: 1 if locked else 0}, write=True)
+
+    async def set_max_charging_current(self, charger_id, amps):
+        &quot;&quot;&quot;Set the maximum charging current in amps.&quot;&quot;&quot;
+        return await self._api(&quot;PUT&quot;, &quot;v2/charger/{}&quot;.format(charger_id), body={&quot;maxChargingCurrent&quot;: int(amps)}, write=True)
+
+    async def set_eco_smart(self, charger_id, mode):
+        &quot;&quot;&quot;Set the Eco-Smart solar charging mode to one of ECO_SMART_OPTIONS.&quot;&quot;&quot;
+        if mode not in ECO_SMART_OPTIONS:
+            raise WallboxApiError(&quot;unknown Eco-Smart mode '{}'&quot;.format(mode))
+        attributes = {&quot;enabled&quot;: 0 if mode == ECO_SMART_OFF else 1, &quot;mode&quot;: 1 if mode == ECO_SMART_FULL_SOLAR else 0}
+        return await self._api(&quot;PUT&quot;, &quot;v4/chargers/{}/eco-smart&quot;.format(charger_id), body={&quot;data&quot;: {&quot;attributes&quot;: attributes, &quot;type&quot;: &quot;eco_smart&quot;}}, write=True)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Expected: four more <code>✓</code> lines.</p>
+<ul>
+<li>[ ] <strong>Step 5: Extend the command line mode and commit</strong></li>
+</ul>
+<p>Replace <code>run_wallbox_cli</code> and <code>main</code> with versions that take the control flags, so the same calls can be tried by hand:</p>
+<pre><code class="language-python">async def run_wallbox_cli(args):  # pragma: no cover
+    &quot;&quot;&quot;Sign in, list the chargers, print each one's status and optionally send one control.&quot;&quot;&quot;
+    transport = WallboxTransport(print, args.username, args.password)
+    charger_ids = await transport.list_chargers()
+    if not charger_ids:
+        print(&quot;No chargers found on this account&quot;)
+        return
+    print(&quot;Chargers: {}&quot;.format(charger_ids))
+    for charger_id in charger_ids:
+        payload = await transport.get_status(charger_id)
+        if args.raw:
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        else:
+            print(normalise_charger(charger_id, payload))
+
+    target = args.charger if args.charger is not None else charger_ids[0]
+    action = None
+    if args.pause:
+        action = (&quot;pause&quot;, transport.pause(target))
+    elif args.resume:
+        action = (&quot;resume&quot;, transport.resume(target))
+    elif args.resume_schedule:
+        action = (&quot;resume schedule&quot;, transport.resume_schedule(target))
+    elif args.lock:
+        action = (&quot;lock&quot;, transport.set_locked(target, True))
+    elif args.unlock:
+        action = (&quot;unlock&quot;, transport.set_locked(target, False))
+    elif args.max_current is not None:
+        action = (&quot;set max current {}A&quot;.format(args.max_current), transport.set_max_charging_current(target, args.max_current))
+    elif args.eco_smart:
+        action = (&quot;set Eco-Smart {}&quot;.format(args.eco_smart), transport.set_eco_smart(target, args.eco_smart))
+    if not action:
+        return
+    print(&quot;\nSending {} to {}...&quot;.format(action[0], target))
+    await action[1]
+    print(&quot;Waiting {}s for the charger to report the change...&quot;.format(COMMAND_SETTLE_SECONDS))
+    await asyncio.sleep(COMMAND_SETTLE_SECONDS)
+    print(normalise_charger(target, await transport.get_status(target)))
+
+
+def main():  # pragma: no cover
+    &quot;&quot;&quot;Main function for command line execution.&quot;&quot;&quot;
+    parser = argparse.ArgumentParser(description=&quot;Test the Wallbox API&quot;)
+    parser.add_argument(&quot;--username&quot;, required=True, help=&quot;Wallbox account email address&quot;)
+    parser.add_argument(&quot;--password&quot;, required=True, help=&quot;Wallbox account password&quot;)
+    parser.add_argument(&quot;--raw&quot;, action=&quot;store_true&quot;, help=&quot;Print each charger's full status payload as JSON&quot;)
+    parser.add_argument(&quot;--charger&quot;, default=None, help=&quot;Charger id to control; defaults to the first one&quot;)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(&quot;--pause&quot;, action=&quot;store_true&quot;, help=&quot;Pause the charging session&quot;)
+    group.add_argument(&quot;--resume&quot;, action=&quot;store_true&quot;, help=&quot;Resume a paused charging session&quot;)
+    group.add_argument(&quot;--resume-schedule&quot;, action=&quot;store_true&quot;, help=&quot;Hand the charger back to its own schedule&quot;)
+    group.add_argument(&quot;--lock&quot;, action=&quot;store_true&quot;, help=&quot;Lock the charger&quot;)
+    group.add_argument(&quot;--unlock&quot;, action=&quot;store_true&quot;, help=&quot;Unlock the charger&quot;)
+    group.add_argument(&quot;--max-current&quot;, type=int, default=None, help=&quot;Set the maximum charging current in amps&quot;)
+    group.add_argument(&quot;--eco-smart&quot;, choices=ECO_SMART_OPTIONS, default=None, help=&quot;Set the Eco-Smart mode&quot;)
+    args = parser.parse_args()
+    asyncio.run(run_wallbox_cli(args))
+</code></pre>
+<p>Add next to the constants:</p>
+<pre><code class="language-python"># How long the command line mode waits before reading a charger back after a control
+COMMAND_SETTLE_SECONDS = 8
+</code></pre>
+<p>Run the test command once more (expected: still passing), then:</p>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): transport control calls and command line actions&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-component-registration-polling-publishing-and-error-handling">Task 5: Component — registration, polling, publishing and error handling</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (add <code>WallboxAPI</code>)
+- Modify: <code>apps/predbat/components.py</code> (after the <code>"myenergi"</code> entry, about line 291)
+- Modify: <code>apps/predbat/config.py</code> (after the <code>myenergi_*</code> keys, about line 2779)
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>WallboxTransport</code>, <code>normalise_charger</code>, <code>WallboxCharger</code>, the error classes.
+- Produces on <code>WallboxAPI(ComponentBase)</code>:
+  - <code>initialize(self, username, password, automatic=True, wallbox_control=False, poll_seconds=120)</code>
+  - attributes <code>transport</code>, <code>chargers</code> (dict of <code>charger_id</code> str to <code>WallboxCharger</code>), <code>charger_ids</code> (list as the API returned them, sorted), <code>stale_ids</code> (set of str), <code>queued_events</code> (list), <code>poll_seconds</code>, <code>skip_cycles</code>, <code>backoff_cycles</code>, <code>control_active</code> (bool, <code>False</code> until Task 8), <code>control_enabled</code> (bool, <code>True</code>)
+  - <code>entity_prefix(charger) -&gt; str</code>, <code>ordered_chargers() -&gt; list[WallboxCharger]</code> (sorted by <code>charger_id</code>, the order that makes charger N car N)
+  - <code>async run(seconds, first) -&gt; bool</code>, <code>async poll(seconds, first) -&gt; bool</code>, <code>async process_events() -&gt; bool</code>, <code>async publish_data()</code>
+  - <code>warn_permission()</code> (logs the rights warning once)
+  - hooks that are no-ops in this task and filled in later: <code>async load_control_state()</code>, <code>enable_control()</code>, <code>automatic_config()</code>, <code>async control_tick(now)</code>
+- Test helpers produced: <code>_StubTransport</code>, <code>_make_component(statuses=None, **overrides)</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<p>Add <code>WallboxAPI</code>, <code>MIN_POLL_SECONDS</code>, <code>MAX_POLL_SECONDS</code> to the import list. Add:</p>
+<pre><code class="language-python">class _StubTransport:
+    &quot;&quot;&quot;In-memory transport: serves statuses by charger id and records every call.&quot;&quot;&quot;
+
+    def __init__(self, statuses=None):
+        &quot;&quot;&quot;Hold the statuses to serve; errors maps a call tuple to an exception to raise once.&quot;&quot;&quot;
+        self.statuses = statuses if statuses is not None else {101: _status()}
+        self.calls = []
+        self.errors = {}
+
+    def _record(self, *call):
+        &quot;&quot;&quot;Record a call, raising the queued error for it if there is one.&quot;&quot;&quot;
+        self.calls.append(call)
+        error = self.errors.pop(call, None) or self.errors.pop((call[0],), None)
+        if error:
+            raise error
+        return {}
+
+    async def list_chargers(self):
+        &quot;&quot;&quot;Return the ids of the statuses held.&quot;&quot;&quot;
+        self._record(&quot;list_chargers&quot;)
+        return list(self.statuses)
+
+    async def get_status(self, charger_id):
+        &quot;&quot;&quot;Return one charger's status payload.&quot;&quot;&quot;
+        self._record(&quot;get_status&quot;, charger_id)
+        return self.statuses[charger_id]
+
+    async def pause(self, charger_id):
+        &quot;&quot;&quot;Record a pause.&quot;&quot;&quot;
+        return self._record(&quot;pause&quot;, charger_id)
+
+    async def resume(self, charger_id):
+        &quot;&quot;&quot;Record a resume.&quot;&quot;&quot;
+        return self._record(&quot;resume&quot;, charger_id)
+
+    async def resume_schedule(self, charger_id):
+        &quot;&quot;&quot;Record a resume schedule.&quot;&quot;&quot;
+        return self._record(&quot;resume_schedule&quot;, charger_id)
+
+    async def set_locked(self, charger_id, locked):
+        &quot;&quot;&quot;Record a lock change.&quot;&quot;&quot;
+        return self._record(&quot;set_locked&quot;, charger_id, locked)
+
+    async def set_max_charging_current(self, charger_id, amps):
+        &quot;&quot;&quot;Record a current change.&quot;&quot;&quot;
+        return self._record(&quot;set_max_charging_current&quot;, charger_id, amps)
+
+    async def set_eco_smart(self, charger_id, mode):
+        &quot;&quot;&quot;Record an Eco-Smart change.&quot;&quot;&quot;
+        return self._record(&quot;set_eco_smart&quot;, charger_id, mode)
+
+    def count(self, name):
+        &quot;&quot;&quot;How many times a call of this name was made.&quot;&quot;&quot;
+        return len([call for call in self.calls if call[0] == name])
+
+
+def _make_component(statuses=None, **overrides):
+    &quot;&quot;&quot;Build a WallboxAPI against MockBase with a stub transport and a captured log.&quot;&quot;&quot;
+    args = {&quot;username&quot;: &quot;user@example.com&quot;, &quot;password&quot;: &quot;secret&quot;, &quot;automatic&quot;: True, &quot;wallbox_control&quot;: False, &quot;poll_seconds&quot;: 120}
+    args.update(overrides)
+    component = WallboxAPI(MockBase(), **args)
+    component.transport = _StubTransport(statuses)
+    component.log_messages = []
+    component.log = component.log_messages.append
+    return component
+
+
+def _logged(component, text):
+    &quot;&quot;&quot;Was a message containing this text logged.&quot;&quot;&quot;
+    return any(text in message for message in component.log_messages)
+
+
+def test_component_registration():
+    &quot;&quot;&quot;The component is registered with matching config keys and event filter.&quot;&quot;&quot;
+    import inspect
+
+    from components import COMPONENT_LIST, load_component_class
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST[&quot;wallbox&quot;]
+    assert load_component_class(entry) is WallboxAPI
+    assert entry[&quot;event_filter&quot;] == &quot;predbat_wallbox_&quot;
+    assert entry[&quot;phase&quot;] == 1 and entry[&quot;can_restart&quot;] is True
+    assert entry[&quot;args&quot;][&quot;username&quot;][&quot;required&quot;] is True and entry[&quot;args&quot;][&quot;username&quot;][&quot;secret&quot;] is True
+    assert entry[&quot;args&quot;][&quot;password&quot;][&quot;required&quot;] is True and entry[&quot;args&quot;][&quot;password&quot;][&quot;secret&quot;] is True
+    assert {spec[&quot;config&quot;] for spec in entry[&quot;args&quot;].values()} == {&quot;wallbox_username&quot;, &quot;wallbox_password&quot;, &quot;wallbox_automatic&quot;, &quot;wallbox_control&quot;, &quot;wallbox_poll_seconds&quot;}
+    parameters = inspect.signature(WallboxAPI.initialize).parameters
+    for arg_name, spec in entry[&quot;args&quot;].items():
+        assert arg_name in parameters, &quot;initialize() has no parameter '{}'&quot;.format(arg_name)
+        assert spec[&quot;config&quot;] in APPS_SCHEMA, &quot;{} missing from APPS_SCHEMA&quot;.format(spec[&quot;config&quot;])
+    print(&quot;  ✓ Component is registered with matching config keys&quot;)
+
+
+def test_component_poll_seconds_is_clamped():
+    &quot;&quot;&quot;The poll interval is a whole number of minutes between the limits.&quot;&quot;&quot;
+    assert _make_component(poll_seconds=120).poll_seconds == 120
+    assert _make_component(poll_seconds=90).poll_seconds == 120
+    assert _make_component(poll_seconds=5).poll_seconds == MIN_POLL_SECONDS
+    assert _make_component(poll_seconds=99999).poll_seconds == MAX_POLL_SECONDS
+    assert _make_component(poll_seconds=&quot;junk&quot;).poll_seconds == 120
+    print(&quot;  ✓ Poll interval is rounded and clamped&quot;)
+
+
+def test_component_missing_credentials():
+    &quot;&quot;&quot;Without both credentials there is no transport and run() fails.&quot;&quot;&quot;
+    component = WallboxAPI(MockBase(), username=None, password=&quot;secret&quot;)
+    assert component.transport is None
+    assert run_async(component.run(0, True)) is False
+    print(&quot;  ✓ Missing credentials leave the component failed&quot;)
+
+
+def test_component_publishes_one_charger():
+    &quot;&quot;&quot;One charger without Eco-Smart publishes exactly the expected entities and values.&quot;&quot;&quot;
+    component = _make_component()
+    assert run_async(component.run(0, True)) is True
+
+    entities = component.base.entities
+    prefix = &quot;predbat_wallbox_101&quot;
+    wallbox_entities = {name for name in entities if &quot;_wallbox_&quot; in name}
+    assert wallbox_entities == {
+        &quot;sensor.{}_status&quot;.format(prefix), &quot;sensor.{}_power&quot;.format(prefix), &quot;sensor.{}_session_energy&quot;.format(prefix),
+        &quot;binary_sensor.{}_connected&quot;.format(prefix), &quot;binary_sensor.{}_charging&quot;.format(prefix),
+        &quot;switch.{}_charging&quot;.format(prefix), &quot;switch.{}_locked&quot;.format(prefix), &quot;number.{}_max_charging_current&quot;.format(prefix),
+    }, wallbox_entities
+    assert entities[&quot;sensor.{}_status&quot;.format(prefix)][&quot;state&quot;] == &quot;Charging&quot;
+    status_attributes = entities[&quot;sensor.{}_status&quot;.format(prefix)][&quot;attributes&quot;]
+    assert status_attributes[&quot;status_id&quot;] == 193 and status_attributes[&quot;serial_number&quot;] == &quot;900001&quot; and status_attributes[&quot;name&quot;] == &quot;Garage&quot;
+    assert entities[&quot;sensor.{}_power&quot;.format(prefix)][&quot;state&quot;] == 7200.0
+    assert entities[&quot;sensor.{}_power&quot;.format(prefix)][&quot;attributes&quot;][&quot;unit_of_measurement&quot;] == &quot;W&quot;
+    assert entities[&quot;sensor.{}_session_energy&quot;.format(prefix)][&quot;state&quot;] == 4.5
+    assert entities[&quot;binary_sensor.{}_connected&quot;.format(prefix)][&quot;state&quot;] == &quot;on&quot;
+    assert entities[&quot;binary_sensor.{}_charging&quot;.format(prefix)][&quot;state&quot;] == &quot;on&quot;
+    assert entities[&quot;switch.{}_charging&quot;.format(prefix)][&quot;state&quot;] == &quot;on&quot;
+    assert entities[&quot;switch.{}_locked&quot;.format(prefix)][&quot;state&quot;] == &quot;off&quot;
+    number = entities[&quot;number.{}_max_charging_current&quot;.format(prefix)]
+    assert number[&quot;state&quot;] == 32 and number[&quot;attributes&quot;][&quot;min&quot;] == 6 and number[&quot;attributes&quot;][&quot;max&quot;] == 32 and number[&quot;attributes&quot;][&quot;step&quot;] == 1
+    assert component.last_success_timestamp is not None
+    print(&quot;  ✓ One charger publishes the expected entities&quot;)
+
+
+def test_component_publishes_two_chargers_and_eco_smart():
+    &quot;&quot;&quot;Each charger gets its own entities, and the Eco-Smart select appears only where supported.&quot;&quot;&quot;
+    component = _make_component({202: _status(status_id=161, power=0, energy=0), 101: _status(eco={&quot;enabled&quot;: True, &quot;mode&quot;: 1})})
+    assert run_async(component.run(0, True)) is True
+
+    entities = component.base.entities
+    assert entities[&quot;sensor.predbat_wallbox_202_status&quot;][&quot;state&quot;] == &quot;Ready&quot;
+    assert entities[&quot;binary_sensor.predbat_wallbox_202_connected&quot;][&quot;state&quot;] == &quot;off&quot;
+    assert entities[&quot;switch.predbat_wallbox_202_charging&quot;][&quot;state&quot;] == &quot;off&quot;
+    select = entities[&quot;select.predbat_wallbox_101_eco_smart&quot;]
+    assert select[&quot;state&quot;] == &quot;full_solar&quot; and select[&quot;attributes&quot;][&quot;options&quot;] == [&quot;off&quot;, &quot;eco_mode&quot;, &quot;full_solar&quot;]
+    assert &quot;select.predbat_wallbox_202_eco_smart&quot; not in entities
+    assert [charger.charger_id for charger in component.ordered_chargers()] == [&quot;101&quot;, &quot;202&quot;]
+    print(&quot;  ✓ Two chargers publish separately, Eco-Smart only where supported&quot;)
+
+
+def test_component_poll_cadence():
+    &quot;&quot;&quot;Status is polled on the first run and every poll_seconds; the charger list every 30 minutes.&quot;&quot;&quot;
+    component = _make_component()
+    run_async(component.run(0, True))
+    assert component.transport.count(&quot;get_status&quot;) == 1 and component.transport.count(&quot;list_chargers&quot;) == 1
+    run_async(component.run(60, False))
+    assert component.transport.count(&quot;get_status&quot;) == 1, &quot;60s is between polls at poll_seconds=120&quot;
+    run_async(component.run(120, False))
+    assert component.transport.count(&quot;get_status&quot;) == 2
+    assert component.transport.count(&quot;list_chargers&quot;) == 1, &quot;The charger list is not refetched every poll&quot;
+    run_async(component.run(1800, False))
+    assert component.transport.count(&quot;list_chargers&quot;) == 2
+    print(&quot;  ✓ Poll cadence follows poll_seconds and the 30 minute list refresh&quot;)
+
+
+def test_component_no_chargers():
+    &quot;&quot;&quot;An account with no chargers warns on the first run and does not stamp a success.&quot;&quot;&quot;
+    component = _make_component({})
+    assert run_async(component.run(0, True)) is True
+    assert _logged(component, &quot;no chargers were found&quot;)
+    assert component.last_success_timestamp is None
+    assert not [name for name in component.base.entities if &quot;_wallbox_&quot; in name]
+    print(&quot;  ✓ An account with no chargers warns and publishes nothing&quot;)
+
+
+def test_component_one_charger_failing_does_not_blank_the_other():
+    &quot;&quot;&quot;A status failure on one charger keeps the other published and keeps the charger order.&quot;&quot;&quot;
+    component = _make_component({101: _status(), 202: _status(status_id=161, power=0)})
+    run_async(component.run(0, True))
+    component.transport.errors[(&quot;get_status&quot;, 202)] = WallboxApiError(&quot;HTTP 500&quot;)
+    component.transport.statuses[101] = _status(status_id=178, power=0)
+
+    assert run_async(component.run(120, False)) is True
+    assert component.base.entities[&quot;sensor.predbat_wallbox_101_status&quot;][&quot;state&quot;] == &quot;Paused&quot;
+    assert component.stale_ids == {&quot;202&quot;}
+    assert [charger.charger_id for charger in component.ordered_chargers()] == [&quot;101&quot;, &quot;202&quot;], &quot;Charger N must stay car N&quot;
+    assert _logged(component, &quot;could not read charger 202&quot;)
+
+    assert run_async(component.run(240, False)) is True
+    assert component.stale_ids == set()
+    print(&quot;  ✓ One failing charger does not blank the other&quot;)
+
+
+def test_component_every_charger_failing_fails_the_cycle():
+    &quot;&quot;&quot;When no charger could be read the cycle fails and no success is stamped.&quot;&quot;&quot;
+    component = _make_component()
+    component.transport.errors[(&quot;get_status&quot;,)] = WallboxApiError(&quot;HTTP 500&quot;)
+    assert run_async(component.run(0, True)) is False
+    assert component.last_success_timestamp is None
+    assert _logged(component, &quot;poll failed&quot;)
+    print(&quot;  ✓ A poll that reads no charger fails the cycle&quot;)
+
+
+def test_component_auth_failure():
+    &quot;&quot;&quot;Bad credentials log an error naming the config keys and fail the cycle.&quot;&quot;&quot;
+    component = _make_component()
+    component.transport.errors[(&quot;list_chargers&quot;,)] = WallboxAuthError(&quot;rejected&quot;)
+    assert run_async(component.run(0, True)) is False
+    assert _logged(component, &quot;Error: wallbox:&quot;) and _logged(component, &quot;wallbox_username&quot;)
+    print(&quot;  ✓ Bad credentials are reported as an error&quot;)
+
+
+def test_component_rate_limit_backoff():
+    &quot;&quot;&quot;A 429 skips polls on a doubling back-off capped at 15 minutes, then recovers.&quot;&quot;&quot;
+    component = _make_component()
+    run_async(component.run(0, True))
+
+    component.transport.errors[(&quot;get_status&quot;,)] = WallboxRateLimitError(&quot;429&quot;)
+    assert run_async(component.run(120, False)) is True, &quot;A rate limit after start-up is not a failed cycle&quot;
+    assert component.skip_cycles == 2 and _logged(component, &quot;rate limited&quot;)
+
+    polls = component.transport.count(&quot;get_status&quot;)
+    run_async(component.run(180, False))
+    run_async(component.run(240, False))
+    assert component.transport.count(&quot;get_status&quot;) == polls, &quot;Both skipped cycles made no call&quot;
+
+    for expected in (4, 8, 15, 15):
+        component.skip_cycles = 0
+        component.transport.errors[(&quot;get_status&quot;,)] = WallboxRateLimitError(&quot;429&quot;)
+        run_async(component.run(120, False))
+        assert component.skip_cycles == expected, (expected, component.skip_cycles)
+
+    component.skip_cycles = 0
+    assert run_async(component.run(120, False)) is True
+    assert component.backoff_cycles == 0, &quot;A good poll resets the back-off&quot;
+    print(&quot;  ✓ Rate limit back-off doubles, caps at 15 minutes and resets&quot;)
+
+
+def test_component_rate_limit_on_first_run_fails():
+    &quot;&quot;&quot;A 429 on the very first run fails it, so the component is not marked started with no data.&quot;&quot;&quot;
+    component = _make_component()
+    component.transport.errors[(&quot;list_chargers&quot;,)] = WallboxRateLimitError(&quot;429&quot;)
+    assert run_async(component.run(0, True)) is False
+    # The retry of the first run must poll, not be swallowed by the skip counter
+    assert run_async(component.run(0, True)) is True
+    assert &quot;sensor.predbat_wallbox_101_status&quot; in component.base.entities
+    print(&quot;  ✓ A rate limit on the first run fails it and the retry polls&quot;)
+</code></pre>
+<p>Add all twelve to <code>test_wallbox()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Expected: <code>ImportError: cannot import name 'WallboxAPI' from 'wallbox'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Register the component</strong></li>
+</ul>
+<p>Run <code>impact({target: "COMPONENT_LIST", direction: "upstream"})</code> and <code>impact({target: "APPS_SCHEMA", direction: "upstream"})</code> and report the result before editing; both are additive dict entries.</p>
+<p>In <code>apps/predbat/components.py</code>, after the closing <code>},</code> of the <code>"myenergi"</code> entry:</p>
+<pre><code class="language-python">    &quot;wallbox&quot;: {
+        &quot;class&quot;: &quot;wallbox.WallboxAPI&quot;,
+        &quot;name&quot;: &quot;Wallbox Charger&quot;,
+        &quot;event_filter&quot;: &quot;predbat_wallbox_&quot;,
+        &quot;args&quot;: {
+            &quot;username&quot;: {&quot;required&quot;: True, &quot;secret&quot;: True, &quot;config&quot;: &quot;wallbox_username&quot;},
+            &quot;password&quot;: {&quot;required&quot;: True, &quot;secret&quot;: True, &quot;config&quot;: &quot;wallbox_password&quot;},
+            &quot;automatic&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;wallbox_automatic&quot;, &quot;default&quot;: True},
+            &quot;wallbox_control&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;wallbox_control&quot;, &quot;default&quot;: False},
+            &quot;poll_seconds&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;wallbox_poll_seconds&quot;, &quot;default&quot;: 120},
+        },
+        &quot;phase&quot;: 1,
+        &quot;can_restart&quot;: True,
+    },
+</code></pre>
+<p>In <code>apps/predbat/config.py</code>, after <code>"myenergi_zappi_control": {"type": "boolean"},</code>:</p>
+<pre><code class="language-python">    &quot;wallbox_username&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;wallbox_password&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;wallbox_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;wallbox_control&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;wallbox_poll_seconds&quot;: {&quot;type&quot;: &quot;integer&quot;, &quot;zero&quot;: False},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Write the component</strong></li>
+</ul>
+<p>In <code>wallbox.py</code> add <code>from component_base import ComponentBase</code> to the imports, add these constants, and add the class above <code>run_wallbox_cli</code>:</p>
+<pre><code class="language-python"># components.py's is_alive() fails a component whose last successful update is more than
+# 60 minutes old, so the poll interval is capped at half that
+MIN_POLL_SECONDS = 60
+MAX_POLL_SECONDS = 30 * 60
+DEFAULT_POLL_SECONDS = 120
+CHARGER_LIST_SECONDS = 30 * 60
+
+# Rate limit back-off, in 60 second run cycles. The cap keeps recovery well inside the
+# 60 minute health window.
+RATE_LIMIT_MIN_CYCLES = 2
+RATE_LIMIT_MAX_CYCLES = 15
+
+MIN_CHARGING_CURRENT = 6
+# Used as the upper bound only when the charger does not report one
+DEFAULT_MAX_CHARGING_CURRENT = 32
+
+wallbox_attribute_table = {
+    &quot;status&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Status&quot;, &quot;icon&quot;: &quot;mdi:information-outline&quot;},
+    &quot;power&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Power&quot;, &quot;icon&quot;: &quot;mdi:lightning-bolt&quot;, &quot;unit_of_measurement&quot;: &quot;W&quot;, &quot;device_class&quot;: &quot;power&quot;, &quot;state_class&quot;: &quot;measurement&quot;},
+    &quot;session_energy&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Session Energy&quot;, &quot;icon&quot;: &quot;mdi:lightning-bolt&quot;, &quot;unit_of_measurement&quot;: &quot;kWh&quot;, &quot;device_class&quot;: &quot;energy&quot;, &quot;state_class&quot;: &quot;total_increasing&quot;},
+    &quot;connected&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Car Connected&quot;, &quot;icon&quot;: &quot;mdi:ev-plug-type2&quot;},
+    &quot;charging&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Charging&quot;, &quot;icon&quot;: &quot;mdi:battery-charging&quot;},
+    &quot;charging_switch&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Charge&quot;, &quot;icon&quot;: &quot;mdi:ev-station&quot;},
+    &quot;locked&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Locked&quot;, &quot;icon&quot;: &quot;mdi:lock&quot;},
+    &quot;max_charging_current&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Maximum Charging Current&quot;, &quot;icon&quot;: &quot;mdi:current-ac&quot;, &quot;unit_of_measurement&quot;: &quot;A&quot;, &quot;min&quot;: MIN_CHARGING_CURRENT, &quot;step&quot;: 1},
+    &quot;eco_smart&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Eco-Smart&quot;, &quot;icon&quot;: &quot;mdi:solar-power&quot;, &quot;options&quot;: ECO_SMART_OPTIONS},
+    &quot;control&quot;: {&quot;friendly_name&quot;: &quot;Wallbox Charge Control&quot;, &quot;icon&quot;: &quot;mdi:ev-station&quot;},
+}
+
+
+class WallboxAPI(ComponentBase):
+    &quot;&quot;&quot;Wallbox component: monitoring, controls and Predbat-led charging for Wallbox chargers.&quot;&quot;&quot;
+
+    def initialize(self, username, password, automatic=True, wallbox_control=False, poll_seconds=120):
+        &quot;&quot;&quot;Set up component state and the transport.&quot;&quot;&quot;
+        self.automatic = automatic
+        self.wallbox_control = bool(wallbox_control)
+        # ComponentBase.start() calls run() every 60 seconds, so the interval is a whole number of those
+        self.poll_seconds = min(MAX_POLL_SECONDS, max(MIN_POLL_SECONDS, int(round(_to_float(poll_seconds, DEFAULT_POLL_SECONDS) / 60.0)) * 60))
+
+        self.chargers = {}
+        self.charger_ids = []
+        self.stale_ids = set()
+        self.queued_events = []
+        self.skip_cycles = 0
+        self.backoff_cycles = 0
+        self.permission_warned = False
+        self._auto_configured = False
+        self.control_active = False
+        self.control_enabled = True
+        self.transport = None
+
+        if not username or not password:
+            self.log(&quot;Error: wallbox: wallbox_username and wallbox_password must both be set&quot;)
+            return
+        self.transport = WallboxTransport(self.log, username, password)
+
+    def entity_prefix(self, charger):
+        &quot;&quot;&quot;Return the entity name prefix for a charger, e.g. predbat_wallbox_12345.&quot;&quot;&quot;
+        return &quot;{}_wallbox_{}&quot;.format(self.prefix, charger.charger_id)
+
+    def ordered_chargers(self):
+        &quot;&quot;&quot;The chargers in id order. This order is what makes charger N the same thing as car N.&quot;&quot;&quot;
+        return [self.chargers[charger_id] for charger_id in sorted(self.chargers)]
+
+    def warn_permission(self):
+        &quot;&quot;&quot;Say once that the account cannot control the charger.&quot;&quot;&quot;
+        if not self.permission_warned:
+            self.log(&quot;Warn: wallbox: Wallbox refused a control - the account needs admin rights over the charger. Monitoring continues&quot;)
+            self.permission_warned = True
+
+    async def load_control_state(self):
+        &quot;&quot;&quot;Restore saved control state. Filled in with plan-led control.&quot;&quot;&quot;
+
+    def enable_control(self):
+        &quot;&quot;&quot;Decide whether plan-led control can run. Filled in with plan-led control.&quot;&quot;&quot;
+
+    def automatic_config(self):
+        &quot;&quot;&quot;Wire the charger entities into Predbat's car inputs. Filled in with automatic configuration.&quot;&quot;&quot;
+
+    async def control_tick(self, now):
+        &quot;&quot;&quot;Run one cycle of plan-led control. Filled in with plan-led control.&quot;&quot;&quot;
+
+    async def run(self, seconds, first):
+        &quot;&quot;&quot;Process queued control events, then poll and publish.&quot;&quot;&quot;
+        if not self.transport:
+            return False
+        if first:
+            await self.load_control_state()
+            self.enable_control()
+            self.skip_cycles = 0
+        if self.skip_cycles &gt; 0:
+            self.skip_cycles -= 1
+            return True
+        try:
+            refresh = await self.process_events()
+            if first or refresh or (seconds % self.poll_seconds) == 0:
+                return await self.poll(seconds, first)
+            return True
+        except WallboxRateLimitError:
+            self.backoff_cycles = min(RATE_LIMIT_MAX_CYCLES, max(RATE_LIMIT_MIN_CYCLES, self.backoff_cycles * 2))
+            self.skip_cycles = self.backoff_cycles
+            self.log(&quot;Warn: wallbox: rate limited by the Wallbox API, pausing polling for {} minutes&quot;.format(self.backoff_cycles))
+            # After start-up one rate limit is not a failure, but a first run that got no
+            # data must not mark the component started
+            return not first
+        except WallboxAuthError as exc:
+            self.log(&quot;Error: wallbox: sign in failed, check wallbox_username and wallbox_password: {}&quot;.format(exc))
+            return False
+        except WallboxError as exc:
+            self.log(&quot;Warn: wallbox: poll failed: {}&quot;.format(exc))
+            return False
+
+    async def process_events(self):
+        &quot;&quot;&quot;Run every queued control. Returns True when at least one ran, so the caller polls afresh.&quot;&quot;&quot;
+        refresh = False
+        while self.queued_events:
+            handler, *event_args = self.queued_events[0]
+            try:
+                await handler(*event_args)
+            except WallboxRateLimitError:
+                # Left on the queue, so it is retried once the back-off has passed
+                raise
+            except WallboxPermissionError:
+                self.warn_permission()
+            except WallboxError as exc:
+                self.log(&quot;Warn: wallbox: control failed: {}&quot;.format(exc))
+            self.queued_events.pop(0)
+            refresh = True
+        return refresh
+
+    async def poll(self, seconds, first):
+        &quot;&quot;&quot;Read every charger, publish, and run automatic configuration and control.&quot;&quot;&quot;
+        if first or not self.charger_ids or (seconds % CHARGER_LIST_SECONDS) == 0:
+            self.charger_ids = sorted(await self.transport.list_chargers(), key=str)
+        if not self.charger_ids:
+            if first:
+                self.log(&quot;Warn: wallbox: signed in but no chargers were found on the account&quot;)
+            return True
+
+        chargers = {}
+        stale_ids = set()
+        for charger_id in self.charger_ids:
+            key = str(charger_id)
+            try:
+                chargers[key] = normalise_charger(charger_id, await self.transport.get_status(charger_id))
+            except WallboxApiError as exc:
+                self.log(&quot;Warn: wallbox: could not read charger {}: {}&quot;.format(charger_id, exc))
+                # Keep the last record so the charger keeps its place in the car order,
+                # marked stale so control does not act on old state
+                if key in self.chargers:
+                    chargers[key] = self.chargers[key]
+                    stale_ids.add(key)
+        if len(stale_ids) == len(chargers):
+            raise WallboxApiError(&quot;no charger could be read&quot;)
+
+        self.chargers = chargers
+        self.stale_ids = stale_ids
+        await self.publish_data()
+        if self.automatic and not self._auto_configured:
+            self.automatic_config()
+            self._auto_configured = True
+        try:
+            await self.control_tick(self.now_utc_exact)
+        except WallboxPermissionError:
+            self.warn_permission()
+        except WallboxApiError as exc:
+            # Monitoring succeeded, so a refused control is a warning, not a failed cycle
+            self.log(&quot;Warn: wallbox: charge control failed: {}&quot;.format(exc))
+        self.backoff_cycles = 0
+        self.update_success_timestamp()
+        return True
+
+    async def publish_data(self):
+        &quot;&quot;&quot;Publish every known charger as Predbat entities.&quot;&quot;&quot;
+        if self.control_active:
+            # Published only while control could act on it, so the switch is never a lie
+            self.dashboard_item(&quot;switch.{}_wallbox_control&quot;.format(self.prefix), state=&quot;on&quot; if self.control_enabled else &quot;off&quot;, attributes=wallbox_attribute_table[&quot;control&quot;], app=&quot;wallbox&quot;)
+        for charger in self.ordered_chargers():
+            prefix = self.entity_prefix(charger)
+            status_attributes = dict(wallbox_attribute_table[&quot;status&quot;])
+            status_attributes.update({&quot;status_id&quot;: charger.status_id, &quot;name&quot;: charger.name, &quot;serial_number&quot;: charger.serial, &quot;part_number&quot;: charger.part_number, &quot;software_version&quot;: charger.software_version})
+            current_attributes = dict(wallbox_attribute_table[&quot;max_charging_current&quot;])
+            current_attributes[&quot;max&quot;] = charger.max_available_current if charger.max_available_current &gt;= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
+
+            self.dashboard_item(&quot;sensor.{}_status&quot;.format(prefix), state=charger.status, attributes=status_attributes, app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;sensor.{}_power&quot;.format(prefix), state=charger.power_w, attributes=wallbox_attribute_table[&quot;power&quot;], app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;sensor.{}_session_energy&quot;.format(prefix), state=charger.session_energy_kwh, attributes=wallbox_attribute_table[&quot;session_energy&quot;], app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;binary_sensor.{}_connected&quot;.format(prefix), state=&quot;on&quot; if charger.connected else &quot;off&quot;, attributes=wallbox_attribute_table[&quot;connected&quot;], app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;binary_sensor.{}_charging&quot;.format(prefix), state=&quot;on&quot; if charger.charging else &quot;off&quot;, attributes=wallbox_attribute_table[&quot;charging&quot;], app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;switch.{}_charging&quot;.format(prefix), state=&quot;on&quot; if charger.charging else &quot;off&quot;, attributes=wallbox_attribute_table[&quot;charging_switch&quot;], app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;switch.{}_locked&quot;.format(prefix), state=&quot;on&quot; if charger.locked else &quot;off&quot;, attributes=wallbox_attribute_table[&quot;locked&quot;], app=&quot;wallbox&quot;)
+            self.dashboard_item(&quot;number.{}_max_charging_current&quot;.format(prefix), state=charger.max_charging_current, attributes=current_attributes, app=&quot;wallbox&quot;)
+            if charger.eco_smart is not None:
+                self.dashboard_item(&quot;select.{}_eco_smart&quot;.format(prefix), state=charger.eco_smart, attributes=wallbox_attribute_table[&quot;eco_smart&quot;], app=&quot;wallbox&quot;)
+</code></pre>
+<p>Note on <code>len(stale_ids) == len(chargers)</code>: a first poll where every status call fails leaves <code>chargers</code> empty and <code>stale_ids</code> empty, so <code>0 == 0</code> raises, which is the intended "nothing could be read" failure.</p>
+<ul>
+<li>[ ] <strong>Step 5: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Expected: twelve more <code>✓</code> lines. Also run <code>./run_all --test components &gt; /tmp/wallbox_components.log 2&gt;&amp;1; tail -20 /tmp/wallbox_components.log</code> (the quick-suite test that imports every registered component); expected: pass.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<p>Run <code>detect_changes()</code> and confirm only <code>wallbox.py</code>, the test file, <code>COMPONENT_LIST</code> and <code>APPS_SCHEMA</code> are affected.</p>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/components.py apps/predbat/config.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): component with polling, publishing and rate limit back-off&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-manual-controls">Task 6: Manual controls</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (<code>WallboxAPI</code>)
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>queued_events</code>, <code>process_events()</code>, <code>entity_prefix()</code>, the transport control methods, <code>ECO_SMART_OPTIONS</code>, <code>MIN_CHARGING_CURRENT</code>, <code>DEFAULT_MAX_CHARGING_CURRENT</code>.
+- Produces: <code>charger_for_entity(entity_id) -&gt; WallboxCharger | None</code>; <code>async switch_event(entity_id, service)</code>, <code>async number_event(entity_id, value)</code>, <code>async select_event(entity_id, value)</code> (queue only); <code>async switch_event_handler(entity_id, service)</code>, <code>async number_event_handler(entity_id, value)</code>, <code>async select_event_handler(entity_id, value)</code>. Task 8 adds a <code>_wallbox_control</code> branch at the top of <code>switch_event_handler</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def _started_component(statuses=None, **overrides):
+    &quot;&quot;&quot;A component that has completed its first poll, with the transport call log cleared.&quot;&quot;&quot;
+    component = _make_component(statuses, **overrides)
+    run_async(component.run(0, True))
+    component.transport.calls = []
+    return component
+
+
+def test_controls_queue_rather_than_call():
+    &quot;&quot;&quot;An event only queues; the API call happens in the next run(), followed by a fresh poll.&quot;&quot;&quot;
+    component = _started_component()
+    run_async(component.switch_event(&quot;switch.predbat_wallbox_101_charging&quot;, &quot;turn_off&quot;))
+    assert component.transport.calls == [] and len(component.queued_events) == 1
+
+    run_async(component.run(60, False))
+    assert component.transport.calls[0] == (&quot;pause&quot;, 101)
+    assert (&quot;get_status&quot;, 101) in component.transport.calls, &quot;A control is followed by a re-poll even between polls&quot;
+    assert component.queued_events == []
+    print(&quot;  ✓ Controls are queued and followed by a re-poll&quot;)
+
+
+def test_switch_controls():
+    &quot;&quot;&quot;The charging and lock switches map to resume/pause and lock/unlock.&quot;&quot;&quot;
+    cases = [
+        (&quot;switch.predbat_wallbox_101_charging&quot;, &quot;turn_on&quot;, (&quot;resume&quot;, 101)),
+        (&quot;switch.predbat_wallbox_101_charging&quot;, &quot;turn_off&quot;, (&quot;pause&quot;, 101)),
+        (&quot;switch.predbat_wallbox_101_locked&quot;, &quot;turn_on&quot;, (&quot;set_locked&quot;, 101, True)),
+        (&quot;switch.predbat_wallbox_101_locked&quot;, &quot;turn_off&quot;, (&quot;set_locked&quot;, 101, False)),
+    ]
+    for entity_id, service, expected in cases:
+        component = _started_component()
+        run_async(component.switch_event_handler(entity_id, service))
+        assert component.transport.calls == [expected], (entity_id, service, component.transport.calls)
+
+    component = _started_component()
+    run_async(component.switch_event_handler(&quot;switch.predbat_wallbox_101_charging&quot;, &quot;toggle&quot;))
+    run_async(component.switch_event_handler(&quot;switch.predbat_wallbox_999_charging&quot;, &quot;turn_on&quot;))
+    run_async(component.switch_event_handler(&quot;switch.predbat_wallbox_101_something&quot;, &quot;turn_on&quot;))
+    assert component.transport.calls == [], &quot;Unknown services, chargers and entities send nothing&quot;
+    print(&quot;  ✓ Switch controls send the right calls&quot;)
+
+
+def test_number_control_clamps_and_ignores_junk():
+    &quot;&quot;&quot;The charging current is clamped to 6..max available, and a non-number is ignored.&quot;&quot;&quot;
+    component = _started_component()
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_max_charging_current&quot;, 16))
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_max_charging_current&quot;, &quot;20.0&quot;))
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_max_charging_current&quot;, 2))
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_max_charging_current&quot;, 500))
+    assert component.transport.calls == [(&quot;set_max_charging_current&quot;, 101, 16), (&quot;set_max_charging_current&quot;, 101, 20), (&quot;set_max_charging_current&quot;, 101, 6), (&quot;set_max_charging_current&quot;, 101, 32)]
+
+    component.transport.calls = []
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_max_charging_current&quot;, &quot;junk&quot;))
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_max_charging_current&quot;, None))
+    run_async(component.number_event_handler(&quot;number.predbat_wallbox_101_other&quot;, 16))
+    assert component.transport.calls == [], &quot;Junk values and other number entities send nothing&quot;
+    print(&quot;  ✓ Charging current is clamped and junk is ignored&quot;)
+
+
+def test_select_control():
+    &quot;&quot;&quot;Eco-Smart accepts only its three options, and only on a charger that supports it.&quot;&quot;&quot;
+    component = _started_component({101: _status(eco={&quot;enabled&quot;: False, &quot;mode&quot;: 0})})
+    run_async(component.select_event_handler(&quot;select.predbat_wallbox_101_eco_smart&quot;, &quot;full_solar&quot;))
+    run_async(component.select_event_handler(&quot;select.predbat_wallbox_101_eco_smart&quot;, &quot;turbo&quot;))
+    assert component.transport.calls == [(&quot;set_eco_smart&quot;, 101, &quot;full_solar&quot;)]
+
+    unsupported = _started_component()
+    run_async(unsupported.select_event_handler(&quot;select.predbat_wallbox_101_eco_smart&quot;, &quot;eco_mode&quot;))
+    assert unsupported.transport.calls == []
+    print(&quot;  ✓ Eco-Smart select sends only valid modes to chargers that support it&quot;)
+
+
+def test_control_refused_for_rights_warns_once():
+    &quot;&quot;&quot;A rights refusal warns once across repeated attempts and does not fail the cycle.&quot;&quot;&quot;
+    component = _started_component()
+    for _ in range(2):
+        component.transport.errors[(&quot;set_locked&quot;, 101, True)] = WallboxPermissionError(&quot;403&quot;)
+        run_async(component.switch_event(&quot;switch.predbat_wallbox_101_locked&quot;, &quot;turn_on&quot;))
+        assert run_async(component.run(60, False)) is True
+    assert len([message for message in component.log_messages if &quot;admin rights&quot; in message]) == 1
+    print(&quot;  ✓ A rights refusal warns once and monitoring continues&quot;)
+
+
+def test_control_failure_is_logged_and_not_retried():
+    &quot;&quot;&quot;An API failure on a control is logged, dropped from the queue, and the cycle still succeeds.&quot;&quot;&quot;
+    component = _started_component()
+    component.transport.errors[(&quot;pause&quot;, 101)] = WallboxApiError(&quot;HTTP 500&quot;)
+    run_async(component.switch_event(&quot;switch.predbat_wallbox_101_charging&quot;, &quot;turn_off&quot;))
+    assert run_async(component.run(60, False)) is True
+    assert _logged(component, &quot;control failed&quot;) and component.queued_events == []
+    print(&quot;  ✓ A failed control is logged and dropped&quot;)
+
+
+def test_control_survives_a_rate_limit():
+    &quot;&quot;&quot;A control that hits the rate limit stays queued and is sent after the back-off.&quot;&quot;&quot;
+    component = _started_component()
+    component.transport.errors[(&quot;pause&quot;, 101)] = WallboxRateLimitError(&quot;429&quot;)
+    run_async(component.switch_event(&quot;switch.predbat_wallbox_101_charging&quot;, &quot;turn_off&quot;))
+    run_async(component.run(60, False))
+    assert len(component.queued_events) == 1 and component.skip_cycles == 2
+
+    component.skip_cycles = 0
+    component.transport.calls = []
+    run_async(component.run(120, False))
+    assert component.transport.calls[0] == (&quot;pause&quot;, 101) and component.queued_events == []
+    print(&quot;  ✓ A rate limited control is retried after the back-off&quot;)
+
+
+def test_charger_for_entity_requires_a_whole_id():
+    &quot;&quot;&quot;Charger 10 must not claim charger 101's entities.&quot;&quot;&quot;
+    component = _started_component({10: _status(), 101: _status()})
+    assert component.charger_for_entity(&quot;switch.predbat_wallbox_101_charging&quot;).charger_id == &quot;101&quot;
+    assert component.charger_for_entity(&quot;switch.predbat_wallbox_10_charging&quot;).charger_id == &quot;10&quot;
+    assert component.charger_for_entity(&quot;switch.predbat_wallbox_control&quot;) is None
+    print(&quot;  ✓ Entities resolve to a whole charger id&quot;)
+</code></pre>
+<p>Add all eight to <code>test_wallbox()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Expected: <code>AttributeError: 'WallboxAPI' object has no attribute 'switch_event_handler'</code> (the base class <code>switch_event</code> is a no-op, so the first test fails on its queue assertion).</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Add to <code>WallboxAPI</code>:</p>
+<pre><code class="language-python">    def charger_for_entity(self, entity_id):
+        &quot;&quot;&quot;Find the charger an entity belongs to, or None.
+
+        The trailing underscore anchors the match to a whole id, so charger 10 cannot
+        claim charger 101's entities.
+        &quot;&quot;&quot;
+        for charger in self.chargers.values():
+            if &quot;{}_&quot;.format(self.entity_prefix(charger)) in entity_id:
+                return charger
+        return None
+
+    def api_id(self, charger):
+        &quot;&quot;&quot;The id in the form the API listed it, for a normalised charger.&quot;&quot;&quot;
+        for charger_id in self.charger_ids:
+            if str(charger_id) == charger.charger_id:
+                return charger_id
+        return charger.charger_id
+
+    async def switch_event(self, entity_id, service):
+        &quot;&quot;&quot;Queue a switch service call for the run loop.&quot;&quot;&quot;
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def number_event(self, entity_id, value):
+        &quot;&quot;&quot;Queue a number change for the run loop.&quot;&quot;&quot;
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def select_event(self, entity_id, value):
+        &quot;&quot;&quot;Queue a select change for the run loop.&quot;&quot;&quot;
+        self.queued_events.append((self.select_event_handler, entity_id, value))
+
+    async def switch_event_handler(self, entity_id, service):
+        &quot;&quot;&quot;Pause/resume or lock/unlock in response to a charger switch.&quot;&quot;&quot;
+        if service not in (&quot;turn_on&quot;, &quot;turn_off&quot;):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger:
+            return
+        turn_on = service == &quot;turn_on&quot;
+        if entity_id.endswith(&quot;_charging&quot;):
+            self.log(&quot;Info: wallbox: {} charging on {}&quot;.format(&quot;resuming&quot; if turn_on else &quot;pausing&quot;, charger.name))
+            if turn_on:
+                await self.transport.resume(self.api_id(charger))
+            else:
+                await self.transport.pause(self.api_id(charger))
+        elif entity_id.endswith(&quot;_locked&quot;):
+            self.log(&quot;Info: wallbox: {} {}&quot;.format(&quot;locking&quot; if turn_on else &quot;unlocking&quot;, charger.name))
+            await self.transport.set_locked(self.api_id(charger), turn_on)
+
+    async def number_event_handler(self, entity_id, value):
+        &quot;&quot;&quot;Set the maximum charging current, clamped to what the charger allows.&quot;&quot;&quot;
+        if not entity_id.endswith(&quot;_max_charging_current&quot;):
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger:
+            return
+        try:
+            amps = int(float(value))
+        except (TypeError, ValueError):
+            self.log(&quot;Warn: wallbox: ignoring charging current '{}' for {}&quot;.format(value, charger.name))
+            return
+        upper = charger.max_available_current if charger.max_available_current &gt;= MIN_CHARGING_CURRENT else DEFAULT_MAX_CHARGING_CURRENT
+        amps = max(MIN_CHARGING_CURRENT, min(upper, amps))
+        self.log(&quot;Info: wallbox: setting {} maximum charging current to {}A&quot;.format(charger.name, amps))
+        await self.transport.set_max_charging_current(self.api_id(charger), amps)
+
+    async def select_event_handler(self, entity_id, value):
+        &quot;&quot;&quot;Set the Eco-Smart mode on a charger that supports it.&quot;&quot;&quot;
+        if not entity_id.endswith(&quot;_eco_smart&quot;) or value not in ECO_SMART_OPTIONS:
+            return
+        charger = self.charger_for_entity(entity_id)
+        if not charger or charger.eco_smart is None:
+            return
+        self.log(&quot;Info: wallbox: setting {} Eco-Smart to {}&quot;.format(charger.name, value))
+        await self.transport.set_eco_smart(self.api_id(charger), value)
+</code></pre>
+<p><code>api_id()</code> exists because the API lists ids as integers while entity names carry strings; calls go out with the id exactly as Wallbox listed it. The tests assert integer ids in the recorded calls, which pins this.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Expected: eight more <code>✓</code> lines.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): pause, lock, charging current and Eco-Smart controls&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-automatic-configuration">Task 7: Automatic configuration</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (<code>WallboxAPI.automatic_config</code>)
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>ordered_chargers()</code>, <code>entity_prefix()</code>, <code>ComponentBase.set_arg_auto(arg, value, overwrite=True)</code>, <code>set_arg(arg, value)</code>, <code>get_arg(arg, default)</code>.
+- Produces: <code>automatic_config()</code> (sync), called once by <code>poll()</code> when <code>self.automatic</code> is on.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def test_automatic_config_two_chargers():
+    &quot;&quot;&quot;Each argument is a per-car list in charger id order, and num_cars is raised to match.&quot;&quot;&quot;
+    component = _make_component({202: _status(), 101: _status()})
+    run_async(component.run(0, True))
+    args = component.base.args
+    assert args[&quot;car_charging_energy&quot;] == [&quot;sensor.predbat_wallbox_101_session_energy&quot;, &quot;sensor.predbat_wallbox_202_session_energy&quot;]
+    assert args[&quot;car_charging_planned&quot;] == [&quot;binary_sensor.predbat_wallbox_101_connected&quot;, &quot;binary_sensor.predbat_wallbox_202_connected&quot;]
+    assert args[&quot;car_charging_power&quot;] == [&quot;sensor.predbat_wallbox_101_power&quot;, &quot;sensor.predbat_wallbox_202_power&quot;]
+    assert args[&quot;car_charging_now&quot;] == [&quot;sensor.predbat_wallbox_101_power&quot;, &quot;sensor.predbat_wallbox_202_power&quot;]
+    assert args[&quot;num_cars&quot;] == 2
+    assert &quot;car_charging_soc&quot; not in args, &quot;A Type 2 charger cannot report state of charge&quot;
+    print(&quot;  ✓ Automatic configuration wires per-car lists in charger order&quot;)
+
+
+def test_automatic_config_single_charger_is_still_a_list():
+    &quot;&quot;&quot;One charger still produces lists, which is what the per-car arguments expect.&quot;&quot;&quot;
+    component = _make_component()
+    run_async(component.run(0, True))
+    assert component.base.args[&quot;car_charging_energy&quot;] == [&quot;sensor.predbat_wallbox_101_session_energy&quot;]
+    assert component.base.args[&quot;num_cars&quot;] == 1
+    print(&quot;  ✓ A single charger is still wired as a list&quot;)
+
+
+def test_automatic_config_keeps_user_values():
+    &quot;&quot;&quot;A user's car_charging_now is kept, and a larger num_cars is not reduced.&quot;&quot;&quot;
+    component = _make_component()
+    component.base.args[&quot;car_charging_now&quot;] = [&quot;binary_sensor.my_car_charging&quot;]
+    component.base.args[&quot;num_cars&quot;] = 3
+    run_async(component.run(0, True))
+    assert component.base.args[&quot;car_charging_now&quot;] == [&quot;binary_sensor.my_car_charging&quot;]
+    assert component.base.args[&quot;num_cars&quot;] == 3
+    print(&quot;  ✓ User car_charging_now and a larger num_cars are kept&quot;)
+
+
+def test_automatic_config_disabled():
+    &quot;&quot;&quot;With wallbox_automatic off nothing is wired.&quot;&quot;&quot;
+    component = _make_component(automatic=False)
+    run_async(component.run(0, True))
+    assert &quot;car_charging_energy&quot; not in component.base.args and &quot;num_cars&quot; not in component.base.args
+    print(&quot;  ✓ Automatic configuration off wires nothing&quot;)
+
+
+def test_automatic_config_runs_once():
+    &quot;&quot;&quot;A value the user changes after start-up is not put back by the next poll.&quot;&quot;&quot;
+    component = _make_component()
+    run_async(component.run(0, True))
+    component.base.args[&quot;car_charging_energy&quot;] = [&quot;sensor.something_else&quot;]
+    run_async(component.run(120, False))
+    assert component.base.args[&quot;car_charging_energy&quot;] == [&quot;sensor.something_else&quot;]
+    print(&quot;  ✓ Automatic configuration runs once&quot;)
+</code></pre>
+<p>Add all five to <code>test_wallbox()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Expected: <code>KeyError: 'car_charging_energy'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Replace the placeholder <code>automatic_config</code> in <code>WallboxAPI</code>:</p>
+<pre><code class="language-python">    def automatic_config(self):
+        &quot;&quot;&quot;Wire the charger entities into Predbat's car charging inputs.
+
+        Each argument is a per-car list in charger id order, so charger N is car N.
+        car_charging_now takes the power sensors, which count as charging from
+        CAR_CHARGING_NOW_POWER_W; a value the user set in apps.yaml is kept. Session
+        energy resets with each session, which the shared incrementing-sensor handling
+        already copes with. car_charging_soc is not set: a Type 2 connector cannot
+        report the car's state of charge.
+        &quot;&quot;&quot;
+        chargers = self.ordered_chargers()
+        if not chargers:
+            return
+        energy_entities = [&quot;sensor.{}_session_energy&quot;.format(self.entity_prefix(charger)) for charger in chargers]
+        planned_entities = [&quot;binary_sensor.{}_connected&quot;.format(self.entity_prefix(charger)) for charger in chargers]
+        power_entities = [&quot;sensor.{}_power&quot;.format(self.entity_prefix(charger)) for charger in chargers]
+
+        self.log(&quot;Info: wallbox: setting car_charging_energy to {}&quot;.format(energy_entities))
+        self.set_arg_auto(&quot;car_charging_energy&quot;, energy_entities)
+        self.log(&quot;Info: wallbox: setting car_charging_planned to {}&quot;.format(planned_entities))
+        self.set_arg_auto(&quot;car_charging_planned&quot;, planned_entities)
+        self.log(&quot;Info: wallbox: setting car_charging_power and car_charging_now to {}&quot;.format(power_entities))
+        self.set_arg_auto(&quot;car_charging_power&quot;, power_entities)
+        self.set_arg_auto(&quot;car_charging_now&quot;, power_entities, overwrite=False)
+        if _to_int(self.get_arg(&quot;num_cars&quot;, 0), 0) &lt; len(chargers):
+            self.log(&quot;Info: wallbox: setting num_cars to {}&quot;.format(len(chargers)))
+            self.set_arg(&quot;num_cars&quot;, len(chargers))
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Expected: five more <code>✓</code> lines.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): automatic car charging configuration&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-predbat-led-charging">Task 8: Predbat-led charging</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code> (<code>WallboxAPI</code>)
+- Modify: <code>apps/predbat/tests/test_wallbox.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>utils.parse_car_plan_windows(planned, now, local_tz)</code>, <code>utils.in_car_plan_window(windows, now)</code>, <code>ComponentBase.storage</code> (<code>async save(module, filename, data)</code>, <code>async load(module, filename)</code>, or <code>None</code>), <code>ordered_chargers()</code>, <code>stale_ids</code>, <code>api_id()</code>, <code>transport.pause/resume/resume_schedule</code>.
+- Produces: <code>enable_control()</code>, <code>async load_control_state()</code>, <code>async save_control_state()</code>, <code>control_read_only_now() -&gt; bool</code>, <code>refresh_car_windows(now) -&gt; bool</code>, <code>async control_tick(now)</code>, <code>async control_charge(now)</code>, <code>async release_chargers()</code>; attributes <code>paused_by_predbat</code> (set of charger id str), <code>control_windows</code> (dict of car number to windows), <code>lock_warned</code> (set of charger id str); a <code>_wallbox_control</code> branch in <code>switch_event_handler</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">CONTROL_TZ = pytz.timezone(&quot;Europe/London&quot;)
+CONTROL_NOW = CONTROL_TZ.localize(datetime.datetime(2026, 10, 5, 23, 30))
+
+
+def _plan_window(start, end):
+    &quot;&quot;&quot;Build one planned-window dict in the shape output.py publishes.&quot;&quot;&quot;
+    return {&quot;start&quot;: start.strftime(&quot;%m-%d %H:%M:%S&quot;), &quot;end&quot;: end.strftime(&quot;%m-%d %H:%M:%S&quot;)}
+
+
+# CONTROL_NOW is inside this window...
+PLAN_INSIDE = [_plan_window(datetime.datetime(2026, 10, 5, 23, 0), datetime.datetime(2026, 10, 6, 1, 0))]
+# ...and before this one
+PLAN_OUTSIDE = [_plan_window(datetime.datetime(2026, 10, 6, 2, 0), datetime.datetime(2026, 10, 6, 4, 0))]
+
+
+class _Storage:
+    &quot;&quot;&quot;Minimal in-memory stand-in for the Storage component.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Start empty.&quot;&quot;&quot;
+        self.data = {}
+
+    async def save(self, module, filename, data, **kwargs):
+        &quot;&quot;&quot;Store a document.&quot;&quot;&quot;
+        self.data[(module, filename)] = data
+
+    async def load(self, module, filename):
+        &quot;&quot;&quot;Return a stored document, or None.&quot;&quot;&quot;
+        return self.data.get((module, filename))
+
+
+class _Components:
+    &quot;&quot;&quot;Stand-in for the component registry, serving only the storage component.&quot;&quot;&quot;
+
+    def __init__(self, storage):
+        &quot;&quot;&quot;Hold the storage stand-in to serve.&quot;&quot;&quot;
+        self.storage = storage
+
+    def get_component(self, name):
+        &quot;&quot;&quot;Return the storage stand-in, and nothing else.&quot;&quot;&quot;
+        return self.storage if name == &quot;storage&quot; else None
+
+
+def _control_component(plans, statuses=None, storage=None, **overrides):
+    &quot;&quot;&quot;A component with control on, chargers loaded and car plans published.
+
+    plans maps car number to a list of _plan_window() dicts. The chargers are loaded
+    directly rather than through run(), so each test calls control_tick() with a fixed clock.
+    &quot;&quot;&quot;
+    overrides.setdefault(&quot;wallbox_control&quot;, True)
+    component = _make_component(statuses, **overrides)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    if storage is not None:
+        component.base.components = _Components(storage)
+    for car_n, windows in plans.items():
+        postfix = &quot;&quot; if car_n == 0 else &quot;_{}&quot;.format(car_n)
+        component.base.set_state_wrapper(&quot;binary_sensor.predbat_car_charging_slot&quot; + postfix, &quot;off&quot;, {&quot;planned&quot;: windows})
+    run_async(component.load_control_state())
+    component.enable_control()
+    _load_chargers(component)
+    return component
+
+
+def _load_chargers(component):
+    &quot;&quot;&quot;Load the stub transport's current statuses into the component, as a poll would.&quot;&quot;&quot;
+    component.charger_ids = sorted(component.transport.statuses, key=str)
+    component.chargers = {str(charger_id): normalise_charger(charger_id, payload) for charger_id, payload in component.transport.statuses.items()}
+    component.stale_ids = set()
+    component.transport.calls = []
+
+
+def test_control_needs_automatic():
+    &quot;&quot;&quot;Control stays off, with a warning, unless automatic configuration is on.&quot;&quot;&quot;
+    assert _control_component({}).control_active is True
+    without_auto = _control_component({}, automatic=False)
+    assert without_auto.control_active is False and _logged(without_auto, &quot;needs wallbox_automatic&quot;)
+    assert _control_component({}, wallbox_control=False).control_active is False
+    print(&quot;  ✓ Control needs wallbox_control and wallbox_automatic&quot;)
+
+
+def test_control_resumes_inside_a_window():
+    &quot;&quot;&quot;A Paused charger inside its car's window is resumed.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_INSIDE}, {101: _status(status_id=178, power=0)})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [(&quot;resume&quot;, 101)]
+    print(&quot;  ✓ A paused charger inside a window is resumed&quot;)
+
+
+def test_control_pauses_outside_a_window():
+    &quot;&quot;&quot;A Charging charger outside its car's window is paused, and Predbat remembers it did so.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [(&quot;pause&quot;, 101)]
+    assert component.paused_by_predbat == {&quot;101&quot;}
+    print(&quot;  ✓ A charging charger outside a window is paused&quot;)
+
+
+def test_control_leaves_other_states_alone():
+    &quot;&quot;&quot;Scheduled, Waiting, Ready, Locked and already-correct chargers are sent nothing.&quot;&quot;&quot;
+    for plan, status_id in [(PLAN_INSIDE, 177), (PLAN_INSIDE, 179), (PLAN_INSIDE, 180), (PLAN_INSIDE, 164), (PLAN_INSIDE, 161), (PLAN_INSIDE, 193), (PLAN_INSIDE, 210), (PLAN_OUTSIDE, 178), (PLAN_OUTSIDE, 177), (PLAN_OUTSIDE, 161), (PLAN_OUTSIDE, 210)]:
+        component = _control_component({0: plan}, {101: _status(status_id=status_id, power=0)})
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [], (status_id, component.transport.calls)
+    print(&quot;  ✓ Scheduled, Waiting, Ready and Locked chargers are left alone&quot;)
+
+
+def test_control_warns_once_about_a_locked_charger():
+    &quot;&quot;&quot;A locked charger with a car connected inside a window is warned about once, never unlocked.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_INSIDE}, {101: _status(status_id=210, power=0, locked=True)})
+    run_async(component.control_tick(CONTROL_NOW))
+    run_async(component.control_tick(CONTROL_NOW))
+    assert len([message for message in component.log_messages if &quot;is locked&quot; in message]) == 1
+    assert component.transport.count(&quot;set_locked&quot;) == 0
+    print(&quot;  ✓ A locked charger is warned about once and never unlocked&quot;)
+
+
+def test_control_is_per_car():
+    &quot;&quot;&quot;Charger N follows car N's plan: the second charger reads the _1 slot sensor.&quot;&quot;&quot;
+    statuses = {101: _status(status_id=178, power=0), 202: _status(status_id=193)}
+    component = _control_component({0: PLAN_INSIDE, 1: PLAN_OUTSIDE}, statuses)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [(&quot;resume&quot;, 101), (&quot;pause&quot;, 202)]
+    print(&quot;  ✓ Each charger follows its own car's plan&quot;)
+
+
+def test_control_skips_a_charger_with_no_plan():
+    &quot;&quot;&quot;A charger whose car has no slot sensor is left alone, not paused as if outside a window.&quot;&quot;&quot;
+    statuses = {101: _status(status_id=193), 202: _status(status_id=193)}
+    component = _control_component({0: PLAN_INSIDE}, statuses)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [], &quot;Charger 202 has no car 1 plan, so it must not be paused&quot;
+
+    nothing_planned = _control_component({})
+    run_async(nothing_planned.control_tick(CONTROL_NOW))
+    assert nothing_planned.transport.calls == [], &quot;Before Predbat has planned anything, no charger is touched&quot;
+    print(&quot;  ✓ A charger with no car plan is left alone&quot;)
+
+
+def test_control_skips_a_stale_charger():
+    &quot;&quot;&quot;A charger whose last status read failed is not controlled on old state.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_OUTSIDE})
+    component.stale_ids = {&quot;101&quot;}
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == []
+    print(&quot;  ✓ A stale charger is not controlled&quot;)
+
+
+def test_control_forgets_an_unplugged_charger():
+    &quot;&quot;&quot;Once the car is unplugged, Predbat no longer counts the charger as one it paused.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_OUTSIDE})
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.paused_by_predbat == {&quot;101&quot;}
+    component.transport.statuses[101] = _status(status_id=161, power=0)
+    _load_chargers(component)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.paused_by_predbat == set() and component.transport.calls == []
+    print(&quot;  ✓ An unplugged charger is forgotten&quot;)
+
+
+def test_control_releases_on_read_only_and_switch_off():
+    &quot;&quot;&quot;Read only mode and the control switch both resume what Predbat paused and hand back the schedule.&quot;&quot;&quot;
+    for release in (&quot;read_only&quot;, &quot;switch&quot;):
+        component = _control_component({0: PLAN_OUTSIDE})
+        run_async(component.control_tick(CONTROL_NOW))
+        component.transport.statuses[101] = _status(status_id=178, power=0)
+        _load_chargers(component)
+
+        if release == &quot;read_only&quot;:
+            component.base.args[&quot;set_read_only&quot;] = True
+        else:
+            run_async(component.switch_event_handler(&quot;switch.predbat_wallbox_control&quot;, &quot;turn_off&quot;))
+            assert component.control_enabled is False
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [(&quot;resume&quot;, 101), (&quot;resume_schedule&quot;, 101)], (release, component.transport.calls)
+        assert component.paused_by_predbat == set()
+
+        component.transport.calls = []
+        run_async(component.control_tick(CONTROL_NOW))
+        assert component.transport.calls == [], &quot;Release happens once, and control stays quiet while released&quot;
+    print(&quot;  ✓ Read only mode and the control switch release the chargers&quot;)
+
+
+def test_control_does_not_release_a_charger_it_did_not_pause():
+    &quot;&quot;&quot;A charger the user paused by hand is not resumed when Predbat releases.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)})
+    component.base.args[&quot;set_read_only&quot;] = True
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == []
+    print(&quot;  ✓ A charger Predbat did not pause is not resumed on release&quot;)
+
+
+def test_control_state_survives_a_restart():
+    &quot;&quot;&quot;After a restart with control turned off, the charger Predbat paused is still released.&quot;&quot;&quot;
+    storage = _Storage()
+    component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
+    run_async(component.control_tick(CONTROL_NOW))
+    assert storage.data[(&quot;wallbox&quot;, &quot;control_state&quot;)] == {&quot;control_enabled&quot;: True, &quot;paused&quot;: [&quot;101&quot;]}
+
+    restarted = _control_component({0: PLAN_OUTSIDE}, {101: _status(status_id=178, power=0)}, storage=storage, wallbox_control=False)
+    assert restarted.control_active is False and restarted.paused_by_predbat == {&quot;101&quot;}
+    run_async(restarted.control_tick(CONTROL_NOW))
+    assert restarted.transport.calls == [(&quot;resume&quot;, 101), (&quot;resume_schedule&quot;, 101)]
+    assert storage.data[(&quot;wallbox&quot;, &quot;control_state&quot;)][&quot;paused&quot;] == []
+    print(&quot;  ✓ A restart with control off still releases the charger&quot;)
+
+
+def test_control_switch_state_survives_a_restart():
+    &quot;&quot;&quot;The control switch stays off across a restart and is published in that state from the start.&quot;&quot;&quot;
+    storage = _Storage()
+    component = _control_component({0: PLAN_OUTSIDE}, storage=storage)
+    run_async(component.switch_event_handler(&quot;switch.predbat_wallbox_control&quot;, &quot;turn_off&quot;))
+
+    restarted = _make_component(wallbox_control=True)
+    restarted.base.components = _Components(storage)
+    run_async(restarted.run(0, True))
+    assert restarted.control_enabled is False
+    assert restarted.base.entities[&quot;switch.predbat_wallbox_control&quot;][&quot;state&quot;] == &quot;off&quot;
+    print(&quot;  ✓ The control switch state survives a restart&quot;)
+
+
+def test_control_switch_is_published_only_when_available():
+    &quot;&quot;&quot;The control switch appears only when control can actually run.&quot;&quot;&quot;
+    on = _make_component(wallbox_control=True)
+    run_async(on.run(0, True))
+    assert on.base.entities[&quot;switch.predbat_wallbox_control&quot;][&quot;state&quot;] == &quot;on&quot;
+    off = _make_component(wallbox_control=False)
+    run_async(off.run(0, True))
+    assert &quot;switch.predbat_wallbox_control&quot; not in off.base.entities
+    print(&quot;  ✓ The control switch is published only when control is available&quot;)
+
+
+def test_control_without_storage_still_works():
+    &quot;&quot;&quot;With no Storage component, control runs and nothing is raised.&quot;&quot;&quot;
+    component = _control_component({0: PLAN_OUTSIDE})
+    assert component.storage is None
+    run_async(component.control_tick(CONTROL_NOW))
+    assert component.transport.calls == [(&quot;pause&quot;, 101)]
+    print(&quot;  ✓ Control works without the Storage component&quot;)
+
+
+def test_control_failure_does_not_fail_the_cycle():
+    &quot;&quot;&quot;A refused pause during a poll is a warning; monitoring still succeeds and it is retried next poll.&quot;&quot;&quot;
+    component = _make_component(wallbox_control=True)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    component.base.set_state_wrapper(&quot;binary_sensor.predbat_car_charging_slot&quot;, &quot;off&quot;, {&quot;planned&quot;: []})
+    component.transport.errors[(&quot;pause&quot;, 101)] = WallboxApiError(&quot;HTTP 500&quot;)
+    assert run_async(component.run(0, True)) is True
+    assert _logged(component, &quot;charge control failed&quot;) and component.paused_by_predbat == set()
+    run_async(component.run(120, False))
+    assert component.paused_by_predbat == {&quot;101&quot;}
+    print(&quot;  ✓ A refused control is a warning and is retried&quot;)
+</code></pre>
+<p>Add all sixteen to <code>test_wallbox()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<p>Expected: <code>AssertionError</code> in <code>test_control_needs_automatic</code> (the placeholder <code>enable_control</code> never sets <code>control_active</code>).</p>
+<ul>
+<li>[ ] <strong>Step 3: Write the implementation</strong></li>
+</ul>
+<p>Add <code>from utils import parse_car_plan_windows, in_car_plan_window</code> to the imports and these constants:</p>
+<pre><code class="language-python">WALLBOX_STORAGE_MODULE = &quot;wallbox&quot;
+WALLBOX_CONTROL_STATE = &quot;control_state&quot;
+</code></pre>
+<p>In <code>initialize</code>, next to <code>self.control_active = False</code>, add:</p>
+<pre><code class="language-python">        self.paused_by_predbat = set()
+        self.control_windows = {}
+        self.lock_warned = set()
+        self.control_state_loaded = False
+</code></pre>
+<p>Replace the three placeholders (<code>load_control_state</code>, <code>enable_control</code>, <code>control_tick</code>) and add the rest:</p>
+<pre><code class="language-python">    def enable_control(self):
+        &quot;&quot;&quot;Decide whether Predbat-led charging can run, and say why when it cannot.
+
+        Control needs automatic configuration because a charger is driven from its own
+        car's plan, and it is automatic configuration that makes charger N car N.
+        &quot;&quot;&quot;
+        self.control_active = False
+        if not self.wallbox_control:
+            return
+        if not self.automatic:
+            self.log(&quot;Warn: wallbox: wallbox_control needs wallbox_automatic to map each charger to a car, charge control is disabled&quot;)
+            return
+        self.control_active = True
+        self.log(&quot;Info: wallbox: Predbat-led charge control enabled&quot;)
+
+    async def load_control_state(self):
+        &quot;&quot;&quot;Restore the control switch and the list of chargers Predbat paused.
+
+        The paused list is what lets a restart with control turned off still release a
+        charger an earlier session left paused. Fails soft with no Storage component.
+        &quot;&quot;&quot;
+        if self.control_state_loaded or self.storage is None:
+            return
+        try:
+            saved = await self.storage.load(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE)
+        except Exception as exc:
+            self.log(&quot;Warn: wallbox: could not read the saved charge control state: {}&quot;.format(exc))
+            return
+        self.control_state_loaded = True
+        if not isinstance(saved, dict):
+            return
+        if &quot;control_enabled&quot; in saved:
+            self.control_enabled = bool(saved[&quot;control_enabled&quot;])
+        paused = saved.get(&quot;paused&quot;)
+        if isinstance(paused, list):
+            self.paused_by_predbat = {str(charger_id) for charger_id in paused}
+
+    async def save_control_state(self):
+        &quot;&quot;&quot;Persist the control switch and the list of chargers Predbat paused.&quot;&quot;&quot;
+        if self.storage is None:
+            return
+        try:
+            await self.storage.save(WALLBOX_STORAGE_MODULE, WALLBOX_CONTROL_STATE, {&quot;control_enabled&quot;: self.control_enabled, &quot;paused&quot;: sorted(self.paused_by_predbat)})
+        except Exception as exc:
+            self.log(&quot;Warn: wallbox: could not save the charge control state: {}&quot;.format(exc))
+
+    def control_read_only_now(self):
+        &quot;&quot;&quot;Is Predbat in read only mode - the live attribute first, then the config argument.&quot;&quot;&quot;
+        read_only = getattr(self.base, &quot;set_read_only&quot;, None)
+        if read_only is None:
+            read_only = self.get_arg(&quot;set_read_only&quot;, False)
+        return bool(read_only)
+
+    def refresh_car_windows(self, now):
+        &quot;&quot;&quot;Read each car's planned charging windows into control_windows.
+
+        A car with no slot sensor yet is simply absent, so its charger is left alone.
+        Returns True once at least one car's plan has been read.
+        &quot;&quot;&quot;
+        windows = {}
+        for car_n in range(len(self.chargers)):
+            postfix = &quot;&quot; if car_n == 0 else &quot;_{}&quot;.format(car_n)
+            planned = self.get_state_wrapper(&quot;binary_sensor.{}_car_charging_slot{}&quot;.format(self.prefix, postfix), attribute=&quot;planned&quot;)
+            if planned is None:
+                continue
+            windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)
+        self.control_windows = windows
+        return bool(windows)
+
+    async def control_tick(self, now):
+        &quot;&quot;&quot;Run one cycle of charge control, releasing rather than just going quiet.
+
+        Called on every poll whether or not control is available, because a charger a
+        previous session paused must be released even when control has since been turned off.
+        &quot;&quot;&quot;
+        reason = None
+        if not self.control_active:
+            reason = &quot;charge control is not enabled&quot;
+        elif self.control_read_only_now():
+            reason = &quot;Predbat is in read only mode&quot;
+        elif not self.control_enabled:
+            reason = &quot;the charge control switch is off&quot;
+        if reason:
+            if self.paused_by_predbat:
+                self.log(&quot;Info: wallbox: releasing the chargers because {}&quot;.format(reason))
+                await self.release_chargers()
+            return
+        await self.control_charge(now)
+
+    async def release_chargers(self):
+        &quot;&quot;&quot;Resume every charger Predbat paused and hand each back to its own schedule.
+
+        A charger that is no longer paused - resumed by hand, or unplugged - is only
+        forgotten. The record is saved even if a call fails part way, so what was
+        released stays released and the rest is retried on the next poll.
+        &quot;&quot;&quot;
+        try:
+            for charger_id in sorted(self.paused_by_predbat):
+                charger = self.chargers.get(charger_id)
+                if charger and charger_id in self.stale_ids:
+                    continue
+                if charger and charger.paused:
+                    self.log(&quot;Info: wallbox: releasing {}&quot;.format(charger.name))
+                    await self.transport.resume(self.api_id(charger))
+                    await self.transport.resume_schedule(self.api_id(charger))
+                self.paused_by_predbat.discard(charger_id)
+        finally:
+            await self.save_control_state()
+
+    async def control_charge(self, now):
+        &quot;&quot;&quot;Drive each charger from its car's plan: resume a paused one inside a window, pause a charging one outside.
+
+        Nothing else is sent. A Scheduled charger is following its own schedule and a
+        Waiting one is waiting on the car, and resume does nothing for either.
+        &quot;&quot;&quot;
+        if not self.refresh_car_windows(now):
+            return
+        before = set(self.paused_by_predbat)
+        try:
+            for car_n, charger in enumerate(self.ordered_chargers()):
+                if car_n not in self.control_windows or charger.charger_id in self.stale_ids:
+                    continue
+                wanted = in_car_plan_window(self.control_windows[car_n], now)
+                if not charger.connected:
+                    self.paused_by_predbat.discard(charger.charger_id)
+                    continue
+                if wanted and charger.locked:
+                    if charger.charger_id not in self.lock_warned:
+                        self.log(&quot;Warn: wallbox: {} is locked, so it will not charge in its planned window. Predbat does not unlock chargers&quot;.format(charger.name))
+                        self.lock_warned.add(charger.charger_id)
+                    continue
+                self.lock_warned.discard(charger.charger_id)
+                if wanted and charger.paused:
+                    self.log(&quot;Info: wallbox: resuming {} for car {}&quot;.format(charger.name, car_n))
+                    await self.transport.resume(self.api_id(charger))
+                    self.paused_by_predbat.discard(charger.charger_id)
+                elif not wanted and charger.charging:
+                    self.log(&quot;Info: wallbox: pausing {} for car {}&quot;.format(charger.name, car_n))
+                    await self.transport.pause(self.api_id(charger))
+                    self.paused_by_predbat.add(charger.charger_id)
+        finally:
+            if self.paused_by_predbat != before:
+                await self.save_control_state()
+</code></pre>
+<p>In <code>switch_event_handler</code>, insert this between the <code>if service not in ("turn_on", "turn_off"): return</code> check and the <code>charger = self.charger_for_entity(entity_id)</code> line. It must come before the charger lookup, because the control switch belongs to no charger:</p>
+<pre><code class="language-python">        if entity_id.endswith(&quot;_wallbox_control&quot;):
+            self.control_enabled = service == &quot;turn_on&quot;
+            self.log(&quot;Info: wallbox: charge control switched {}&quot;.format(&quot;on&quot; if self.control_enabled else &quot;off&quot;))
+            await self.save_control_state()
+            return
+</code></pre>
+<p>Why <code>control_enabled</code> keeps a charger paused by the user out of release: <code>release_chargers</code> only walks <code>paused_by_predbat</code>, which is added to only where Predbat itself sent the pause.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests to verify they pass</strong></li>
+</ul>
+<p>Expected: sixteen more <code>✓</code> lines, and every earlier test still passing.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/wallbox.py apps/predbat/tests/test_wallbox.py
+git commit -m &quot;feat(wallbox): Predbat-led charging with persistent release&quot;
+</code></pre>
+<hr />
+<h3 id="task-9-documentation">Task 9: Documentation</h3>
+<p><strong>Files:</strong>
+- Modify: <code>docs/components.md</code>, <code>docs/car-charging.md</code>, <code>docs/apps-yaml.md</code>, <code>docs/devices.md</code>, <code>apps/predbat/config/apps.yaml</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.github/copilot-instructions.md</code></p>
+<p>No code, so no test cycle. The check is <code>./run_pre_commit</code> (markdown lint and British English spelling).</p>
+<ul>
+<li>[ ] <strong>Step 1: <code>docs/components.md</code></strong></li>
+</ul>
+<p>Add <code>- [Wallbox Charger (wallbox)](#wallbox-charger-wallbox)</code> to the table of contents after the myenergi line (about line 20). After the end of the <code>### myenergi (myenergi)</code> section, add:</p>
+<pre><code class="language-markdown">### Wallbox Charger (wallbox)
+
+Talks directly to the Wallbox cloud, so it works with or without Home Assistant. It monitors every charger on your Wallbox account, can register them with Predbat as cars, and can pause and resume them from Predbat's car charging plan.
+
+#### What it publishes (wallbox)
+
+For each charger, with `&lt;id&gt;` being the Wallbox charger id:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_wallbox_&lt;id&gt;_status` | Charger status, e.g. `Charging`, `Paused`, `Waiting for car demand`, `Ready` |
+| `sensor.predbat_wallbox_&lt;id&gt;_power` | Charging power in W |
+| `sensor.predbat_wallbox_&lt;id&gt;_session_energy` | Energy added in the current session in kWh; resets with each session |
+| `binary_sensor.predbat_wallbox_&lt;id&gt;_connected` | On while a car is plugged in |
+| `binary_sensor.predbat_wallbox_&lt;id&gt;_charging` | On while the car is charging |
+| `switch.predbat_wallbox_&lt;id&gt;_charging` | Turn off to pause charging, on to resume a paused session |
+| `switch.predbat_wallbox_&lt;id&gt;_locked` | Lock or unlock the charger |
+| `number.predbat_wallbox_&lt;id&gt;_max_charging_current` | Maximum charging current in A |
+| `select.predbat_wallbox_&lt;id&gt;_eco_smart` | Eco-Smart mode: `off`, `eco_mode` or `full_solar`. Only on chargers with Eco-Smart |
+
+Wallbox chargers cannot report the car's state of charge, so there is no battery sensor.
+
+The controls need a Wallbox account with admin rights over the charger. Without them monitoring still works and Predbat logs a warning the first time a control is refused.
+
+#### Automatic configuration (wallbox)
+
+With `wallbox_automatic` on (the default), Predbat sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** to the Wallbox entities, and raises **num_cars** to the number of chargers. Chargers are taken in order of their id, so the first charger is car 0. A **car_charging_now** you have set yourself is kept.
+
+Predbat does not set **car_charging_soc**. If you want Predbat to plan to a target charge level, set it from your car's own integration.
+
+#### Predbat-led charging (wallbox)
+
+Set `wallbox_control: True` to let Predbat pause and resume each charger from its own car charging plan. It needs `wallbox_automatic`. While it is active Predbat publishes `switch.predbat_wallbox_control`, which you can turn off to hand the chargers back at any time; read only mode does the same.
+
+- Inside a planned car charging slot a paused charger is resumed.
+- Outside a slot a charging charger is paused.
+- When control is released, any charger Predbat paused is resumed and returned to its own Wallbox schedule.
+
+Things to know:
+
+- Wallbox can only pause a charger once it is charging, so a car plugged in outside a slot draws power until Predbat's next poll (two minutes by default).
+- Clear any schedule set in the Wallbox app. A charger that Wallbox is holding in `Scheduled` will not charge in a Predbat slot.
+- Predbat never unlocks a locked charger. It logs a warning if a locked charger misses its slot.
+- Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
+
+#### Configuration Options (wallbox)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | Yes | - | `wallbox_username` | Your Wallbox account email address |
+| `password` | String | Yes | - | `wallbox_password` | Your Wallbox account password |
+| `automatic` | Boolean | No | `True` | `wallbox_automatic` | Register the chargers with Predbat as cars |
+| `wallbox_control` | Boolean | No | `False` | `wallbox_control` | Let Predbat pause and resume the chargers from its own plan. Requires `wallbox_automatic`; released by read only mode |
+| `poll_seconds` | Integer | No | `120` | `wallbox_poll_seconds` | How often to poll Wallbox, 60 to 1800, in steps of 60 |
+</code></pre>
+<p>Also add <code>wallbox_username</code> and <code>wallbox_password</code> to the list of secret ids near line 278, in the same style as <code>ohme_login</code>.</p>
+<ul>
+<li>[ ] <strong>Step 2: <code>docs/car-charging.md</code></strong></li>
+</ul>
+<p>After the Ohme sections and before <code>## GivEnergy Gateway OCPP EV charger</code> (about line 423), add:</p>
+<pre><code class="language-markdown">## Wallbox car charger direct integration
+
+Predbat can talk directly to your Wallbox charger by configuring your Wallbox account details in `apps.yaml`:
+
+```yaml
+  wallbox_username: !secret wallbox_username
+  wallbox_password: !secret wallbox_password
+  # Let Predbat pause and resume the charger from its own car charging plan
+  #wallbox_control: True
+```
+
+Predbat then registers each charger on the account as a car and sets **car_charging_energy**, **car_charging_planned**, **car_charging_power** and **car_charging_now** for you. A Wallbox charger cannot report the car's state of charge, so set **car_charging_soc** from your car's own integration if you want Predbat to plan to a target.
+
+See [Wallbox Charger](components.md#wallbox-charger-wallbox) for the entities it publishes and how Predbat-led charging behaves.
+
+If you would rather use the Home Assistant Wallbox integration, see [Wallbox Pulsar](devices.md#wallbox-pulsar).
+</code></pre>
+<p>In each of the four sentences that list the supported charger integrations (about lines 108, 211, 521 and 537), add <code>Wallbox</code> after <code>myenergi Zappi</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: <code>docs/apps-yaml.md</code></strong></li>
+</ul>
+<p>After the <code>ohme_automatic_octopus_intelligent</code> bullet (about line 2112), add:</p>
+<pre><code class="language-markdown">- **wallbox_username** - Wallbox EV charger account email address
+- **wallbox_password** - Password for the above Wallbox account
+- **wallbox_automatic** - Register the Wallbox chargers with Predbat as cars (default `True`)
+- **wallbox_control** - Let Predbat pause and resume the Wallbox chargers from its own car charging plan (default `False`)
+- **wallbox_poll_seconds** - How often to poll the Wallbox cloud in seconds (default `120`)
+</code></pre>
+<p>Add <code>wallbox_username</code> and <code>wallbox_password</code> to the sample secrets near lines 239–240, next to the Ohme ones and in the same form.</p>
+<ul>
+<li>[ ] <strong>Step 4: <code>docs/devices.md</code></strong></li>
+</ul>
+<p>In the <code>## Wallbox Pulsar</code> section (about line 269), add as its first paragraph:</p>
+<pre><code class="language-markdown">Predbat can talk to Wallbox directly, with no Home Assistant integration needed: see [Wallbox Charger](components.md#wallbox-charger-wallbox). The configuration below is for the Home Assistant Wallbox integration instead.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: <code>apps/predbat/config/apps.yaml</code></strong></li>
+</ul>
+<p>After the Ohme block (ends about line 320), add:</p>
+<pre><code class="language-yaml">  # Wallbox EV charger cloud direct integration
+  #wallbox_username: !secret wallbox_username
+  #wallbox_password: !secret wallbox_password
+  # Register the Wallbox chargers with Predbat as cars (on by default)
+  #wallbox_automatic: True
+  # Let Predbat pause and resume the chargers according to its own car charging plan.
+  # Requires wallbox_automatic
+  #wallbox_control: True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Component counts</strong></li>
+</ul>
+<p>In <code>CLAUDE.md</code> (line 113) and <code>AGENTS.md</code> (line 109), add <code>Wallbox</code> to the name list after <code>Ohme</code> and correct the count in "registry of 18 pluggable components". The 18 is already stale: count the entries with <code>grep -c '"class":' apps/predbat/components.py</code> after Task 5 and use that number. In <code>.github/copilot-instructions.md</code>, add <code>WallboxAPI</code> to the component class list (line 139) and <code>wallbox.py</code> to the file list (line 328).</p>
+<ul>
+<li>[ ] <strong>Step 7: Check and commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &gt; /tmp/wallbox_precommit.log 2&gt;&amp;1; tail -40 /tmp/wallbox_precommit.log
+</code></pre>
+<p>Expected: every hook <code>Passed</code>. If CSpell flags a real word (for example <code>ecosmart</code>), add it to <code>.cspell/custom-dictionary-workspace.txt</code>, run pre-commit again (it re-sorts that file), and stage the result.</p>
+<pre><code class="language-bash">git add docs/components.md docs/car-charging.md docs/apps-yaml.md docs/devices.md apps/predbat/config/apps.yaml CLAUDE.md AGENTS.md .github/copilot-instructions.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;docs(wallbox): document the Wallbox component&quot;
+</code></pre>
+<hr />
+<h3 id="task-10-full-verification-and-live-check-needs-the-maintainers-charger">Task 10: Full verification and live check (needs the maintainer's charger)</h3>
+<p><strong>Files:</strong>
+- Modify: <code>tools/debug-journal.md</code> (a Wallbox entry)</p>
+<ul>
+<li>[ ] <strong>Step 1: Run the quick suite</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage
+./run_all --quick &gt; /tmp/wallbox_quick.log 2&gt;&amp;1; tail -40 /tmp/wallbox_quick.log
+</code></pre>
+<p>Expected: all tests pass. Tests that enumerate components or config keys (<code>components</code>, <code>validate_config</code>, <code>component_base</code>, <code>agent_tools</code>) are the likely ones to react to a new registry entry; if one fails, read its assertion in the log before changing anything.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run pre-commit over everything</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &gt; /tmp/wallbox_precommit.log 2&gt;&amp;1; tail -40 /tmp/wallbox_precommit.log
+</code></pre>
+<p>Expected: every hook <code>Passed</code>, including <code>interrogate</code> at 100%.</p>
+<ul>
+<li>[ ] <strong>Step 3: Live check (maintainer)</strong></li>
+</ul>
+<p>With a car plugged in and charging, from <code>apps/predbat/</code>:</p>
+<pre><code class="language-bash">python3 wallbox.py --username &lt;email&gt; --password &lt;password&gt; --pause
+python3 wallbox.py --username &lt;email&gt; --password &lt;password&gt; --resume
+python3 wallbox.py --username &lt;email&gt; --password &lt;password&gt; --resume-schedule
+</code></pre>
+<p>Expected after <code>--pause</code>: the read-back shows <code>status='Paused'</code>, <code>paused=True</code>. After <code>--resume</code>: <code>status='Charging'</code>. <code>--resume-schedule</code> returns without error.</p>
+<p>Then run Predbat with <code>wallbox_username</code>, <code>wallbox_password</code> and <code>wallbox_control: True</code> and confirm, in order:</p>
+<ol>
+<li>The <code>predbat_wallbox_&lt;id&gt;_*</code> entities appear with sensible values.</li>
+<li>The log shows <code>car_charging_energy</code>, <code>car_charging_planned</code>, <code>car_charging_power</code> and <code>car_charging_now</code> being set.</li>
+<li>With the car charging outside a planned car slot, Predbat pauses it within one poll.</li>
+<li>Turning <code>switch.predbat_wallbox_control</code> off resumes the charger.</li>
+<li>Over an hour of running there is no <code>rate limited</code> warning at the default 120 second poll.</li>
+</ol>
+<ul>
+<li>[ ] <strong>Step 4: Record what was learnt</strong></li>
+</ul>
+<p>Add a <code>Wallbox</code> entry to <code>tools/debug-journal.md</code> in that file's existing style, recording: which <code>User-Agent</code> the API accepted; the status ids actually seen for charging, paused and unplugged; whether a 120 second poll stayed clear of the rate limit; how long a pause took to show in the status; and anything in the live check that differed from this plan.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add tools/debug-journal.md
+git commit -m &quot;docs(journal): Wallbox API findings from the live check&quot;
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
