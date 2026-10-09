@@ -55,9 +55,7 @@ If the bot's most recent prior comment (the one you found in step 1) carries a o
 - **Still a bug** — restate the one-line statement in this comment, unchanged if the new evidence doesn't bear on it, updated if it sharpens or changes what the fault actually is.
 - **Not a bug after all** — say so plainly, retract the statement, and give the corrected classification. This is the expected outcome when, as happened on #5390, a maintainer's own reply shows the reported behaviour is Predbat doing what the config says.
 
-If this review is the one changing the classification **to** `bug` (no prior comment carried the label), write the one-line statement now, to the same standard as `/issue-triage` step 3 — a new `bug` verdict needs the statement just as much as the original first-pass one did.
-
-A `bug` label applied by an early-exit gate (`/issue-triage` step 1a or 1b) carries no such statement, since those gates stop before step 3 — this rule doesn't apply until a full investigation has actually produced one.
+If no earlier bot comment carries a bug statement and this review concludes the issue is a bug, write the one-line statement now, to the same standard as `/issue-triage` step 3. That covers two cases: this review changing the classification **to** `bug`, and this review confirming a `bug` label that an early-exit gate (`/issue-triage` step 1a or 1b) applied without investigating — those gates stop before step 3, so the first full investigation after one is where the statement gets written, even though the label is already there.
 
 ## 5. Post one follow-up comment
 

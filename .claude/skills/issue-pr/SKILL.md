@@ -14,7 +14,9 @@ This skill assumes the issue has already been triaged — the daemon only invoke
 
 ## 1. Read the ticket
 
-Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bot's own triage comment (opens with "automated first-pass triage") already has the classification, priority, and any root-cause pointer — start from there rather than re-investigating from scratch. If it's labelled `bug`, the comment also has a one-line statement of the fault right after the classification — use that as the precise claim to fix, not the reporter's (often vaguer) symptom description. If the issue carries any follow-up bot comments (opening with "automated follow-up triage review"), check the most recent one too — it may have restated, sharpened, or only just written that statement, and its version of the claim supersedes the first-pass one.
+Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bot's own triage comment (opens with "automated first-pass triage") already has the classification, priority, and any root-cause pointer — start from there rather than re-investigating from scratch. If it's labelled `bug` and the triage reached a full investigation, the comment also has a one-line statement of the fault right after the classification — use that as the precise claim to fix, not the reporter's (often vaguer) symptom description. If the issue carries any follow-up bot comments (opening with "automated follow-up triage review"), check the most recent one too — it may have restated, sharpened, or only just written that statement, and its version of the claim supersedes the first-pass one.
+
+A `bug` label can arrive without that statement: the split and evidence gates (`/issue-triage` steps 1a and 1b) apply a type label and stop before any investigation. If no bot comment has a bug statement or a root-cause pointer, the fault hasn't been verified yet — don't fall back to the reporter's title or symptoms. Go to step 8 and say the issue needs a full triage (the follow-up review that the reporter's reply triggers) before a fix can be attempted.
 
 ## 2. Investigate
 
