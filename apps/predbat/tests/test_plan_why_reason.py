@@ -852,6 +852,30 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: expected toggleForceDropdown to null-guard document.getElementById(id) before using it")
         failed = True
 
+    # --- Test 17: a History slot that ran alongside a warning is flagged, keeping its own reason ---
+    print("Test status warning flag")
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
+    warning = "Warn: Return bad float value unavailable from car_charging_soc"
+    _, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False, status_warnings={minutes_now + 5: warning})
+    row = _get_row(raw_plan, minutes_now)
+    next_row = _get_row(raw_plan, minutes_now + my_predbat.plan_interval_minutes)
+    if row is None or _codes(row)[-1:] != ["status_warning"] or not _codes(row)[0].startswith("demand_"):
+        print("ERROR: a warning slot should keep its demand reason and add status_warning, got {}".format(row and _codes(row)))
+        failed = True
+    elif "&#128681;" not in row["state_text"]:
+        print("ERROR: a warning slot should carry the red flag in its state, got {!r}".format(row["state_text"]))
+        failed = True
+    elif warning not in _render(row, raw_plan["reason_templates"]):
+        print("ERROR: the warning text should appear in the slot's reason, got {!r}".format(_render(row, raw_plan["reason_templates"])))
+        failed = True
+    elif next_row is None or "status_warning" in _codes(next_row) or "&#128681;" in next_row["state_text"]:
+        print("ERROR: a slot without a warning should not be flagged, got {}".format(next_row and _codes(next_row)))
+        failed = True
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed

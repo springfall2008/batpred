@@ -25,6 +25,7 @@ import traceback
 import gc
 import random
 import time
+import threading
 
 # from memory_profiler import profile
 
@@ -65,6 +66,8 @@ else:
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from const import (
+    COMPONENT_ERROR_STATUS_PREFIX,
+    COMPONENT_ERROR_STATUS_SUFFIX,
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
@@ -365,6 +368,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.current_status = None
         self.previous_status = None
         self.had_errors = False
+        self.status_warning = None
+        self.status_warning_debug = ""
+        self.status_lock = threading.RLock()
         self.plan_valid = False
         self.plan_preclip = None
         self.plan_last_updated = None
@@ -1025,8 +1031,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         if self.had_errors:
             self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
+            self.record_status_under_warning(status)
         elif failed_components:
-            error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
+            error_status = COMPONENT_ERROR_STATUS_PREFIX + status + COMPONENT_ERROR_STATUS_SUFFIX + ", ".join(failed_components)
             self.log(error_status)
             self.record_status(
                 error_status,
@@ -1067,6 +1074,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         recompute = False
         status_extra = ""
         self.had_errors = False
+        self.status_warning = None
+        self.status_warning_debug = ""
 
         self.update_time()
         self.save_current_config()
