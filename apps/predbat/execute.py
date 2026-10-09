@@ -1089,6 +1089,7 @@ class Execute:
         """
         if not self.set_read_only or (self.inverter_needs_reset_force in ["set_read_only"]):
             self.last_service_hash = {}
+            self.last_service_time = {}
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
                 self.log("Reset inverter settings to safe mode (set_charge_window={} set_export_window={} force={})".format(self.set_charge_window, self.set_export_window, self.inverter_needs_reset_force))

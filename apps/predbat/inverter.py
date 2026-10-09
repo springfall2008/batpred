@@ -3306,6 +3306,40 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
+    def repeat_service_skip_reason(self, service_name, service_data, hash_index, repeat_interval):
+        """
+        Decide whether a repeated identical service call may be skipped under repeat_interval rate limiting.
+
+        Returns a skip reason string when the call can safely be skipped, or an empty string when the
+        service must be called. Identical repeats are re-issued once repeat_interval minutes have passed
+        since the last actual call (the keepalive floor). Within the interval a select.select_option call
+        is only skipped when the select entity already reports the requested option; if the entity reports
+        anything else, or can not be read, the call goes ahead so a device that silently reverted is
+        re-asserted on the next cycle. Other services are skipped purely on the time floor. When in doubt
+        the call is made, as failing towards more calls is safe and failing towards fewer is not.
+        """
+        last_time = self.base.last_service_time.get(hash_index, None)
+        if last_time is None:
+            return ""
+        try:
+            since_call_minutes = (self.base.now_utc - last_time).total_seconds() / 60
+        except (TypeError, AttributeError):
+            return ""
+        if since_call_minutes < 0 or since_call_minutes >= repeat_interval:
+            return ""
+
+        if service_name.replace(".", "/") == "select/select_option":
+            entity_id = service_data.get("entity_id", None)
+            option = service_data.get("option", None)
+            if not isinstance(entity_id, str) or option is None:
+                return ""
+            current_option = self.base.get_state_wrapper(entity_id=entity_id, refresh=True)
+            if current_option != option:
+                self.log("Inverter {} Repeat of service_name {} goes ahead as {} reports {} not {}".format(self.id, service_name, entity_id, current_option, option))
+                return ""
+            return "entity {} already reports {} and it was last called {:.1f} minutes ago (repeat_interval {:g} minutes)".format(entity_id, option, since_call_minutes, repeat_interval)
+        return "it was last called {:.1f} minutes ago (repeat_interval {:g} minutes)".format(since_call_minutes, repeat_interval)
+
     def call_service_template(self, service, data, domain="charge", extra_data=None):
         """
         Call a service template with data
@@ -3332,6 +3366,7 @@ class Inverter:
             service_data = {}
             service_name = ""
             service_always = False
+            service_repeat_interval = 0
 
             if isinstance(service_template, str):
                 service_name = service_template
@@ -3346,6 +3381,11 @@ class Inverter:
                         service_name = service_template[key]
                     elif key in ["always", "repeat"]:
                         service_always = service_template[key]
+                    elif key == "repeat_interval":
+                        try:
+                            service_repeat_interval = float(service_template[key])
+                        except (TypeError, ValueError):
+                            service_repeat_interval = 0
                     else:
                         value = service_template[key]
                         use_index = None
@@ -3355,14 +3395,28 @@ class Inverter:
                         if value:
                             service_data[key] = value
 
-            if service_name and service_repeat and not service_always:
-                self.log("Inverter {} Skipped service {} domain {} service_name {} as it was previously called.".format(self.id, service, domain, service_name))
+            skip_reason = ""
+            if service_name and service_repeat:
+                if service_repeat_interval > 0:
+                    skip_reason = self.repeat_service_skip_reason(service_name, service_data, hash_index, service_repeat_interval)
+                elif not service_always:
+                    skip_reason = "it was previously called"
+
+            if service_name and skip_reason:
+                self.log("Inverter {} Skipped service {} domain {} service_name {} as {}.".format(self.id, service, domain, service_name, skip_reason))
             elif service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Calling service {} domain {} service_name {} with data {}".format(self.id, service, domain, service_name, service_data))
                 if not self.base.call_service_wrapper(service_name, **service_data):
                     self.log("Warn: Inverter {} service {} domain {} service_name {} was not accepted, it will be retried next cycle".format(self.id, service, domain, service_name))
                     service_calls_ok = False
+                else:
+                    # Only start the repeat_interval keepalive clock for an accepted call, like the
+                    # last_service_hash handling below, so the floor is always measured from a write
+                    # that actually landed rather than from an attempt the HA layer rejected.
+                    now_utc = getattr(self.base, "now_utc", None)
+                    if now_utc is not None:
+                        self.base.last_service_time[hash_index] = now_utc
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
 
