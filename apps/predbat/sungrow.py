@@ -278,6 +278,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self.control_held = set()
         self._heartbeat_task = None
         self._heartbeat_stop = False
+        self._beat_failures = {}
         # Per-device "does this device accept parameter configuration" verdict from
         # paramSettingCheck. Cached because it is a property of the hardware and the account
         # tier, not a transient error, and re-probing it every cycle spends a call to be told
@@ -978,6 +979,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 # write: a write that failed still means Predbat owns this inverter and the
                 # next tick should retry.
                 self.control_active.add(uuid)
+                await self.save_control()
                 await self.apply_schedule(uuid)
             return
         self.update_local_schedule(uuid, entity_id, value)
@@ -1401,6 +1403,19 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     # The heartbeat
     # -------------------------------------------------------------------------
 
+    def _drop_control(self, uuids, reason):
+        """Forget that these inverters are held, because they have reverted or are about to.
+
+        The cached applied command goes too. It is what makes _write_params skip an unchanged
+        decision, and once the inverter has left external dispatch that decision is no longer
+        applied - keeping it would mean the command is never sent again.
+        """
+        for uuid in uuids:
+            self.control_held.discard(uuid)
+            self.applied_command.pop(uuid, None)
+            self._beat_failures.pop(uuid, None)
+            self.log("Info: Sungrow no longer holds {} ({}); control will be re-established on the next cycle that needs it".format(self._serial(uuid), reason))
+
     def _ensure_heartbeat(self):
         """Start the heartbeat loop if control is held and it is not already running.
 
@@ -1444,6 +1459,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             # self-consumption within one interval.
             if self._is_read_only() or not self.control_enable:
                 self.log("Info: Sungrow heartbeat paused (read-only or control disabled); the inverter will revert to self-consumption")
+                self._drop_control(list(self.control_held), "heartbeat paused")
                 break
             for uuid in list(self.control_held):
                 await self.send_heartbeat(uuid)
@@ -1681,15 +1697,17 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         await self.save_cache(SUNGROW_CACHE_STATIC, {"plant_list": self.plant_list, "plant_detail": self.plant_detail, "device_list": self.device_list, "device_detail": self.device_detail, "write_supported": self._write_supported})
 
     async def save_control(self):
-        """Persist the write pacing clock and applied decisions.
+        """Persist the write pacing clock and which inverters Predbat drives.
 
-        control_held is deliberately NOT persisted. After a restart the inverter has already
-        reverted to self-consumption, or is within one heartbeat interval of doing so, and
-        restoring "we hold control" would be a claim about hardware state that is no longer
-        true - the component would start beating for a mode the inverter is not in and would
-        never re-send the command that puts it there.
+        Neither control_held nor applied_command is persisted. After a restart the inverter has
+        already reverted to self-consumption, or is within one heartbeat interval of doing so,
+        so both would be claims about hardware state that is no longer true: the first would
+        beat for a mode the inverter is not in, the second would stop the command that puts it
+        there from ever being sent again. control_active IS persisted - it records that Predbat
+        has a plan for this inverter, so the reconcile loop can act on the first cycle rather
+        than waiting for a button press that only comes when the plan changes.
         """
-        await self.save_cache(SUNGROW_CACHE_CONTROL, {"last_write_time": {str(key): value for key, value in self.last_write_time.items()}, "applied_command": {str(key): value for key, value in self.applied_command.items()}})
+        await self.save_cache(SUNGROW_CACHE_CONTROL, {"last_write_time": {str(key): value for key, value in self.last_write_time.items()}, "control_active": sorted(str(uuid) for uuid in self.control_active)})
 
     async def restore_state(self):
         """Restore the caches on the first cycle, marking the guard only on success."""
@@ -1707,7 +1725,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         control = await self.load_cache(SUNGROW_CACHE_CONTROL)
         if control:
             self.last_write_time = {key: value for key, value in (control.get("last_write_time") or {}).items()}
-            self.applied_command = dict(control.get("applied_command") or {})
+            self.control_active = set(str(uuid) for uuid in (control.get("control_active") or []))
         self._cache_restored = True
 
     # -------------------------------------------------------------------------

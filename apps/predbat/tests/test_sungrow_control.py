@@ -8,6 +8,7 @@
 
 """Tests for the Sungrow control decision and the dispatch-then-poll write path."""
 
+import json
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from unittest.mock import patch
 from sungrow_const import (
@@ -832,6 +833,46 @@ def test_entity_ids_resolve_back_to_the_right_inverter():
     assert not failed, "test_entity_ids_resolve_back_to_the_right_inverter"
 
 
+def test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter():
+    """After a restart the inverter has reverted, so the same decision must be written again."""
+    failed = False
+    store = {}
+
+    async def save(name, data):
+        """Persist through a JSON round trip, as the Storage component does."""
+        store[name] = json.loads(json.dumps(data))
+
+    async def load(name):
+        """Return what the previous process saved."""
+        return store.get(name)
+
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, export={"power": 5000})
+    first = _controlled_client()
+    first.set_mock_clock(3 * 60)
+    first.save_cache = save
+    sent = _capture_dispatch(first)
+    first.control_active.add(UUID)
+    run_async_local(first.apply_settings(UUID, schedule))
+
+    second = _controlled_client()
+    second.set_mock_clock(3 * 60)
+    second.save_cache = save
+    second.load_cache = load
+    sent_after = _capture_dispatch(second)
+    run_async_local(second.restore_state())
+    if UUID not in second.control_active:
+        print("ERROR: control_active was not restored, so the reconcile loop would wait for the next button press")
+        failed = True
+    run_async_local(second.apply_settings(UUID, schedule))
+    if len(sent) != 1 or len(sent_after) != 1:
+        print(f"ERROR: writes before/after restart were {len(sent)}/{len(sent_after)}, expected 1/1")
+        failed = True
+    if UUID not in second.control_held:
+        print("ERROR: control is not held after the restart, so no heartbeat would run")
+        failed = True
+    assert not failed, "test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter"
+
+
 def run_sungrow_control_tests(my_predbat):
     """Run all Sungrow control-logic tests."""
     failed = False
@@ -875,6 +916,7 @@ def run_sungrow_control_tests(my_predbat):
         ("write_button", test_write_button_press_marks_the_inverter_as_driven),
         ("entities_round_trip", test_control_entities_round_trip_through_home_assistant),
         ("entity_resolution", test_entity_ids_resolve_back_to_the_right_inverter),
+        ("restart_re_establishes", test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter),
     ]:
         try:
             if fn():

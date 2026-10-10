@@ -341,6 +341,25 @@ def test_final_stops_the_heartbeat_before_releasing():
     assert not failed, "test_final_stops_the_heartbeat_before_releasing"
 
 
+def test_a_read_only_pause_forgets_the_applied_command():
+    """Pausing the beats lets the inverter revert, so the cached command must go with them.
+
+    Otherwise switching read-only off finds an "unchanged" decision, writes nothing and never
+    restarts the heartbeat.
+    """
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
+    client.state["switch.predbat_set_read_only"] = "on"
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if UUID in client.control_held or UUID in client.applied_command:
+        print(f"ERROR: after a read-only pause held={client.control_held} applied={client.applied_command}")
+        failed = True
+    assert not failed, "test_a_read_only_pause_forgets_the_applied_command"
+
+
 def test_control_held_is_not_persisted_across_a_restart():
     """After a restart the inverter has already reverted, so restoring 'we hold control' would lie.
 
@@ -414,6 +433,7 @@ def run_sungrow_heartbeat_tests(my_predbat):
         ("final_stops_first", test_final_stops_the_heartbeat_before_releasing),
         ("held_not_persisted", test_control_held_is_not_persisted_across_a_restart),
         ("loop_cancellable", test_heartbeat_loop_survives_being_cancelled),
+        ("read_only_drops_control", test_a_read_only_pause_forgets_the_applied_command),
     ]:
         try:
             if fn():
