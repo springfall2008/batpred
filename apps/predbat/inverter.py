@@ -3446,7 +3446,7 @@ class Inverter:
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
-        if target_soc < 100:
+        if target_soc < 100 or freeze:
             # Mirrors adjust_charge_immediate()'s charge_start_service payload just above - the
             # actual (possibly low-power-scaled) rate already set via adjust_discharge_rate(), not
             # always the inverter's maximum, which produced a full-power discharge_start_service
