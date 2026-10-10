@@ -3638,7 +3638,7 @@ class TestGatewayUnitControlBinding:
         asyncio.run(gw._load_discovery())
         return gw
 
-    _STORED_400 = {"CE2225G400": {"serial": "CE2225G400", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": True, "capacity_wh": 9500, "model": ""}}
+    _STORED_400 = {"CE2225G400": {"serial": "CE2225G400", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": True, "capacity_wh": 9500, "rate_max_w": 3000, "inverter_rate_max_w": 0, "model": ""}}
 
     def test_listed_inverter_never_read_is_left_out_until_the_hub_reads_it(self):
         """A listed inverter the hub has never read is left out, with a warning and no error, and bound once it is read."""
@@ -3947,7 +3947,7 @@ class TestGatewayUnitControlBinding:
 
     def test_stored_pv_only_inverter_missing_at_startup_has_its_pv_entities(self):
         """A PV-only inverter known only from its stored record still has the PV entities auto-config binds."""
-        stored = {"FD0000P001": {"serial": "FD0000P001", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": False, "capacity_wh": 0, "model": ""}}
+        stored = {"FD0000P001": {"serial": "FD0000P001", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": False, "capacity_wh": 0, "rate_max_w": 0, "inverter_rate_max_w": 0, "model": ""}}
         gw = self._listed_gateway(["FD0000P001", "CH0000B002"], stored=stored)
         status = self._pv_only_site_status(battery_ready=True)
         del status.inverters[0]
@@ -3983,6 +3983,85 @@ class TestGatewayUnitControlBinding:
             gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
             assert gw._args["soc_max"] == ["sensor.predbat_gateway_23g800_battery_capacity", "sensor.predbat_gateway_25g400_battery_capacity"], listed
             assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5, listed
+
+    # ------------------------------------------------------------------
+    # A rating the hub stops reporting keeps its last good value (#5478)
+    # ------------------------------------------------------------------
+
+    def _rated_status(self, rate_max_w=3000, inverter_rate_max_w=3000, export_limit_w=6000):
+        """Two 3kW AC inverters; the arguments are what CE2225G400 reports for its ratings."""
+        status = self._two_ac_status("ok")
+        for inv in status.inverters:
+            inv.inverter.rate_max_w = 3000
+            inv.control.export_limit_w = 6000
+            inv.control.reserve_soc = 4
+        second = status.inverters[1]
+        second.battery.rate_max_w = rate_max_w
+        second.inverter.rate_max_w = inverter_rate_max_w
+        second.control.export_limit_w = export_limit_w
+        return status
+
+    def test_ratings_the_hub_stops_reporting_keep_their_last_good_value(self):
+        """A status with the ratings unpopulated must not turn a 3kW inverter into a 6kW one with no export limit."""
+        for listed in (["CE2223G800", "CE2225G400"], []):
+            gw = self._listed_gateway(listed)
+            gw._process_telemetry(self._rated_status().SerializeToString())
+            assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000, listed
+            assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3000, listed
+            assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 6000, listed
+
+            gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0, export_limit_w=0).SerializeToString())
+
+            assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000, listed
+            assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3000, listed
+            assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 6000, listed
+            # The other inverter is untouched
+            assert gw._states["sensor.predbat_gateway_23g800_battery_rate_max"] == 3000, listed
+
+            # A new real value is taken straight away
+            gw._process_telemetry(self._rated_status(rate_max_w=3600, inverter_rate_max_w=5000, export_limit_w=3680).SerializeToString())
+            assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3600, listed
+            assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 5000, listed
+            assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 3680, listed
+
+    def test_zero_export_limit_is_kept_when_the_hub_stops_reporting_it(self):
+        """A real limit of zero (the hub's value 1) is a limit like any other: a later undefined keeps it."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._rated_status(export_limit_w=1).SerializeToString())
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 0
+
+        gw._process_telemetry(self._rated_status(export_limit_w=0).SerializeToString())
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 0
+
+    def test_ratings_never_reported_keep_the_existing_defaults(self):
+        """An inverter that has never reported a rating still gets the 6000W default and no export limit."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0, export_limit_w=0).SerializeToString())
+
+        assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 6000
+        assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 6000
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 99999
+
+    def test_stored_ratings_are_used_after_a_restart(self):
+        """With a serial list the ratings are in the discovery record, so a restart does not fall back to 6000W."""
+        first = self._listed_gateway(["CE2223G800", "CE2225G400"])
+        first._process_telemetry(self._rated_status(rate_max_w=3000, inverter_rate_max_w=3600).SerializeToString())
+        asyncio.run(first._save_discovery())
+        stored = first._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]
+        assert stored["CE2225G400"]["rate_max_w"] == 3000
+        assert stored["CE2225G400"]["inverter_rate_max_w"] == 3600
+
+        # Reporting, but with its ratings unpopulated
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=stored)
+        gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0).SerializeToString())
+        assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000
+        assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3600
+
+        # Not being read at all
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=stored)
+        gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+        assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000
+        assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3600
 
     def test_listed_inverters_all_healthy_report_no_error(self):
         """A healthy site with a serial list raises nothing."""

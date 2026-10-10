@@ -239,6 +239,7 @@ class GatewayMQTT(ComponentBase):
     _pv_only_serials = ()
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
+    _last_ratings = {}  # replaced, never changed in place
     gateway_device_id = None
 
     def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=True, gateway_integrate_power=False, **kwargs):
@@ -345,6 +346,7 @@ class GatewayMQTT(ComponentBase):
         self._inverter_slot_serials = []  # serial bound to each PredBat inverter slot at the last auto-config
         self._pv_only_serials = ()  # listed inverters with no battery: counted for PV, never written to
         self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
+        self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
         self._discovery = {}  # upper-case serial -> what the hub last reported it to be, for gateway_inverter_serial
         self._discovery_dirty = False
         self._discovery_save_retry_at = 0
@@ -1208,6 +1210,24 @@ class GatewayMQTT(ComponentBase):
             return None
         return {"import_wh": state["import_wh"], "export_wh": state["export_wh"], "load_wh": state["load_published_wh"]}
 
+    def _last_rating(self, suffix, name, value):
+        """A rating as the hub reports it, or the last real value it reported when it leaves it out.
+
+        Args:
+            suffix: The inverter's entity suffix.
+            name: Which rating.
+            value: The value in this status; zero is the hub's "not reported".
+
+        Returns:
+            The value, the last non-zero one for this inverter, or None if there has never been one.
+        """
+        key = (suffix, name)
+        if value:
+            if self._last_ratings.get(key) != value:
+                self._last_ratings = {**self._last_ratings, key: value}
+            return value
+        return self._last_ratings.get(key)
+
     def _inject_inverter_entities(self, inv, suffix, site_energy=None):
         """Inject entities for a single inverter using HA-style naming.
 
@@ -1229,7 +1249,11 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
         if bat.soh_percent:
             self.dashboard_item(f"sensor.{pfx}_battery_soh", bat.soh_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_soh", {}), app="gateway")
-        battery_rate_max = bat.rate_max_w or 6000
+        # A rating the hub leaves out keeps the last real value it reported. A status with the
+        # ratings unpopulated (seen for a few minutes after a hub restart) otherwise turned a 3kW
+        # inverter into a 6kW one with no export limit, and those rates were written to it (#5478).
+        record = self._discovery.get(inv.serial.upper(), {})
+        battery_rate_max = self._last_rating(suffix, "battery_rate_max", bat.rate_max_w) or record.get("rate_max_w") or 6000
         self.dashboard_item(f"sensor.{pfx}_battery_rate_max", battery_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
 
         self.dashboard_item(f"sensor.{pfx}_pv_power", inv.pv.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
@@ -1246,15 +1270,16 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_inverter_power", inv.inverter.active_power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_power", {}), app="gateway")
         if inv.inverter.temperature_c:
             self.dashboard_item(f"sensor.{pfx}_inverter_temperature", inv.inverter.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_temperature", {}), app="gateway")
-        inverter_rate_max = inv.inverter.rate_max_w or battery_rate_max
+        inverter_rate_max = self._last_rating(suffix, "inverter_rate_max", inv.inverter.rate_max_w) or record.get("inverter_rate_max_w") or battery_rate_max
         if inverter_rate_max:
             self.dashboard_item(f"sensor.{pfx}_inverter_rate_max", inverter_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {}), app="gateway")
 
         control = inv.control
         self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
         self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
-        # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is
-        _raw_export_limit = control.export_limit_w
+        # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is.
+        # Undefined only means unlimited for an inverter that has never reported a limit.
+        _raw_export_limit = self._last_rating(suffix, "export_limit", control.export_limit_w) or 0
         export_limit_publish = 99999 if _raw_export_limit == 0 else (0 if _raw_export_limit == 1 else _raw_export_limit)
         self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
         # The hub reports the rate the inverter holds, so a GivEnergy one reads back short of the rate written
@@ -1522,7 +1547,7 @@ class GatewayMQTT(ComponentBase):
     def _update_discovery(self, status):
         """Record what the hub reports each inverter in ``gateway_inverter_serial`` to be.
 
-        The record - type, whether it has a battery, its size and model - is what lets a
+        The record - type, whether it has a battery, its size, ratings and model - is what lets a
         listed inverter keep its place when the hub cannot read it, including across a
         restart (#5471). It is taken only from an inverter the hub is reading, so an offline
         one never overwrites what is known about it. Having a battery only ever turns on: an
@@ -1546,6 +1571,8 @@ class GatewayMQTT(ComponentBase):
                 "type": int(inv.type),
                 "battery": bool(known.get("battery")) or inv.battery.ByteSize() > 0,
                 "capacity_wh": int(inv.battery.capacity_wh) or int(known.get("capacity_wh", 0)),
+                "rate_max_w": int(inv.battery.rate_max_w) or int(known.get("rate_max_w", 0)),
+                "inverter_rate_max_w": int(inv.inverter.rate_max_w) or int(known.get("inverter_rate_max_w", 0)),
                 "model": inv.model or known.get("model", ""),
             }
             if record != known:
@@ -1602,6 +1629,8 @@ class GatewayMQTT(ComponentBase):
                 "type": int(stored.get("type", pb.INVERTER_TYPE_GIVENERGY)),
                 "battery": stored.get("battery") is True,
                 "capacity_wh": max(int(stored.get("capacity_wh") or 0), 0),
+                "rate_max_w": max(int(stored.get("rate_max_w") or 0), 0),
+                "inverter_rate_max_w": max(int(stored.get("inverter_rate_max_w") or 0), 0),
                 "model": str(stored.get("model") or ""),
             }
         except (AttributeError, KeyError, TypeError, ValueError):
