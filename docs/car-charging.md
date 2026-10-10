@@ -784,6 +784,7 @@ Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned wit
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When set to Off home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
 This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
+On inverters without a timed pause, the car hold does not set the discharge rate to 0 while the home battery is itself charging in a charge window, as a charging battery cannot feed the car.
 The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
