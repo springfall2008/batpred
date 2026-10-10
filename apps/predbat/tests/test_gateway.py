@@ -3720,6 +3720,69 @@ class TestGatewayUnitControlBinding:
         restarted = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"])
         assert sorted(restarted._discovery) == ["CE2223G800", "CE2225G400"]
 
+    def test_failed_discovery_save_is_retried_after_a_wait(self):
+        """A save the storage refuses is kept pending and tried again after a wait, not on every status message."""
+        import gateway
+
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+        storage = gw.base.components.get_component.return_value
+        real_save = storage.save
+        attempts = []
+
+        async def failing_save(module, filename, data, format="yaml", expiry=None, indent=None):
+            attempts.append(1)
+            return False
+
+        now = [1000.0]
+        real_monotonic = gateway._monotonic
+        gateway._monotonic = lambda: now[0]
+        try:
+            storage.save = failing_save
+            gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+            asyncio.run(gw._save_discovery())
+            assert attempts == [1]
+            assert gw._discovery_dirty is True
+            assert gw._saved == {}
+            assert self._logged(gw, "Warn", "failed to save inverter discovery")
+
+            # Still failing, but inside the wait: not tried again
+            asyncio.run(gw._save_discovery())
+            assert attempts == [1]
+
+            storage.save = real_save
+            now[0] += gateway.GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS
+            asyncio.run(gw._save_discovery())
+            assert gw._discovery_dirty is False
+            assert sorted(gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]) == ["CE2223G800", "CE2225G400"]
+        finally:
+            gateway._monotonic = real_monotonic
+
+    def test_newly_bound_inverter_has_its_entities_on_the_same_status(self):
+        """An inverter auto-config has just bound is published before the API is declared started.
+
+        One the hub does not flag primary is skipped by the injection that runs ahead of
+        auto-config, so without a second pass its soc and size entities would not exist
+        until the next status message.
+        """
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+
+        gw._process_telemetry(self._two_ac_status("not_primary").SerializeToString())
+
+        assert gw.api_started is True
+        assert gw._args["num_inverters"] == 2
+        assert gw._states["sensor.predbat_gateway_25g400_soc"] == 50
+        assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5
+
+        # The same for a PV-only inverter the hub does not flag primary
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        status = self._pv_and_battery_status(pv_power=900)
+        status.inverters[0].primary = False
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._pv_only_serials == ("FD0000P001",)
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 900
+
     def test_no_serial_list_stores_nothing(self):
         """With no serial list nothing is recorded or saved, and auto-config uses what it finds."""
         gw = self._listed_gateway([])

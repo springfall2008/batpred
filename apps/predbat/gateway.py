@@ -108,6 +108,8 @@ GIVENERGY_INVERTER_TYPES = (pb.INVERTER_TYPE_GIVENERGY, pb.INVERTER_TYPE_GIVENER
 GATEWAY_COORDINATOR_TYPES = (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
 # Where the discovery record of each inverter in gateway_inverter_serial is kept (see _update_discovery)
 GATEWAY_STORAGE_MODULE = "gateway"
+# How long a failed save of the discovery records waits before it is tried again
+GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS = 5 * 60
 
 # Entity attribute table — keyed by the semantic suffix used in dashboard_item calls
 GATEWAY_ATTRIBUTE_TABLE = {
@@ -233,6 +235,7 @@ class GatewayMQTT(ComponentBase):
     _unavailable_inverters = ((), ())
     _discovery = {}  # replaced, never changed in place, so this default is not shared state
     _discovery_dirty = False
+    _discovery_save_retry_at = 0
     _pv_only_serials = ()
     _inverter_slot_serials = ()
     gateway_device_id = None
@@ -342,6 +345,7 @@ class GatewayMQTT(ComponentBase):
         self._pv_only_serials = ()  # listed inverters with no battery: counted for PV, never written to
         self._discovery = {}  # upper-case serial -> what the hub last reported it to be, for gateway_inverter_serial
         self._discovery_dirty = False
+        self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
         self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
         self._last_published_plan = None
@@ -860,6 +864,11 @@ class GatewayMQTT(ComponentBase):
 
         if self._needs_reconfigure(status):
             self.automatic_config()
+            if self._auto_configured:
+                # The injection above ran before this status's inverters were bound, so one that
+                # is only published once bound has no entities yet. Publish again before the API
+                # is declared started below.
+                self._inject_entities(status)
         self._check_configured_inverters(status)
 
         # Declare the API started only once auto-config has wired up the inverter args.
@@ -1473,15 +1482,30 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Info: GatewayMQTT: loaded stored discovery for inverter(s) {sorted(loaded)}")
 
     async def _save_discovery(self):
-        """Save the discovery records when they have changed."""
+        """Save the discovery records when they have changed.
+
+        A save that fails stays pending and is tried again after
+        GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS: without the stored record a configured
+        inverter the hub cannot read would be left out after the next restart.
+        """
         storage = self.storage
-        if not self._discovery_dirty or storage is None:
+        if not self._discovery_dirty or storage is None or _monotonic() < self._discovery_save_retry_at:
             return
+        # Cleared before the save so a record that changes while it is being written is saved again
         self._discovery_dirty = False
         try:
-            await storage.save(GATEWAY_STORAGE_MODULE, self._discovery_filename(), {"inverters": self._discovery}, format="json")
+            saved = await storage.save(GATEWAY_STORAGE_MODULE, self._discovery_filename(), {"inverters": self._discovery}, format="json")
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: failed to save inverter discovery: {e}")
+            saved = False
+        else:
+            if not saved:
+                self.log("Warn: GatewayMQTT: failed to save inverter discovery, will retry")
+        if saved:
+            self._discovery_save_retry_at = 0
+        else:
+            self._discovery_dirty = True
+            self._discovery_save_retry_at = _monotonic() + GATEWAY_DISCOVERY_SAVE_RETRY_SECONDS
 
     @staticmethod
     def _stored_unit(record):
@@ -1866,7 +1890,6 @@ class GatewayMQTT(ComponentBase):
         # Register the gateway's OCPP EV charger as a PredBat car (opt-in). Done after the
         # inverter config so a failure here never blocks battery control.
         self._register_ev_car(status)
-        self._inject_unreported_inverters(status)
 
         self._auto_configured = True
         self._configured_inverter_serials = self._usable_serials(status) | frozenset(self._inverter_slot_serials)
