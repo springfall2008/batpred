@@ -404,6 +404,12 @@ SUNGROW_LIMIT_AGREEMENT = 0.10
 # must not be retried on every cycle; an hour is soon enough for a setting an installer changes.
 SUNGROW_LIMITS_RETRY_MINUTES = 60
 
+# How far a derived rating must move before the discovery report follows it. The capacity is
+# a sum of two live energy figures and the rate is "what the pack will take right now", so
+# both wander with temperature and state of charge; the catalogue records hardware, and five
+# percent is well clear of that wander while still catching a battery module being added.
+SUNGROW_RATING_DRIFT = 0.05
+
 # -----------------------------------------------------------------------------
 # The heartbeat
 # -----------------------------------------------------------------------------

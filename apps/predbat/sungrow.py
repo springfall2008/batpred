@@ -114,6 +114,7 @@ from sungrow_const import (
     SUNGROW_NO_EXPORT_LIMIT,
     SUNGROW_LIMIT_AGREEMENT,
     SUNGROW_LIMITS_RETRY_MINUTES,
+    SUNGROW_RATING_DRIFT,
     SUNGROW_PARAM_EMS_MODE,
     SUNGROW_PARAM_COMMAND,
     SUNGROW_PARAM_POWER,
@@ -324,6 +325,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # precisely which stage failed.
         self.last_api_error = ""
         self.discovery_ok = None
+        # What the discovery report last said for each derived rating, and which inverters have
+        # ever been seen with PV. Both exist to stop the report changing when the hardware has not.
+        self._discovery_ratings = {}
+        self._solar_seen = set()
         self._stale_logged = False
         if not self.control_enable:
             self.log("Info: Sungrow control is disabled (sungrow_control_enable is false); monitoring only")
@@ -1815,9 +1820,9 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         automatic_config() makes, so the two cannot drift apart. The record describes this
         inverter alone: a setting automatic_config() binds only when a figure is known - an
         energy counter, the capacity, the rate - is described whenever this inverter reports
-        it, although automatic_config() binds it only once every inverter does. pv_power and
-        pv_today are described even under automatic_ignore_pv, which is the user's opt-out
-        rather than a fact about the device. The three *_power_invert settings are always
+        it, although automatic_config() binds it only once every inverter does. What is
+        returned here is everything that COULD be described; build_discovery() filters it
+        down to what has been published. The three *_power_invert settings are always
         False, which is the descriptor's default, so no descriptor carries invert.
         inverter_limit and export_limit are described when known.
         """
@@ -1855,6 +1860,20 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         entities["schedule_write_button"] = {"entity_id": self._control_name("switch", uuid, "battery_schedule_charge_write"), "access": "rw", "domain": "switch"}
         return entities
 
+    def _stable_rating(self, uuid, key, value, step):
+        """Return the figure the discovery report should carry for one derived rating.
+
+        refresh_discovery() files the report again whenever it differs at all, and these
+        ratings are derived from live readings, so reporting them raw would file a new report
+        on most telemetry polls. The reported figure is rounded to step and then held until
+        the live one has moved more than SUNGROW_RATING_DRIFT away from it.
+        """
+        held = self._discovery_ratings.get((uuid, key))
+        if held is None or abs(value - held) > SUNGROW_RATING_DRIFT * held:
+            held = round(round(value / step) * step, 3)
+            self._discovery_ratings[(uuid, key)] = held
+        return held
+
     def build_discovery(self):
         """Describe the discovered Sungrow inverters for the discovery catalogue.
 
@@ -1865,7 +1884,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
 
         capabilities is the SUNGROW_CAPABILITIES constant and entities is
         _discovery_entities(uuid): together they rebuild the SungrowCloud INVERTER_DEF row,
-        and entities holds every setting automatic_config() binds.
+        and entities holds the settings automatic_config() binds, less any whose entity Home
+        Assistant has not seen yet.
 
         Deliberately not reported:
         - firmware: the OpenAPI device list carries no firmware version.
@@ -1886,12 +1906,14 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             detail = self.device_detail.get(uuid, {}) or {}
             serial = self._serial(uuid)
 
-            # PV is reported at the plant, not the device, so "does this site have solar" is a
-            # plant question. A site whose plant reports PV power at all has solar; one that has
-            # never reported it is recorded as battery-only rather than guessed at.
+            # telemetry() reads the inverter's own PV point and falls back to the plant's, so
+            # either is evidence of solar. It is remembered once seen: solar that is absent
+            # from one response is still on the roof, and flipping the record back to
+            # battery-only would re-file the report for nothing.
             ps_id = detail.get("ps_id")
-            plant = self.plant_values.get(ps_id, {}) if ps_id else {}
-            functions = ["solar", "battery"] if plant.get("total_active_power_of_pv") is not None else ["battery"]
+            if self.telemetry(uuid, "pv_power") is not None:
+                self._solar_seen.add(uuid)
+            functions = ["solar", "battery"] if uuid in self._solar_seen else ["battery"]
 
             info = {}
             if detail.get("device_model"):
@@ -1902,10 +1924,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             ratings = {}
             battery_kwh = self.battery_capacity(uuid)
             if battery_kwh > 0:
-                ratings["soc_max"] = battery_kwh
+                ratings["soc_max"] = self._stable_rating(uuid, "soc_max", battery_kwh, 0.1)
             rate_max = self.battery_rate_max(uuid)
             if rate_max > 0:
-                ratings["battery_rate_max"] = rate_max
+                ratings["battery_rate_max"] = self._stable_rating(uuid, "battery_rate_max", rate_max, 100)
 
             hardware_ids = {"serial": serial, "uuid": str(uuid)}
 
@@ -1921,7 +1943,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                     account_ids={"ps_id": str(ps_id)} if ps_id else None,
                     info=info,
                     ratings=ratings,
-                    entities=self._discovery_entities(uuid),
+                    entities=self.discovery_entities(self._discovery_entities(uuid)),
                 )
             )
 

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 from sungrow import SungrowAPI, SUNGROW_CAPABILITIES
 from sungrow_const import SUNGROW_NO_EXPORT_LIMIT, SUNGROW_TTL_STATIC
+from component_base import ComponentBase
 from coordinator import CAPABILITY_KEYS, validate_report
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
@@ -1217,6 +1218,104 @@ def test_sungrow_ignore_pv_never_triggers_a_rerun():
     assert not failed, "test_sungrow_ignore_pv_never_triggers_a_rerun"
 
 
+def _published_client(**kwargs):
+    """Return a polled client whose sensors and control entities have been published once."""
+    client = _polled_client(**kwargs)
+    run_async_local(client.publish_data())
+    for uuid in client.device_list:
+        run_async_local(client.publish_schedule_settings_ha(uuid))
+    return client
+
+
+def _only_record(client):
+    """Build the discovery report and return its single validated inverter record."""
+    logs = []
+    cleaned = validate_report(client.build_discovery(), "sungrow", logs.append)
+    records = cleaned.get("inverters") or []
+    assert len(records) == 1, f"validate_report kept {len(records)} of 1 records: {logs}"
+    return records[0]
+
+
+def test_sungrow_discovery_only_describes_entities_that_were_published():
+    """The catalogue must never claim an entity Home Assistant has never seen."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    client.device_values[uuid].pop("pv_power", None)
+    client.plant_values["1234567"].pop("total_active_power_of_pv", None)
+    run_async_local(client.publish_data())
+    run_async_local(client.publish_schedule_settings_ha(uuid))
+    entities = _only_record(client).get("entities", {})
+    if "pv_power" in entities:
+        print("ERROR: pv_power was described although no such sensor was published")
+        failed = True
+    for name in ("soc_percent", "battery_power", "charge_start_time", "schedule_write_button"):
+        if name not in entities:
+            print(f"ERROR: {name} was published but is missing from the record")
+            failed = True
+    assert not failed, "test_sungrow_discovery_only_describes_entities_that_were_published"
+
+
+def test_sungrow_discovery_ratings_do_not_follow_drift():
+    """A rating that wanders by a few watt-hours is the same hardware, and the same report."""
+    failed = False
+    client = _published_client()
+    first = client.build_discovery()
+    client.plant_values["1234567"]["chargeable_energy"] = 3642.0  # 10.042 kWh, was 10.000
+    client.plant_values["1234567"]["max_rechargeable_power"] = 4870.0
+    client.plant_values["1234567"]["max_dischargeable_power"] = 4870.0
+    if client.build_discovery() != first:
+        print("ERROR: a drift of under 5% produced a different report, which would be filed again")
+        failed = True
+    client.plant_values["1234567"]["chargeable_energy"] = 8600.0  # 15 kWh: a battery was added
+    if _only_record(client).get("ratings", {}).get("soc_max") != 15.0:
+        print(f"ERROR: a real capacity change was not reported: {_only_record(client).get('ratings')}")
+        failed = True
+    assert not failed, "test_sungrow_discovery_ratings_do_not_follow_drift"
+
+
+def test_sungrow_discovery_takes_solar_from_either_read_and_keeps_it():
+    """The inverter's own PV point is as good as the plant's, and solar does not vanish overnight."""
+    failed = False
+    client = _published_client()
+    uuid = client.device_list[0]
+    client.plant_values["1234567"].pop("total_active_power_of_pv", None)
+    if "solar" not in _only_record(client).get("functions", []):
+        print("ERROR: the inverter's own PV reading was ignored")
+        failed = True
+    client.device_values[uuid].pop("pv_power", None)
+    if "solar" not in _only_record(client).get("functions", []):
+        print("ERROR: a site already seen to have solar was re-described as battery-only")
+        failed = True
+    assert not failed, "test_sungrow_discovery_takes_solar_from_either_read_and_keeps_it"
+
+
+def test_sungrow_run_files_the_discovery_report_once():
+    """run() files the report through the real reporting loop, and not again for an unchanged site."""
+    failed = False
+    client = _polled_client()
+    client._discovery_report = None
+    client.component_name = "sungrow"
+    client.refresh_discovery = lambda: ComponentBase.refresh_discovery(client)
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
+    report = client.base.components.coordinator.report
+    run_async_local(client.run(0, True))
+    if report.call_count != 1 or report.call_args[0][0] != "sungrow":
+        print(f"ERROR: the report was filed {report.call_count} time(s) with {report.call_args}")
+        failed = True
+    client.plant_values["1234567"]["chargeable_energy"] = 3605.0
+    run_async_local(client.run(0, False))
+    if report.call_count != 1:
+        print(f"ERROR: an unchanged site was reported again ({report.call_count} filings)")
+        failed = True
+    assert not failed, "test_sungrow_run_files_the_discovery_report_once"
+
+
 def run_sungrow_api_tests(my_predbat):
     """Run all Sungrow API tests."""
     failed = False
@@ -1264,6 +1363,10 @@ def run_sungrow_api_tests(my_predbat):
         ("limits_after_control", test_sungrow_run_reads_limits_after_the_control_loop),
         ("late_binding", test_sungrow_run_binds_a_setting_that_becomes_available_later),
         ("ignore_pv_no_rerun", test_sungrow_ignore_pv_never_triggers_a_rerun),
+        ("discovery_only_real_entities", test_sungrow_discovery_only_describes_entities_that_were_published),
+        ("discovery_ratings_stable", test_sungrow_discovery_ratings_do_not_follow_drift),
+        ("discovery_solar_from_device", test_sungrow_discovery_takes_solar_from_either_read_and_keeps_it),
+        ("discovery_filed_from_run", test_sungrow_run_files_the_discovery_report_once),
     ]:
         try:
             if fn():
