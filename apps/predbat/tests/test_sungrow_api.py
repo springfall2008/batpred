@@ -488,14 +488,8 @@ def _discovered_client(**kwargs):
     return client
 
 
-def _polled_client(**kwargs):
-    """Return a client that has discovered one inverter and polled telemetry once."""
-    client = MockSungrow(**kwargs)
-    with _mock_post([_envelope(PLANT_LIST), _envelope(DEVICE_LIST)]):
-        run_async_local(client.refresh_static())
-    with _mock_post([_envelope(PLANT_REALTIME), _envelope(DEVICE_REALTIME)]):
-        run_async_local(client.refresh_power())
-    return client
+# Later tasks' tests use this name; it is the same client (discovery plus one telemetry poll).
+_polled_client = _discovered_client
 
 
 def test_sungrow_plant_figures_are_shared_between_inverters_in_one_plant():
