@@ -3819,8 +3819,11 @@ class TestGatewayUnitControlBinding:
             gw = self._listed_gateway(listed)
             healthy = self._two_ac_status("ok")
             healthy.inverters[1].battery.soc_percent = 84
+            healthy.inverters[1].battery.power_w = -3000
+            healthy.inverters[1].pv.power_w = 400
             gw._process_telemetry(healthy.SerializeToString())
             assert gw._states["sensor.predbat_gateway_25g400_soc"] == 84
+            assert gw._states["sensor.predbat_gateway_25g400_battery_power"] == 3000
 
             offline = self._two_ac_status("no_battery")
             offline.inverters[0].battery.soc_percent = 61
@@ -3831,16 +3834,155 @@ class TestGatewayUnitControlBinding:
             assert gw._states["sensor.predbat_gateway_25g400_soc"] == 84, listed
             assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5, listed
             assert gw._states["sensor.predbat_gateway_23g800_soc"] == 61, listed
+            # A power is a rate, so it is not left at the value it had when the inverter dropped out
+            assert gw._states["sensor.predbat_gateway_25g400_battery_power"] == 0, listed
+            assert gw._states["sensor.predbat_gateway_25g400_pv_power"] == 0, listed
+            assert gw._states["sensor.predbat_gateway_25g400_inverter_power"] == 0, listed
 
             # Gone from the status message altogether: still configured, still stale
+            healthy.inverters[1].battery.power_w = -2500
+            gw._process_telemetry(healthy.SerializeToString())
+            assert gw._states["sensor.predbat_gateway_25g400_battery_power"] == 2500, listed
             gw._process_telemetry(self._two_ac_status("absent").SerializeToString())
             assert gw._args["num_inverters"] == 2, listed
             assert gw._states["sensor.predbat_gateway_25g400_soc"] == 84, listed
+            assert gw._states["sensor.predbat_gateway_25g400_battery_power"] == 0, listed
             assert gw.non_fatal_error_occurred.call_count == (3 if listed else 0), listed
 
             healthy.inverters[1].battery.soc_percent = 80
             gw._process_telemetry(healthy.SerializeToString())
             assert gw._states["sensor.predbat_gateway_25g400_soc"] == 80, listed
+
+    def test_shared_ct_metering_carries_on_when_the_first_inverter_is_unread(self):
+        """On a shared clamp the site readings live on the first inverter's entities, and are filled from the next one while it is away."""
+
+        def status(first):
+            built = self._two_ac_status("ok")
+            for inv, grid_w in zip(built.inverters, (-1500, -1500)):
+                inv.grid.power_w = grid_w
+                inv.load.power_w = 1800
+                inv.energy.grid_import_today_wh = 4200
+                inv.energy.grid_export_today_wh = 300
+                inv.energy.consumption_today_wh = 6100
+            if first == "unread":
+                for block in ("battery", "pv", "grid", "load", "inverter", "energy"):
+                    built.inverters[0].ClearField(block)
+            elif first == "absent":
+                del built.inverters[0]
+            return built
+
+        for first in ("unread", "absent"):
+            for listed in (["CE2223G800", "CE2225G400"], []):
+                gw = self._listed_gateway(listed)
+                gw._process_telemetry(status("ok").SerializeToString())
+                assert gw._args["grid_power"] == ["sensor.predbat_gateway_23g800_grid_power", 0], (first, listed)
+
+                later = status(first)
+                later.inverters[-1].grid.power_w = -900
+                later.inverters[-1].load.power_w = 1100
+                later.inverters[-1].energy.grid_import_today_wh = 5000
+                later.inverters[-1].energy.consumption_today_wh = 7400
+                gw._process_telemetry(later.SerializeToString())
+
+                assert gw._states["sensor.predbat_gateway_23g800_grid_power"] == -900, (first, listed)
+                assert gw._states["sensor.predbat_gateway_23g800_load_power"] == 1100, (first, listed)
+                assert gw._states["sensor.predbat_gateway_23g800_import_today"] == 5.0, (first, listed)
+                assert gw._states["sensor.predbat_gateway_23g800_export_today"] == 0.3, (first, listed)
+                assert gw._states["sensor.predbat_gateway_23g800_load_today"] == 7.4, (first, listed)
+                # Its own battery is still unknown: stale state of charge, no power
+                assert gw._states["sensor.predbat_gateway_23g800_soc"] == 50, (first, listed)
+                assert gw._states["sensor.predbat_gateway_23g800_battery_power"] == 0, (first, listed)
+
+    def test_separate_ct_metering_is_not_filled_from_another_inverter(self):
+        """With a clamp each (gateway_shared_ct off) an unread inverter's grid reading is its own, so it goes to zero."""
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+        gw.gateway_shared_ct = False
+        healthy = self._two_ac_status("ok")
+        for inv in healthy.inverters:
+            inv.grid.power_w = -700
+        gw._process_telemetry(healthy.SerializeToString())
+
+        unread = self._two_ac_status("ok")
+        unread.inverters[1].grid.power_w = -700
+        unread.inverters[0].ClearField("battery")
+        gw._process_telemetry(unread.SerializeToString())
+
+        assert gw._states["sensor.predbat_gateway_23g800_grid_power"] == 0
+        assert gw._states["sensor.predbat_gateway_25g400_grid_power"] == -700
+
+    def test_unread_inverter_behind_a_coordinator_is_an_error(self):
+        """Behind a Gateway the Gateway holds the only slot, and one of its listed inverters going unread is still reported."""
+        gw = self._listed_gateway(["GW2347G077", "CH2414G318", "CH9999G999"])
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"]).SerializeToString())
+        assert self._errors(gw) == []
+
+        unread = self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"])
+        unread.inverters[2].ClearField("battery")
+        gw._process_telemetry(unread.SerializeToString())
+
+        assert gw._args["num_inverters"] == 1
+        assert self._logged(gw, "Error", "CH9999G999", "not being read")
+        assert not self._logged(gw, "Error", "CH2414G318")
+        assert gw.non_fatal_error_occurred.call_count == 1
+
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw.non_fatal_error_occurred.call_count == 2
+
+    def test_unreadable_stored_discovery_is_ignored(self):
+        """A stored record that cannot be read is dropped with a warning; it must not stop auto-config."""
+        good = self._STORED_400["CE2225G400"]
+        for bad in ({"serial": "CE2223G800", "type": "GIVENERGY"}, {"serial": "CE2223G800", "capacity_wh": "big"}, {"type": 1}, "CE2223G800", None, {"serial": "  "}):
+            gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored={"CE2223G800": bad, "CE2225G400": good})
+
+            assert gw._discovery == {"CE2225G400": good}, bad
+            assert self._logged(gw, "Warn", "CE2223G800", "unreadable stored discovery"), bad
+
+            gw._process_telemetry(self._two_ac_status("absent").SerializeToString())
+            assert gw._args["num_inverters"] == 2, bad
+
+        # A record that says it has a battery in any way but true is not taken to have one
+        gw = self._listed_gateway(["CE2225G400"], stored={"CE2225G400": {**good, "battery": "false", "capacity_wh": None}})
+        assert gw._discovery["CE2225G400"]["battery"] is False
+        assert gw._discovery["CE2225G400"]["capacity_wh"] == 0
+
+    def test_stored_pv_only_inverter_missing_at_startup_has_its_pv_entities(self):
+        """A PV-only inverter known only from its stored record still has the PV entities auto-config binds."""
+        stored = {"FD0000P001": {"serial": "FD0000P001", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": False, "capacity_wh": 0, "model": ""}}
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"], stored=stored)
+        status = self._pv_only_site_status(battery_ready=True)
+        del status.inverters[0]
+
+        gw._process_telemetry(status.SerializeToString())
+
+        assert gw._pv_only_serials == ("FD0000P001",)
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00b002_pv_power", "sensor.predbat_gateway_00p001_pv_power"]
+        assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 0
+        assert gw._states["sensor.predbat_gateway_00p001_pv_today"] == 0
+
+    def test_coordinator_slot_has_no_battery_size_sensor(self):
+        """A slot with no battery size known is left for automatic sizing, not pointed at a sensor that is never published."""
+        gw = self._listed_gateway(["GW2347G077", "CH2414G318", "CH9999G999"])
+
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"]).SerializeToString())
+
+        assert gw._args["soc_max"] == [None]
+        assert "sensor.predbat_gateway_47g077_battery_capacity" not in gw._states
+
+    def test_slot_bound_with_no_battery_size_is_rebound_when_the_hub_reports_one(self):
+        """A battery inverter bound before its size is known gets its size sensor on the first status that carries one."""
+        for listed in (["CE2223G800", "CE2225G400"], []):
+            gw = self._listed_gateway(listed)
+            unsized = self._two_ac_status("ok")
+            unsized.inverters[1].battery.capacity_wh = 0
+            gw._process_telemetry(unsized.SerializeToString())
+            assert gw._args["soc_max"] == ["sensor.predbat_gateway_23g800_battery_capacity", None], listed
+
+            gw._process_telemetry(unsized.SerializeToString())
+            assert gw._args["soc_max"][1] is None, listed
+
+            gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+            assert gw._args["soc_max"] == ["sensor.predbat_gateway_23g800_battery_capacity", "sensor.predbat_gateway_25g400_battery_capacity"], listed
+            assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5, listed
 
     def test_listed_inverters_all_healthy_report_no_error(self):
         """A healthy site with a serial list raises nothing."""
@@ -6502,6 +6644,55 @@ class TestIntegratePower:
 
     def _today(self, gw, name, suffix="23g800"):
         return gw._dashboard_calls[f"sensor.predbat_gateway_{suffix}_{name}"][0]
+
+    def test_midnight_still_resets_the_day_while_an_inverter_is_away(self):
+        """An inverter kept configured while it is away stops the integration, but not the day ending."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-2000))
+        self._feed(gw, self._status(self.BASE_TIME + 600, grid_w=-3000))
+        assert approx_equal(gw._integrated_energy["import_wh"], 416.67)
+
+        # 16:10 + 8.5h = 00:40 the next day, with the second inverter gone from the status
+        away = self._status(self.BASE_TIME + 600 + 8 * 3600 + 1800, grid_w=-2000, battery_w=(0,), serials=("CE2223G800",))
+        self._feed(gw, away)
+
+        assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"]
+        assert gw._integrated_energy["import_wh"] == 0.0
+        assert gw._integrated_energy["load_published_wh"] == 0.0
+        assert self._today(gw, "import_today") == 0.0
+        assert self._today(gw, "load_today") == 0.0
+
+    def test_pv_only_inverter_generation_counts_towards_the_load(self):
+        """A PV-only inverter has no slot, but what it generates is used by the house like any other PV."""
+        gw = self._make_gateway()
+        gw.gateway_inverter_serial = ["CE2223G800", "FD0000P001"]
+
+        def status(timestamp, pv_only_wh, with_pv_only=True):
+            built = self._status(timestamp, grid_w=0, battery_w=(0,), pv_today_wh=1000, serials=("CE2223G800",))
+            if with_pv_only:
+                inv = built.inverters.add()
+                inv.type = pb.INVERTER_TYPE_GIVENERGY
+                inv.serial = "FD0000P001"
+                inv.primary = True
+                inv.connected = True
+                inv.pv.power_w = 1000
+                inv.energy.pv_today_wh = pv_only_wh
+            return built
+
+        self._feed(gw, status(self.BASE_TIME, 3000))
+        assert gw._inverter_slot_serials == ["CE2223G800"]
+        assert gw._pv_only_serials == ("FD0000P001",)
+
+        self._feed(gw, status(self.BASE_TIME + 600, 3200))
+        assert approx_equal(gw._integrated_energy["load_wh"], 200.0)
+
+        # Away for a status: nothing added, and the integration carries on for the rest of the site
+        self._feed(gw, status(self.BASE_TIME + 1200, 0, with_pv_only=False))
+        assert approx_equal(gw._integrated_energy["load_wh"], 200.0)
+        assert gw._integrated_energy["time"] == self.BASE_TIME + 1200
+
+        self._feed(gw, status(self.BASE_TIME + 1800, 3500))
+        assert approx_equal(gw._integrated_energy["load_wh"], 500.0)
 
     def test_import_and_load_are_integrated_from_power(self):
         """6 kW of import for 6 minutes is 0.6 kWh; 3 kW of that went into a battery, so load is 0.3 kWh."""
