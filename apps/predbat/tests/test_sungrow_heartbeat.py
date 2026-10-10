@@ -248,6 +248,12 @@ def test_heartbeat_loop_stops_in_read_only_mode():
         return True
 
     client.send_heartbeat = record_beat
+
+    async def fake_dispatch(uuid, param_list, set_type=0, task_name="Predbat"):
+        """Report the release as landed without touching the network."""
+        return param_list
+
+    client.dispatch_params = fake_dispatch
     with patch("asyncio.sleep", new=_no_sleep()):
         run_async_local(client._heartbeat_loop())
     if beats:
@@ -367,9 +373,15 @@ def test_a_read_only_pause_forgets_the_applied_command():
     client.control_held.add(UUID)
     client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
     client.state["switch.predbat_set_read_only"] = "on"
+
+    async def fake_dispatch(uuid, param_list, set_type=0, task_name="Predbat"):
+        """Report the release as landed without touching the network."""
+        return param_list
+
+    client.dispatch_params = fake_dispatch
     with patch("asyncio.sleep", new=_no_sleep()):
         run_async_local(client._heartbeat_loop())
-    if UUID in client.control_held or UUID in client.applied_command:
+    if UUID in client.control_held or client.applied_command.get(UUID, {}).get("command") == SUNGROW_CMD_CHARGE:
         print(f"ERROR: after a read-only pause held={client.control_held} applied={client.applied_command}")
         failed = True
     assert not failed, "test_a_read_only_pause_forgets_the_applied_command"
@@ -478,6 +490,28 @@ def test_missed_beats_drop_control_so_it_is_re_established():
     assert not failed, "test_missed_beats_drop_control_so_it_is_re_established"
 
 
+def test_a_read_only_pause_releases_explicitly():
+    """The loop hands the inverter back itself rather than leaving it to the lapsing heartbeat."""
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    client.state["switch.predbat_set_read_only"] = "on"
+    tasks = []
+
+    async def fake_dispatch(uuid, param_list, set_type=0, task_name="Predbat"):
+        """Record the task name and report it as landed."""
+        tasks.append(task_name)
+        return param_list
+
+    client.dispatch_params = fake_dispatch
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if tasks != ["Predbat release"] or UUID in client.control_held:
+        print(f"ERROR: the read-only pause sent {tasks} and left held={client.control_held}")
+        failed = True
+    assert not failed, "test_a_read_only_pause_releases_explicitly"
+
+
 def run_sungrow_heartbeat_tests(my_predbat):
     """Run all Sungrow EMS heartbeat tests."""
     failed = False
@@ -499,6 +533,7 @@ def run_sungrow_heartbeat_tests(my_predbat):
         ("read_only_drops_control", test_a_read_only_pause_forgets_the_applied_command),
         ("loop_survives_exception", test_heartbeat_loop_survives_a_beat_that_raises),
         ("missed_beats_drop_control", test_missed_beats_drop_control_so_it_is_re_established),
+        ("read_only_releases", test_a_read_only_pause_releases_explicitly),
     ]:
         try:
             if fn():

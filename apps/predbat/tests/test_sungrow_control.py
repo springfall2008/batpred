@@ -895,6 +895,40 @@ def test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter():
     assert not failed, "test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter"
 
 
+def test_the_write_button_sends_nothing_in_read_only():
+    """A button press is a command like any other; read-only must stop it whoever pressed it."""
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(3 * 60)
+    sent = _capture_dispatch(client)
+    client.state["switch.predbat_set_read_only"] = "on"
+    client.local_schedule[UUID] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, export={"power": 5000})
+    run_async_local(client._handle_control_event("switch.predbat_sungrow_a2211test01_battery_schedule_charge_write", "turn_on"))
+    if sent or UUID in client.control_held:
+        print(f"ERROR: a button press in read-only sent {sent} and left held={client.control_held}")
+        failed = True
+    assert not failed, "test_the_write_button_sends_nothing_in_read_only"
+
+
+def test_read_only_releases_a_held_inverter_but_changes_nothing_else():
+    """Handing back control already held is the one write read-only allows, and it happens once."""
+    failed = False
+    client = _controlled_client()
+    sent = _capture_dispatch(client)
+    client.state["switch.predbat_set_read_only"] = "on"
+    client.control_held.add(UUID)
+    run_async_local(client.release_control(UUID, reserve=10))
+    if len(sent) != 1 or sent[0][1].get(SUNGROW_PARAM_EMS_MODE) != "0":
+        print(f"ERROR: a held inverter was not released on entering read-only: {sent}")
+        failed = True
+    # Now released. A reserve change is a settings change, which read-only does not make.
+    run_async_local(client.release_control(UUID, reserve=20))
+    if len(sent) != 1:
+        print("ERROR: a reserve change was written in read-only")
+        failed = True
+    assert not failed, "test_read_only_releases_a_held_inverter_but_changes_nothing_else"
+
+
 def run_sungrow_control_tests(my_predbat):
     """Run all Sungrow control-logic tests."""
     failed = False
@@ -940,6 +974,8 @@ def run_sungrow_control_tests(my_predbat):
         ("entities_round_trip", test_control_entities_round_trip_through_home_assistant),
         ("entity_resolution", test_entity_ids_resolve_back_to_the_right_inverter),
         ("restart_re_establishes", test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter),
+        ("read_only_button", test_the_write_button_sends_nothing_in_read_only),
+        ("read_only_release", test_read_only_releases_a_held_inverter_but_changes_nothing_else),
     ]:
         try:
             if fn():

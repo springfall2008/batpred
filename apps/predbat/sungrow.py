@@ -1283,6 +1283,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         nothing needed sending" alike. False covers both a HELD change and an outright
         rejection - a caller must not read either of those as the inverter matching the plan.
         """
+        if self._is_read_only():
+            # Checked here, not only in the callers: the write button is pressed by anything
+            # that can reach the entity, and read-only has to mean no command leaves at all.
+            return False
         if self._write_supported.get(uuid) is False:
             return False
         if not force and self.applied_command.get(uuid) == decision:
@@ -1359,7 +1363,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not was_held and self.applied_command.get(uuid) == release:
             return True
         self.applied_command.pop(uuid, None)
-        if not self.control_enable or self._is_read_only() or self._write_supported.get(uuid) is False:
+        if not self.control_enable or self._write_supported.get(uuid) is False:
+            return True
+        if self._is_read_only() and not was_held:
+            # Read-only changes no settings. Handing back control Predbat was holding is the
+            # exception, and was_held makes it happen exactly once.
             return True
         if not was_held and not self._write_allowed(uuid):
             return False
@@ -1465,7 +1473,12 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             # state read-only exists to avoid. Letting the beats lapse returns it to
             # self-consumption within one interval.
             if self._is_read_only() or not self.control_enable:
-                self.log("Info: Sungrow heartbeat paused (read-only or control disabled); the inverter will revert to self-consumption")
+                self.log("Info: Sungrow heartbeat paused (read-only or control disabled); handing the inverter back to self-consumption")
+                for uuid in list(self.control_held):
+                    try:
+                        await self.release_control(uuid, int(as_float(self.local_schedule.get(uuid, {}).get("reserve"), 0)))
+                    except Exception as error:
+                        self.log("Warn: Sungrow could not release {} on pausing: {}; it will revert when the heartbeat lapses".format(self._serial(uuid), error))
                 self._drop_control(list(self.control_held), "heartbeat paused")
                 break
             for uuid in list(self.control_held):
