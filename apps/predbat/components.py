@@ -711,6 +711,7 @@ COMPONENT_LIST = {
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
+            "load_ml_retrain_interval_hours": {"required": False, "config": "load_ml_retrain_interval_hours", "default": 2},
         },
         "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,

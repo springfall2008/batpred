@@ -64,6 +64,7 @@ def test_load_ml(my_predbat=None):
         ("component_stale_midnight_baseline", _test_component_stale_midnight_baseline, "LoadMLComponent baseline handling when publishing crosses midnight"),
         ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
         ("component_run_data_merge", _test_component_run_data_merge, "LoadMLComponent run() data fetch, save and merge across two runs"),
+        ("component_retrain_interval", _test_component_retrain_interval, "YAML retraining interval, boundaries, startup and prediction cadence"),
         ("component_init_predictor_last_train_time", _test_component_init_predictor_sets_last_train_time, "LoadMLComponent _init_predictor sets last_train_time from embedded training_timestamp"),
         ("nan_inf_robustness", _test_nan_inf_robustness, "LoadPredictor handles NaN, Inf, and None across input channels without NaN loss"),
         ("database_zero_preservation", _test_database_zero_preservation, "Database save/load preserves 0.0 values across roundtrip"),
@@ -981,6 +982,61 @@ def _test_prediction_with_temp():
         assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
 
 
+def _test_component_retrain_interval():
+    """Exercise YAML-to-component wiring and age-based scheduling without expensive training."""
+    import asyncio
+    from unittest.mock import AsyncMock, Mock
+    from components import Components
+    from mock_base import MockBase
+
+    async def run_test():
+        """Check defaults, configured bounds, clamping and the independent prediction timer."""
+        key = "load_ml_retrain_interval_hours"
+        for args, expected_hours in (({}, 2), ({key: 24}, 24), ({key: 1}, 1), ({key: 48}, 48), ({key: 0}, 1), ({key: -1}, 1), ({key: 49}, 48)):
+            base = MockBase(config_root=None, load_ml_enable=True, load_ml_database_days=0, load_today=["sensor.load_today"], **args)
+            base.log = Mock()
+            base.prediction_started = False
+            registry = Components(base)
+            registry.initialize(only="load_ml", phase=2)
+            component = registry.get_component("load_ml")
+            assert component is not None, registry.component_errors
+            assert component.ml_retrain_interval_seconds == expected_hours * 3600
+            component.data_ready = True
+            component.load_data_age_days = 7
+            component.database_history_loaded = True
+            component._do_fetch = AsyncMock()
+            component._do_training = AsyncMock()
+            component._get_predictions = Mock(return_value={})
+            component._update_model_status = Mock()
+            component._publish_entity = Mock()
+
+            # Use a non-prediction tick to prove retraining follows model age, not uptime.
+            for age_seconds, seconds, first, expected_train, expected_predict in (
+                (expected_hours * 3600 - 1, 30, False, False, False),
+                (expected_hours * 3600, 30, False, True, True),
+                (expected_hours * 3600 + 1, 30, False, True, True),
+                (1800, 1800, False, False, True),
+                (None, 0, True, False, False),
+                (None, 30, False, True, True),
+            ):
+                component.initial_training_done = age_seconds is not None
+                component.last_train_time = base.now_utc - timedelta(seconds=age_seconds) if age_seconds is not None else None
+                component._do_fetch.reset_mock()
+                component._do_training.reset_mock()
+                component._get_predictions.reset_mock()
+                base.log.reset_mock()
+                assert await component.run(seconds=seconds, first=first)
+                assert component._do_training.await_count == int(expected_train), (args, age_seconds, first)
+                assert component._get_predictions.call_count == int(expected_predict), (args, age_seconds, first)
+                assert component._do_fetch.await_count == int(first or expected_predict), (args, age_seconds, first)
+                if expected_train:
+                    component._do_training.assert_awaited_once_with(age_seconds is None)
+                    if age_seconds is not None:
+                        assert any("({}h interval)".format(expected_hours) in call.args[0] for call in base.log.call_args_list)
+
+    asyncio.run(run_test())
+
+
 def _test_component_run_data_merge():
     """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
     1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save).
@@ -1104,7 +1160,7 @@ def _test_component_run_data_merge():
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
 
         # ── Run 2 (first=False, seconds=30) ─────────────────────────────────────
-        # last_train_time is None -> retrain_age_seconds = RETRAIN_INTERVAL_SECONDS -> should_train=True
+        # last_train_time is None -> retrain_age_seconds = configured interval -> should_train=True
         # Expect: shift old keys, merge fresh data, run initial training, save once.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_2, 7, 3.0, None, None, None, None))
 
@@ -1133,7 +1189,7 @@ def _test_component_run_data_merge():
 
         # ── Run 3 (first=False, seconds=PREDICTION_INTERVAL_SECONDS) ─────────────
         # last_train_time = 30 min ago (set in mock_do_training to component.now_utc of Run 2).
-        # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) -> should_train=False.
+        # retrain_age_seconds = 30*60 = 1800 < default interval (7200) -> should_train=False.
         # seconds % PREDICTION_INTERVAL_SECONDS == 0 -> should_fetch=True.
         # Expect: fetch+predict+save only, no training.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_3, 7, 3.0, None, None, None, None))
