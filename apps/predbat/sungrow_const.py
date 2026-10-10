@@ -593,6 +593,9 @@ SUNGROW_TELEMETRY_STALE_MINUTES = 15
 # fields: a tester's first log should be read for anything personal this misses.
 SUNGROW_DEBUG_REDACT_KEYS = ("appkey", "access_key", "x-access-key", "token", "access_token", "refresh_token", "Authorization", "ps_location", "latitude", "longitude", "email", "user_account", "user_name", "mobile_tel", "ps_holder")
 
+# Every minute of the day as HH:MM:00, the options the charge/export time selects offer.
+SUNGROW_TIME_OPTIONS = ["{:02d}:{:02d}:00".format(minute // 60, minute % 60) for minute in range(24 * 60)]
+
 # -----------------------------------------------------------------------------
 # Pure helpers
 # -----------------------------------------------------------------------------

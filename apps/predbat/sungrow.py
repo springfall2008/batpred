@@ -156,6 +156,7 @@ from sungrow_const import (
     SUNGROW_TTL_POWER,
     SUNGROW_TELEMETRY_STALE_MINUTES,
     SUNGROW_DEBUG_REDACT_KEYS,
+    SUNGROW_TIME_OPTIONS,
     gateway_url,
     strip_point_prefix,
     as_float,
@@ -255,6 +256,12 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # OAuth is wired exactly as fox.py does it - the mixin assigns 'key' to access_token
         # when auth_method is oauth, and the oauth-refresh edge function owns the refresh chain.
         self._init_oauth(auth_method, key, token_expires_at, "sungrow")
+        # OAuthMixin drops the key for any method other than oauth, because for the components
+        # it was written for a non-oauth key is an API key sent some other way. Here the key is
+        # always the bearer token, whoever obtained it: in "token" mode a self-hosted user has
+        # pasted one from Sungrow's own authorisation flow, and nothing can refresh it for them.
+        if self.auth_method != "oauth":
+            self.access_token = key or None
         self.token_hash = token_hash or ""
 
         self.plant_list = []
@@ -888,13 +895,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.dashboard_item(
                 self._control_name("select", uuid, "battery_schedule_{}_start_time".format(direction)),
                 state=window.get("start", "00:00:00"),
-                attributes={"friendly_name": "Sungrow {} {} Start".format(serial, direction.title()), "icon": "mdi:clock-outline"},
+                attributes={"options": SUNGROW_TIME_OPTIONS, "friendly_name": "Sungrow {} {} Start".format(serial, direction.title()), "icon": "mdi:clock-outline"},
                 app="sungrow",
             )
             self.dashboard_item(
                 self._control_name("select", uuid, "battery_schedule_{}_end_time".format(direction)),
                 state=window.get("end", "00:00:00"),
-                attributes={"friendly_name": "Sungrow {} {} End".format(serial, direction.title()), "icon": "mdi:clock-outline"},
+                attributes={"options": SUNGROW_TIME_OPTIONS, "friendly_name": "Sungrow {} {} End".format(serial, direction.title()), "icon": "mdi:clock-outline"},
                 app="sungrow",
             )
             self.dashboard_item(
@@ -1615,6 +1622,9 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(uuid, "battery_rate_max") for uuid in devices])
         else:
             self.log("Warn: Sungrow no battery power limit available, battery_rate_max must be set manually in apps.yaml or with sungrow_battery_rate_max")
+        if all(self.telemetry(uuid, "battery_temperature") is not None for uuid in devices):
+            self.set_arg_auto("battery_temperature", [self._sensor_name(uuid, "battery_temperature") for uuid in devices])
+            self.set_arg_auto("battery_temperature_history", self._sensor_name(devices[0], "battery_temperature"))
         # Deliberately NOT auto-mapped. Nothing in the measuring points is the SITE's grid
         # connection limit, and a G98/G99-capped site can sit far below the inverter rating.
         # Unlike battery_rate_max, nothing measures and reports this error back, so a guess
@@ -1661,6 +1671,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             entities["soc_max"] = {"entity_id": self._sensor_name(uuid, "battery_capacity"), "access": "r", "unit": "kWh"}
         if self.battery_rate_max(uuid) > 0:
             entities["battery_rate_max"] = {"entity_id": self._sensor_name(uuid, "battery_rate_max"), "access": "r", "unit": "W"}
+        if self.telemetry(uuid, "battery_temperature") is not None:
+            entities["battery_temperature"] = {"entity_id": self._sensor_name(uuid, "battery_temperature"), "access": "r", "unit": "°C"}
 
         entities["reserve"] = {"entity_id": self._control_name("number", uuid, "battery_schedule_reserve"), "access": "rw", "unit": "%"}
         for direction, prefix in (("charge", "charge"), ("export", "discharge")):
@@ -1826,8 +1838,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not self.appkey or not self.access_key:
             self.log("Warn: Sungrow needs both sungrow_appkey and sungrow_access_key; register an application at https://developer-api.isolarcloud.com/")
             return False
-        if self.auth_method == "oauth" and not self.access_token:
-            self.log("Warn: Sungrow has no OAuth access token; reconnect the Sungrow account")
+        if not self.access_token:
+            self.log("Warn: Sungrow has no access token; reconnect the Sungrow account, or set sungrow_key with sungrow_auth_method: token on a self-hosted install")
             return False
 
         if self.tier_expired("static", SUNGROW_TTL_STATIC) or not self.device_list:

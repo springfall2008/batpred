@@ -841,6 +841,18 @@ def test_control_entities_round_trip_through_home_assistant():
     assert not failed, "test_control_entities_round_trip_through_home_assistant"
 
 
+def test_time_selects_publish_their_options():
+    """A select with no options attribute renders as an empty dropdown and cannot be set by hand."""
+    failed = False
+    client = _controlled_client()
+    run_async_local(client.publish_schedule_settings_ha(UUID))
+    options = client.published["select.predbat_sungrow_a2211test01_battery_schedule_charge_start_time"]["attributes"].get("options") or []
+    if len(options) != 1440 or options[0] != "00:00:00" or options[-1] != "23:59:00":
+        print(f"ERROR: {len(options)} options published")
+        failed = True
+    assert not failed, "test_time_selects_publish_their_options"
+
+
 def test_entity_ids_resolve_back_to_the_right_inverter():
     """An entity for A2211 must never route to A221, which would write to the wrong inverter."""
     failed = False
@@ -997,6 +1009,7 @@ def run_sungrow_control_tests(my_predbat):
         ("control_disabled", test_control_enable_false_writes_nothing),
         ("write_button", test_write_button_press_marks_the_inverter_as_driven),
         ("entities_round_trip", test_control_entities_round_trip_through_home_assistant),
+        ("select_options", test_time_selects_publish_their_options),
         ("entity_resolution", test_entity_ids_resolve_back_to_the_right_inverter),
         ("restart_re_establishes", test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter),
         ("read_only_button", test_the_write_button_sends_nothing_in_read_only),

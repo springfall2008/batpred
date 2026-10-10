@@ -273,6 +273,29 @@ def test_sungrow_request_skips_the_call_when_refresh_fails():
     assert not failed, "test_sungrow_request_skips_the_call_when_refresh_fails"
 
 
+def test_sungrow_token_auth_sends_the_pasted_token_and_never_refreshes():
+    """A self-hosted user supplies a token from Sungrow's own flow; predbat.com cannot refresh it."""
+    failed = False
+    client = MockSungrow(auth_method="token", key="pasted-token")
+    if client._headers().get("Authorization") != "Bearer pasted-token":
+        print(f"ERROR: Authorization header {client._headers().get('Authorization')}")
+        failed = True
+    refreshes = []
+
+    async def no_refresh():
+        """Record any attempt to reach the refresh function."""
+        refreshes.append(1)
+        return False
+
+    client._do_refresh = no_refresh
+    with _mock_post([_envelope(PLANT_LIST)]):
+        ok, _ = run_async_local(client._request("plant_list", {"page": 1}))
+    if not ok or refreshes:
+        print(f"ERROR: token auth gave ok={ok} with {len(refreshes)} refresh attempt(s)")
+        failed = True
+    assert not failed, "test_sungrow_token_auth_sends_the_pasted_token_and_never_refreshes"
+
+
 def test_sungrow_auth_and_rate_limit_codes_are_reported_differently():
     """A credential rejection points at the credentials; a rate limit is a pacing signal.
 
@@ -735,6 +758,24 @@ def test_sungrow_automatic_config_respects_ignore_pv():
     assert not failed, "test_sungrow_automatic_config_respects_ignore_pv"
 
 
+def test_sungrow_automatic_config_binds_battery_temperature_when_reported():
+    """The sensor is published already; Predbat's temperature model only sees it once it is bound."""
+    failed = False
+    client = _polled_client(automatic=True)
+    uuid = client.device_list[0]
+    run_async_local(client.automatic_config())
+    if "battery_temperature" in client.base.args:
+        print("ERROR: battery_temperature was bound although the inverter does not report it")
+        failed = True
+    client.device_values[uuid]["battery_temperature"] = 21.5
+    run_async_local(client.automatic_config())
+    expected = "sensor.predbat_sungrow_a2211test01_battery_temperature"
+    if client.base.args.get("battery_temperature") != [expected] or client.base.args.get("battery_temperature_history") != expected:
+        print(f"ERROR: temperature args {client.base.args.get('battery_temperature')} / {client.base.args.get('battery_temperature_history')}")
+        failed = True
+    assert not failed, "test_sungrow_automatic_config_binds_battery_temperature_when_reported"
+
+
 def test_sungrow_discovery_record_round_trips_and_rebuilds_the_row():
     """The record validates and carries every capability key with the INVERTER_DEF value."""
     failed = False
@@ -896,6 +937,7 @@ def run_sungrow_api_tests(my_predbat):
         ("non_json_body", test_sungrow_request_survives_a_body_that_is_not_json),
         ("retry_on_401", test_sungrow_request_retries_once_on_401),
         ("skip_on_dead_token", test_sungrow_request_skips_the_call_when_refresh_fails),
+        ("token_auth", test_sungrow_token_auth_sends_the_pasted_token_and_never_refreshes),
         ("auth_and_rate_limit_codes", test_sungrow_auth_and_rate_limit_codes_are_reported_differently),
         ("device_realtime_device_type", test_sungrow_device_realtime_sends_the_device_type),
         ("plant_list_valid_flag", test_sungrow_plant_list_asks_for_connected_plants_too),
@@ -916,6 +958,7 @@ def run_sungrow_api_tests(my_predbat):
         ("publish_omits_missing", test_sungrow_publish_omits_values_the_inverter_did_not_report),
         ("automatic_config", test_sungrow_automatic_config_binds_sensors_and_controls),
         ("automatic_ignore_pv", test_sungrow_automatic_config_respects_ignore_pv),
+        ("temperature_bound", test_sungrow_automatic_config_binds_battery_temperature_when_reported),
         ("record_round_trips", test_sungrow_discovery_record_round_trips_and_rebuilds_the_row),
         ("record_none_before_discovery", test_sungrow_discovery_record_is_none_before_discovery),
         ("record_no_solar_claim", test_sungrow_discovery_record_omits_solar_when_pv_was_never_reported),
