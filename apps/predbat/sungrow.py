@@ -207,6 +207,10 @@ SUNGROW_CAPABILITIES = {
 # with these limits", so the release goes through the same change detection as a command.
 SUNGROW_CMD_RELEASE = "release"
 
+# Predbat's live args and the telemetry leaf that backs each. One table, read by both
+# automatic_config() and _bindable_args(), so what is bound and what is checked cannot drift.
+SUNGROW_POWER_ARGS = (("soc_percent", "soc"), ("battery_power", "battery_power"), ("grid_power", "grid_power"), ("load_power", "load_power"), ("pv_power", "pv_power"))
+
 
 class SungrowAPI(ComponentBase, OAuthMixin):
     """Sungrow iSolarCloud OpenAPI cloud component."""
@@ -297,6 +301,9 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # pressed at least once. The reconcile loop only re-applies for these, so a startup
         # cycle can never take control of an inverter before there is a plan to apply.
         self.control_active = set()
+        # Names automatic_config() has already bound, so run() can tell a figure that just
+        # became available from one that was already mapped on an earlier cycle.
+        self._bound_args = set()
         # Devices currently held in external dispatch. This is what the heartbeat loop beats
         # for, and it is deliberately NOT persisted: after a restart the inverter has already
         # reverted to self-consumption (or is about to), so restoring "we hold control" would
@@ -1683,6 +1690,38 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     # Automatic configuration and discovery
     # -------------------------------------------------------------------------
 
+    def _bindable_args(self):
+        """Return the names of the settings automatic_config() could bind right now.
+
+        A name is present only when EVERY inverter has the figure behind it, which is the rule
+        automatic_config() itself binds by. run() compares this with what has already been
+        bound, so a figure that was missing on the first cycle is bound when it turns up
+        rather than at the next restart. The export limit's name carries its kind as well,
+        because switching the inverter's limitation on or off changes what is bound.
+        """
+        devices = list(self.device_list)
+        if not devices:
+            return set()
+        found = set()
+        for arg, leaf in SUNGROW_POWER_ARGS:
+            if all(self.telemetry(uuid, leaf) is not None for uuid in devices):
+                found.add(arg)
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if all(self.energy(uuid, leaf) is not None for uuid in devices):
+                found.add(leaf)
+        if all(self.battery_capacity(uuid) > 0 for uuid in devices):
+            found.add("soc_max")
+        if all(self.battery_rate_max(uuid) > 0 for uuid in devices):
+            found.add("battery_rate_max")
+        if all(self.telemetry(uuid, "battery_temperature") is not None for uuid in devices):
+            found.add("battery_temperature")
+        if all(self.inverter_limit(uuid) > 0 for uuid in devices):
+            found.add("inverter_limit")
+        export_limits = [self.export_limit(uuid) for uuid in devices]
+        if all(limit is not None for limit in export_limits):
+            found.add("export_limit:" + ",".join("limit" if limit < SUNGROW_NO_EXPORT_LIMIT else "none" for limit in export_limits))
+        return found
+
     async def automatic_config(self):
         """Register every discovered inverter as a SungrowCloud Predbat inverter."""
         devices = list(self.device_list)
@@ -1693,12 +1732,18 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Sungrow found more than one inverter in a plant; battery capacity and rate are the plant figures split equally between them. Set soc_max and battery_rate_max in apps.yaml if the batteries differ")
         self.set_arg_auto("inverter_type", ["SungrowCloud" for _ in devices])
         self.set_arg_auto("num_inverters", len(devices))
-        self.set_arg_auto("soc_percent", [self._sensor_name(uuid, "soc") for uuid in devices])
-        self.set_arg_auto("battery_power", [self._sensor_name(uuid, "battery_power") for uuid in devices])
-        self.set_arg_auto("grid_power", [self._sensor_name(uuid, "grid_power") for uuid in devices])
-        self.set_arg_auto("load_power", [self._sensor_name(uuid, "load_power") for uuid in devices])
-        if not self.automatic_ignore_pv:
-            self.set_arg_auto("pv_power", [self._sensor_name(uuid, "pv_power") for uuid in devices])
+        # Bound only when every inverter reports the point: the sensor is only published when
+        # there is a value for it, and an arg naming a sensor that never appears reads as a
+        # broken install rather than as a figure this hardware does not have.
+        for arg, leaf in SUNGROW_POWER_ARGS:
+            if arg == "pv_power" and self.automatic_ignore_pv:
+                continue
+            if all(self.telemetry(uuid, leaf) is not None for uuid in devices):
+                self.set_arg_auto(arg, [self._sensor_name(uuid, leaf) for uuid in devices])
+            elif arg == "pv_power":
+                self.log("Info: Sungrow reports no PV power for every inverter, so pv_power is left unset; set it in apps.yaml if your solar is on another inverter")
+            else:
+                self.log("Warn: Sungrow not every inverter reports {}, it must be set manually in apps.yaml".format(arg))
         # Own the sign flags rather than leaving them to whatever else configured this install.
         # base.args is shared and NOT namespaced per inverter type, so a component that
         # legitimately inverts its own grid sensor - teslemetry and fox both do - leaves that
@@ -1754,6 +1799,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("discharge_rate", [self._control_name("number", uuid, "battery_schedule_export_power") for uuid in devices])
         self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", uuid, "battery_schedule_export_enable") for uuid in devices])
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", uuid, "battery_schedule_charge_write") for uuid in devices])
+
+        self._bound_args = self._bound_args | self._bindable_args()
 
     def _discovery_entities(self, uuid):
         """The settings automatic_config() binds for one inverter, as discovery entity descriptors.
@@ -2014,8 +2061,12 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Sungrow telemetry is {:.0f} minutes old and could not be refreshed; SoC and power are stale".format(self.tier_age_minutes("power")))
         self._stale_logged = stale
 
-        if first and self.automatic:
-            await self.automatic_config()
+        if self.automatic:
+            newly_available = self._bindable_args() - self._bound_args
+            if first or newly_available:
+                if not first:
+                    self.log("Info: Sungrow now reports {}; re-running automatic configuration".format(", ".join(sorted(newly_available))))
+                await self.automatic_config()
         if not stale:
             self.update_success_timestamp()
         return True

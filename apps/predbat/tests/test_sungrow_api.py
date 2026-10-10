@@ -792,6 +792,23 @@ def test_sungrow_automatic_config_binds_battery_temperature_when_reported():
     assert not failed, "test_sungrow_automatic_config_binds_battery_temperature_when_reported"
 
 
+def test_sungrow_automatic_config_only_binds_power_sensors_that_exist():
+    """An arg pointing at a sensor that is never published is worse than no arg at all."""
+    failed = False
+    client = _polled_client(automatic=True)
+    uuid = client.device_list[0]
+    client.device_values[uuid].pop("pv_power", None)
+    client.plant_values["1234567"].pop("total_active_power_of_pv", None)
+    run_async_local(client.automatic_config())
+    if "pv_power" in client.base.args:
+        print(f"ERROR: pv_power was bound to {client.base.args['pv_power']} although nothing reports it")
+        failed = True
+    if client.base.args.get("soc_percent") != ["sensor.predbat_sungrow_a2211test01_soc"]:
+        print(f"ERROR: soc_percent arg {client.base.args.get('soc_percent')}")
+        failed = True
+    assert not failed, "test_sungrow_automatic_config_only_binds_power_sensors_that_exist"
+
+
 def test_sungrow_discovery_record_round_trips_and_rebuilds_the_row():
     """The record validates and carries every capability key with the INVERTER_DEF value."""
     failed = False
@@ -1128,6 +1145,42 @@ def test_sungrow_run_reads_limits_after_the_control_loop():
     assert not failed, "test_sungrow_run_reads_limits_after_the_control_loop"
 
 
+def test_sungrow_run_binds_a_setting_that_becomes_available_later():
+    """A point missing on the first cycle must not stay unbound until the next restart."""
+    failed = False
+    client = _polled_client(automatic=True)
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
+    client.plant_values["1234567"].pop("chargeable_energy", None)
+    run_async_local(client.run(0, True))
+    if "soc_max" in client.base.args:
+        print("ERROR: soc_max was bound without a capacity")
+        failed = True
+    runs = []
+    original = client.automatic_config
+
+    async def counting_config():
+        """Count re-runs of automatic_config."""
+        runs.append(1)
+        await original()
+
+    client.automatic_config = counting_config
+    client.plant_values["1234567"]["chargeable_energy"] = 3600.0
+    run_async_local(client.run(0, False))
+    if client.base.args.get("soc_max") != ["sensor.predbat_sungrow_a2211test01_battery_capacity"] or len(runs) != 1:
+        print(f"ERROR: after the capacity appeared soc_max is {client.base.args.get('soc_max')} with {len(runs)} re-run(s)")
+        failed = True
+    run_async_local(client.run(0, False))
+    if len(runs) != 1:
+        print(f"ERROR: automatic_config re-ran with nothing new to bind ({len(runs)} runs)")
+        failed = True
+    assert not failed, "test_sungrow_run_binds_a_setting_that_becomes_available_later"
+
+
 def run_sungrow_api_tests(my_predbat):
     """Run all Sungrow API tests."""
     failed = False
@@ -1159,6 +1212,7 @@ def run_sungrow_api_tests(my_predbat):
         ("automatic_config", test_sungrow_automatic_config_binds_sensors_and_controls),
         ("automatic_ignore_pv", test_sungrow_automatic_config_respects_ignore_pv),
         ("temperature_bound", test_sungrow_automatic_config_binds_battery_temperature_when_reported),
+        ("power_args_conditional", test_sungrow_automatic_config_only_binds_power_sensors_that_exist),
         ("record_round_trips", test_sungrow_discovery_record_round_trips_and_rebuilds_the_row),
         ("record_none_before_discovery", test_sungrow_discovery_record_is_none_before_discovery),
         ("record_no_solar_claim", test_sungrow_discovery_record_omits_solar_when_pv_was_never_reported),
@@ -1172,6 +1226,7 @@ def run_sungrow_api_tests(my_predbat):
         ("limits_bound", test_sungrow_automatic_config_binds_the_limits),
         ("limits_backoff", test_sungrow_failed_limits_read_backs_off),
         ("limits_after_control", test_sungrow_run_reads_limits_after_the_control_loop),
+        ("late_binding", test_sungrow_run_binds_a_setting_that_becomes_available_later),
     ]:
         try:
             if fn():
