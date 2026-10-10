@@ -178,7 +178,7 @@ def test_sungrow_inverter_def_row():
         ("soc_units", "%"),
         ("time_button_press", True),
         ("support_charge_freeze", True),
-        ("support_discharge_freeze", True),
+        ("support_discharge_freeze", False),
         ("has_idle_time", False),
         ("can_span_midnight", False),
         ("target_soc_used_for_discharge", True),

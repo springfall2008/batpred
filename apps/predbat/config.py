@@ -2455,7 +2455,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
-        "support_discharge_freeze": True,
+        # False: nothing in the published parameter table expresses "the battery may discharge
+        # but must not charge". Stop (10004 = 204) blocks both directions, which is a hold, not
+        # a freeze export. Revisit only with evidence from real hardware.
+        "support_discharge_freeze": False,
         "has_idle_time": False,
         # The component never writes a window to the inverter, so there is nothing that could
         # span midnight - but Predbat still needs to be told not to hand one over.

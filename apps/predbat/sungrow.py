@@ -106,6 +106,7 @@ from sungrow_const import (
     SUNGROW_ESS_DEVICE_TYPES,
     SUNGROW_PARAM_SOC_UPPER,
     SUNGROW_PARAM_SOC_LOWER,
+    SUNGROW_PARAM_RANGE,
     SUNGROW_PARAM_EMS_MODE,
     SUNGROW_PARAM_COMMAND,
     SUNGROW_PARAM_POWER,
@@ -180,7 +181,7 @@ from sungrow_const import (
 # there is no feed-in-first mode in the control parameter table.
 SUNGROW_CAPABILITIES = {
     "support_charge_freeze": True,
-    "support_discharge_freeze": True,
+    "support_discharge_freeze": False,
     "support_feedin_first": False,
     "can_span_midnight": False,
     "charge_discharge_with_rate": False,
@@ -992,30 +993,36 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     def decide_command(self, uuid, schedule):
         """Translate Predbat's plan into the instantaneous command to hold right now.
 
-        Returns a dict of the external-dispatch state to put the inverter in, or None meaning
-        "release control and let the inverter run self-consumption". This is where Predbat's
-        time windows stop being times: Sungrow's parameters carry no schedule, so the window
-        arithmetic happens here on every cycle and what goes out is a setpoint for this minute.
+        Returns the external-dispatch state to put the inverter in, or None meaning "release
+        control and let the inverter run self-consumption". Sungrow's parameters carry no
+        schedule, so the window arithmetic happens here on every cycle.
 
-        The order of the branches is the order of Predbat's own precedence:
+        The branches read the control entities the way execute.py writes them for a type with
+        no timed pause and charge_discharge_with_rate False:
 
-        1. An active export window with real power is a forced discharge. Its target SoC
-           becomes the LOWER limit (10002), which is what stops the discharge at the target
-           rather than at the pack floor.
-        2. An active charge window whose target is above the current SoC is a forced charge,
-           with the target as the UPPER limit (10001).
-        3. Anything else that must not move the battery is a STOP (10004 = 204). That covers
-           both of Predbat's freezes: an export window at zero power (freeze export / any
-           generic no-discharge hold), and a charge window whose target has already been
-           reached, where execute_plan has cleared the enable switch but left the window
-           intact. Sungrow has a real stop command, so unlike AlphaESS this needs no synthetic
-           low-target charge profile to express a hold.
-        4. Otherwise there is nothing to hold and control is released, which also stops the
-           heartbeat and lets the inverter fall back on its own.
+        1. An enabled, active export window with power, while SoC is above its floor, is a
+           forced discharge. The floor is checked HERE as well as being written to 10002,
+           because 10002 only accepts 0-50% and a higher target would otherwise be overrun.
+        2. An enabled, active charge window with power and a target above SoC is a forced
+           charge.
+        3. Discharge rate zero while the charge rate is still set is Predbat's generic
+           no-discharge hold (freeze charge, car hold, iBoost hold). It carries no window, so
+           it is not gated on one. Both rates zero is an inverter nobody has planned for yet,
+           not a hold.
+        4. An ENABLED charge window whose target is already met holds there. A disabled window
+           is never read: execute.py leaves its times in place when it disables it, so the
+           same hours would otherwise stop the battery again on every later day.
+        5. A reserve above the range 10002 accepts cannot be held by the inverter, so it is
+           held with a stop while SoC is at or below it.
+
+        Freeze export (charge rate zero, discharge rate set) deliberately matches none of
+        these: the type declares support_discharge_freeze False.
         """
         charge = schedule.get("charge", {}) or {}
         export = schedule.get("export", {}) or {}
-        soc_now = as_float(self.telemetry(uuid, "soc"), 0.0)
+        soc_reading = self.telemetry(uuid, "soc")
+        soc_known = soc_reading is not None
+        soc_now = as_float(soc_reading, 0.0)
         reserve = int(as_float(schedule.get("reserve"), 0))
 
         charge_active = self._window_active_now(charge)
@@ -1024,23 +1031,22 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         charge_power = as_float(charge.get("power"), 0.0)
         export_target = as_float(export.get("soc"), 0.0)
         export_power = as_float(export.get("power"), 0.0)
+        export_floor = max(reserve, int(export_target))
 
-        if export.get("enable") and export_active and export_power > 0:
-            return {"command": SUNGROW_CMD_DISCHARGE, "power": export_power, "soc_lower": max(reserve, int(export_target)), "reason": "export window active"}
+        if export.get("enable") and export_active and export_power > 0 and (not soc_known or soc_now > export_floor):
+            return {"command": SUNGROW_CMD_DISCHARGE, "power": export_power, "soc_lower": export_floor, "reason": "export window active"}
 
         if charge.get("enable") and charge_active and charge_power > 0 and charge_target > soc_now:
             return {"command": SUNGROW_CMD_CHARGE, "power": charge_power, "soc_upper": int(charge_target), "reason": "charge window active"}
 
-        # Freeze export: Predbat expresses every no-discharge hold as an export window with
-        # zero power, and leaves the window times in place so the intent survives.
-        if export_active and export_power <= 0 and (export.get("enable") or charge_active):
+        if export_power <= 0 and charge_power > 0:
             return {"command": SUNGROW_CMD_STOP, "power": 0, "soc_lower": reserve, "reason": "discharge hold"}
 
-        # Charge target already reached inside its own window - hold, do not discharge back
-        # down to it. Gated on the window still being active so stale target/time entities
-        # cannot extend the hold past the period it was planned for.
-        if charge_active and charge_target > 0 and charge_target <= soc_now:
+        if charge.get("enable") and charge_active and charge_target > 0 and charge_target <= soc_now:
             return {"command": SUNGROW_CMD_STOP, "power": 0, "soc_upper": int(charge_target), "reason": "charge target reached"}
+
+        if soc_known and reserve > SUNGROW_PARAM_RANGE[SUNGROW_PARAM_SOC_LOWER][1] and soc_now <= reserve:
+            return {"command": SUNGROW_CMD_STOP, "power": 0, "soc_lower": reserve, "reason": "reserve above the inverter's floor range"}
 
         return None
 

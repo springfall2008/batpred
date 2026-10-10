@@ -88,7 +88,7 @@ def test_decide_releases_control_outside_every_window():
     failed = False
     client = _controlled_client()
     client.set_mock_clock(12 * 60)  # midday, outside 02:00-05:00
-    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, export={"power": 5000})
     if client.decide_command(UUID, schedule) is not None:
         print("ERROR: control was taken outside the planned window")
         failed = True
@@ -132,50 +132,116 @@ def test_decide_export_lower_limit_never_dips_below_reserve():
     assert not failed, "test_decide_export_lower_limit_never_dips_below_reserve"
 
 
-def test_decide_freeze_export_becomes_the_stop_command():
-    """Predbat expresses every no-discharge hold as an export window at zero power.
+def test_decide_freeze_export_is_not_a_hold():
+    """Freeze export arrives as export disabled, charge rate 0, discharge rate max - and is unsupported.
 
-    Sungrow has a real stop command (10004 = 204), so unlike AlphaESS this needs no synthetic
-    low-target charge profile to express a hold.
+    Nothing in Sungrow's parameter table says "discharge allowed, charging not", so the type
+    declares support_discharge_freeze False and this state is plain self-consumption.
     """
     failed = False
     client = _controlled_client()
     client.set_mock_clock(17 * 60)
-    schedule = _schedule(export={"enable": True, "soc": 20, "power": 0, "start": "16:00:00", "end": "19:00:00"}, reserve=10)
+    schedule = _schedule(charge={"power": 0}, export={"enable": False, "soc": 4, "power": 5000, "start": "16:00:00", "end": "19:00:00"})
+    if client.decide_command(UUID, schedule) is not None:
+        print("ERROR: freeze export was turned into a command; a STOP would block discharge to the house")
+        failed = True
+    assert not failed, "test_decide_freeze_export_is_not_a_hold"
+
+
+def test_decide_discharge_hold_needs_no_window():
+    """A car/iBoost hold is discharge rate 0 with charge rate still set, and carries no window at all."""
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(12 * 60)
+    schedule = _schedule(charge={"power": 5000}, export={"power": 0}, reserve=65)
     decision = client.decide_command(UUID, schedule)
-    if decision is None:
-        print("ERROR: a freeze produced no decision, so the battery would be left free to discharge")
-        assert False, "test_decide_freeze_export_becomes_the_stop_command"
-    if decision["command"] != SUNGROW_CMD_STOP:
-        print(f"ERROR: command {decision['command']}, expected stop")
+    if decision is None or decision["command"] != SUNGROW_CMD_STOP:
+        print(f"ERROR: a discharge hold gave {decision}, expected a stop")
         failed = True
-    if decision["power"] != 0:
-        print(f"ERROR: power {decision['power']}")
+    assert not failed, "test_decide_discharge_hold_needs_no_window"
+
+
+def test_decide_all_zero_rates_is_not_a_hold():
+    """Entities that were never written read 0 for both rates; that is no plan, not a hold."""
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(12 * 60)
+    if client.decide_command(UUID, _schedule()) is not None:
+        print("ERROR: a never-configured inverter was put into a permanent stop")
         failed = True
-    assert not failed, "test_decide_freeze_export_becomes_the_stop_command"
+    assert not failed, "test_decide_all_zero_rates_is_not_a_hold"
 
 
-def test_decide_holds_once_the_charge_target_is_reached():
-    """A reached target inside its own window is a hold, not a discharge back down to it.
-
-    execute_plan clears the enable switch once the target is met but deliberately leaves the
-    window times intact, which is the signal this branch reads.
-    """
+def test_decide_enabled_charge_window_holds_at_target():
+    """An ENABLED charge window whose target is already met holds; a disabled one never does."""
     failed = False
     client = _controlled_client()
     client.set_mock_clock(3 * 60)
-    # Telemetry says SoC is 64%; a target of 60% has already been passed.
-    schedule = _schedule(charge={"enable": False, "soc": 60, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
-    decision = client.decide_command(UUID, schedule)
+    window = {"soc": 60, "power": 3000, "start": "02:00:00", "end": "05:00:00"}
+    decision = client.decide_command(UUID, _schedule(charge=dict(window, enable=True), export={"power": 5000}))
     if decision is None or decision["command"] != SUNGROW_CMD_STOP:
-        print(f"ERROR: a reached charge target gave {decision}, expected a stop")
+        print(f"ERROR: an enabled charge window at its target gave {decision}, expected a stop")
         failed = True
-    # Outside the window the same stale entities must NOT extend the hold.
+    # Yesterday's window, disabled, target below SoC: the plan is Demand and must stay Demand.
+    if client.decide_command(UUID, _schedule(charge=dict(window, enable=False), export={"power": 5000})) is not None:
+        print("ERROR: a stale disabled charge window stopped the battery")
+        failed = True
+    assert not failed, "test_decide_enabled_charge_window_holds_at_target"
+
+
+def test_decide_export_stops_at_its_target():
+    """The inverter's own floor only covers 0-50%, so the target is enforced here as well."""
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(17 * 60)
+    window = {"enable": True, "power": 4000, "start": "16:00:00", "end": "19:00:00"}
+    # SoC is 64. A 70% target is already passed.
+    if client.decide_command(UUID, _schedule(charge={"power": 5000}, export=dict(window, soc=70))) is not None:
+        print("ERROR: exported below the export target")
+        failed = True
+    decision = client.decide_command(UUID, _schedule(charge={"power": 5000}, export=dict(window, soc=60)))
+    if decision is None or decision["command"] != SUNGROW_CMD_DISCHARGE or decision.get("soc_lower") != 60:
+        print(f"ERROR: export above its target gave {decision}")
+        failed = True
+    assert not failed, "test_decide_export_stops_at_its_target"
+
+
+def test_decide_export_runs_without_soc_telemetry():
+    """With no SoC reading the export still runs; the inverter's lower limit is the protection."""
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(17 * 60)
+    client.device_values[UUID].pop("soc", None)
+    client.plant_values["1234567"].pop("battery_level_soc", None)
+    schedule = _schedule(charge={"power": 5000}, export={"enable": True, "soc": 20, "power": 4000, "start": "16:00:00", "end": "19:00:00"})
+    decision = client.decide_command(UUID, schedule)
+    if decision is None or decision["command"] != SUNGROW_CMD_DISCHARGE:
+        print(f"ERROR: export with unknown SoC gave {decision}")
+        failed = True
+    assert not failed, "test_decide_export_runs_without_soc_telemetry"
+
+
+def test_decide_reserve_above_the_floor_range_holds_only_at_or_below_it():
+    """10002 cannot express a reserve above 50%, so a higher reserve is held with a stop instead."""
+    failed = False
+    client = _controlled_client()
     client.set_mock_clock(12 * 60)
-    if client.decide_command(UUID, schedule) is not None:
-        print("ERROR: stale target/time entities extended the hold beyond its planned window")
+    rates = {"charge": {"power": 5000}, "export": {"power": 5000}}
+    # SoC 64 above a 61% reserve: free to discharge down to it.
+    if client.decide_command(UUID, _schedule(reserve=61, **rates)) is not None:
+        print("ERROR: SoC above the reserve was stopped")
         failed = True
-    assert not failed, "test_decide_holds_once_the_charge_target_is_reached"
+    # SoC 64 at or below a 65% reserve: hold.
+    decision = client.decide_command(UUID, _schedule(reserve=65, **rates))
+    if decision is None or decision["command"] != SUNGROW_CMD_STOP:
+        print(f"ERROR: SoC below a 65% reserve gave {decision}, expected a stop")
+        failed = True
+    # A reserve the inverter can hold itself (<= 50%) is never a stop.
+    client.device_values[UUID]["soc"] = 10
+    if client.decide_command(UUID, _schedule(reserve=20, **rates)) is not None:
+        print("ERROR: a reserve inside the inverter's own range was turned into a stop")
+        failed = True
+    assert not failed, "test_decide_reserve_above_the_floor_range_holds_only_at_or_below_it"
 
 
 def test_decide_ignores_a_charge_window_with_no_power():
@@ -704,8 +770,13 @@ def run_sungrow_control_tests(my_predbat):
         ("decide_release", test_decide_releases_control_outside_every_window),
         ("decide_export_precedence", test_decide_export_beats_charge),
         ("decide_reserve_floor", test_decide_export_lower_limit_never_dips_below_reserve),
-        ("decide_freeze_stop", test_decide_freeze_export_becomes_the_stop_command),
-        ("decide_target_reached", test_decide_holds_once_the_charge_target_is_reached),
+        ("decide_freeze_export_unsupported", test_decide_freeze_export_is_not_a_hold),
+        ("decide_hold_no_window", test_decide_discharge_hold_needs_no_window),
+        ("decide_all_zero", test_decide_all_zero_rates_is_not_a_hold),
+        ("decide_enabled_target_hold", test_decide_enabled_charge_window_holds_at_target),
+        ("decide_export_target", test_decide_export_stops_at_its_target),
+        ("decide_export_no_soc", test_decide_export_runs_without_soc_telemetry),
+        ("decide_reserve_hold", test_decide_reserve_above_the_floor_range_holds_only_at_or_below_it),
         ("decide_zero_power_charge", test_decide_ignores_a_charge_window_with_no_power),
         ("window_crosses_midnight", test_window_active_now_handles_a_window_crossing_midnight),
         ("param_list_mode_and_heartbeat", test_build_param_list_writes_the_mode_and_heartbeat_with_the_command),
