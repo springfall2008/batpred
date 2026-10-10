@@ -13,7 +13,7 @@ import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 from sungrow import SungrowAPI, SUNGROW_CAPABILITIES
-from sungrow_const import SUNGROW_NO_EXPORT_LIMIT
+from sungrow_const import SUNGROW_NO_EXPORT_LIMIT, SUNGROW_TTL_STATIC
 from coordinator import CAPABILITY_KEYS, validate_report
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
@@ -1069,6 +1069,65 @@ def test_sungrow_automatic_config_binds_the_limits():
     assert not failed, "test_sungrow_automatic_config_binds_the_limits"
 
 
+def test_sungrow_failed_limits_read_backs_off():
+    """A read-back nobody answers is not attempted again until the retry window has passed."""
+    failed = False
+    client = _polled_client()
+    attempts = []
+
+    async def failing_read(device, codes):
+        """Record the attempt and report that the read-back did not complete."""
+        attempts.append(device)
+        return None
+
+    client.read_params = failing_read
+    run_async_local(client.refresh_limits())
+    run_async_local(client.refresh_limits())
+    if len(attempts) != 1:
+        print(f"ERROR: a failed read-back was attempted {len(attempts)} times in a row, expected 1")
+        failed = True
+    # Just inside the retry window: still waiting.
+    client.mark_refreshed("limits", age_minutes=SUNGROW_TTL_STATIC - 1)
+    run_async_local(client.refresh_limits())
+    if len(attempts) != 1:
+        print("ERROR: the read-back was retried before the tier came due")
+        failed = True
+    client.mark_refreshed("limits", age_minutes=SUNGROW_TTL_STATIC + 1)
+    run_async_local(client.refresh_limits())
+    if len(attempts) != 2:
+        print("ERROR: the read-back was never retried after the tier came due")
+        failed = True
+    assert not failed, "test_sungrow_failed_limits_read_backs_off"
+
+
+def test_sungrow_run_reads_limits_after_the_control_loop():
+    """The limits read-back must not sit in front of the battery's command or its sensors."""
+    failed = False
+    client = _polled_client()
+    order = []
+
+    async def record_limits():
+        """Record when the limits read-back runs."""
+        order.append("limits")
+
+    async def record_reconcile(uuid):
+        """Record when the control reconcile runs."""
+        order.append("control")
+
+    async def record_publish():
+        """Record when the sensors are published."""
+        order.append("publish")
+
+    client.refresh_limits = record_limits
+    client._reconcile_control = record_reconcile
+    client.publish_data = record_publish
+    run_async_local(client.run(0, False))
+    if order != ["control", "limits", "publish"]:
+        print(f"ERROR: run() order was {order}, expected control, limits, publish")
+        failed = True
+    assert not failed, "test_sungrow_run_reads_limits_after_the_control_loop"
+
+
 def run_sungrow_api_tests(my_predbat):
     """Run all Sungrow API tests."""
     failed = False
@@ -1111,6 +1170,8 @@ def run_sungrow_api_tests(my_predbat):
         ("export_limit_trust", test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted),
         ("limits_read_back", test_sungrow_refresh_limits_reads_the_feed_in_parameters),
         ("limits_bound", test_sungrow_automatic_config_binds_the_limits),
+        ("limits_backoff", test_sungrow_failed_limits_read_backs_off),
+        ("limits_after_control", test_sungrow_run_reads_limits_after_the_control_loop),
     ]:
         try:
             if fn():

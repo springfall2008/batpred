@@ -113,6 +113,7 @@ from sungrow_const import (
     SUNGROW_PARAM_FEED_IN_LIMIT_RATIO,
     SUNGROW_NO_EXPORT_LIMIT,
     SUNGROW_LIMIT_AGREEMENT,
+    SUNGROW_LIMITS_RETRY_MINUTES,
     SUNGROW_PARAM_EMS_MODE,
     SUNGROW_PARAM_COMMAND,
     SUNGROW_PARAM_POWER,
@@ -842,9 +843,14 @@ class SungrowAPI(ComponentBase, OAuthMixin):
 
         A read is the same dispatch-then-poll task as a write, so it is slow and is kept off
         the per-minute path. A failed read keeps whatever was known: the limitation is a
-        setting that changes when an installer changes it, not from one hour to the next.
+        setting that changes when an installer changes it, not from one hour to the next. A
+        read that nobody answers is not retried until SUNGROW_LIMITS_RETRY_MINUTES has passed,
+        rather than on the very next cycle - otherwise a read-back that keeps failing would
+        spend up to the task timeout per inverter on every tick.
         """
         if not self.tier_expired("limits", SUNGROW_TTL_STATIC):
+            return
+        if not self.device_list:
             return
         codes = [SUNGROW_PARAM_FEED_IN_LIMIT, SUNGROW_PARAM_FEED_IN_LIMIT_VALUE, SUNGROW_PARAM_FEED_IN_LIMIT_RATIO]
         answered = False
@@ -871,6 +877,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 )
         if answered:
             self.mark_refreshed("limits")
+        else:
+            # Nothing answered. Age the stamp so the tier comes due again after the retry window
+            # rather than on the next tick - otherwise every cycle would spend up to the task
+            # timeout per inverter waiting on a read that is not going to arrive.
+            self.mark_refreshed("limits", age_minutes=max(0, SUNGROW_TTL_STATIC - SUNGROW_LIMITS_RETRY_MINUTES))
 
     # -------------------------------------------------------------------------
     # Publishing
@@ -1952,7 +1963,6 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not self.device_list:
             self.log("Warn: Sungrow found no energy-storage inverters on this account")
             return False
-        await self.refresh_limits()
 
         live_ok = True
         if self.tier_expired("power", SUNGROW_TTL_POWER):
@@ -1974,6 +1984,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # be needed - the loop guards its own body - but a held inverter with no heartbeat is
         # the one state this component must not sit in.
         self._ensure_heartbeat()
+
+        # After the control loop on purpose: a read-back is a dispatched task that can take a
+        # while, and the battery's command must not wait on a setting that changes once a year.
+        # Still ahead of publish_data() and automatic_config(), which both use the result.
+        await self.refresh_limits()
 
         await self.publish_data()
 

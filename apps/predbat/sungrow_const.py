@@ -399,6 +399,11 @@ SUNGROW_NO_EXPORT_LIMIT = 99999
 # with a wide margin either side.
 SUNGROW_LIMIT_AGREEMENT = 0.10
 
+# How long to wait before reading the feed-in limitation again after an attempt in which no
+# inverter answered. A read is a dispatched task that can take over a minute to give up, so it
+# must not be retried on every cycle; an hour is soon enough for a setting an installer changes.
+SUNGROW_LIMITS_RETRY_MINUTES = 60
+
 # -----------------------------------------------------------------------------
 # The heartbeat
 # -----------------------------------------------------------------------------
