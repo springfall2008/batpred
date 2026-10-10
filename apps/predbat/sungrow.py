@@ -1928,3 +1928,79 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 self.log("Warn: Sungrow could not release {} on shutdown: {}; the heartbeat has stopped, so it will revert to self-consumption on its own".format(self._serial(uuid), error))
         await self.save_static()
         await self.save_control()
+
+
+def _build_sungrow(mock_base, args):  # pragma: no cover
+    """Construct a SungrowAPI around a MockBase for standalone command-line use.
+
+    Control is disabled and the token is used as pasted: this tool exists to let a tester
+    compare what the API reports against the iSolarCloud app before Predbat is given control.
+    """
+    return SungrowAPI(
+        mock_base,
+        appkey=args.appkey,
+        access_key=args.access_key,
+        key=args.token,
+        gateway=args.gateway,
+        auth_method="token",
+        inverter_sn=args.serial,
+        automatic=False,
+        control_enable=False,
+        api_delay=args.api_delay,
+    )
+
+
+async def test_sungrow_api(args):  # pragma: no cover
+    """Run one read-only Sungrow diagnostic pass and print what was found."""
+    from mock_base import MockBase
+
+    client = _build_sungrow(MockBase(), args)
+    await client.refresh_static()
+    if client.discovery_ok is False:
+        print("FAILED at plant discovery: {}".format(client.last_api_error or "no response - check the gateway region and the three credentials"))
+        return
+    print("Plants: {}".format(", ".join(client.plant_list) or "none"))
+    if not client.device_list:
+        print("No energy-storage inverters found. If the account has one, the gateway region is the usual cause.")
+        return
+    if not await client.refresh_power():
+        print("FAILED at telemetry: {}".format(client.last_api_error or "no plant answered"))
+    for uuid in client.device_list:
+        detail = client.device_detail.get(uuid, {})
+        print("\nInverter {} (uuid {}, model {}, plant {})".format(client._serial(uuid), uuid, detail.get("device_model") or detail.get("device_name") or "unknown", detail.get("ps_id")))
+        for leaf in ("soc", "battery_power", "grid_power", "pv_power", "load_power", "battery_soh", "battery_temperature"):
+            print("  {:22s} {}".format(leaf, client.telemetry(uuid, leaf)))
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            print("  {:22s} {} kWh".format(leaf, client.energy(uuid, leaf)))
+        print("  {:22s} {} kWh (chargeable + dischargeable energy)".format("battery_capacity", client.battery_capacity(uuid)))
+        print("  {:22s} {} (point 13140, unit disputed)".format("capacity_reported", client.device_values.get(uuid, {}).get("battery_capacity_reported")))
+        print("  {:22s} {} W".format("battery_rate_max", client.battery_rate_max(uuid)))
+        if args.read_params:
+            codes = [SUNGROW_PARAM_SOC_UPPER, SUNGROW_PARAM_SOC_LOWER, SUNGROW_PARAM_EMS_MODE, SUNGROW_PARAM_COMMAND, SUNGROW_PARAM_POWER, SUNGROW_PARAM_HEARTBEAT]
+            values = await client.read_params(uuid, codes)
+            if values is None:
+                print("  parameter read-back FAILED: {}".format(client.last_api_error or "see the trace above"))
+            else:
+                for code in codes:
+                    print("  {:40s} raw {}".format(describe_param(code), values.get(code)))
+    print("\nCompare SoC (is it 64 or 640?), the sign of battery_power while charging, and the sign of grid_power while importing against the iSolarCloud app, and report them on the Predbat issue tracker.")
+
+
+def main():  # pragma: no cover
+    """Command-line entry point for read-only Sungrow diagnostics."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sungrow iSolarCloud OpenAPI diagnostics (read-only)")
+    parser.add_argument("--appkey", required=True, help="Application appkey from https://developer-api.isolarcloud.com/")
+    parser.add_argument("--access-key", required=True, help="Application x-access-key, issued with the appkey")
+    parser.add_argument("--token", required=True, help="OAuth access token from Sungrow's authorisation-code flow")
+    parser.add_argument("--gateway", default="europe", help="Region name (europe, australia, international, china, india) or a full gateway URL")
+    parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
+    parser.add_argument("--api-delay", type=float, default=2, help="Seconds to wait between API calls")
+    parser.add_argument("--read-params", action="store_true", help="Also read back the control parameters (10001-10005, 10017); this queues a read task, it changes nothing")
+    args = parser.parse_args()
+    asyncio.run(test_sungrow_api(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
