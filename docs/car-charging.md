@@ -256,10 +256,60 @@ If you have [multiple electric cars](#multiple-electric-cars) then car_charging_
 
 Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan.
 
-- **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
+- **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars), and so should **car_charging_now** if you set it
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+#### One charger shared by more than one car
+
+A single charger sensor listed for both cars shows both cars as plugged in (in **car_charging_planned**) or charging (in **car_charging_now**) whenever either one is.
+With **car_charging_exclusive** set to `true` Predbat then plans only one of them, but it goes through the cars in order, so it plans car 0 whenever car 0 has charging to plan, whichever car is actually on the charger.
+
+This applies to a charger whose car settings you set yourself in `apps.yaml` - not one set up by Predbat's own charger integrations (Ohme, myenergi, Wallbox, GivEnergy Gateway or GivEnergy Cloud EV charger), whose automatic setup and charger control assume one car per charger.
+
+To fix it, tell Predbat which car is on the charger, and give each car its own sensors that follow the charger only while that car is the one on it (keep **car_charging_exclusive** set to `true` as well).
+For example, with an `input_select` helper of your own, with options `Car 0`, `Car 1` and `None`, which you or an automation set to the car on the charger:
+
+```yaml
+template:
+  - sensor:
+      # Use the same unit as your charger's power sensor: "kW" if it is in kW, which Predbat converts
+      - name: "Car 0 charging power"
+        unit_of_measurement: "W"
+        device_class: power
+        availability: "{{ has_value('input_select.car_on_charger') and (not is_state('input_select.car_on_charger', 'Car 0') or has_value('sensor.your_charger_power')) }}"
+        state: "{{ states('sensor.your_charger_power') if is_state('input_select.car_on_charger', 'Car 0') else 0 }}"
+      - name: "Car 1 charging power"
+        unit_of_measurement: "W"
+        device_class: power
+        availability: "{{ has_value('input_select.car_on_charger') and (not is_state('input_select.car_on_charger', 'Car 1') or has_value('sensor.your_charger_power')) }}"
+        state: "{{ states('sensor.your_charger_power') if is_state('input_select.car_on_charger', 'Car 1') else 0 }}"
+  - binary_sensor:
+      # Use your charger's plugged-in sensor; with a status sensor instead, test for its "no car" state,
+      # e.g. has_value('sensor.your_charger_status') and not is_state('sensor.your_charger_status', 'Disconnected')
+      - name: "Car 0 plugged in"
+        state: "{{ is_state('input_select.car_on_charger', 'Car 0') and is_state('binary_sensor.your_charger_plugged_in', 'on') }}"
+      - name: "Car 1 plugged in"
+        state: "{{ is_state('input_select.car_on_charger', 'Car 1') and is_state('binary_sensor.your_charger_plugged_in', 'on') }}"
+```
+
+```yaml
+  car_charging_now:
+    - sensor.car_0_charging_power
+    - sensor.car_1_charging_power
+  car_charging_planned:
+    - binary_sensor.car_0_plugged_in
+    - binary_sensor.car_1_plugged_in
+  car_charging_exclusive:
+    - true
+    - true
+```
+
+The `availability` lines matter with Octopus Intelligent: the [dispatch check](#checking-intelligent-dispatches-against-the-car) treats an unavailable sensor as no evidence, but a definite 0W as the car not charging.
+
+With Octopus Intelligent, this works when each car is enrolled separately with its own **octopus_intelligent_slot** entry (see [below](#multiple-cars-with-octopus-intelligent-go-iog)).
+When only the charger is enrolled, its dispatches belong to the car whose **octopus_intelligent_slot** entry it is, normally car 0. While the other car is selected, the enrolled car reads 0W, so Predbat can cancel the dispatch - and with **switch.predbat_octopus_intelligent_ignore_unplugged** On it also reads as unplugged, so the dispatch is ignored. This recipe does not suit that setup.
 
 ### Multiple cars with Octopus Intelligent Go (IOG)
 

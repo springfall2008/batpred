@@ -2,6 +2,16 @@
 
 This section of the documentation describes the configuration required for different 3rd party devices/integrations, typically EV chargers.  If you have a device not listed then please raise a GitHub ticket with your configuration.
 
+## Telling Predbat the car is charging now
+
+Where a charger below has a **car_charging_now** example, it tells Predbat when the car is actually drawing power, so Predbat can hold the house battery for the car while it charges, including a charge you start by hand.
+See [car_charging_now](car-charging.md#planned-car-charging) for the kinds of sensor it accepts (on/off, a charger status, or a charging power) and when the hold applies.
+If your charger is not listed, look on its device page in Home Assistant for one of these, and check its history while the car charges.
+
+**car_charging_now_response** and **car_charging_planned_response** are each one list for every car. Predbat uses its built-in default only when you have not set a list. If an example below sets one, merge that example's values into your list (or into the default, `yes`, `on` and `true` among them) rather than replacing it, so your other cars' sensors still match.
+
+If more than one car uses the same charger, see [One charger shared by more than one car](car-charging.md#one-charger-shared-by-more-than-one-car).
+
 ## Hypervolt
 
 <https://github.com/gndean/home-assistant-hypervolt-charger>
@@ -104,6 +114,17 @@ Home Assistant 2026.8.0 removed the Ohme integration's `energy` sensor entirely 
     - "Plugged in"
     - "pending_approval"
 ```
+
+**Determine if the car is charging now**
+
+The status sensor reads `charging` while the car draws power, which the default **car_charging_now_response** accepts:
+
+```yaml
+  car_charging_now:
+    - "sensor.ohme_{ohme_name}_status"
+```
+
+If you use [Ohme Direct](car-charging.md#ohme-car-charger-direct-integration) instead (`ohme_automatic`), leave this entry out: Predbat then uses its own Ohme power sensor, but an entry you have set yourself takes its place.
 
 **Octopus Intelligent GO**
 
@@ -295,8 +316,15 @@ Can be used both for the Car Charging Hold feature (to filter out previous car c
 ```yaml
   car_charging_energy: 're:sensor.myenergi_zappi_[0-9a-z]+_charge_added_session'
   car_charging_planned:
-    - 're:sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+    - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_now:
+    - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 ```
+
+The plug status reads `Charging` while the car draws power, which the default **car_charging_now_response** accepts. (Predbat's own myenergi integration uses the Zappi's charging power instead, where 200W or more counts as charging.)
+The template `apps.yaml`'s **car_charging_planned_response** list covers the plug status values for a connected car, apart from `ev ready to charge` (plugged in but paused) - add that one.
+A `re:` expression resolves to a single matching entity, and which one is not predictable, so with more than one Zappi give each car the full entity name of its own Zappi's sensor instead.
+If you use Predbat's own [myenergi integration](components.md#myenergi-myenergi) with `myenergi_automatic` on (the default), it sets these for you, so remove these lines - a **car_charging_now** you leave set is used in place of the integration's own power sensor.
 
 _TIP:_ The Zappi must be set to Eco+ mode for IOG to control it.
 If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
