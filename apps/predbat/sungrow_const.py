@@ -19,6 +19,8 @@ pysolarcloud speak is a different, unofficial API with different paths; nothing 
 applies to it.
 """
 
+import re
+
 # -----------------------------------------------------------------------------
 # Gateways
 # -----------------------------------------------------------------------------
@@ -386,6 +388,16 @@ SUNGROW_PARAM_RANGE = {
 # hybrids exist and the cap that matters is the device's own limit, which the component knows
 # and this module does not - see SungrowAPI.power_limit(). This is the floor of that cap.
 SUNGROW_POWER_DOCUMENTED_MAX = 5000
+
+# What Predbat uses for "no export limit". Bound when the inverter's own feed-in limitation
+# is switched off, which is a known answer rather than a missing one.
+SUNGROW_NO_EXPORT_LIMIT = 99999
+
+# How closely the feed-in limit VALUE (10013, unit undocumented) must match the feed-in limit
+# RATIO (10014) applied to the inverter's rating before the value is believed. A unit error
+# is a factor of ten or more, so ten percent separates "these agree" from "one is mis-scaled"
+# with a wide margin either side.
+SUNGROW_LIMIT_AGREEMENT = 0.10
 
 # -----------------------------------------------------------------------------
 # The heartbeat
@@ -849,3 +861,16 @@ def hm_to_minutes(value):
         return int(parts[0]) * 60 + int(parts[1])
     except (TypeError, ValueError):
         return 0
+
+
+def inverter_rating_from_model(model):
+    """Return the AC rating in watts encoded in a Sungrow hybrid model name, or 0.0.
+
+    Residential and small commercial hybrids are named SH<kW><suffix> - SH10RT is 10 kW,
+    SH5.0RS is 5 kW, SH25T is 25 kW. Only that SH prefix is read: SG models are string
+    inverters with no battery, and anything else is not a naming scheme this can vouch for.
+    """
+    match = re.match(r"^SH(\d+(?:\.\d+)?)", str(model or "").strip().upper())
+    if not match:
+        return 0.0
+    return float(match.group(1)) * 1000.0

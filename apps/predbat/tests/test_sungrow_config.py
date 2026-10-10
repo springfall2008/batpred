@@ -58,6 +58,8 @@ def test_sungrow_component_registered():
         ("api_delay", "sungrow_api_delay", 2),
         ("min_write_interval", "sungrow_min_write_interval", 300),
         ("api_debug", "sungrow_api_debug", True),
+        ("inverter_limit", "sungrow_inverter_limit", None),
+        ("export_limit", "sungrow_export_limit", None),
     ]:
         info = entry["args"].get(arg)
         if not info:
@@ -135,6 +137,8 @@ def test_sungrow_apps_schema_keys():
         ("sungrow_api_delay", "float"),
         ("sungrow_min_write_interval", "integer"),
         ("sungrow_api_debug", "boolean"),
+        ("sungrow_inverter_limit", "float"),
+        ("sungrow_export_limit", "float"),
     ]:
         entry = APPS_SCHEMA.get(key)
         if entry is None:

@@ -494,6 +494,10 @@ COMPONENT_LIST = {
             # The measuring points carry no battery power limit on every model, so this is the
             # escape hatch for a user who knows their pack's real limit.
             "battery_rate_max": {"required": False, "config": "sungrow_battery_rate_max"},
+            # Both in watts. The inverter rating is otherwise read from the model name, and the
+            # export limit from the inverter's own feed-in limitation when that can be trusted.
+            "inverter_limit": {"required": False, "config": "sungrow_inverter_limit"},
+            "export_limit": {"required": False, "config": "sungrow_export_limit"},
             "api_delay": {"required": False, "default": 2, "config": "sungrow_api_delay"},
             "min_write_interval": {"required": False, "default": 300, "config": "sungrow_min_write_interval"},
             # On by default while the integration is unverified against hardware: a tester's log

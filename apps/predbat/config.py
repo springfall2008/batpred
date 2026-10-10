@@ -2870,6 +2870,8 @@ APPS_SCHEMA = {
     "sungrow_heartbeat_interval": {"type": "integer"},
     "sungrow_forced_charge_schedule": {"type": "boolean"},
     "sungrow_battery_rate_max": {"type": "float"},
+    "sungrow_inverter_limit": {"type": "float"},
+    "sungrow_export_limit": {"type": "float"},
     "sungrow_api_delay": {"type": "float"},
     "sungrow_min_write_interval": {"type": "integer"},
     "sungrow_api_debug": {"type": "boolean"},

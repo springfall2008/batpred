@@ -108,6 +108,11 @@ from sungrow_const import (
     SUNGROW_PARAM_SOC_LOWER,
     SUNGROW_PARAM_RANGE,
     SUNGROW_POWER_DOCUMENTED_MAX,
+    SUNGROW_PARAM_FEED_IN_LIMIT,
+    SUNGROW_PARAM_FEED_IN_LIMIT_VALUE,
+    SUNGROW_PARAM_FEED_IN_LIMIT_RATIO,
+    SUNGROW_NO_EXPORT_LIMIT,
+    SUNGROW_LIMIT_AGREEMENT,
     SUNGROW_PARAM_EMS_MODE,
     SUNGROW_PARAM_COMMAND,
     SUNGROW_PARAM_POWER,
@@ -162,6 +167,7 @@ from sungrow_const import (
     as_float,
     as_int,
     scale_for_write,
+    scale_from_read,
     heartbeat_send_interval,
     heartbeat_declared_interval,
     signed_battery_power,
@@ -172,6 +178,7 @@ from sungrow_const import (
     param_entry,
     describe_param,
     clamp_range,
+    inverter_rating_from_model,
 )
 
 # The behaviour a SungrowCloud inverter has, stated for the discovery record's capabilities.
@@ -223,6 +230,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         automatic_ignore_pv=False,
         control_enable=True,
         battery_rate_max=None,
+        inverter_limit=None,
+        export_limit=None,
         heartbeat_interval=SUNGROW_HEARTBEAT_DEFAULT_SECONDS,
         forced_charge_schedule=False,
         api_delay=2,
@@ -248,6 +257,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self.control_enable = control_enable
         self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.battery_rate_max_override = float(battery_rate_max) if battery_rate_max else 0.0
+        self.inverter_limit_override = float(inverter_limit) if inverter_limit else 0.0
+        self.export_limit_override = float(export_limit) if export_limit else 0.0
         self.heartbeat_interval = int(as_float(heartbeat_interval, SUNGROW_HEARTBEAT_DEFAULT_SECONDS))
         self.forced_charge_schedule = bool(forced_charge_schedule)
         self.api_delay = max(0, float(api_delay or 0))
@@ -276,6 +287,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self.device_detail = {}
         self.device_values = {}
         self.device_energy = {}
+        # What was read back of each inverter's own feed-in limitation (10012-10014).
+        self.device_limits = {}
         self.local_schedule = {}
         self.applied_command = {}
         self.last_write_time = {}
@@ -786,6 +799,79 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         known = self.battery_rate_max(uuid) if uuid is not None else 0.0
         return float(max(SUNGROW_POWER_DOCUMENTED_MAX, known))
 
+    def inverter_limit(self, uuid):
+        """Return the inverter's AC rating in watts, or 0.0 when it is not known.
+
+        The measuring points do not carry a rating, but the model name does, and the device
+        list returns it. sungrow_inverter_limit overrides it for a model this cannot read or a
+        unit that has been derated.
+        """
+        if self.inverter_limit_override > 0:
+            return self.inverter_limit_override
+        detail = self.device_detail.get(uuid, {})
+        return inverter_rating_from_model(detail.get("device_model")) or inverter_rating_from_model(detail.get("device_name"))
+
+    def export_limit(self, uuid):
+        """Return the grid export limit in watts, SUNGROW_NO_EXPORT_LIMIT for none, or None.
+
+        None means "not known well enough to act on", and the caller must not bind anything.
+        The inverter's feed-in limitation is read back as an enable flag, a value and a ratio
+        of rated power. The value's unit is not documented, so it is only believed when it
+        matches the ratio applied to the rating: a limit that is ten times too low would stop
+        Predbat planning exports altogether, silently, which is worse than no limit.
+        """
+        if self.export_limit_override > 0:
+            return self.export_limit_override
+        limits = self.device_limits.get(uuid)
+        if not limits:
+            return None
+        if limits.get("feed_in_enabled") is False:
+            return float(SUNGROW_NO_EXPORT_LIMIT)
+        value = limits.get("feed_in_value")
+        ratio = limits.get("feed_in_ratio")
+        rating = self.inverter_limit(uuid)
+        if value is None or ratio is None or rating <= 0:
+            return None
+        from_ratio = rating * ratio / 100.0
+        if abs(value - from_ratio) > SUNGROW_LIMIT_AGREEMENT * max(from_ratio, 1.0):
+            return None
+        return float(value)
+
+    async def refresh_limits(self):
+        """Read each inverter's feed-in limitation back, once per static tier.
+
+        A read is the same dispatch-then-poll task as a write, so it is slow and is kept off
+        the per-minute path. A failed read keeps whatever was known: the limitation is a
+        setting that changes when an installer changes it, not from one hour to the next.
+        """
+        if not self.tier_expired("limits", SUNGROW_TTL_STATIC):
+            return
+        codes = [SUNGROW_PARAM_FEED_IN_LIMIT, SUNGROW_PARAM_FEED_IN_LIMIT_VALUE, SUNGROW_PARAM_FEED_IN_LIMIT_RATIO]
+        answered = False
+        for uuid in list(self.device_list):
+            try:
+                values = await self.read_params(uuid, codes)
+            except Exception as error:
+                self.log("Warn: Sungrow could not read the feed-in limitation of {}: {}".format(self._serial(uuid), error))
+                values = None
+            if values is None:
+                continue
+            answered = True
+            limits = {
+                "feed_in_enabled": as_int(values.get(SUNGROW_PARAM_FEED_IN_LIMIT)) == SUNGROW_ENABLE,
+                "feed_in_value": scale_from_read(SUNGROW_PARAM_FEED_IN_LIMIT_VALUE, values.get(SUNGROW_PARAM_FEED_IN_LIMIT_VALUE)),
+                "feed_in_ratio": scale_from_read(SUNGROW_PARAM_FEED_IN_LIMIT_RATIO, values.get(SUNGROW_PARAM_FEED_IN_LIMIT_RATIO)),
+            }
+            self.device_limits[uuid] = limits
+            if limits["feed_in_enabled"] and self.export_limit(uuid) is None:
+                self.log(
+                    "Warn: Sungrow {} has feed-in limitation on, but its value ({}) and ratio ({}%) of a {}W rating do not agree, so the export limit is not being set automatically. Set sungrow_export_limit in apps.yaml (watts)".format(
+                        self._serial(uuid), limits["feed_in_value"], limits["feed_in_ratio"], self.inverter_limit(uuid)
+                    )
+                )
+        if answered:
+            self.mark_refreshed("limits")
+
     # -------------------------------------------------------------------------
     # Publishing
     # -------------------------------------------------------------------------
@@ -840,6 +926,12 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             rate_max = self.battery_rate_max(uuid)
             if rate_max > 0:
                 self.dashboard_item(self._sensor_name(uuid, "battery_rate_max"), state=round(rate_max), attributes={"unit_of_measurement": "W", "friendly_name": "Sungrow {} Battery Rate Max".format(serial)}, app="sungrow")
+            inverter_limit = self.inverter_limit(uuid)
+            if inverter_limit > 0:
+                self.dashboard_item(self._sensor_name(uuid, "inverter_limit"), state=round(inverter_limit), attributes={"unit_of_measurement": "W", "friendly_name": "Sungrow {} Inverter Limit".format(serial)}, app="sungrow")
+            export_limit = self.export_limit(uuid)
+            if export_limit is not None and export_limit < SUNGROW_NO_EXPORT_LIMIT:
+                self.dashboard_item(self._sensor_name(uuid, "export_limit"), state=round(export_limit), attributes={"unit_of_measurement": "W", "friendly_name": "Sungrow {} Export Limit".format(serial)}, app="sungrow")
 
             # Daily energy counters feed Predbat's load/import/export learning. They reset at
             # midnight; minute_data/clean_incrementing_reverse absorbs that.
@@ -1625,11 +1717,19 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if all(self.telemetry(uuid, "battery_temperature") is not None for uuid in devices):
             self.set_arg_auto("battery_temperature", [self._sensor_name(uuid, "battery_temperature") for uuid in devices])
             self.set_arg_auto("battery_temperature_history", self._sensor_name(devices[0], "battery_temperature"))
-        # Deliberately NOT auto-mapped. Nothing in the measuring points is the SITE's grid
-        # connection limit, and a G98/G99-capped site can sit far below the inverter rating.
-        # Unlike battery_rate_max, nothing measures and reports this error back, so a guess
-        # would over-export silently. Predbat falls back to 99999W until the user sets it.
-        self.log("Warn: Sungrow does not report an export power limit; set export_limit in apps.yaml if your grid connection is capped below the inverter rating, otherwise Predbat will plan exports it cannot deliver")
+        if all(self.inverter_limit(uuid) > 0 for uuid in devices):
+            self.set_arg_auto("inverter_limit", [self._sensor_name(uuid, "inverter_limit") for uuid in devices])
+        else:
+            self.log("Warn: Sungrow could not read the inverter rating from every model name; set sungrow_inverter_limit (watts) in apps.yaml")
+        # Bound only when EVERY inverter's limit is known. A limitation that is switched off is
+        # a known answer (no limit); one whose value cannot be trusted is not, and Predbat's
+        # own default of no limit is not a safe stand-in on a G98/G99-capped site, so the user
+        # is told rather than left with a silent guess.
+        export_limits = [self.export_limit(uuid) for uuid in devices]
+        if all(limit is not None for limit in export_limits):
+            self.set_arg_auto("export_limit", [self._sensor_name(uuid, "export_limit") if limit < SUNGROW_NO_EXPORT_LIMIT else SUNGROW_NO_EXPORT_LIMIT for uuid, limit in zip(devices, export_limits)])
+        else:
+            self.log("Warn: Sungrow could not establish the grid export limit; if your connection is capped below the inverter rating, set sungrow_export_limit (watts) in apps.yaml, otherwise Predbat will plan exports it cannot deliver")
 
         self.set_arg_auto("reserve", [self._control_name("number", uuid, "battery_schedule_reserve") for uuid in devices])
         self.set_arg_auto("charge_start_time", [self._control_name("select", uuid, "battery_schedule_charge_start_time") for uuid in devices])
@@ -1655,7 +1755,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         pv_today are described even under automatic_ignore_pv, which is the user's opt-out
         rather than a fact about the device. The three *_power_invert settings are always
         False, which is the descriptor's default, so no descriptor carries invert.
-        export_limit is never bound (see automatic_config()).
+        inverter_limit and export_limit are described when known.
         """
         entities = {
             "soc_percent": {"entity_id": self._sensor_name(uuid, "soc"), "access": "r", "unit": "%"},
@@ -1671,6 +1771,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             entities["soc_max"] = {"entity_id": self._sensor_name(uuid, "battery_capacity"), "access": "r", "unit": "kWh"}
         if self.battery_rate_max(uuid) > 0:
             entities["battery_rate_max"] = {"entity_id": self._sensor_name(uuid, "battery_rate_max"), "access": "r", "unit": "W"}
+        if self.inverter_limit(uuid) > 0:
+            entities["inverter_limit"] = {"entity_id": self._sensor_name(uuid, "inverter_limit"), "access": "r", "unit": "W"}
+        export_limit = self.export_limit(uuid)
+        if export_limit is not None and export_limit < SUNGROW_NO_EXPORT_LIMIT:
+            entities["export_limit"] = {"entity_id": self._sensor_name(uuid, "export_limit"), "access": "r", "unit": "W"}
         if self.telemetry(uuid, "battery_temperature") is not None:
             entities["battery_temperature"] = {"entity_id": self._sensor_name(uuid, "battery_temperature"), "access": "r", "unit": "°C"}
 
@@ -1699,7 +1804,6 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         and entities holds every setting automatic_config() binds.
 
         Deliberately not reported:
-        - export_limit: Sungrow report no grid export limit anywhere this component can reach.
         - firmware: the OpenAPI device list carries no firmware version.
         - a battery SoH rating: SoH is a value that CHANGES, and refresh_discovery() compares
           whole reports, so reporting it would re-file the report every time it moved.
@@ -1848,6 +1952,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not self.device_list:
             self.log("Warn: Sungrow found no energy-storage inverters on this account")
             return False
+        await self.refresh_limits()
 
         live_ok = True
         if self.tier_expired("power", SUNGROW_TTL_POWER):
@@ -1965,6 +2070,7 @@ async def test_sungrow_api(args):  # pragma: no cover
         return
     if not await client.refresh_power():
         print("FAILED at telemetry: {}".format(client.last_api_error or "no plant answered"))
+    await client.refresh_limits()
     for uuid in client.device_list:
         detail = client.device_detail.get(uuid, {})
         print("\nInverter {} (uuid {}, model {}, plant {})".format(client._serial(uuid), uuid, detail.get("device_model") or detail.get("device_name") or "unknown", detail.get("ps_id")))
@@ -1975,6 +2081,8 @@ async def test_sungrow_api(args):  # pragma: no cover
         print("  {:22s} {} kWh (chargeable + dischargeable energy)".format("battery_capacity", client.battery_capacity(uuid)))
         print("  {:22s} {} (point 13140, unit disputed)".format("capacity_reported", client.device_values.get(uuid, {}).get("battery_capacity_reported")))
         print("  {:22s} {} W".format("battery_rate_max", client.battery_rate_max(uuid)))
+        print("  {:22s} {} W (from the model name)".format("inverter_limit", client.inverter_limit(uuid)))
+        print("  {:22s} {} (read-back: {})".format("export_limit", client.export_limit(uuid), client.device_limits.get(uuid)))
         if args.read_params:
             codes = [SUNGROW_PARAM_SOC_UPPER, SUNGROW_PARAM_SOC_LOWER, SUNGROW_PARAM_EMS_MODE, SUNGROW_PARAM_COMMAND, SUNGROW_PARAM_POWER, SUNGROW_PARAM_HEARTBEAT]
             values = await client.read_params(uuid, codes)

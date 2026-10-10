@@ -56,6 +56,7 @@ from sungrow_const import (
     window_is_empty,
     param_entry,
     describe_param,
+    inverter_rating_from_model,
 )
 
 
@@ -580,6 +581,16 @@ def test_error_and_check_result_tables_describe_the_codes_the_component_branches
     assert not failed, "test_error_and_check_result_tables_describe_the_codes_the_component_branches_on"
 
 
+def test_inverter_rating_from_model():
+    """The AC rating is the number after SH in the model name, in kW."""
+    failed = False
+    for model, expected in [("SH10RT", 10000.0), ("SH5.0RS", 5000.0), ("SH3.6RS", 3600.0), ("SH25T", 25000.0), ("sh8.0rt-v112", 8000.0), ("SG10RT", 0.0), ("", 0.0), (None, 0.0)]:
+        if inverter_rating_from_model(model) != expected:
+            print(f"ERROR: {model!r} gave {inverter_rating_from_model(model)}, expected {expected}")
+            failed = True
+    assert not failed, "test_inverter_rating_from_model"
+
+
 def run_sungrow_const_tests(my_predbat):
     """Run all Sungrow constants tests."""
     failed = False
@@ -611,6 +622,7 @@ def run_sungrow_const_tests(my_predbat):
         ("disputed_points_pinned", test_disputed_and_unscaled_points_are_pinned_to_the_ess_map),
         ("ess_energy_leaves", test_ess_energy_leaves_exist_in_the_point_map),
         ("error_tables", test_error_and_check_result_tables_describe_the_codes_the_component_branches_on),
+        ("rating_from_model", test_inverter_rating_from_model),
     ]:
         try:
             if fn():

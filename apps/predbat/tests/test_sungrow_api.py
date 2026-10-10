@@ -13,6 +13,7 @@ import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 from sungrow import SungrowAPI, SUNGROW_CAPABILITIES
+from sungrow_const import SUNGROW_NO_EXPORT_LIMIT
 from coordinator import CAPABILITY_KEYS, validate_report
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
@@ -21,7 +22,19 @@ class MockSungrow(SungrowAPI):
     """Test double: build a SungrowAPI without the full component lifecycle."""
 
     def __init__(
-        self, appkey="sungrow-test-appkey", access_key="sungrow-access-key", key="test-access-token", auth_method="oauth", inverter_sn=None, control_enable=True, automatic=False, min_write_interval=0, heartbeat_interval=300, forced_charge_schedule=False
+        self,
+        appkey="sungrow-test-appkey",
+        access_key="sungrow-access-key",
+        key="test-access-token",
+        auth_method="oauth",
+        inverter_sn=None,
+        control_enable=True,
+        automatic=False,
+        min_write_interval=0,
+        heartbeat_interval=300,
+        forced_charge_schedule=False,
+        inverter_limit=None,
+        export_limit=None,
     ):
         """Set up a minimal SungrowAPI instance for tests, bypassing ComponentBase.__init__."""
         self.prefix = "predbat"
@@ -53,6 +66,8 @@ class MockSungrow(SungrowAPI):
             forced_charge_schedule=forced_charge_schedule,
             api_delay=0,
             min_write_interval=min_write_interval,
+            inverter_limit=inverter_limit,
+            export_limit=export_limit,
         )
 
     def set_mock_clock(self, minutes_now):
@@ -739,9 +754,10 @@ def test_sungrow_automatic_config_binds_sensors_and_controls():
         if args.get(flag) != [False]:
             print(f"ERROR: {flag} is {args.get(flag)}, expected [False]")
             failed = True
-    # export_limit is deliberately never bound - nothing reports the site's grid connection cap.
+    # Nothing here has read back the feed-in limitation (see test_sungrow_automatic_config_binds_the_limits),
+    # so export_limit must not be bound on an unknown value.
     if "export_limit" in args:
-        print("ERROR: export_limit must not be auto-bound")
+        print("ERROR: export_limit must not be auto-bound when it is not known")
         failed = True
     assert not failed, "test_sungrow_automatic_config_binds_sensors_and_controls"
 
@@ -846,6 +862,12 @@ def test_sungrow_run_defers_startup_without_telemetry():
     """
     failed = False
     client = MockSungrow(automatic=True)
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
     with _mock_post([_envelope(PLANT_LIST), _envelope(DEVICE_LIST), _envelope(None, code="E00000"), _envelope(None, code="E00000")]):
         result = run_async_local(client.run(0, True))
     if result is not False:
@@ -887,6 +909,12 @@ def test_sungrow_stale_telemetry_is_reported_without_failing_the_cycle():
         return False
 
     client.refresh_power = no_telemetry
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
     client.mark_refreshed("power", age_minutes=6)
     if run_async_local(client.run(0, False)) is not True or len(stamps) != 1 or not client.is_alive() or client.health_message() is not None:
         print("ERROR: a single missed telemetry poll was treated as stale")
@@ -920,12 +948,125 @@ def test_sungrow_run_saves_discovery_when_it_refreshes():
         saved.append(name)
 
     client.save_cache = capture
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
     with _mock_post([_envelope(PLANT_LIST), _envelope(DEVICE_LIST), _envelope(PLANT_REALTIME), _envelope(DEVICE_REALTIME)]):
         run_async_local(client.run(0, True))
     if "static" not in saved:
         print(f"ERROR: discovery was not cached when it ran; saved {saved}")
         failed = True
     assert not failed, "test_sungrow_run_saves_discovery_when_it_refreshes"
+
+
+def test_sungrow_inverter_limit_comes_from_the_model_or_the_override():
+    """The fixture inverter is an SH10RT, which is 10 kW; a configured value wins."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    if client.inverter_limit(uuid) != 10000.0:
+        print(f"ERROR: inverter limit {client.inverter_limit(uuid)}, expected 10000 from the model name")
+        failed = True
+    client.inverter_limit_override = 8000.0
+    if client.inverter_limit(uuid) != 8000.0:
+        print("ERROR: sungrow_inverter_limit did not override the model")
+        failed = True
+    client.inverter_limit_override = 0.0
+    client.device_detail[uuid]["device_model"] = "Mystery"
+    client.device_detail[uuid]["device_name"] = "Mystery"
+    if client.inverter_limit(uuid) != 0.0:
+        print("ERROR: an unrecognised model produced a rating")
+        failed = True
+    assert not failed, "test_sungrow_inverter_limit_comes_from_the_model_or_the_override"
+
+
+def test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted():
+    """10013 has no documented unit, so it must agree with ratio x rating before it is believed."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    if client.export_limit(uuid) is not None:
+        print("ERROR: an export limit was reported before anything was read")
+        failed = True
+    client.device_limits[uuid] = {"feed_in_enabled": False, "feed_in_value": None, "feed_in_ratio": None}
+    if client.export_limit(uuid) != SUNGROW_NO_EXPORT_LIMIT:
+        print("ERROR: a disabled feed-in limitation was not reported as no limit")
+        failed = True
+    # 36.8% of the 10 kW rating is 3680 W: the value and the ratio agree.
+    client.device_limits[uuid] = {"feed_in_enabled": True, "feed_in_value": 3680.0, "feed_in_ratio": 36.8}
+    if client.export_limit(uuid) != 3680.0:
+        print(f"ERROR: an agreeing limit gave {client.export_limit(uuid)}")
+        failed = True
+    # The same site if 10013 were in tens of watts: 368 against 3680 - do not guess.
+    client.device_limits[uuid] = {"feed_in_enabled": True, "feed_in_value": 368.0, "feed_in_ratio": 36.8}
+    if client.export_limit(uuid) is not None:
+        print(f"ERROR: a limit that disagrees with its own ratio was reported as {client.export_limit(uuid)}")
+        failed = True
+    # A zero-export site agrees with itself at zero.
+    client.device_limits[uuid] = {"feed_in_enabled": True, "feed_in_value": 0.0, "feed_in_ratio": 0.0}
+    if client.export_limit(uuid) != 0.0:
+        print(f"ERROR: a zero-export limit gave {client.export_limit(uuid)}")
+        failed = True
+    client.export_limit_override = 5000.0
+    if client.export_limit(uuid) != 5000.0:
+        print("ERROR: sungrow_export_limit did not override the read-back")
+        failed = True
+    assert not failed, "test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted"
+
+
+def test_sungrow_refresh_limits_reads_the_feed_in_parameters():
+    """The limitation is read with the read-back flow; a failed read keeps what was known."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    answers = [{"10012": "170", "10013": "3680", "10014": "368"}, None]
+
+    async def fake_read(device, codes):
+        """Return the next canned read-back."""
+        return answers.pop(0)
+
+    client.read_params = fake_read
+    run_async_local(client.refresh_limits())
+    expected = {"feed_in_enabled": True, "feed_in_value": 3680.0, "feed_in_ratio": 36.8}
+    if client.device_limits.get(uuid) != expected:
+        print(f"ERROR: limits read back as {client.device_limits.get(uuid)}")
+        failed = True
+    client._tier_refreshed.pop("limits", None)
+    run_async_local(client.refresh_limits())
+    if client.device_limits.get(uuid) != expected:
+        print("ERROR: a failed read-back discarded the limits already known")
+        failed = True
+    assert not failed, "test_sungrow_refresh_limits_reads_the_feed_in_parameters"
+
+
+def test_sungrow_automatic_config_binds_the_limits():
+    """inverter_limit and export_limit are bound when known, and export_limit never on a guess."""
+    failed = False
+    client = _polled_client(automatic=True)
+    uuid = client.device_list[0]
+    run_async_local(client.automatic_config())
+    if client.base.args.get("inverter_limit") != ["sensor.predbat_sungrow_a2211test01_inverter_limit"]:
+        print(f"ERROR: inverter_limit arg {client.base.args.get('inverter_limit')}")
+        failed = True
+    if "export_limit" in client.base.args or not any("sungrow_export_limit" in message for message in client.log_messages):
+        print("ERROR: an unknown export limit was bound, or the user was not told how to set it")
+        failed = True
+    client.device_limits[uuid] = {"feed_in_enabled": True, "feed_in_value": 3680.0, "feed_in_ratio": 36.8}
+    run_async_local(client.publish_data())
+    run_async_local(client.automatic_config())
+    entity = "sensor.predbat_sungrow_a2211test01_export_limit"
+    if client.base.args.get("export_limit") != [entity] or client.published.get(entity, {}).get("state") != 3680:
+        print(f"ERROR: export_limit arg {client.base.args.get('export_limit')} sensor {client.published.get(entity)}")
+        failed = True
+    client.device_limits[uuid] = {"feed_in_enabled": False, "feed_in_value": None, "feed_in_ratio": None}
+    run_async_local(client.automatic_config())
+    if client.base.args.get("export_limit") != [SUNGROW_NO_EXPORT_LIMIT]:
+        print(f"ERROR: a disabled limitation bound {client.base.args.get('export_limit')}")
+        failed = True
+    assert not failed, "test_sungrow_automatic_config_binds_the_limits"
 
 
 def run_sungrow_api_tests(my_predbat):
@@ -966,6 +1107,10 @@ def run_sungrow_api_tests(my_predbat):
         ("run_requires_credentials", test_sungrow_run_requires_credentials),
         ("stale_telemetry", test_sungrow_stale_telemetry_is_reported_without_failing_the_cycle),
         ("static_saved_on_discovery", test_sungrow_run_saves_discovery_when_it_refreshes),
+        ("inverter_limit", test_sungrow_inverter_limit_comes_from_the_model_or_the_override),
+        ("export_limit_trust", test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted),
+        ("limits_read_back", test_sungrow_refresh_limits_reads_the_feed_in_parameters),
+        ("limits_bound", test_sungrow_automatic_config_binds_the_limits),
     ]:
         try:
             if fn():
