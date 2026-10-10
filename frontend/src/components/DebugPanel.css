@@ -1,0 +1,272 @@
+.debug-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.debug-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.debug-panel-header > svg {
+  font-size: 1rem;
+  color: var(--color-text-muted);
+}
+
+.debug-panel-header > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.debug-panel-header strong {
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.debug-panel-header span {
+  margin-top: 0.1rem;
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+}
+
+.debug-panel-content {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 1rem 1rem;
+}
+
+.debug-action-row {
+  display: grid;
+  grid-template-columns:
+    2rem
+    minmax(0, 1fr)
+    auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.debug-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+
+.debug-action-description {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.debug-action-description strong {
+  font-size: 0.75rem;
+  color: var(--color-text);
+}
+
+.debug-action-description span {
+  margin-top: 0.1rem;
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+.debug-action-buttons {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.debug-action-button,
+.debug-action-buttons button,
+.debug-restart-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.debug-action-button:hover,
+.debug-action-buttons button:hover {
+  background: var(--color-bg);
+  border-color: var(--color-text-muted);
+}
+
+.debug-restart-button {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.debug-restart-button:hover {
+  background: var(--color-danger);
+  color: var(--color-semantic-contrast);
+}
+
+.debug-restart-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.debug-restart-message {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+}
+
+.debug-companion-note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.8rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.debug-companion-note strong {
+  font-size: 0.68rem;
+  color: var(--color-text-secondary);
+}
+
+.debug-companion-note span {
+  font-size: 0.64rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.debug-companion-note code {
+  margin-left: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.debug-api-data {
+  margin-top: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.debug-api-data > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.debug-api-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.debug-api-summary::-webkit-details-marker {
+  display: none;
+}
+
+.debug-api-summary-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.debug-api-chevron {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  transition: transform 0.2s ease;
+}
+
+.debug-api-data[open] .debug-api-chevron {
+  transform: rotate(180deg);
+}
+
+.debug-api-data-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem;
+}
+
+.debug-panel-section {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.debug-panel-section summary {
+  padding: 0.55rem 0.65rem;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.debug-panel-section pre {
+  max-height: 400px;
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.63rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .debug-action-row {
+    grid-template-columns:
+      2rem
+      minmax(0, 1fr);
+  }
+
+  .debug-action-row > .debug-action-button,
+  .debug-action-row > .debug-action-buttons,
+  .debug-action-row > .debug-restart-button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

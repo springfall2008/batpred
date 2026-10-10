@@ -82,6 +82,7 @@ def run_test_web_if(my_predbat):
             ("GET", "/entity"),
             ("POST", "/entity"),
             ("POST", "/config"),
+            ("POST", "/api/config"),
             ("GET", "/dash"),
             ("POST", "/dash"),
             ("GET", "/components"),
@@ -105,15 +106,22 @@ def run_test_web_if(my_predbat):
             ("POST", "/inverter_refresh"),
             ("GET", "/api/state"),
             ("GET", "/api/ping"),
+            ("GET", "/api/apps_schema"),
+            ("GET", "/api/apps_yaml"),
+            ("POST", "/api/apps_yaml"),
             ("POST", "/api/state"),
             ("POST", "/api/service"),
             ("GET", "/api/log"),
             ("GET", "/api/entities"),
+            ("GET", "/api/config"),
+            ("GET", "/api/components"),
+            ("GET", "/api/browse"),
             ("POST", "/api/login"),
             ("GET", "/browse"),
             ("GET", "/download"),
             ("GET", "/internals"),
             ("GET", "/api/internals"),
+            ("GET", "/api/internals/threads"),
             ("GET", "/api/internals/download"),
             ("GET", "/api/status"),
             ("GET", "/metrics"),
@@ -199,6 +207,68 @@ def run_test_web_if(my_predbat):
         # Test POST endpoints
         print("\n**** Testing POST endpoints ****")
 
+        components_response = requests.get(base_url + "/api/components")
+        components_data = components_response.json()
+        component_ids = {component.get("id") for component in components_data.get("components", [])}
+        if components_response.status_code != 200 or not {"db", "web"}.issubset(component_ids):
+            print("ERROR: /api/components did not return registered component status")
+            failed = 1
+
+        config_response = requests.get(base_url + "/api/config")
+        config_items = config_response.json().get("items", [])
+        if config_response.status_code != 200 or not config_items or not all(item.get("entity") and item.get("description") for item in config_items):
+            print("ERROR: /api/config did not return enabled configuration entities")
+            failed = 1
+
+        browse_response = requests.get(base_url + "/api/browse")
+        browse_files = {item.get("name") for item in browse_response.json().get("files", [])}
+        if browse_response.status_code != 200 or "apps.yaml" not in browse_files:
+            print("ERROR: /api/browse did not return files from the Predbat working directory")
+            failed = 1
+        if requests.get(base_url + "/api/browse", params={"path": "../"}).status_code != 403:
+            print("ERROR: /api/browse allowed directory traversal")
+            failed = 1
+
+        my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": True})
+        if requests.get(base_url + "/api/status").json().get("updating") is not True:
+            print("ERROR: /api/status did not report an in-progress Predbat update")
+            failed = 1
+        my_predbat.set_state_wrapper("update.predbat_version", "on", attributes={"in_progress": False})
+
+        print("Test apps.yaml editor API and generated schema")
+        schema_response = requests.get(base_url + "/api/apps_schema")
+        schema = schema_response.json()
+        app_schema = schema.get("$defs", {}).get("predbatApp", {})
+        properties = app_schema.get("properties", {})
+        if schema_response.status_code != 200 or schema.get("required") != ["pred_bat"] or not {"module", "class", "load_today", "active", "grid_power"}.issubset(properties):
+            print("ERROR: /api/apps_schema did not combine structural, APPS_SCHEMA and CONFIG_ITEMS keys")
+            failed = 1
+        if properties.get("prefix", {}).get("default") != "predbat" or properties.get("timezone", {}).get("default") != "Europe/London":
+            print("ERROR: /api/apps_schema did not include structural defaults")
+            failed = 1
+        if properties.get("active", {}).get("default") is not False or not properties.get("load_today", {}).get("description"):
+            print("ERROR: /api/apps_schema did not enrich settings with defaults and descriptions")
+            failed = 1
+        load_today_options = properties.get("load_today", {}).get("oneOf", [])
+        grid_power_options = properties.get("grid_power", {}).get("oneOf", [])
+        if not all(any(option.get("x-ha-entity") or option.get("items", {}).get("x-ha-entity") for option in options) for options in (load_today_options, grid_power_options)):
+            print("ERROR: /api/apps_schema did not identify Home Assistant entity fields")
+            failed = 1
+
+        yaml_response = requests.get(base_url + "/api/apps_yaml")
+        yaml_data = yaml_response.json()
+        save_response = requests.post(base_url + "/api/apps_yaml", json=yaml_data)
+        if yaml_response.status_code == 200 and save_response.status_code == 200 and save_response.json().get("saved"):
+            accessed_endpoints.add(("POST", "/api/apps_yaml"))
+        else:
+            print("ERROR: /api/apps_yaml could not round-trip apps.yaml")
+            failed = 1
+
+        stale_response = requests.post(base_url + "/api/apps_yaml", json={"content": yaml_data.get("content", ""), "checksum": "stale"})
+        if stale_response.status_code != 409:
+            print("ERROR: /api/apps_yaml did not reject a stale editor save")
+            failed = 1
+
         # Test /compare POST
         print("Test POST /compare")
         address = base_url + "/compare"
@@ -245,6 +315,13 @@ def run_test_web_if(my_predbat):
             accessed_endpoints.add(("POST", "/config"))
         else:
             print("ERROR: Unexpected response from /config: {} - {}".format(res.status_code, res.text))
+            failed = 1
+
+        res = requests.post(base_url + "/api/config", data=data)
+        if res.status_code in [200]:
+            accessed_endpoints.add(("POST", "/api/config"))
+        else:
+            print("ERROR: Unexpected response from /api/config: {} - {}".format(res.status_code, res.text))
             failed = 1
 
         # Test /dash POST

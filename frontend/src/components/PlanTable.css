@@ -1,0 +1,806 @@
+.plan-table-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+.plan-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plan-table-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-text);
+}
+
+.plan-table-header p {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+/* Preserve readable columns on narrow screens by scrolling the table horizontally. */
+.plan-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.plan-table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.plan-debug-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-current) 8%, var(--color-surface));
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.plan-colour-style {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 0.12rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+}
+
+.plan-colour-style button {
+  padding: 0.25rem 0.45rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.plan-colour-style button.is-active {
+  background: var(--color-current);
+  color: white;
+}
+
+.plan-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 0.65rem 0.7rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-align: left;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.plan-table td {
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+}
+
+.plan-row:hover {
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+/*
+ * Current Predbat slot.
+ */
+.plan-row.is-current {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.plan-row.is-current td {
+  background: color-mix(in srgb, var(--color-current) 10%, var(--color-surface));
+}
+
+.plan-row.is-current {
+  box-shadow: inset 4px 0 0 var(--color-current);
+}
+
+.plan-row.is-current .plan-now-label {
+  background: var(--color-current);
+  color: white;
+}
+
+/*
+ * Date divider.
+ */
+.plan-day-row td {
+  padding: 0.65rem 0.7rem;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.035em;
+}
+
+.plan-time {
+  min-width: 5.3rem;
+  color: var(--color-text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.plan-now-label {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text) 10%, transparent);
+  color: var(--color-text);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.plan-number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.plan-pv-value.is-generating {
+  color: var(--color-flow-solar);
+  font-weight: 700;
+}
+
+.plan-value-with-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+}
+
+.plan-value-indicator {
+  width: 0.42rem;
+  height: 0.42rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--color-text) 18%, transparent);
+  border-radius: 50%;
+}
+
+.plan-table.is-cell-colours .plan-value-indicator {
+  display: none;
+}
+
+.plan-table.is-cell-colours td.has-plan-cell-colour {
+  background: color-mix(in srgb, var(--plan-cell-colour) 24%, var(--color-surface));
+}
+
+.plan-totals-row td {
+  border-top: 2px solid var(--color-border);
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--color-text) 3%, var(--color-surface));
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.plan-debug-value,
+.plan-rate-values small {
+  display: block;
+  margin-top: 0.12rem;
+  color: var(--color-text-muted);
+  font-size: 0.58rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.plan-debug-column {
+  background: color-mix(in srgb, var(--color-current) 4%, transparent);
+}
+
+.plan-rate-values {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.plan-soc {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+/*
+ * Detailed action badges.
+ */
+.plan-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/*
+ * Active charge.
+ */
+.plan-action-charge {
+  background: color-mix(in srgb, var(--color-charge) 15%, transparent);
+  color: var(--color-charge);
+}
+
+/*
+ * Hold/freeze charge still belongs to a charge window,
+ * but is deliberately visually quieter than active charging.
+ */
+.plan-action-charge-secondary {
+  background: color-mix(in srgb, var(--color-charge) 8%, transparent);
+  color: var(--color-charge);
+}
+
+/*
+ * Active export.
+ */
+.plan-action-export {
+  background: color-mix(in srgb, var(--color-export) 15%, transparent);
+  color: var(--color-export);
+}
+
+/*
+ * Hold/freeze export.
+ */
+.plan-action-export-secondary {
+  background: color-mix(in srgb, var(--color-export) 8%, transparent);
+  color: var(--color-export);
+}
+
+/*
+ * Demand and miscellaneous states remain neutral.
+ *
+ * Normal battery discharge is not shown as a charge/export
+ * action colour.
+ */
+.plan-action-neutral {
+  background: color-mix(in srgb, var(--color-text-muted) 10%, transparent);
+  color: var(--color-text-secondary);
+}
+
+.plan-table-empty {
+  padding: 2rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.plan-column-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.plan-column-label-mobile {
+  display: none;
+}
+
+.plan-column-heading .plan-tooltip-trigger {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  opacity: 1;
+  cursor: help;
+}
+
+.plan-rate-predicted {
+  color: var(--color-current);
+  cursor: help;
+}
+
+/*
+ * Column-header tooltips open downwards.
+ *
+ * Opening upwards causes them to be clipped by the table/card
+ * overflow because the headings sit at the very top.
+ */
+.plan-column-heading .plan-tooltip-trigger::after {
+  top: calc(100% + 0.6rem);
+  bottom: auto;
+}
+
+/*
+ * Generic tooltip trigger.
+ *
+ * Used both for column descriptions and the explanation behind
+ * individual Predbat actions.
+ */
+.plan-tooltip-trigger {
+  position: relative;
+  outline: none;
+}
+
+.plan-tooltip-trigger:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.plan-tooltip-trigger::after {
+  display: none;
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.6rem);
+  z-index: 50;
+  width: max-content;
+  max-width: 320px;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--color-surface) 96%, var(--color-text) 4%);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-text) 16%, transparent);
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    visibility 0.12s ease;
+}
+
+.plan-tooltip-trigger:hover::after,
+.plan-tooltip-trigger:focus::after {
+  display: block;
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+/*
+ * Edge column tooltips must stay inside the horizontally
+ * scrollable table container.
+ *
+ * The normal tooltip is centred over its info icon, which means
+ * the first and last column tooltips can extend beyond the
+ * scroll container and be clipped.
+ */
+
+/* First column: align tooltip's left edge with the trigger. */
+.plan-table thead th:first-child .plan-tooltip-trigger::after {
+  left: 0;
+  right: auto;
+  transform: translate(0, 4px);
+}
+
+.plan-table thead th:first-child .plan-tooltip-trigger:hover::after,
+.plan-table thead th:first-child .plan-tooltip-trigger:focus::after {
+  transform: translate(0, 0);
+}
+
+/* Last column: align tooltip's right edge with the trigger. */
+.plan-table thead th:last-child .plan-tooltip-trigger::after {
+  left: auto;
+  right: 0;
+  transform: translate(0, 4px);
+}
+
+.plan-table thead th:last-child .plan-tooltip-trigger:hover::after,
+.plan-table thead th:last-child .plan-tooltip-trigger:focus::after {
+  transform: translate(0, 0);
+}
+
+@media (max-width: 700px) {
+  .plan-table-header {
+    padding: 0.8rem;
+  }
+}
+
+/*
+ * Completed slots should recede visually without affecting
+ * tooltip readability.
+ */
+.plan-row.is-past td {
+  background: color-mix(in srgb, var(--color-bg) 80%, var(--color-surface));
+  color: color-mix(in srgb, var(--color-text-secondary) 68%, var(--color-bg));
+}
+
+.plan-row.is-past .plan-time,
+.plan-row.is-past .plan-soc {
+  color: color-mix(in srgb, var(--color-text) 75%, var(--color-bg));
+}
+
+.plan-row.is-past .plan-pv-value.is-generating {
+  color: color-mix(in srgb, var(--color-flow-solar) 78%, var(--color-bg));
+}
+
+/*
+ * Keep the semantic action colour while making completed actions quieter.
+ */
+.plan-row.is-past .plan-action {
+  opacity: 0.82;
+}
+
+.plan-action-control {
+  position: relative;
+  display: inline-block;
+}
+
+/*
+ * The action is now both an explanation target and,
+ * for current/future rows, the manual-override control.
+ */
+.plan-action {
+  border: 0;
+  font: inherit;
+  appearance: none;
+}
+
+.plan-row:not(.is-past) .plan-action {
+  cursor: pointer;
+}
+
+.plan-row.is-past .plan-action {
+  cursor: help;
+}
+
+.plan-action-chevron {
+  margin-left: 0.1rem;
+  font-size: 0.55rem;
+  opacity: 0.65;
+}
+
+/*
+ * A small marker makes manual actions distinguishable from
+ * actions selected automatically by Predbat.
+ */
+.plan-action-manual-dot {
+  width: 0.35rem;
+  height: 0.35rem;
+  margin-left: 0.05rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.plan-saving-session-badge {
+  --event-colour: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  margin-left: 0.12rem;
+  padding: 0.12rem 0.32rem;
+  border: 1px solid color-mix(in srgb, var(--event-colour) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--event-colour) 14%, transparent);
+  color: var(--event-colour);
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.plan-saving-session-badge.is-power-down {
+  --event-colour: var(--color-danger);
+}
+
+.plan-saving-session-badge.is-power-up {
+  --event-colour: var(--color-success);
+}
+
+.plan-saving-session-badge.is-axle-import {
+  --event-colour: var(--color-flow-grid);
+}
+
+.plan-saving-session-badge.is-axle-export {
+  --event-colour: var(--color-export);
+}
+
+.plan-saving-session-badge.is-axle-event {
+  --event-colour: var(--color-warning);
+}
+
+@media (max-width: 720px) {
+  .plan-saving-session-badge > span {
+    display: none;
+  }
+
+  .plan-saving-session-badge {
+    padding-inline: 0.22rem;
+  }
+}
+
+/*
+ * Don't leave the explanation tooltip sitting over the menu
+ * once the action has been clicked.
+ */
+.plan-action-control.is-open .plan-tooltip-trigger::after {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/*
+ * Manual action picker.
+ */
+.plan-action-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 100;
+  width: 240px;
+  padding: 0.35rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--color-text) 22%, transparent);
+}
+
+.plan-action-menu-reason {
+  padding: 0.45rem 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.plan-action-menu-divider {
+  height: 1px;
+  margin: 0.3rem 0;
+  background: var(--color-border);
+}
+
+.plan-action-menu button {
+  display: grid;
+  grid-template-columns:
+    1rem
+    1fr
+    1rem;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.5rem 0.55rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-action-menu button:hover,
+.plan-action-menu button:focus-visible {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
+}
+
+.plan-action-menu button.is-selected {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.plan-action-menu-check {
+  justify-self: end;
+}
+
+.plan-action-menu-clear {
+  color: var(--color-text-muted) !important;
+}
+
+.plan-action-menu-status {
+  padding: 0.45rem 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+}
+
+.plan-action-menu-error {
+  margin-top: 0.3rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 5px;
+  background: color-mix(in srgb, #dc2626 10%, var(--color-surface));
+  color: #dc2626;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.plan-target {
+  font-weight: 700;
+}
+
+.plan-table td.plan-target-charge {
+  color: var(--color-charge);
+}
+
+.plan-table td.plan-target-export {
+  color: var(--color-export);
+}
+.plan-rate-cell {
+  position: relative;
+}
+
+.plan-rate-control {
+  position: relative;
+  display: inline-block;
+}
+
+.plan-rate-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.35rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.plan-rate-button:hover,
+.plan-rate-button:focus-visible {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.plan-rate-button.is-manual {
+  border-color: color-mix(in srgb, var(--color-text-muted) 35%, transparent);
+}
+
+.plan-rate-manual-dot {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.plan-row.is-past .plan-rate-button {
+  cursor: default;
+}
+
+.plan-cell-popover {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  width: 210px;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--color-text) 20%, transparent);
+}
+
+.plan-cell-popover label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.plan-rate-input {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.plan-rate-input input {
+  min-width: 0;
+  width: 100%;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.plan-rate-input > span {
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 0.65rem;
+}
+
+.plan-cell-popover button {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.plan-cell-popover .plan-rate-clear {
+  color: var(--color-text-secondary);
+}
+
+.plan-cell-popover .plan-rate-clear:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+
+.plan-rate-error {
+  color: #dc2626;
+  font-size: 0.67rem;
+  line-height: 1.35;
+}
+
+.plan-target-control {
+  position: relative;
+  display: inline-block;
+}
+
+.plan-target-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 3.2rem;
+  padding: 0.18rem 0.35rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.plan-target-button:hover,
+.plan-target-button:focus-visible {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.plan-target-button.is-manual {
+  border-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.plan-target-manual-dot {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.plan-car-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-car.is-charging {
+  color: var(--color-car);
+  font-weight: 700;
+}

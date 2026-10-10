@@ -2,6 +2,95 @@
 
 The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including viewing the current plan, adjusting the configuration, viewing the charts, checking your apps.yaml and viewing the logfiles.
 
+The existing interface is used by default. Add `web_ui: modern` to the `pred_bat` section of `apps.yaml` to use the new interface, or set `web_ui: legacy` to select the existing interface explicitly.
+
+## Use the modern interface
+
+The modern interface includes the Overview, Dashboard, Plan, Charts, Compare, configuration and system pages in one responsive interface. Select it in the `pred_bat` section of `apps.yaml`:
+
+```yaml
+pred_bat:
+  # Load the modern React interface. Use legacy to select the original UI.
+  web_ui: modern
+```
+
+Predbat uses the legacy interface when `web_ui` is missing. Saving `apps.yaml` restarts Predbat and applies the selection.
+
+### Configure the Overview page
+
+![image](images/web-interface-overview-view.png)
+
+Overview reads the standard grid, solar, home and battery data from your existing Predbat configuration. You don't need to duplicate those entities. The electric vehicle (EV) and air-source heat pump (ASHP) cards accept extra, optional entities.
+
+The solar card can display the current weather, and optional weather effects can be enabled on the house view. To enable, add a weather entity:
+
+```yaml
+pred_bat:
+  # Weather and temperature shown on Overview
+  weather: weather.forecast_home
+```
+
+Add the EV entries only when Predbat's supported charger integrations haven't configured them automatically. Use one list item per car, in the same order for every setting:
+
+```yaml
+pred_bat:
+  # Tell Predbat how many cars the lists below describe.
+  num_cars: 1
+
+  # Current charger power in W, kW or another convertible power unit.
+  car_charging_power:
+    - sensor.your_ev_charger_power
+
+  # Charger connection state, such as unplugged, connected or charging.
+  car_charging_status:
+    - sensor.your_ev_charger_status
+
+  # Current vehicle battery state of charge as a percentage.
+  car_charging_soc:
+    - sensor.your_ev_battery_percentage
+
+  # Daily incrementing charger energy in kWh.
+  car_charging_energy:
+    - sensor.your_ev_charger_energy_today
+```
+
+To add an ASHP to overview, enable the card explicitly and provide a daily energy entity if one is available:
+
+```yaml
+pred_bat:
+  # Show the ASHP card without a PredHeat configuration.
+  ashp_enable: true
+
+  # Optional current electrical power draw and operating mode.
+  ashp_power: sensor.heat_pump_power
+  ashp_status: sensor.heat_pump_status
+
+  # Optional daily heat-pump electricity use in kWh.
+  heat_energy: sensor.heat_pump_energy_today
+```
+
+ashp_status should point to an entity that returns `off` / `hot_water` / `heating` depending on the status. An example helper for this:
+
+```yaml
+
+{% set output = states('sensor.heat_pump_energy_output') | float(0) %}
+{% set unit = state_attr('sensor.heat_pump_energy_output', 'unit_of_measurement') %}
+{% set watts = output * 1000 if unit == 'kW' else output %}
+
+{% if watts < 100 %}
+  off
+{% elif is_state('sensor.ch_or_dhw', 'HW') %}
+  hot_water
+{% else %}
+  heating
+{% endif %}
+
+```
+
+Overview uses `predheat.weather` when PredHeat is configured. Otherwise it uses the top-level `weather` setting shown above. For compatibility with earlier test releases it will still try `weather.forecast_home` when neither is set. If the selected entity does not exist, Overview hides the weather reading, weather effects and their toggle.
+
+The modern `apps.yaml` editor validates these settings and suggests entity IDs from Home Assistant. Open **Configuration > Editor**, enter one of the entity settings, then choose the matching entity from the suggestions. Hover over a setting to read its schema description.
+
 ![image](images/web-interface-plan-view.png)
 
 ## Accessing the Web Interface
@@ -260,6 +349,31 @@ Further details about the Predbat logfile and its location is [described in the 
 ### Config View
 
 The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
+
+#### Tariff helper
+
+The modern Config view includes a tariff helper which reviews Predbat's current configuration controls and its published import and export prices. It is a review tool: it does not change the tariff source, edit `apps.yaml`, or apply a setting until you select **Apply**.
+
+The helper reads the current and next 48 hours of rates from the same data used by the Rates chart. It classifies the import tariff as:
+
+- **Dynamic** when any import price is negative, or when at least eight distinct prices are published (rounded to 0.1 in the configured minor currency unit).
+- **Time of use** when there is more than one import price, or the difference between the lowest and highest price is at least 4 per kWh.
+- **Flat** when neither of those conditions applies.
+
+Export prices are treated separately. An export tariff is considered variable when its highest and lowest prices differ by at least 3 per kWh. If Predbat has no future export-rate data, the helper reports it as unavailable and makes no export suggestions.
+
+The helper can suggest changes to these existing Predbat controls when they are available:
+
+| Control | Flat or time-of-use suggestion | Dynamic or variable suggestion |
+| --- | --- | --- |
+| **Combine Charge Slots** | On, so adjacent low-price periods form one practical window | Off, preserving individual half-hour prices |
+| **Set Charge Low Power Mode** | On, spreading charging across a known low-price window | Off, concentrating charging into the cheapest periods |
+| **Combine Export Slots** | On when export prices are broadly flat | Off when export prices vary, preserving individual peaks |
+| **Set Export Low Power Mode** | On when there is little price benefit from exporting faster | Off when export prices vary, concentrating export into the most valuable periods |
+
+Only controls whose suggested value differs from their current value are shown. Each suggestion displays the exact current and proposed values with a reason, and is selected individually so you can exclude any change before applying the remainder. Applying the selection updates the normal Home Assistant configuration entities through the same Config API as the controls below it.
+
+The tariff helper does not calculate a personalised saving or analyse historical household consumption. Predbat's normal optimiser already combines the selected controls with the load forecast, solar forecast, battery losses and available capacity when it builds the plan; the helper only chooses sensible control behaviour for the shape of the published tariff.
 
 Any entities that are coloured pale red simply denote entities where you have changed the value from Predbat's default value - it does not indicate that the entity value is in error, its just that its different from the default value.
 

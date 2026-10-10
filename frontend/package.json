@@ -1,0 +1,38 @@
+{
+  "name": "frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "bundle": "npm run build && python3 -m zipfile -c ../apps/predbat/frontend.zip dist",
+    "lint": "oxlint",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "vite preview",
+    "images:house": "node scripts/convert-house-images.mjs",
+    "prebuild": "npm run images:house",
+    "predev": "npm run images:house"
+  },
+  "dependencies": {
+    "@cubone/react-file-manager": "^1.35.0",
+    "@fortawesome/fontawesome-svg-core": "^7.3.1",
+    "@fortawesome/free-brands-svg-icons": "^7.3.1",
+    "@fortawesome/free-solid-svg-icons": "^7.3.1",
+    "@fortawesome/react-fontawesome": "^3.5.0",
+    "chart.js": "^4.5.1",
+    "monaco-editor": "^0.54.0",
+    "monaco-yaml": "^5.5.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "sharp": "^0.35.5",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}

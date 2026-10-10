@@ -1,0 +1,686 @@
+.plan-timeline {
+  margin: 1rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+/*
+ * Header
+ */
+.plan-timeline-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem 0.75rem;
+}
+
+.plan-timeline-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.plan-timeline-header p {
+  margin: 0.18rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+}
+
+/*
+ * Small visual key.
+ */
+.plan-timeline-key {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem 0.8rem;
+  color: var(--color-text-muted);
+  font-size: 0.64rem;
+}
+
+.plan-timeline-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.plan-timeline-key span::before {
+  content: '';
+  width: 0.65rem;
+  height: 0.25rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.timeline-key-charge {
+  color: var(--color-charge);
+}
+
+.timeline-key-export {
+  color: var(--color-export);
+}
+
+.timeline-key-demand {
+  color: var(--color-text-muted);
+}
+
+.timeline-key-soc {
+  color: var(--color-flow-battery);
+}
+
+/*
+ * Event detail panel.
+ *
+ * This sits outside the horizontal scroller, so there are
+ * no clipping problems with hover information.
+ */
+.plan-timeline-detail {
+  margin: 0 1rem 0.9rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 35%, var(--color-surface));
+}
+
+.plan-timeline-detail.timeline-action-charge,
+.plan-timeline-detail.timeline-action-hold-charge,
+.plan-timeline-detail.timeline-action-freeze-charge {
+  border-left-color: var(--color-charge);
+}
+
+.plan-timeline-detail.timeline-action-export,
+.plan-timeline-detail.timeline-action-hold-export,
+.plan-timeline-detail.timeline-action-freeze-export {
+  border-left-color: var(--color-export);
+}
+
+.plan-timeline-detail-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.plan-timeline-detail-icon {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--color-text-muted);
+}
+
+.timeline-action-charge .plan-timeline-detail-icon,
+.timeline-action-hold-charge .plan-timeline-detail-icon,
+.timeline-action-freeze-charge .plan-timeline-detail-icon {
+  color: var(--color-charge);
+}
+
+.timeline-action-export .plan-timeline-detail-icon,
+.timeline-action-hold-export .plan-timeline-detail-icon,
+.timeline-action-freeze-export .plan-timeline-detail-icon {
+  color: var(--color-export);
+}
+
+.plan-timeline-detail-heading > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.plan-timeline-detail-heading strong {
+  font-size: 0.8rem;
+}
+
+.plan-timeline-detail-heading span {
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+}
+
+.plan-timeline-detail-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.4rem;
+  margin-top: 0.75rem;
+}
+
+.plan-timeline-detail-values > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 72px;
+}
+
+.plan-timeline-detail-values span {
+  color: var(--color-text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.plan-timeline-detail-values strong {
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-timeline-explanation {
+  margin: 0.7rem 0 0;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.67rem;
+  line-height: 1.45;
+}
+
+/*
+ * Horizontal timeline viewport.
+ */
+.plan-timeline-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--color-border);
+  overscroll-behavior-x: contain;
+}
+
+.plan-timeline-canvas {
+  position: relative;
+  min-height: 235px;
+  padding-bottom: 0.35rem;
+}
+
+/*
+ * Time axis.
+ */
+.plan-timeline-axis {
+  position: relative;
+  height: 52px;
+}
+
+.plan-timeline-tick {
+  position: absolute;
+  top: 0;
+  bottom: -180px;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.plan-timeline-tick::after {
+  content: '';
+  position: absolute;
+  top: 44px;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--color-border);
+  opacity: 0.45;
+}
+
+.plan-timeline-tick span {
+  position: absolute;
+  left: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-timeline-tick .plan-timeline-tick-date {
+  top: 7px;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+}
+
+.plan-timeline-tick .plan-timeline-tick-time {
+  top: 26px;
+}
+
+.plan-timeline-tick.is-start span {
+  transform: none;
+}
+
+.plan-timeline-tick.is-end span {
+  transform: translateX(-100%);
+}
+
+/*
+ * Main action ribbon.
+ */
+.plan-timeline-track {
+  position: relative;
+  z-index: 2;
+  height: 58px;
+}
+
+.plan-timeline-track::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 44px;
+  right: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-text-muted) 5%, transparent);
+}
+
+/*
+ * Each meaningful Predbat action is a real button.
+ *
+ * This gives us mouse, keyboard and touch interaction
+ * without custom hit-testing.
+ */
+.plan-timeline-event {
+  appearance: none;
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  height: 58px;
+  min-width: 2px;
+  padding: 0 0.3rem;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    filter 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.12s ease;
+  white-space: nowrap;
+}
+
+.plan-timeline-event:hover,
+.plan-timeline-event:focus-visible,
+.plan-timeline-event.is-active {
+  z-index: 4;
+  outline: none;
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-text) 18%, transparent);
+}
+
+.plan-timeline-event.is-current {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-text) 40%, transparent);
+}
+
+.plan-timeline-event-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.plan-timeline-event-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-timeline-event-rate {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.57rem;
+  opacity: 0.85;
+}
+
+/*
+ * Demand deliberately stays visually quiet.
+ */
+.plan-timeline-event.timeline-action-demand {
+  background: color-mix(in srgb, var(--color-text-muted) 9%, var(--color-surface));
+  color: var(--color-text-muted);
+}
+
+/*
+ * Charging is the established Predbat blue.
+ */
+.plan-timeline-event.timeline-action-charge {
+  border-color: var(--color-charge);
+  background: var(--color-charge);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-action-hold-charge {
+  border-color: var(--color-charge);
+  background: color-mix(in srgb, var(--color-charge) 22%, var(--color-surface));
+  color: var(--color-charge);
+}
+
+.plan-timeline-event.timeline-action-hold-export {
+  border-color: var(--color-export);
+  background: color-mix(in srgb, var(--color-export) 22%, var(--color-surface));
+  color: var(--color-export);
+}
+
+/*
+ * Freeze Charge belongs to the charge family, but is
+ * deliberately visually distinct from active charging.
+ */
+.plan-timeline-event.timeline-action-freeze-charge {
+  border-color: var(--color-charge);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--color-charge) 18%, var(--color-surface));
+  color: var(--color-charge);
+}
+
+/*
+ * Export uses the established purple action colour.
+ */
+.plan-timeline-event.timeline-action-export {
+  border-color: var(--color-export);
+  background: var(--color-export);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-action-freeze-export {
+  border-color: var(--color-export);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--color-export) 18%, var(--color-surface));
+  color: var(--color-export);
+}
+
+.plan-timeline-event.timeline-action-hold-car,
+.plan-timeline-event.timeline-action-hold-iboost,
+.plan-timeline-event.timeline-action-no-charge,
+.plan-timeline-event.timeline-action-unknown {
+  background: color-mix(in srgb, var(--color-text-muted) 14%, var(--color-surface));
+  color: var(--color-text);
+}
+
+/* Energy-session colours take priority over the underlying battery action. */
+.plan-timeline-event.timeline-rate-event-power-down {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-power-up {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-axle-import {
+  border-color: var(--color-flow-grid);
+  background: var(--color-flow-grid);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-axle-export {
+  border-color: var(--color-export);
+  background: var(--color-export);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-axle-event {
+  border-color: var(--color-warning);
+  background: var(--color-warning);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-generic {
+  border-color: var(--color-text-muted);
+  background: var(--color-text-muted);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-rate-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.plan-timeline-rate-event.is-power-down {
+  color: var(--color-danger);
+}
+
+.plan-timeline-rate-event.is-power-up {
+  color: var(--color-success);
+}
+
+.plan-timeline-rate-event.is-axle-import {
+  color: var(--color-flow-grid);
+}
+
+.plan-timeline-rate-event.is-axle-export {
+  color: var(--color-export);
+}
+
+.plan-timeline-rate-event.is-axle-event {
+  color: var(--color-warning);
+}
+
+.plan-timeline-rate-event.is-generic {
+  color: var(--color-text-muted);
+}
+
+/*
+ * SOC heading.
+ */
+.plan-timeline-soc-title {
+  position: relative;
+  z-index: 2;
+  margin: 12px 0 0 44px;
+  color: var(--color-text-muted);
+  font-size: 0.61rem;
+  font-weight: 700;
+}
+
+/*
+ * SOC graph.
+ */
+.plan-timeline-soc {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.plan-timeline-active-range {
+  fill: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+.plan-timeline-soc-grid {
+  stroke: var(--color-border);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  opacity: 0.7;
+}
+
+.plan-timeline-time-grid {
+  stroke: var(--color-border);
+  stroke-width: 1;
+  opacity: 0.35;
+}
+
+.plan-timeline-soc-scale {
+  fill: var(--color-text-muted);
+  font-family: inherit;
+  font-size: 8px;
+}
+
+.plan-timeline-soc-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plan-timeline-soc-point {
+  fill: var(--color-surface);
+  stroke-width: 2;
+}
+
+.plan-timeline-soc-value {
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--color-surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.plan-timeline-soc-hover-area {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.plan-timeline-soc-hover > line {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.plan-timeline-soc-hover > circle {
+  fill: var(--color-surface);
+  stroke: var(--color-current);
+  stroke-width: 2;
+}
+
+.plan-timeline-soc-hover rect {
+  fill: var(--color-tooltip-bg);
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 20%));
+}
+
+.plan-timeline-soc-hover text {
+  fill: var(--color-tooltip-text);
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+/*
+ * Targets are subtle horizontal dashed lines underneath
+ * the corresponding action window.
+ */
+.plan-timeline-target {
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  opacity: 0.8;
+}
+
+.plan-timeline-target.timeline-target-charge,
+.plan-timeline-target.timeline-target-hold-charge
+  .plan-timeline-target.timeline-target-freeze-charge {
+  stroke: var(--color-charge);
+}
+
+.plan-timeline-target.timeline-target-export,
+.plan-timeline-target.timeline-target-hold-export,
+.plan-timeline-target.timeline-target-freeze-export {
+  stroke: var(--color-export);
+}
+
+.plan-timeline-target.timeline-target-demand,
+.plan-timeline-target.timeline-target-hold-car,
+.plan-timeline-target.timeline-target-hold-iboost,
+.plan-timeline-target.timeline-target-no-charge,
+.plan-timeline-target.timeline-target-unknown {
+  stroke: var(--color-text-muted);
+}
+
+/*
+ * Current-time marker.
+ *
+ * It runs down through both the action strip and SOC graph.
+ */
+.plan-timeline-now {
+  position: absolute;
+  top: 40px;
+  bottom: 10px;
+  z-index: 5;
+  width: 0;
+  border-left: 1.5px dashed var(--color-text);
+  pointer-events: none;
+}
+
+.plan-timeline-now span {
+  position: absolute;
+  top: -17px;
+  left: 4px;
+  padding: 0.05rem 0.22rem;
+  border-radius: 3px;
+  background: var(--color-text);
+  color: var(--color-surface);
+  font-size: 0.5rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+/*
+ * Interaction hint.
+ */
+.plan-timeline-hint {
+  margin: 0;
+  padding: 0.55rem 1rem 0.65rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.6rem;
+}
+
+/*
+ * Mobile.
+ *
+ * The chart keeps its useful horizontal scale and scrolls.
+ * The detail panel itself remains fully responsive.
+ */
+@media (max-width: 700px) {
+  .plan-timeline-header {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .plan-timeline-key {
+    justify-content: flex-start;
+  }
+
+  .plan-timeline-detail {
+    margin: 0 0.65rem 0.75rem;
+    padding: 0.7rem;
+  }
+
+  .plan-timeline-detail-values {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .plan-timeline-hint {
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+}
+
+/*
+ * Avoid unnecessary motion for users requesting reduced
+ * animation.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .plan-timeline-event {
+    transition: none;
+  }
+}

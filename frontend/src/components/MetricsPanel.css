@@ -1,0 +1,305 @@
+.metrics-panel {
+  overflow: hidden;
+  margin: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text);
+}
+
+.metrics-panel-message {
+  padding: 1rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.metrics-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.metrics-panel-header h2,
+.metrics-panel-header p,
+.metrics-section h3,
+.metrics-empty {
+  margin: 0;
+}
+
+.metrics-panel-header h2 {
+  font-size: 1.05rem;
+}
+
+.metrics-panel-header p,
+.metrics-panel-header small {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+}
+
+.metrics-panel-header p {
+  margin-top: 0.2rem;
+}
+
+.metrics-panel-header small {
+  white-space: nowrap;
+}
+
+.metrics-section {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.metrics-section + .metrics-section,
+.metrics-section-row + .metrics-section,
+.metrics-section + .metrics-section-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.metrics-section h3 {
+  margin-bottom: 0.7rem;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+}
+
+.metrics-section-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--color-border);
+}
+
+.metrics-section-row > .metrics-section + .metrics-section {
+  border-top: 0;
+  border-left: 1px solid var(--color-border);
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.metrics-grid-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metrics-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 65%, var(--color-surface));
+}
+
+.metrics-card > span,
+.metrics-card small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 0.64rem;
+  text-overflow: ellipsis;
+}
+
+.metrics-card > span {
+  white-space: nowrap;
+}
+
+.metrics-card strong {
+  margin-top: 0.2rem;
+  font-size: 0.9rem;
+}
+
+.metrics-card small {
+  margin-top: 0.15rem;
+}
+
+.metrics-config-errors {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+}
+
+.metrics-config-errors > strong { color: var(--color-danger); }
+.metrics-config-errors ul { margin: 0.45rem 0; padding-left: 1.2rem; }
+.metrics-config-errors li + li { margin-top: 0.25rem; }
+.metrics-config-errors b { color: var(--color-text); }
+.metrics-config-errors a { color: var(--color-current); font-weight: 700; }
+
+.metrics-card .is-good {
+  color: var(--color-success);
+}
+
+.metrics-card .is-warning,
+.metrics-table-wrap td.is-warning {
+  color: var(--color-warning);
+}
+
+.metrics-card .is-bad {
+  color: var(--color-danger);
+}
+
+.metrics-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.metrics-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.7rem;
+}
+
+.metrics-table-wrap th,
+.metrics-table-wrap td {
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.metrics-table-wrap th {
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metrics-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+
+.metrics-empty {
+  padding: 1rem;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.metrics-quota-card .metrics-quota {
+  overflow: hidden;
+  height: 0.35rem;
+  margin-top: 0.45rem;
+  border-radius: 1rem;
+  background: var(--color-border);
+}
+
+.metrics-quota span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-success);
+}
+
+.metrics-conflict-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metrics-conflict-table {
+  margin-top: 0.7rem;
+}
+
+@media (max-width: 1100px) {
+  .metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metrics-grid-compact,
+  .metrics-conflict-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .metrics-panel {
+    margin: 0.75rem;
+  }
+
+  .metrics-panel-header,
+  .metrics-section-row {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .metrics-section-row > .metrics-section + .metrics-section {
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
+  }
+
+  .metrics-grid,
+  .metrics-grid-compact,
+  .metrics-conflict-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .metrics-grid,
+  .metrics-grid-compact,
+  .metrics-conflict-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metrics-chart-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.38fr) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.metrics-chart-card {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 65%, var(--color-surface));
+}
+
+.metrics-chart-card h4,
+.metrics-section-description {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+}
+
+.metrics-chart-card h4 {
+  margin-bottom: 0.5rem;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metrics-section-description {
+  margin: -0.45rem 0 0.7rem;
+}
+
+.metrics-chart-canvas {
+  position: relative;
+  height: 245px;
+}
+
+.metrics-chart-card-soc .metrics-chart-canvas {
+  max-width: 260px;
+  margin-inline: auto;
+}
+
+.metrics-chart-canvas-energy {
+  height: 210px;
+}
+
+@media (max-width: 760px) {
+  .metrics-chart-grid {
+    grid-template-columns: 1fr;
+  }
+}

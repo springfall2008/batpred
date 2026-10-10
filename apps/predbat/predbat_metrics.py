@@ -76,6 +76,7 @@ class PredbatMetrics:
         self.last_update_timestamp = _gauge("predbat_last_update_timestamp", "Timestamp of last update")
         self.config_valid = _gauge("predbat_config_valid", "Configuration is valid (1) or has errors (0)")
         self.config_warnings = _gauge("predbat_config_warnings", "Number of configuration warnings")
+        self.config_errors = {}
 
         # -- Plan --------------------------------------------------------------
         self.plan_valid = _gauge("predbat_plan_valid", "Whether the current plan is valid")
@@ -202,6 +203,7 @@ class PredbatMetrics:
             "last_update_timestamp": _val(self.last_update_timestamp),
             "config_valid": _val(self.config_valid),
             "config_warnings": _val(self.config_warnings),
+            "config_errors": dict(self.config_errors),
             # Plan
             "plan_valid": _val(self.plan_valid),
             "plan_age_minutes": _val(self.plan_age_minutes),

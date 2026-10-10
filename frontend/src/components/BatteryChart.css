@@ -1,0 +1,270 @@
+.battery-chart-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.battery-chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1rem 0.75rem;
+}
+
+.battery-chart-header h2,
+.battery-chart-header p {
+  margin: 0;
+}
+
+.battery-chart-header h2 {
+  font-size: 1.05rem;
+  color: var(--color-text);
+}
+
+.battery-chart-header p {
+  margin-top: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+}
+
+.battery-chart-range {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.solar-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.battery-chart-range button {
+  padding: 0.35rem 0.55rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.battery-chart-range button.is-active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.battery-chart-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  padding: 0 1rem 0.85rem;
+}
+
+.battery-chart-summary > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 65%, var(--color-surface));
+}
+
+.battery-chart-summary span,
+.battery-chart-summary small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 0.65rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.battery-chart-summary strong {
+  overflow: hidden;
+  margin-top: 0.2rem;
+  color: var(--color-text);
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.battery-chart-summary small {
+  margin-top: 0.15rem;
+}
+
+.battery-chart-summary-help {
+  position: relative;
+  width: fit-content;
+  overflow: visible;
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.18rem;
+}
+
+.solar-chart-availability {
+  margin: 0 1rem 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--color-warning);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+}
+
+.battery-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem 1.75rem;
+  padding: 0 1rem 0.7rem;
+}
+
+.battery-chart-legend-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  cursor: help;
+  outline: none;
+}
+
+.power-chart-legend-item {
+  cursor: default;
+}
+
+.battery-chart-legend-item:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-current) 45%, transparent);
+}
+
+.battery-chart-legend-marker {
+  flex: 0 0 auto;
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 50%;
+  background: var(--battery-chart-legend-colour);
+}
+
+.battery-chart-legend-item.is-square .battery-chart-legend-marker {
+  border-radius: 2px;
+}
+
+.battery-chart-legend-item.is-line .battery-chart-legend-marker {
+  width: 1.25rem;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.battery-chart-help-popup {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  left: 50%;
+  z-index: 20;
+  display: none;
+  width: max-content;
+  max-width: min(260px, 75vw);
+  padding: 0.55rem 0.65rem;
+  transform: translateX(-50%);
+  border-radius: 7px;
+  background: var(--color-tooltip-bg);
+  color: var(--color-tooltip-text);
+  box-shadow: var(--shadow-tooltip);
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+}
+
+.battery-chart-legend-item:hover .battery-chart-help-popup,
+.battery-chart-legend-item:focus .battery-chart-help-popup,
+.battery-chart-summary-help:hover .battery-chart-help-popup,
+.battery-chart-summary-help:focus .battery-chart-help-popup {
+  display: block;
+}
+
+.battery-chart-canvas {
+  flex: 1 1 320px;
+  min-height: 320px;
+  padding: 0 0.65rem;
+}
+
+.battery-chart-comparisons {
+  margin: 0.75rem 1rem 0;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+}
+
+.battery-chart-comparisons summary {
+  width: fit-content;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.battery-chart-comparisons > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.5rem 1rem;
+  margin-top: 0.65rem;
+}
+
+.battery-chart-comparisons label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.battery-chart-comparisons label.is-unavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.battery-chart-comparisons label small {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: 0.6rem;
+}
+
+.battery-chart-band-key {
+  display: flex;
+  gap: 1.75rem;
+  padding: 0 1rem 0.85rem;
+  color: var(--color-text-muted);
+  font-size: 0.65rem;
+}
+
+@media (max-width: 760px) {
+  .battery-chart-header {
+    flex-direction: column;
+  }
+
+  .battery-chart-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .battery-chart-canvas {
+    flex-basis: 380px;
+    height: 380px;
+  }
+}

@@ -891,6 +891,16 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
+def normalise_entity_prefix(value):
+    """Return a Home Assistant-safe prefix for Predbat-generated entity IDs."""
+    raw = str(value or "predbat").strip().lower()
+    prefix = re.sub(r"[^a-z0-9_]+", "_", raw)
+    prefix = re.sub(r"_+", "_", prefix).strip("_")
+    if not prefix or not prefix[0].isalpha():
+        prefix = "predbat_{}".format(prefix).rstrip("_")
+    return prefix
+
+
 def is_entity_id(value):
     """
     Whether a resolved apps.yaml value names a Home Assistant entity rather than being a literal.

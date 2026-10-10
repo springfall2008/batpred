@@ -106,6 +106,408 @@ def run_web_charts_tests(my_predbat):
     series_data = [{"name": "SoC", "data": {"2026-07-23T10:00:00+00:00": 45.0}, "chart_type": "line"}]
 
     # -------------------------------------------------------------------------
+    print("Test: battery chart JSON and legacy rendering share the same series source")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_history = my_predbat.soc_kwh_history
+    original_soc_kw = my_predbat.soc_kw
+    original_history_with_now_attrs = web.get_history_with_now_attrs
+    try:
+        forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            my_predbat.prefix + ".soc_kw_best": {"attributes": {"results": {forecast_stamp: 6.5}}},
+            my_predbat.prefix + ".best_charge_limit_kw": {"attributes": {"results": {forecast_stamp: 8.0}}},
+            my_predbat.prefix + ".best_export_limit_kw": {"attributes": {"results": {forecast_stamp: 2.0}}},
+        }
+        my_predbat.soc_kwh_history = {}
+        my_predbat.soc_kw = 6.25
+        web.get_history_with_now_attrs = lambda *args, **kwargs: []
+
+        battery_data = web.get_battery_chart_data()
+        legacy_html = web.get_chart("Battery")
+
+        if not battery_data["ready"]:
+            print("  ERROR: populated optimised forecast should mark battery chart data ready")
+            failed += 1
+        if battery_data["series"]["optimized"].get(forecast_stamp) != 6.5:
+            print(f"  ERROR: optimised series missing from battery chart JSON: {battery_data}")
+            failed += 1
+        if battery_data["series"]["actual"].get(now_str) != 6.25:
+            print(f"  ERROR: current battery value missing from Actual series: {battery_data}")
+            failed += 1
+        if "name: 'Best'" not in legacy_html or "y: 6.5" not in legacy_html:
+            print("  ERROR: legacy chart no longer renders the shared optimised series")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        my_predbat.soc_kwh_history = original_history
+        my_predbat.soc_kw = original_soc_kw
+        web.get_history_with_now_attrs = original_history_with_now_attrs
+
+    # -------------------------------------------------------------------------
+    print("Test: power chart JSON exposes the existing optimised power series")
+    original_dashboard_values = my_predbat.dashboard_values
+    try:
+        forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            my_predbat.prefix + ".battery_power_best": {"attributes": {"results": {forecast_stamp: -2.5}}},
+            my_predbat.prefix + ".pv_power_best": {"attributes": {"results": {forecast_stamp: 3.2}}},
+            # The prediction engine stores import as positive; the modern chart
+            # API normalises it to Predbat's live negative-import convention.
+            my_predbat.prefix + ".grid_power_best": {"attributes": {"results": {forecast_stamp: 0.4}}},
+            my_predbat.prefix + ".load_power_best": {"attributes": {"results": {forecast_stamp: 1.1}}},
+            my_predbat.prefix + ".iboost_best": {"attributes": {"results": {forecast_stamp: 0.25}}},
+        }
+
+        power_data = web.get_power_chart_data()
+
+        if not power_data["ready"]:
+            print("  ERROR: populated forecast should mark power chart data ready")
+            failed += 1
+        if power_data["series"]["battery"].get(forecast_stamp) != -2.5:
+            print(f"  ERROR: battery power forecast missing from chart JSON: {power_data}")
+            failed += 1
+        if power_data["series"]["grid"].get(forecast_stamp) != -0.4:
+            print(f"  ERROR: grid import was not normalised to negative power: {power_data}")
+            failed += 1
+        if power_data["series"]["iboost_energy"].get(forecast_stamp) != 0.25:
+            print(f"  ERROR: iBoost energy forecast missing from chart JSON: {power_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+
+    # -------------------------------------------------------------------------
+    print("Test: cost chart JSON exposes actual and optimised costs with currency")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_currency_symbols = my_predbat.currency_symbols
+    try:
+        forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            my_predbat.prefix + ".cost_today": {"attributes": {"results": {forecast_stamp: 125.0}}},
+            my_predbat.prefix + ".metric": {"attributes": {"results": {forecast_stamp: 240.0}}},
+            my_predbat.prefix + ".best_metric": {"attributes": {"results": {forecast_stamp: 180.0}}},
+        }
+
+        for currency_symbols, expected_major, expected_minor in (("£p", "£", "p"), ("$c", "$", "c"), (["€", "c"], "€", "c")):
+            my_predbat.currency_symbols = currency_symbols
+            cost_data = web.get_cost_chart_data()
+
+            if not cost_data["ready"]:
+                print("  ERROR: populated optimised forecast should mark cost chart data ready")
+                failed += 1
+            if cost_data["series"]["actual"].get(forecast_stamp) != 125.0:
+                print(f"  ERROR: actual cost missing from chart JSON: {cost_data}")
+                failed += 1
+            if cost_data["series"]["optimized"].get(forecast_stamp) != 180.0:
+                print(f"  ERROR: optimised cost missing from chart JSON: {cost_data}")
+                failed += 1
+            if cost_data["currency_symbol"] != expected_major or cost_data["currency_unit"] != expected_minor:
+                print(f"  ERROR: cost chart currency metadata is incorrect for {currency_symbols}: {cost_data}")
+                failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        my_predbat.currency_symbols = original_currency_symbols
+
+    # -------------------------------------------------------------------------
+    print("Test: rates chart JSON exposes tariff series and configured currency")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_currency_symbols = my_predbat.currency_symbols
+    original_history_wrapper = web.get_history_wrapper
+    try:
+        forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.currency_symbols = ["€", "c"]
+        my_predbat.dashboard_values = {
+            my_predbat.prefix + ".rates": {"attributes": {"results": {forecast_stamp: 21.5}}},
+            my_predbat.prefix + ".rates_export": {"attributes": {"results": {forecast_stamp: 12.0}}},
+            my_predbat.prefix + ".rates_gas": {"attributes": {"results": {forecast_stamp: 7.25}}},
+        }
+        web.get_history_wrapper = lambda *args, **kwargs: [[{"state": 18.5, "last_updated": forecast_stamp}]]
+
+        rates_data = web.get_rates_chart_data()
+
+        if not rates_data["ready"]:
+            print("  ERROR: populated tariffs should mark rates chart data ready")
+            failed += 1
+        if rates_data["series"]["import"].get(forecast_stamp) != 21.5:
+            print(f"  ERROR: import tariff missing from rates chart JSON: {rates_data}")
+            failed += 1
+        if rates_data["series"]["export"].get(forecast_stamp) != 12.0:
+            print(f"  ERROR: export tariff missing from rates chart JSON: {rates_data}")
+            failed += 1
+        if rates_data["currency_symbol"] != "€" or rates_data["currency_unit"] != "c":
+            print(f"  ERROR: rates chart currency metadata is incorrect: {rates_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        my_predbat.currency_symbols = original_currency_symbols
+        web.get_history_wrapper = original_history_wrapper
+
+    # -------------------------------------------------------------------------
+    print("Test: in-day chart JSON exposes cumulative load forecasts and adjustment history")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_history_wrapper = web.get_history_wrapper
+    try:
+        forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            my_predbat.prefix + ".load_energy_actual": {"attributes": {"results": {forecast_stamp: 4.2}}},
+            my_predbat.prefix + ".load_energy_predicted": {"attributes": {"results": {forecast_stamp: 8.5}}},
+            my_predbat.prefix + ".load_energy_adjusted": {"attributes": {"results": {forecast_stamp: 9.1}}},
+        }
+        web.get_history_wrapper = lambda *args, **kwargs: [[{"state": 7.5, "last_updated": forecast_stamp}]]
+
+        inday_data = web.get_inday_chart_data()
+
+        if not inday_data["ready"]:
+            print("  ERROR: populated cumulative load data should mark in-day chart data ready")
+            failed += 1
+        if inday_data["series"]["actual"].get(forecast_stamp) != 4.2:
+            print(f"  ERROR: actual cumulative load missing from in-day chart JSON: {inday_data}")
+            failed += 1
+        if inday_data["series"]["adjusted"].get(forecast_stamp) != 9.1:
+            print(f"  ERROR: adjusted load forecast missing from in-day chart JSON: {inday_data}")
+            failed += 1
+        if 7.5 not in inday_data["series"]["adjustment_factor"].values():
+            print(f"  ERROR: in-day adjustment history missing from chart JSON: {inday_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        web.get_history_wrapper = original_history_wrapper
+
+    # -------------------------------------------------------------------------
+    print("Test: solar chart JSON combines seven-day history with today and tomorrow forecasts")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_history_wrapper = web.get_history_wrapper
+    try:
+        history_stamp = (my_predbat.now_utc - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        today_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        tomorrow_stamp = (my_predbat.now_utc + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            "sensor." + my_predbat.prefix + "_pv_today": {"attributes": {"detailedForecast": [{"period_start": today_stamp, "pv_estimate": 2.1, "pv_estimate10": 1.4, "pv_estimate90": 2.8, "pv_estimateCL": 2.3}]}},
+            "sensor." + my_predbat.prefix + "_pv_tomorrow": {"attributes": {"detailedForecast": [{"period_start": tomorrow_stamp, "pv_estimate": 3.0, "pv_estimate10": 2.0, "pv_estimate90": 3.8, "pv_estimateCL": 3.2}]}},
+        }
+
+        def solar_history(entity, *args, **kwargs):
+            if entity == my_predbat.prefix + ".pv_power":
+                return [[{"state": 1.9, "last_updated": history_stamp}]]
+            if entity == my_predbat.prefix + ".pv_energy_h0":
+                return [[{"state": 4.6, "last_updated": history_stamp}]]
+            if entity == "sensor." + my_predbat.prefix + "_pv_today":
+                return [[{"state": 8.0, "last_updated": history_stamp, "attributes": {"totalCL": 8.0, "remainingCL": 3.1}}]]
+            return [[{"state": 1.8, "last_updated": history_stamp, "attributes": {"nowCL": 2.0}}]]
+
+        web.get_history_wrapper = solar_history
+        solar_data = web.get_solar_chart_data()
+
+        if not solar_data["ready"]:
+            print("  ERROR: populated measured and forecast solar data should mark the chart ready")
+            failed += 1
+        if 1.9 not in solar_data["series"]["actual"].values():
+            print(f"  ERROR: measured solar history missing from chart JSON: {solar_data}")
+            failed += 1
+        if 2.3 not in solar_data["series"]["forecast_calibrated"].values():
+            print(f"  ERROR: today's calibrated solar forecast missing from chart JSON: {solar_data}")
+            failed += 1
+        if 3.2 not in solar_data["series"]["forecast_calibrated"].values():
+            print(f"  ERROR: tomorrow's calibrated solar forecast missing from chart JSON: {solar_data}")
+            failed += 1
+        if 2.0 not in solar_data["series"]["forecast_history_calibrated"].values():
+            print(f"  ERROR: calibrated forecast history missing from chart JSON: {solar_data}")
+            failed += 1
+        if 4.6 not in solar_data["series"]["energy_actual"].values() or 4.9 not in solar_data["series"]["energy_forecast"].values():
+            print(f"  ERROR: cumulative solar accuracy series missing from chart JSON: {solar_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        web.get_history_wrapper = original_history_wrapper
+
+    # -------------------------------------------------------------------------
+    print("Test: savings chart JSON exposes daily and cumulative values in major currency units")
+    original_currency_symbols = my_predbat.currency_symbols
+    original_history_wrapper = web.get_history_wrapper
+    total_entities = {
+        my_predbat.prefix + ".savings_total_predbat": 301,
+        my_predbat.prefix + ".savings_total_pvbat": 450,
+    }
+    original_total_states = {entity: my_predbat.ha_interface.dummy_items.get(entity) for entity in total_entities}
+    try:
+        history_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.currency_symbols = ["€", "c"]
+        web.get_history_wrapper = lambda entity, *args, **kwargs: [] if ".savings_total_" in entity else [[{"state": 125, "last_updated": history_stamp}]]
+        for entity, value in total_entities.items():
+            my_predbat.ha_interface.dummy_items[entity] = {"state": value, "attributes": {}}
+
+        savings_data = web.get_savings_chart_data()
+
+        if not savings_data["ready"]:
+            print("  ERROR: populated savings history should mark the chart ready")
+            failed += 1
+        if 1.25 not in savings_data["series"]["daily_predbat"].values():
+            print(f"  ERROR: savings chart did not convert minor units to major units: {savings_data}")
+            failed += 1
+        if 3.01 not in savings_data["series"]["total_predbat"].values() or 4.5 not in savings_data["series"]["total_pv_battery"].values():
+            print(f"  ERROR: current cumulative savings are missing when recorder history is empty: {savings_data}")
+            failed += 1
+        if savings_data["currency_symbol"] != "€":
+            print(f"  ERROR: savings chart currency metadata is incorrect: {savings_data}")
+            failed += 1
+    finally:
+        my_predbat.currency_symbols = original_currency_symbols
+        web.get_history_wrapper = original_history_wrapper
+        for entity, value in original_total_states.items():
+            if value is None:
+                my_predbat.ha_interface.dummy_items.pop(entity, None)
+            else:
+                my_predbat.ha_interface.dummy_items[entity] = value
+
+    # -------------------------------------------------------------------------
+    print("Test: battery degradation chart JSON includes history and today's sensor values")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_history_wrapper = web.get_history_wrapper
+    original_battery_scaling_auto = my_predbat.battery_scaling_auto
+    try:
+        sensor_id = "sensor." + my_predbat.prefix + "_soc_max_calculated"
+        history_stamp = (my_predbat.now_utc - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            sensor_id: {
+                "state": 9.2,
+                "attributes": {"nominal_capacity": 10.0, "degradation_percent": 8.0},
+            }
+        }
+        my_predbat.battery_scaling_auto = True
+        web.get_history_wrapper = lambda *args, **kwargs: [
+            [
+                {
+                    "state": 9.3,
+                    "last_updated": history_stamp,
+                    "attributes": {"nominal_capacity": 10.0, "degradation_percent": 7.0},
+                }
+            ]
+        ]
+
+        degradation_data = web.get_battery_degradation_chart_data()
+        inverter = degradation_data["inverters"][0]
+        today = my_predbat.now_utc.strftime("%Y-%m-%d")
+
+        if not degradation_data["ready"] or inverter["calculated"].get(today) != 9.2:
+            print(f"  ERROR: current calculated capacity missing from degradation chart JSON: {degradation_data}")
+            failed += 1
+        if inverter["nominal"].get(today) != 10.0 or inverter["degradation"].get(today) != 8.0:
+            print(f"  ERROR: current battery attributes missing from degradation chart JSON: {degradation_data}")
+            failed += 1
+        if not degradation_data["automatic_scaling"]:
+            print(f"  ERROR: battery scaling state missing from degradation chart JSON: {degradation_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        my_predbat.battery_scaling_auto = original_battery_scaling_auto
+        web.get_history_wrapper = original_history_wrapper
+
+    # -------------------------------------------------------------------------
+    print("Test: marginal costs chart JSON combines history and forecast")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_history_with_now_attrs = web.get_history_with_now_attrs
+    try:
+        sensor_id = "sensor." + my_predbat.prefix + "_marginal_energy_costs"
+        time_labels = [(my_predbat.now_utc + timedelta(hours=hours)).strftime("%H:%M") for hours in range(0, 13, 2)]
+        my_predbat.dashboard_values = {
+            sensor_id: {
+                "attributes": {
+                    "matrix": {kwh: {stamp: kwh * 10 + index for index, stamp in enumerate(time_labels)} for kwh in (1, 2, 4, 8)},
+                    "grid_import": {stamp: 20 + index for index, stamp in enumerate(time_labels)},
+                    "grid_export": {stamp: 5 + index for index, stamp in enumerate(time_labels)},
+                    "rate_now_low_consumption": 10,
+                    "rate_now_med_consumption": 20,
+                    "rate_now_high_consumption": 40,
+                    "rate_now_ev_consumption": 80,
+                }
+            },
+            "binary_sensor.{}_marginal_rate_now_low_is_cheap".format(my_predbat.prefix): {"state": "on"},
+        }
+        web.get_history_with_now_attrs = lambda *args, **kwargs: []
+
+        marginal_data = web.get_marginal_costs_chart_data()
+
+        if not marginal_data["ready"] or marginal_data["levels"][0]["current_cost"] != 10:
+            print(f"  ERROR: marginal cost summary is incomplete: {marginal_data}")
+            failed += 1
+        if len(marginal_data["levels"][0]["series"]) != 7 or len(marginal_data["grid_import"]) != 7:
+            print(f"  ERROR: marginal forecast series is incomplete: {marginal_data}")
+            failed += 1
+        if not marginal_data["levels"][0]["cheap"] or marginal_data["currency_unit"] != my_predbat.currency_symbols[1]:
+            print(f"  ERROR: marginal cost metadata is incomplete: {marginal_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        web.get_history_with_now_attrs = original_history_with_now_attrs
+
+    # -------------------------------------------------------------------------
+    print("Test: carbon chart JSON exposes actual, base, optimised and intensity series")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_carbon_intensity = my_predbat.carbon_intensity
+    try:
+        forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            my_predbat.prefix + ".carbon_today": {"attributes": {"results": {forecast_stamp: 8000}}},
+            my_predbat.prefix + ".carbon": {"attributes": {"results": {forecast_stamp: 9200}}},
+            my_predbat.prefix + ".carbon_best": {"attributes": {"results": {forecast_stamp: 8700}}},
+        }
+        my_predbat.carbon_intensity = {0: 180, 30: 150}
+
+        carbon_data = web.get_carbon_chart_data()
+
+        if not carbon_data["ready"] or carbon_data["series"]["actual"].get(forecast_stamp) != 8000:
+            print(f"  ERROR: actual household carbon is missing from chart JSON: {carbon_data}")
+            failed += 1
+        if carbon_data["series"]["base"].get(forecast_stamp) != 9200 or carbon_data["series"]["optimized"].get(forecast_stamp) != 8700:
+            print(f"  ERROR: carbon forecasts are missing from chart JSON: {carbon_data}")
+            failed += 1
+        if sorted(carbon_data["series"]["intensity"].values()) != [150, 180]:
+            print(f"  ERROR: grid carbon intensity is missing from chart JSON: {carbon_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        my_predbat.carbon_intensity = original_carbon_intensity
+
+    # -------------------------------------------------------------------------
+    print("Test: load ML chart JSON exposes energy, converted power and car-adjusted load")
+    original_dashboard_values = my_predbat.dashboard_values
+    original_history_wrapper = web.get_history_wrapper
+    original_history_with_now_attrs = web.get_history_with_now_attrs
+    original_car_configured = my_predbat.car_charging_power_configured
+    try:
+        first_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+        second_stamp = (my_predbat.now_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        my_predbat.dashboard_values = {
+            "sensor." + my_predbat.prefix + "_load_ml_forecast": {"attributes": {"results": {first_stamp: 1.0, second_stamp: 1.5}}},
+            my_predbat.prefix + ".pv_power_best": {"attributes": {"results": {second_stamp: 2.5}}},
+            "sensor." + my_predbat.prefix + "_temperature": {"attributes": {"results": {second_stamp: 12.0}}},
+        }
+        stats = [[{"last_updated": first_stamp, "attributes": {"load_today": 3.0, "load_today_h1": 2.8, "load_today_h8": 2.6, "power_today": 0.8, "power_today_h1": 0.7, "power_today_h8": 0.6}}]]
+        web.get_history_with_now_attrs = lambda *args, **kwargs: stats
+
+        def load_ml_history(entity, *args, **kwargs):
+            value = 1.2 if entity.endswith(".load_power") else 0.4 if entity.endswith(".car_charging_power") else 2.0
+            return [[{"state": value, "last_updated": first_stamp}]]
+
+        web.get_history_wrapper = load_ml_history
+        my_predbat.car_charging_power_configured = True
+        load_ml_data = web.get_load_ml_chart_data()
+
+        if not load_ml_data["ready"] or 3.0 not in load_ml_data["series"]["energy_actual"].values():
+            print(f"  ERROR: learned load energy is missing from chart JSON: {load_ml_data}")
+            failed += 1
+        if load_ml_data["series"]["power_forecast"].get(second_stamp) != 1.0:
+            print(f"  ERROR: cumulative ML energy was not converted to interval power: {load_ml_data}")
+            failed += 1
+        if 0.8 not in load_ml_data["series"]["power_actual_less_car"].values() or not load_ml_data["car_configured"]:
+            print(f"  ERROR: configured car power was not removed from measured load: {load_ml_data}")
+            failed += 1
+    finally:
+        my_predbat.dashboard_values = original_dashboard_values
+        web.get_history_wrapper = original_history_wrapper
+        web.get_history_with_now_attrs = original_history_with_now_attrs
+        my_predbat.car_charging_power_configured = original_car_configured
+
+    # -------------------------------------------------------------------------
     print("Test: render_chart() targets a percent-unit tagname via getElementById, not a CSS id selector")
     html = web.render_chart(series_data, "%", "SoC Chart", now_str, tagname="chart_%")
     if "querySelector('#" in html or 'querySelector("#' in html:

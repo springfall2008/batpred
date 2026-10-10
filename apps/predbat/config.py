@@ -30,6 +30,7 @@ CONFIG_ITEMS = [
     {
         "name": "version",
         "friendly_name": "Predbat Core Update",
+        "description": "Shows the installed Predbat version and provides the Home Assistant update entity for installing a newer core release.",
         "type": "update",
         "title": "Predbat",
         "installed_version": THIS_VERSION,
@@ -41,18 +42,21 @@ CONFIG_ITEMS = [
     {
         "name": "expert_mode",
         "friendly_name": "Expert Mode",
+        "description": "Shows advanced configuration controls that most installations do not normally need to change.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "performance_tweaks",
         "friendly_name": "Performance Tweaks",
+        "description": "Shows performance-related optimisation controls that can trade planning accuracy for faster calculation.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "active",
         "friendly_name": "Predbat Active",
+        "description": "Shows when Predbat is actively running; turning it on can also request an immediate Predbat update.",
         "type": "switch",
         "default": False,
         "restore": False,
@@ -60,6 +64,7 @@ CONFIG_ITEMS = [
     {
         "name": "compare_active",
         "friendly_name": "Predbat Compare Active",
+        "description": "Shows when Predbat is currently running a tariff or comparison calculation.",
         "type": "switch",
         "default": False,
         "restore": False,
@@ -67,6 +72,7 @@ CONFIG_ITEMS = [
     {
         "name": "pv_metric10_weight",
         "friendly_name": "Metric 10 Weight",
+        "description": "Controls how much influence the pessimistic PV10 solar forecast has on planning; higher values make the plan more cautious about solar generation.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -78,6 +84,7 @@ CONFIG_ITEMS = [
     {
         "name": "pv_scaling",
         "friendly_name": "PV Scaling",
+        "description": "Multiplies the solar forecast used by Predbat; 1.0 leaves the forecast unchanged, lower values reduce it and higher values increase it.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -89,6 +96,7 @@ CONFIG_ITEMS = [
     {
         "name": "load_scaling",
         "friendly_name": "Load Scaling",
+        "description": "Multiplies predicted household consumption; values above 1.0 make Predbat assume the house will use more energy.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -100,6 +108,7 @@ CONFIG_ITEMS = [
     {
         "name": "load_scaling10",
         "friendly_name": "Load Scaling PV10%",
+        "description": "Applies an additional pessimistic household-load scaling factor to the PV10 planning scenario.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -111,6 +120,7 @@ CONFIG_ITEMS = [
     {
         "name": "charge_scaling10",
         "friendly_name": "Charge Scaling PV10%",
+        "description": "Reduces the assumed battery charging capability in the pessimistic PV10 scenario; this affects planning only, not the inverter charge-rate setting.",
         "type": "input_number",
         "min": 0.1,
         "max": 1.0,
@@ -123,6 +133,7 @@ CONFIG_ITEMS = [
     {
         "name": "pv_metric90_weight",
         "friendly_name": "Metric 90 Weight",
+        "description": "Controls how much influence the optimistic PV90 solar forecast has on planning; higher values give more weight to better-than-expected solar.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -135,6 +146,7 @@ CONFIG_ITEMS = [
     {
         "name": "load_scaling90",
         "friendly_name": "Load Scaling PV90%",
+        "description": "Applies a lower household-load scaling factor to the optimistic PV90 planning scenario.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -147,6 +159,7 @@ CONFIG_ITEMS = [
     {
         "name": "load_scaling_saving",
         "friendly_name": "Load Scaling for saving sessions",
+        "description": "Adjusts predicted household consumption during Saving Sessions to account for deliberate demand reduction.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -158,6 +171,7 @@ CONFIG_ITEMS = [
     {
         "name": "load_scaling_free",
         "friendly_name": "Load Scaling for free sessions",
+        "description": "Adjusts predicted household consumption during free-electricity sessions to account for deliberately increased usage.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -169,6 +183,7 @@ CONFIG_ITEMS = [
     {
         "name": "battery_rate_max_scaling",
         "friendly_name": "Battery rate max scaling charge",
+        "description": "Scales the maximum battery charge rate used by Predbat when modelling the inverter; use it to correct an inaccurate nominal charge limit.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -180,6 +195,7 @@ CONFIG_ITEMS = [
     {
         "name": "battery_rate_max_scaling_discharge",
         "friendly_name": "Battery rate max scaling discharge",
+        "description": "Scales the maximum battery discharge rate used by Predbat when modelling the inverter; use it to correct an inaccurate nominal discharge limit.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -191,6 +207,7 @@ CONFIG_ITEMS = [
     {
         "name": "battery_loss",
         "friendly_name": "Battery loss charge ",
+        "description": "Models the fraction of energy lost while charging the battery.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -202,6 +219,7 @@ CONFIG_ITEMS = [
     {
         "name": "battery_loss_discharge",
         "friendly_name": "Battery loss discharge",
+        "description": "Models the fraction of stored energy lost while discharging the battery.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -213,6 +231,7 @@ CONFIG_ITEMS = [
     {
         "name": "inverter_loss",
         "friendly_name": "Inverter Loss",
+        "description": "Models energy lost through inverter AC/DC conversion.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -224,12 +243,14 @@ CONFIG_ITEMS = [
     {
         "name": "inverter_hybrid",
         "friendly_name": "Inverter Hybrid",
+        "description": "Enable for a DC-coupled hybrid inverter; disable for an AC-coupled battery so Predbat includes the appropriate conversion losses.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "inverter_soc_reset",
         "friendly_name": "Inverter SoC Reset",
+        "description": "Resets the inverter charge target to 100% outside charge windows where required to avoid unintentionally limiting solar charging.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -237,6 +258,7 @@ CONFIG_ITEMS = [
     {
         "name": "inverter_set_charge_before",
         "friendly_name": "Inverter Set charge window before start",
+        "description": "Programs an upcoming charge window into the inverter before it starts instead of waiting until the start of the slot.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -244,6 +266,7 @@ CONFIG_ITEMS = [
     {
         "name": "battery_capacity_nominal",
         "friendly_name": "Use the Battery Capacity Nominal size",
+        "description": "Uses the inverter-reported nominal battery capacity where supported instead of the normal usable-capacity value.",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -251,6 +274,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_energy_scale",
         "friendly_name": "Car charging energy scale",
+        "description": "Scales the energy reported by the configured EV charging sensor to correct its units or calibration.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -262,6 +286,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_threshold",
         "friendly_name": "Car charging threshold",
+        "description": "Power threshold above which Predbat considers the EV to be actively charging.",
         "type": "input_number",
         "min": 4,
         "max": 24,
@@ -273,6 +298,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate",
         "friendly_name": "Car charging rate (Car 0)",
+        "description": "Expected charging power for EV/charger 0, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -286,6 +312,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_1",
         "friendly_name": "Car charging rate (Car 1)",
+        "description": "Expected charging power for EV/charger 1, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -299,6 +326,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_2",
         "friendly_name": "Car charging rate (Car 2)",
+        "description": "Expected charging power for EV/charger 2, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -312,6 +340,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_3",
         "friendly_name": "Car charging rate (Car 3)",
+        "description": "Expected charging power for EV/charger 3, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -325,6 +354,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_4",
         "friendly_name": "Car charging rate (Car 4)",
+        "description": "Expected charging power for EV/charger 4, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -338,6 +368,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_5",
         "friendly_name": "Car charging rate (Car 5)",
+        "description": "Expected charging power for EV/charger 5, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -351,6 +382,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_6",
         "friendly_name": "Car charging rate (Car 6)",
+        "description": "Expected charging power for EV/charger 6, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -364,6 +396,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_rate_7",
         "friendly_name": "Car charging rate (Car 7)",
+        "description": "Expected charging power for EV/charger 7, used when Predbat models how much energy a charging slot will add.",
         "type": "input_number",
         "min": 0.1,
         "max": 24,
@@ -377,6 +410,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_loss",
         "friendly_name": "Car charging loss",
+        "description": "Models charging losses between energy drawn by the EV charger and energy stored in the vehicle battery.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -390,6 +424,7 @@ CONFIG_ITEMS = [
     {
         "name": "best_soc_min",
         "friendly_name": "Best SoC Min",
+        "description": "Sets a lower battery state-of-charge target used by the optimiser when selecting charge and export targets.",
         "type": "input_number",
         "min": 0,
         "max": 100.0,
@@ -402,6 +437,7 @@ CONFIG_ITEMS = [
     {
         "name": "best_soc_max",
         "friendly_name": "Best SoC Max",
+        "description": "Caps the battery state of charge Predbat will plan to charge to; 0 disables the cap.",
         "type": "input_number",
         "min": 0,
         "max": 100.0,
@@ -414,6 +450,7 @@ CONFIG_ITEMS = [
     {
         "name": "best_soc_keep",
         "friendly_name": "Best SoC Keep",
+        "description": "Adds a soft preference to retain at least this much energy in the home battery for later use.",
         "type": "input_number",
         "min": 0,
         "max": 100.0,
@@ -425,6 +462,7 @@ CONFIG_ITEMS = [
     {
         "name": "best_soc_keep_weight",
         "friendly_name": "Best SoC Keep Weighting",
+        "description": "Controls how strongly Predbat values retaining the Best SoC Keep energy; higher values make it more reluctant to use that reserve.",
         "type": "input_number",
         "min": 0.1,
         "max": 5,
@@ -437,6 +475,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_min_improvement_plan",
         "friendly_name": "Metric Min Improvement Plan",
+        "description": "Minimum improvement required before Predbat considers a newly calculated plan sufficiently better than the previous plan.",
         "type": "input_number",
         "min": -50,
         "max": 250.0,
@@ -449,6 +488,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_min_improvement",
         "friendly_name": "Metric Min Improvement Charge",
+        "description": "Minimum financial improvement required before Predbat changes battery state of charge by adding or altering a charge action.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -462,6 +502,7 @@ CONFIG_ITEMS = [
         "name": "metric_min_improvement_export",
         "oldname": "metric_min_improvement_discharge",
         "friendly_name": "Metric Min Improvement Export",
+        "description": "Minimum financial improvement required before Predbat adds a forced battery export to the plan.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -474,6 +515,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_min_improvement_swap",
         "friendly_name": "Metric Min Improvement Swap",
+        "description": "Controls how much improvement is required before Predbat moves an export to a different time; small negative values can favour later exports.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -486,6 +528,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_min_improvement_export_freeze",
         "friendly_name": "Metric Min Improvement Export Freeze",
+        "description": "Minimum improvement required before Predbat uses an export-freeze action instead of normal operation.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -498,6 +541,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_battery_cycle",
         "friendly_name": "Metric Battery Cycle Cost",
+        "description": "Adds a virtual cost for charging and discharging the battery so Predbat avoids marginal battery cycling.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -510,6 +554,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_battery_value_scaling",
         "friendly_name": "Metric Battery Value Scaling",
+        "description": "Changes how valuable Predbat considers energy left in the battery at the end of the forecast; higher values encourage retaining more energy.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -522,6 +567,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_battery_value_export_scaling",
         "friendly_name": "Metric Battery Value Scaling when export is worthless",
+        "description": "Discounts the end-of-plan value of stored battery energy when surplus energy cannot later be exported for a useful price.",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -534,6 +580,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_future_rate_offset_import",
         "friendly_name": "Metric Future Rate Offset Import",
+        "description": "Adjustment added to future import prices that have not yet been published, useful when modelling variable tariffs.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -546,6 +593,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_future_rate_offset_export",
         "friendly_name": "Metric Future Rate Offset Export",
+        "description": "Adjustment added to future export prices that have not yet been published.",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -558,6 +606,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_inday_adjust_damping",
         "friendly_name": "In-day adjustment damping factor",
+        "description": "Controls how strongly Predbat applies the difference between today’s actual and forecast consumption to the remaining in-day load forecast.",
         "type": "input_number",
         "min": 0.5,
         "max": 2.0,
@@ -570,6 +619,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_cloud_enable",
         "friendly_name": "Enable Cloud Model",
+        "description": "Adds realistic short-term peaks and dips to the solar forecast to model passing clouds while keeping overall forecast energy similar.",
         "type": "switch",
         "default": True,
         "enable": "expert_mode",
@@ -577,6 +627,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_load_divergence_enable",
         "friendly_name": "Enable Load Divergence Model",
+        "description": "Adds short-term variation to predicted household demand instead of assuming perfectly smooth consumption.",
         "type": "switch",
         "default": True,
         "enable": "expert_mode",
@@ -584,6 +635,7 @@ CONFIG_ITEMS = [
     {
         "name": "metric_pv_calibration_enable",
         "friendly_name": "Enable use of Calibrated PV data",
+        "description": "Uses historical actual-versus-forecast solar production to calibrate future PV forecasts.",
         "type": "switch",
         "default": True,
         "enable": "expert_mode",
@@ -591,12 +643,14 @@ CONFIG_ITEMS = [
     {
         "name": "metric_dynamic_load_adjust",
         "friendly_name": "Dynamic Load Adjust",
+        "description": "Temporarily adjusts the current and near-term load forecast when live consumption is unusually high or low.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "metric_self_sufficiency",
         "friendly_name": "Metric Self Sufficiency",
+        "description": "Adds a virtual penalty to grid imports so the optimiser favours self-consumption even where importing would be slightly cheaper.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -609,6 +663,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_reserve_min",
         "friendly_name": "Set Reserve Min (Inverter 1)",
+        "description": "Minimum battery percentage Predbat allows inverter 1 to discharge to; it protects reserve capacity but does not itself force charging to that level.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -621,6 +676,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_reserve_min_1",
         "friendly_name": "Set Reserve Min (Inverter 2)",
+        "description": "Minimum battery percentage Predbat allows inverter 2 to discharge to; it protects reserve capacity but does not itself force charging to that level.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -635,6 +691,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_reserve_min_2",
         "friendly_name": "Set Reserve Min (Inverter 3)",
+        "description": "Minimum battery percentage Predbat allows inverter 3 to discharge to; it protects reserve capacity but does not itself force charging to that level.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -649,6 +706,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_reserve_min_3",
         "friendly_name": "Set Reserve Min (Inverter 4)",
+        "description": "Minimum battery percentage Predbat allows inverter 4 to discharge to; it protects reserve capacity but does not itself force charging to that level.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -663,6 +721,7 @@ CONFIG_ITEMS = [
     {
         "name": "rate_low_threshold",
         "friendly_name": "Rate Low Threshold",
+        "description": "Controls which import prices qualify as possible charging periods relative to future prices; 0 lets Predbat determine the threshold automatically.",
         "type": "input_number",
         "min": 0.00,
         "max": 2.00,
@@ -675,6 +734,7 @@ CONFIG_ITEMS = [
     {
         "name": "rate_high_threshold",
         "friendly_name": "Rate High Threshold",
+        "description": "Controls which export prices qualify as possible export periods; 0 lets Predbat determine the threshold automatically.",
         "type": "input_number",
         "min": 0.00,
         "max": 2.00,
@@ -687,6 +747,7 @@ CONFIG_ITEMS = [
     {
         "name": "combine_rate_threshold",
         "friendly_name": "Combine Rate Threshold",
+        "description": "Allows nearby tariff rates within this price difference to be treated as one larger rate block; 0 keeps each rate change separate.",
         "type": "input_number",
         "min": 0,
         "max": 1000,
@@ -699,12 +760,14 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_hold",
         "friendly_name": "Car charging hold (remove car charging energy from load data)",
+        "description": "Removes identified historical EV charging from household load data so it is not forecast again as ordinary house consumption.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "car_energy_reported_load",
         "friendly_name": "Car energy is reported in load data (inside CT clamp)",
+        "description": "Tells Predbat whether EV charging is already included in the measured household load because the charger is inside the load CT clamp.",
         "type": "switch",
         "default": True,
         "enable_condition": "num_cars > 0",
@@ -712,6 +775,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc",
         "friendly_name": "Car charging manual SOC (Car 0)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 0 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -720,6 +784,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh",
         "friendly_name": "Car manual SOC kWh (Car 0)",
+        "description": "Current energy stored in car 0, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -733,6 +798,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_1",
         "friendly_name": "Car charging manual SOC (Car 1)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 1 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -741,6 +807,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_1",
         "friendly_name": "Car manual SOC kWh (Car 1)",
+        "description": "Current energy stored in car 1, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -754,6 +821,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_2",
         "friendly_name": "Car charging manual SOC (Car 2)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 2 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -762,6 +830,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_2",
         "friendly_name": "Car manual SOC kWh (Car 2)",
+        "description": "Current energy stored in car 2, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -775,6 +844,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_3",
         "friendly_name": "Car charging manual SOC (Car 3)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 3 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -783,6 +853,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_3",
         "friendly_name": "Car manual SOC kWh (Car 3)",
+        "description": "Current energy stored in car 3, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -796,6 +867,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_4",
         "friendly_name": "Car charging manual SOC (Car 4)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 4 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -804,6 +876,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_4",
         "friendly_name": "Car manual SOC kWh (Car 4)",
+        "description": "Current energy stored in car 4, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -817,6 +890,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_5",
         "friendly_name": "Car charging manual SOC (Car 5)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 5 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -825,6 +899,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_5",
         "friendly_name": "Car manual SOC kWh (Car 5)",
+        "description": "Current energy stored in car 5, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -838,6 +913,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_6",
         "friendly_name": "Car charging manual SOC (Car 6)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 6 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -846,6 +922,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_6",
         "friendly_name": "Car manual SOC kWh (Car 6)",
+        "description": "Current energy stored in car 6, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -859,6 +936,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_7",
         "friendly_name": "Car charging manual SOC (Car 7)",
+        "description": "Uses Predbat’s manually entered EV energy value for car 7 instead of a configured vehicle state-of-charge sensor.",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -867,6 +945,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_manual_soc_kwh_7",
         "friendly_name": "Car manual SOC kWh (Car 7)",
+        "description": "Current energy stored in car 7, used when manual EV state of charge is enabled for that car.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -880,12 +959,14 @@ CONFIG_ITEMS = [
     {
         "name": "octopus_intelligent_charging",
         "friendly_name": "Octopus Intelligent Charging",
+        "description": "Uses charging slots supplied by Octopus Intelligent rather than relying only on Predbat-generated EV charging slots.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "octopus_saving_auto_join",
         "friendly_name": "Octopus Saving Session Auto Join",
+        "description": "Automatically joins supported Octopus Saving Sessions when Predbat discovers them.",
         "type": "switch",
         "default": True,
     },
@@ -904,6 +985,7 @@ CONFIG_ITEMS = [
     {
         "name": "octopus_intelligent_ignore_unplugged",
         "friendly_name": "Ignore Intelligent slots when car is unplugged",
+        "description": "Ignores Intelligent Octopus charging slots when Predbat knows the car is not connected.",
         "type": "switch",
         "default": False,
         "enable": "expert_mode",
@@ -911,6 +993,7 @@ CONFIG_ITEMS = [
     {
         "name": "octopus_intelligent_consider_full",
         "friendly_name": "Consider car full as part of Intelligent plan",
+        "description": "Makes Intelligent Octopus slot modelling take the configured EV full or charge-limit state into account.",
         "type": "switch",
         "default": False,
         "enable": "expert_mode",
@@ -932,6 +1015,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
+        "description": "Selects the cheapest suitable periods needed for EV charging instead of treating every eligible low-rate slot as a charging period.",
         "type": "switch",
         "default": True,
         "enable": "num_cars",
@@ -940,6 +1024,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_plan_max_price",
         "friendly_name": "Car Charging Plan max price",
+        "description": "Maximum electricity price Predbat may use for its planned EV charging slots.",
         "type": "input_number",
         "min": -1000,
         "max": 1000,
@@ -953,6 +1038,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_from_battery",
         "friendly_name": "Allow car to charge from battery",
+        "description": "Allows EV charging to use energy from the home battery; when disabled Predbat protects the home battery while the car is charging.",
         "type": "switch",
         "default": False,
         "reset_inverter": True,
@@ -963,6 +1049,7 @@ CONFIG_ITEMS = [
         "name": "calculate_export_oncharge",
         "oldname": "calculate_discharge_oncharge",
         "friendly_name": "Calculate Export within charge slots",
+        "description": "Allows the optimiser to place an export opportunity within periods that were initially considered for battery charging.",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -970,6 +1057,7 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_export_on_pv",
         "friendly_name": "Calculate export slots during solar production",
+        "description": "Allows forced battery export opportunities to be considered while solar generation is expected.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -977,6 +1065,7 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_second_pass",
         "friendly_name": "Calculate full second pass (slower)",
+        "description": "Runs a slower second optimisation pass over charge and export windows to refine the plan.",
         "type": "switch",
         "enable": "performance_tweaks",
         "default": True,
@@ -984,6 +1073,7 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_pv90_plan",
         "friendly_name": "Calculate PV90 upside plan",
+        "description": "Includes the optimistic PV90 solar scenario in optimisation; disabling it speeds planning but ignores that upside scenario.",
         "type": "switch",
         "enable": "performance_tweaks",
         "default": True,
@@ -991,6 +1081,7 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_import_low_export",
         "friendly_name": "Calculate import slots on low export rate slots first",
+        "description": "When import prices are equal, prefers charging in slots where the opportunity cost of exporting is lowest.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -999,6 +1090,7 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_export_high_import",
         "friendly_name": "Calculate export slots on high import rate slots first",
+        "description": "When export prices are equal, uses import prices as a tie-breaker when ordering export opportunities.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -1006,12 +1098,14 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_inday_adjustment",
         "friendly_name": "Calculate in-day adjustment",
+        "description": "Compares today’s actual consumption with today’s forecast and adjusts the remaining load forecast when they diverge.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "calculate_plan_every",
         "friendly_name": "Calculate plan every N minutes",
+        "description": "Sets how often Predbat fully recalculates the optimised plan; inverter control can still run more frequently.",
         "type": "input_number",
         "min": 5,
         "max": 60,
@@ -1024,6 +1118,7 @@ CONFIG_ITEMS = [
     {
         "name": "combine_charge_slots",
         "friendly_name": "Combine Charge Slots",
+        "description": "Treats adjacent charge periods as larger blocks, which can speed optimisation and reduce oscillation but gives the optimiser less flexibility.",
         "type": "switch",
         "default": False,
     },
@@ -1031,6 +1126,7 @@ CONFIG_ITEMS = [
         "name": "combine_export_slots",
         "oldname": "combine_discharge_slots",
         "friendly_name": "Combine Export Slots",
+        "description": "Treats adjacent export periods as larger blocks, which can speed optimisation but may miss a slightly better export arrangement.",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -1038,30 +1134,35 @@ CONFIG_ITEMS = [
     {
         "name": "set_status_notify",
         "friendly_name": "Set Status Notify",
+        "description": "Sends notifications when Predbat changes operating state, such as Charging, Demand or Exporting.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "set_inverter_notify",
         "friendly_name": "Set Inverter Notify",
+        "description": "Sends notifications when Predbat changes inverter parameters such as charge rates, targets or operating windows.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "set_event_notify",
         "friendly_name": "Set Event Notify",
+        "description": "Sends notifications about external energy events such as Saving Sessions or other supported events.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "set_system_notify",
         "friendly_name": "Set System Notify",
+        "description": "Sends notifications about Predbat itself, such as updates, restarts and settings save or restore operations.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "set_charge_freeze",
         "friendly_name": "Set Charge Freeze",
+        "description": "Allows Predbat to hold battery state of charge during a charge window rather than discharging the battery to supply the house.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -1070,6 +1171,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_charge_freeze_only",
         "friendly_name": "Set Charge Freeze Only",
+        "description": "Prevents grid charging during charge windows so Predbat may only hold the battery level rather than increase it.",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -1078,6 +1180,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_charge_low_power",
         "friendly_name": "Set Charge Low Power Mode",
+        "description": "Uses the lowest battery charge rate Predbat believes will still reach the target on time instead of charging at full power.",
         "type": "switch",
         "default": False,
         "reset_inverter": True,
@@ -1085,6 +1188,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_export_low_power",
         "friendly_name": "Set Export Low Power Mode",
+        "description": "Uses a reduced forced-discharge rate where the planned export target can still be achieved without exporting at maximum power.",
         "type": "switch",
         "default": False,
         "reset_inverter": True,
@@ -1092,6 +1196,7 @@ CONFIG_ITEMS = [
     {
         "name": "charge_low_power_margin",
         "friendly_name": "Low power mode margin",
+        "description": "Sets how many minutes early low-power charging should aim to reach its target, providing a safety margin.",
         "type": "input_number",
         "min": 0,
         "max": 60,
@@ -1123,6 +1228,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_reserve_enable",
         "friendly_name": "Set Reserve Enable",
+        "description": "Allows Predbat to use the inverter reserve setting to prevent discharge below the planned minimum state of charge.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -1132,6 +1238,7 @@ CONFIG_ITEMS = [
         "name": "set_export_freeze",
         "oldname": "set_discharge_freeze",
         "friendly_name": "Set Export Freeze",
+        "description": "Allows Predbat to prevent battery charging so surplus solar can be exported instead.",
         "type": "switch",
         "default": True,
         "reset_inverter": True,
@@ -1140,6 +1247,7 @@ CONFIG_ITEMS = [
         "name": "set_export_freeze_only",
         "oldname": "set_discharge_freeze_only",
         "friendly_name": "Set Export Freeze Only",
+        "description": "Prevents forced battery discharge; Predbat may export surplus solar but will not deliberately empty the battery into the grid.",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -1148,12 +1256,14 @@ CONFIG_ITEMS = [
     {
         "name": "set_discharge_during_charge",
         "friendly_name": "Set discharge During Charge",
+        "description": "Controls whether Predbat prevents battery discharge during charge slots, mainly to avoid cross-charging in multi-inverter systems.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "set_freeze_export_during_demand",
         "friendly_name": "Set Freeze Export during Demand",
+        "description": "Prevents the battery from charging during normal Demand mode while still allowing discharge, mainly as a multi-inverter cross-charging control.",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -1162,12 +1272,14 @@ CONFIG_ITEMS = [
     {
         "name": "export_more_solar",
         "friendly_name": "Export more solar",
+        "description": "Where the cost difference is small, favours exporting surplus solar rather than storing it in the battery.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "export_more_solar_threshold",
         "friendly_name": "Export more solar threshold",
+        "description": "Maximum extra plan cost Predbat will tolerate when favouring solar export instead of storing that energy.",
         "type": "input_number",
         "min": 0,
         "max": 1000,
@@ -1180,6 +1292,7 @@ CONFIG_ITEMS = [
     {
         "name": "set_read_only",
         "friendly_name": "Read Only mode",
+        "description": "Lets Predbat calculate its normal plan but prevents it from changing inverter settings.",
         "type": "switch",
         "default": False,
         "reset_inverter_force": True,
@@ -1187,30 +1300,35 @@ CONFIG_ITEMS = [
     {
         "name": "chat_confirm_writes",
         "friendly_name": "Chat confirm before changing settings",
+        "description": "Requires confirmation before the Predbat chat or AI feature changes configuration or applies a write action.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "chat_web_search",
         "friendly_name": "Chat web search (costs per request)",
+        "description": "Allows the Predbat chat or AI feature to search the wider web through its configured provider, which may incur API charges.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "ai_ha_state_enable",
         "friendly_name": "AI: allow reading Home Assistant state",
+        "description": "Allows the Predbat AI feature to read Home Assistant entity states and history outside Predbat itself.",
         "type": "switch",
         "default": True,
     },
     {
         "name": "balance_inverters_enable",
         "friendly_name": "Balance Inverters Enable (Beta)",
+        "description": "Enables Predbat’s multi-inverter battery balancing logic.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "balance_inverters_charge",
         "friendly_name": "Balance Inverters for charging",
+        "description": "Adjusts individual inverter charge rates when battery states of charge diverge during charging.",
         "type": "switch",
         "enable": "balance_inverters_enable",
         "default": False,
@@ -1218,6 +1336,7 @@ CONFIG_ITEMS = [
     {
         "name": "balance_inverters_discharge",
         "friendly_name": "Balance Inverters for discharge",
+        "description": "Adjusts individual inverter discharge rates when battery states of charge diverge during discharge.",
         "type": "switch",
         "enable": "balance_inverters_enable",
         "default": False,
@@ -1225,6 +1344,7 @@ CONFIG_ITEMS = [
     {
         "name": "balance_inverters_crosscharge",
         "friendly_name": "Balance Inverters for cross-charging",
+        "description": "Prevents one inverter or battery unnecessarily charging another while the system is in normal operation.",
         "type": "switch",
         "enable": "balance_inverters_enable",
         "default": True,
@@ -1232,6 +1352,7 @@ CONFIG_ITEMS = [
     {
         "name": "balance_inverters_threshold_charge",
         "friendly_name": "Balance Inverters threshold charge",
+        "description": "Minimum state-of-charge difference between batteries before charge balancing begins.",
         "type": "input_number",
         "min": 1,
         "max": 20,
@@ -1244,6 +1365,7 @@ CONFIG_ITEMS = [
     {
         "name": "balance_inverters_threshold_discharge",
         "friendly_name": "Balance Inverters threshold discharge",
+        "description": "Minimum state-of-charge difference between batteries before discharge balancing begins.",
         "type": "input_number",
         "min": 1,
         "max": 20,
@@ -1256,6 +1378,7 @@ CONFIG_ITEMS = [
     {
         "name": "debug_enable",
         "friendly_name": "Debug Enable",
+        "description": "Enables detailed Predbat diagnostic logging and debug output; intended for troubleshooting rather than normal operation.",
         "type": "switch",
         "icon": "mdi:bug-outline",
         "default": False,
@@ -1263,6 +1386,7 @@ CONFIG_ITEMS = [
     {
         "name": "debug_history_enable",
         "friendly_name": "Debug history rolling capture enable",
+        "description": "Keeps periodic diagnostic snapshots so a problem can be investigated after it has occurred.",
         "type": "switch",
         "icon": "mdi:history",
         "default": True,
@@ -1270,6 +1394,7 @@ CONFIG_ITEMS = [
     {
         "name": "debug_history_count",
         "friendly_name": "Debug history snapshot count",
+        "description": "Number of historical diagnostic snapshots Predbat retains.",
         "type": "input_number",
         "min": 1,
         # The maximum only bounds what a user can opt into, the default below is what almost every
@@ -1288,6 +1413,7 @@ CONFIG_ITEMS = [
     {
         "name": "debug_history_interval",
         "friendly_name": "Debug history snapshot interval",
+        "description": "Number of hours between automatic diagnostic-history snapshots.",
         "type": "input_number",
         "min": 1,
         "max": 24,
@@ -1299,6 +1425,7 @@ CONFIG_ITEMS = [
     {
         "name": "debug_history_force_capture",
         "friendly_name": "Debug history force capture now",
+        "description": "Requests an immediate diagnostic-history snapshot and then returns to the off state.",
         "type": "switch",
         "icon": "mdi:camera",
         "default": False,
@@ -1306,6 +1433,7 @@ CONFIG_ITEMS = [
     {
         "name": "car_charging_plan_time",
         "friendly_name": "Car charging planned ready time",
+        "description": "Time by which Predbat should aim to have planned EV charging completed.",
         "type": "select",
         "options": OPTIONS_TIME,
         "icon": "mdi:clock-end",
@@ -1316,6 +1444,7 @@ CONFIG_ITEMS = [
     {
         "name": "mode",
         "friendly_name": "Predbat mode",
+        "description": "Chooses how much control Predbat has, from monitoring only through charge control to full charge and forced-export control.",
         "type": "select",
         "options": PREDBAT_MODE_OPTIONS,
         "icon": "mdi:state-machine",
@@ -1325,6 +1454,7 @@ CONFIG_ITEMS = [
     {
         "name": "update",
         "friendly_name": "Predbat update",
+        "description": "Selects a Predbat core update action or version when an update is available.",
         "type": "select",
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
@@ -1335,6 +1465,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_charge",
         "friendly_name": "Manual force charge",
+        "description": "Forces selected future slots to be treated as battery charging periods.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1345,6 +1476,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_export",
         "friendly_name": "Manual force export",
+        "description": "Forces selected future slots to discharge and export the battery; this takes priority over a manual charge in the same slot.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1355,6 +1487,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_demand",
         "friendly_name": "Manual force demand",
+        "description": "Forces normal Demand operation for selected slots, with no forced charge or export.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1365,6 +1498,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_import_rates",
         "friendly_name": "Manual import rates",
+        "description": "Overrides the import tariff used by Predbat for selected future slots.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1375,6 +1509,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_export_rates",
         "friendly_name": "Manual export rates",
+        "description": "Overrides the export tariff used by Predbat for selected future slots.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1385,6 +1520,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_load_adjust",
         "friendly_name": "Manual load adjustment",
+        "description": "Adds or removes a specified amount of energy from the predicted household load in selected future slots.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1395,6 +1531,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_import_value",
         "friendly_name": "Manual import value",
+        "description": "Default import price applied when creating a Manual Import Rates override.",
         "type": "input_number",
         "min": -50,
         "max": 1000,
@@ -1406,6 +1543,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_export_value",
         "friendly_name": "Manual export value",
+        "description": "Default export price applied when creating a Manual Export Rates override.",
         "type": "input_number",
         "min": -50,
         "max": 1000,
@@ -1417,6 +1555,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_load_value",
         "friendly_name": "Manual load adjustment value",
+        "description": "Default kWh adjustment applied when creating a Manual Load Adjust override.",
         "type": "input_number",
         "min": -10,
         "max": 10,
@@ -1428,6 +1567,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_soc",
         "friendly_name": "Manual SOC target",
+        "description": "Sets a minimum battery state-of-charge target that Predbat must aim to reach by the selected time.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:battery-charging",
@@ -1438,6 +1578,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_soc_value",
         "friendly_name": "Manual SOC target value",
+        "description": "Percentage used as the target for Manual SoC overrides.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -1470,6 +1611,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_api",
         "friendly_name": "Manual API controls",
+        "description": "Advanced interface for temporarily overriding Predbat configuration or controls from Home Assistant automations or API actions.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1480,6 +1622,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_freeze_charge",
         "friendly_name": "Manual force charge freeze",
+        "description": "Forces selected future slots to hold battery state of charge by preventing discharge.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1490,6 +1633,7 @@ CONFIG_ITEMS = [
     {
         "name": "manual_freeze_export",
         "friendly_name": "Manual force export freeze",
+        "description": "Forces selected future slots to prevent battery charging so surplus solar can be exported while the battery may still supply demand.",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -1500,6 +1644,7 @@ CONFIG_ITEMS = [
     {
         "name": "saverestore",
         "friendly_name": "Save/restore settings",
+        "description": "Saves the current Predbat settings, restores a saved set, or restores the default configuration.",
         "type": "select",
         "options": PREDBAT_SAVE_RESTORE,
         "icon": "mdi:state-machine",
@@ -1510,12 +1655,14 @@ CONFIG_ITEMS = [
     {
         "name": "auto_update",
         "friendly_name": "Predbat automatic update enable",
+        "description": "Automatically installs new Predbat releases when they become available.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "load_filter_modal",
         "friendly_name": "Apply modal filter historical load",
+        "description": "Filters unusually low historical-load days from the load average when enough historical days are available.",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -1523,18 +1670,21 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_enable",
         "friendly_name": "iBoost enable",
+        "description": "Enables Predbat’s hot-water or solar-diverter model and planning controls.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "carbon_enable",
         "friendly_name": "Carbon enable",
+        "description": "Includes configured electricity carbon intensity when evaluating plans.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "carbon_metric",
         "friendly_name": "Carbon Metric",
+        "description": "Sets the financial-style weighting assigned to carbon emissions; higher values make lower-carbon plans more valuable to the optimiser.",
         "type": "input_number",
         "min": 0,
         "max": 500,
@@ -1547,6 +1697,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_solar",
         "friendly_name": "iBoost on solar power",
+        "description": "Allows solar generation to be used for hot-water or diverter operation.",
         "type": "switch",
         "default": True,
         "enable": "iboost_enable",
@@ -1554,6 +1705,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_solar_excess",
         "friendly_name": "iBoost solar only runs when exporting excess",
+        "description": "Restricts solar diversion to genuine surplus energy that would otherwise be exported.",
         "type": "switch",
         "default": False,
         "enable": "iboost_enable",
@@ -1561,6 +1713,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_gas",
         "friendly_name": "iBoost when import electricity cheaper than gas",
+        "description": "Allows electric hot-water heating when importing electricity is cheaper than the modelled cost of gas heating.",
         "type": "switch",
         "default": False,
         "enable": "iboost_enable",
@@ -1568,6 +1721,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_gas_export",
         "friendly_name": "iBoost when export electricity cheaper than gas",
+        "description": "Compares the value of exported electricity with gas heating before diverting surplus electricity to hot water.",
         "type": "switch",
         "default": False,
         "enable": "iboost_enable",
@@ -1575,6 +1729,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_charging",
         "friendly_name": "iBoost when battery charging",
+        "description": "Allows the diverter to run while the home battery is charging.",
         "type": "switch",
         "default": False,
         "enable": "iboost_enable",
@@ -1582,6 +1737,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_rate_threshold",
         "friendly_name": "iBoost max import boost price",
+        "description": "Maximum import electricity price at which Predbat may run the diverter.",
         "type": "input_number",
         "min": -10,
         "max": 1000,
@@ -1594,6 +1750,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_rate_threshold_export",
         "friendly_name": "iBoost max export boost price",
+        "description": "Maximum export value Predbat is willing to give up by diverting energy to hot water.",
         "type": "input_number",
         "min": -10,
         "max": 1000,
@@ -1606,6 +1763,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_smart",
         "friendly_name": "iBoost when import rates are lowest to hit target energy",
+        "description": "Chooses the cheapest import-price slots needed to meet the daily diverter energy target.",
         "type": "switch",
         "enable": "iboost_enable",
         "default": False,
@@ -1613,6 +1771,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_smart_min_length",
         "friendly_name": "iBoost smart min length",
+        "description": "Minimum continuous duration of a price-based smart diverter boost period.",
         "type": "input_number",
         "min": 30,
         "max": 120,
@@ -1626,6 +1785,7 @@ CONFIG_ITEMS = [
         "name": "iboost_on_export",
         "oldname": "iboost_on_export",
         "friendly_name": "iBoost is allowed when battery is force exporting",
+        "description": "Allows the diverter to operate while Predbat is deliberately force-exporting the home battery.",
         "type": "switch",
         "enable": "iboost_enable",
         "default": False,
@@ -1633,6 +1793,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_prevent_discharge",
         "friendly_name": "When iBoost is active prevent battery discharge",
+        "description": "Prevents the home battery from discharging to supply the diverter while it is active.",
         "type": "switch",
         "enable": "iboost_enable",
         "default": False,
@@ -1640,6 +1801,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_gas_scale",
         "friendly_name": "iBoost gas price scaling",
+        "description": "Scales the gas price, for example to account for boiler efficiency, before comparing gas heating with electric diversion.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -1652,6 +1814,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_max_energy",
         "friendly_name": "iBoost max energy",
+        "description": "Maximum amount of energy the diverter should consume in one day.",
         "type": "input_number",
         "min": 0,
         "max": 30,
@@ -1663,6 +1826,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_today",
         "friendly_name": "iBoost today",
+        "description": "Tracks Predbat’s estimate of how much energy the diverter has used today.",
         "type": "input_number",
         "min": 0,
         "max": 30,
@@ -1674,6 +1838,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_max_power",
         "friendly_name": "iBoost max power",
+        "description": "Maximum electrical power the modelled diverter can consume.",
         "type": "input_number",
         "min": 0,
         "max": 5000,
@@ -1685,6 +1850,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_min_power",
         "friendly_name": "iBoost min power",
+        "description": "Minimum useful operating power for the modelled diverter.",
         "type": "input_number",
         "min": 0,
         "max": 5000,
@@ -1696,6 +1862,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_min_soc",
         "friendly_name": "iBoost min soc",
+        "description": "Minimum home-battery state of charge required before solar energy may be diverted to hot water.",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -1708,6 +1875,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_value_scaling",
         "friendly_name": "iBoost value scaling",
+        "description": "Controls how valuable Predbat considers energy sent to hot water; higher values make diversion more attractive to the optimiser.",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -1720,6 +1888,7 @@ CONFIG_ITEMS = [
     {
         "name": "iboost_energy_subtract",
         "friendly_name": "Subtract iBoost energy from load predictions",
+        "description": "Removes measured diverter energy from historical household load so it is not forecast again as normal house demand.",
         "type": "switch",
         "enable": "iboost_enable",
         "default": True,
@@ -1727,6 +1896,7 @@ CONFIG_ITEMS = [
     {
         "name": "holiday_days_left",
         "friendly_name": "Holiday days left",
+        "description": "Enables holiday load forecasting for this many remaining days and counts the value down as the holiday progresses.",
         "type": "input_number",
         "min": 0,
         "max": 28,
@@ -1739,6 +1909,7 @@ CONFIG_ITEMS = [
     {
         "name": "holiday_load_scaling",
         "friendly_name": "Holiday load scaling",
+        "description": "Temporary scaling applied to normal household consumption while in holiday mode until Predbat has enough holiday-use history.",
         "type": "input_number",
         "min": 0.1,
         "max": 1.0,
@@ -1750,6 +1921,7 @@ CONFIG_ITEMS = [
     {
         "name": "forecast_plan_hours",
         "friendly_name": "Plan forecast hours",
+        "description": "Sets the minimum number of future hours Predbat considers when constructing and optimising the plan.",
         "type": "input_number",
         "min": 8,
         "max": 96,
@@ -1762,6 +1934,7 @@ CONFIG_ITEMS = [
     {
         "name": "plan_debug",
         "friendly_name": "HTML Plan Debug",
+        "description": "Adds extra optimiser and diagnostic information to the generated HTML plan.",
         "type": "switch",
         "default": False,
         "enable": "expert_mode",
@@ -1769,12 +1942,14 @@ CONFIG_ITEMS = [
     {
         "name": "predheat_enable",
         "friendly_name": "Enable PredHeat",
+        "description": "Enables the optional PredHeat model so expected heating demand and temperature can be included in planning.",
         "type": "switch",
         "default": False,
     },
     {
         "name": "next_volume_temp",
         "friendly_name": "Volume Temperature Next",
+        "description": "Stores the estimated heating-system or radiator-water temperature carried into the next PredHeat calculation when needed.",
         "type": "input_number",
         "min": -20,
         "max": 40,
@@ -1786,6 +1961,7 @@ CONFIG_ITEMS = [
     {
         "name": "inverter_limit_override",
         "friendly_name": "Inverter Limit Override",
+        "description": "Artificially caps the battery or inverter power limit used by Predbat where the installation should not use the reported maximum.",
         "type": "input_number",
         "min": 0,
         "max": 50000,
@@ -2609,6 +2785,7 @@ APPS_SCHEMA = {
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
     "web_port": {"type": "integer"},
+    "web_ui": {"type": "string", "allowed": ["legacy", "modern"]},
     # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
     # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
     # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
@@ -2725,17 +2902,69 @@ APPS_SCHEMA = {
     "pv_forecast_tomorrow": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d3": {"type": "sensor", "sensor_type": "float"},
     "pv_forecast_d4": {"type": "sensor", "sensor_type": "float"},
-    "car_charging_energy": {"type": "sensor", "sensor_type": "float", "transient_ok": True},
+    "car_charging_energy": {
+        "type": "sensor|sensor_list",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Home Assistant energy entity for each EV charger, used for today's charging total on Overview.",
+    },
     "car_charging_power": {"type": "sensor|sensor_list", "sensor_type": "float", "transient_ok": True},
+    "car_charging_status": {
+        "type": "sensor|sensor_list",
+        "sensor_type": "string",
+        "transient_ok": True,
+        "entries": "num_cars",
+        "optional_entries": True,
+        "description": "Home Assistant status entity for each EV charger, such as unplugged, connected or charging.",
+    },
     "num_cars": {"type": "integer", "zero": True},
     "car_charging_planned": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
     "car_charging_planned_response": {"type": "string_list"},
     "car_charging_now": {"type": "sensor|sensor_list", "sensor_type": "string|boolean", "entries": "num_cars"},
     "car_charging_now_response": {"type": "string_list"},
     "car_charging_battery_size": {"type": "sensor", "zero": False, "sensor_type": "float", "entries": "num_cars"},
-    "car_charging_soc": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
+    "car_charging_soc": {
+        "type": "sensor|sensor_list",
+        "sensor_type": "float",
+        "entries": "num_cars",
+        "description": "Home Assistant state-of-charge entity for each configured car.",
+    },
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
+    "weather": {
+        "type": "sensor",
+        "sensor_type": "string",
+        "transient_ok": True,
+        "description": "Home Assistant weather entity used by Overview when PredHeat is not configured.",
+    },
+    "ashp_enable": {
+        "type": "boolean",
+        "description": "Optional Overview ASHP-card override. PredHeat in pump mode shows the card automatically; set false to hide it or true when PredHeat is not configured.",
+    },
+    "ashp_power": {
+        "type": "sensor",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Home Assistant entity reporting the heat pump's current power draw.",
+    },
+    "ashp_status": {
+        "type": "sensor",
+        "sensor_type": "string",
+        "transient_ok": True,
+        "description": "Home Assistant entity reporting the heat pump state, such as off, heating or hot_water.",
+    },
+    "heat_energy": {
+        "type": "sensor",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Home Assistant entity reporting today's heat-pump energy use when PredHeat is not configured.",
+    },
+    "ashp_energy_today": {
+        "type": "sensor",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Legacy alias for heat_energy, retained so existing Overview configurations continue to work.",
+    },
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
     "carbon_automatic": {"type": "boolean"},

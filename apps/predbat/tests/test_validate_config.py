@@ -30,6 +30,8 @@ Types covered (see APPS_SCHEMA in config.py):
 import os
 import tempfile
 
+from utils import normalise_entity_prefix
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -65,6 +67,10 @@ def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_cle
 def test_validate_config(my_predbat):
     """Comprehensive validator tests covering every validation type in APPS_SCHEMA."""
     print("**** test_validate_config ****")
+
+    print("  [prefix] invalid Home Assistant characters are normalised")
+    assert normalise_entity_prefix("Predbat-Dev") == "predbat_dev"
+    assert normalise_entity_prefix("123 test") == "predbat_123_test"
 
     # ==========================================================================
     # STRING type  (gateway_mqtt_host: {"type": "string", "empty": False})
@@ -366,6 +372,19 @@ def test_validate_config(my_predbat):
         extra_states={"sensor.predbat_charge_rate": 2.5},
         expect_clean=["charge_rate"],
     )
+
+    print("  [sensor_list modify] generated controls respect a custom Predbat prefix")
+    saved_prefix = my_predbat.prefix
+    try:
+        my_predbat.prefix = "battery_site"
+        _run(
+            my_predbat,
+            {"charge_rate": ["sensor.battery_site_GS_0_charge_rate"], "num_inverters": 1},
+            extra_states={"sensor.battery_site_GS_0_charge_rate": 2.5},
+            expect_clean=["charge_rate"],
+        )
+    finally:
+        my_predbat.prefix = saved_prefix
 
     print("  [sensor_list modify] select. prefix is allowed for modification")
     _run(

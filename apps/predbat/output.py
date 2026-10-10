@@ -22,7 +22,7 @@ from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored, minutes_to_time, str2time
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -55,6 +55,39 @@ REASON_TEMPLATES = {
     "manual_override_demand": "You manually set this slot to demand mode.",
     "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
 }
+
+
+def event_slot_contains_minute(slot, minute, midnight_utc, start_key="start", end_key="end"):
+    """Return whether an event slot contains an absolute plan minute."""
+    start = slot.get(start_key)
+    end = slot.get(end_key)
+    if not start or not end:
+        return False
+    try:
+        start_minute = minutes_to_time(str2time(start), midnight_utc)
+        end_minute = minutes_to_time(str2time(end), midnight_utc)
+    except (TypeError, ValueError):
+        return False
+    return start_minute <= minute < end_minute
+
+
+def plan_rate_event_type(base, minute):
+    """Return the programme that produced a plan row's generic ``saving`` rate tag."""
+    matching_free_slots = [slot for slot in base.octopus_free_slots if event_slot_contains_minute(slot, minute, base.midnight_utc)]
+    if any(slot.get("event_type") == "WEEKEND_HAPPY_HOUR" for slot in matching_free_slots):
+        return "octopus_happy_hour"
+    if any(slot.get("event_type") == "FREE_ELECTRICITY" for slot in matching_free_slots):
+        return "octopus_free_electricity"
+    if matching_free_slots:
+        return "octopus_power_up"
+    for slot in base.octopus_saving_slots:
+        active_undated_slot = slot.get("state") and not slot.get("start") and not slot.get("end") and (base.minutes_now // 30) * 30 <= minute < (base.minutes_now // 30) * 30 + 30
+        if active_undated_slot or event_slot_contains_minute(slot, minute, base.midnight_utc):
+            return "octopus_power_down"
+    for slot in base.axle_sessions:
+        if event_slot_contains_minute(slot, minute, base.midnight_utc, "start_time", "end_time"):
+            return "axle_{}".format(slot.get("import_export", "event"))
+    return "energy_event"
 
 
 def yesterday_slot_is_exporting(slot_status):
@@ -1075,7 +1108,12 @@ class Output:
             )
 
         if publish:
+            # Existing HTML version used by the classic Predbat interface.
             self.text_plan = self.get_text_plan_html(sentence)
+
+            # Keep the original textual version as well so that newer
+            # interfaces can consume it without having to parse HTML.
+            self.text_plan_raw = sentence
 
         return sentence
 
@@ -1169,7 +1207,12 @@ class Output:
 
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
-        raw_plan["reason_templates"] = REASON_TEMPLATES
+        # Reason templates are shared by the legacy and modern plan views. Replace the
+        # historical pence label once here so every client receives the configured minor unit.
+        raw_plan["reason_templates"] = {code: template.replace("p/kWh", "{}/kWh".format(self.currency_symbols[1])) for code, template in REASON_TEMPLATES.items()}
+
+        raw_plan["description"] = [line.strip()[2:] if line.strip().startswith("- ") else line.strip() for line in self.text_plan_raw.splitlines() if line.strip()]
+
         raw_plan["currency_symbols"] = self.currency_symbols
         raw_plan["soc"] = prediction.soc_kw if prediction is not None else self.soc_kw
         raw_plan["soc_max"] = prediction.soc_max if prediction is not None else self.soc_max
@@ -1793,6 +1836,8 @@ class Output:
             export_rate_adjust_type = self.rate_export_replicated.get(minute)
             if export_rate_adjust_type is not None:
                 json_row["export_rate_adjust_type"] = export_rate_adjust_type
+            if import_rate_adjust_type == "saving" or export_rate_adjust_type == "saving":
+                json_row["rate_event_type"] = plan_rate_event_type(self, minute_start)
             # Add adjusted rates (always included for client-side debug toggle)
             json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
             json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
@@ -2730,6 +2775,17 @@ class Output:
         if had_errors:
             error_count += 1
 
+        status_text = (message + extra).lower()
+        status_icon = "mdi:information"
+        if "hold for car" in status_text:
+            status_icon = "mdi:car"
+        elif status_text.startswith("demand"):
+            status_icon = "mdi:house"
+        elif status_text.startswith("charg"):
+            status_icon = "mdi:battery-charging"
+        elif status_text.startswith("export"):
+            status_icon = "mdi:transmission-tower-export"
+
         # Home Assistant rejects entity states over 255 characters, and this message is the state
         # of the status sensor. Clamp what is written as the state - the full text survives in
         # current_status, the log line and the notification, and attributes have no such cap.
@@ -2742,7 +2798,7 @@ class Output:
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,
-                "icon": "mdi:information",
+                "icon": status_icon,
                 "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
                 "debug": debug,
                 "version": THIS_VERSION_DISPLAY,

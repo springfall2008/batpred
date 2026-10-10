@@ -1,0 +1,315 @@
+.app-content > main:has(> .plan-page) {
+  max-width: none;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
+}
+
+.plan-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+}
+
+.plan-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.plan-page-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--color-text);
+}
+
+.plan-page-header p {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.plan-view-tabs {
+  display: flex;
+  align-self: flex-start;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.plan-view-tabs button {
+  padding: 0.45rem 0.75rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.plan-view-tabs button.is-active {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.plan-view-empty {
+  padding: 2rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.plan-view-empty h2 {
+  margin: 0 0 0.4rem;
+  color: var(--color-text);
+  font-size: 1rem;
+}
+
+.plan-view-empty p {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+/*
+ * Main detailed-plan card.
+ */
+.plan-detail-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+.plan-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plan-detail-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-text);
+}
+
+.plan-detail-header p {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+/*
+ * Horizontal scrolling is intentional on small screens.
+ *
+ * There is too much useful plan information to squash every
+ * column into a narrow mobile layout.
+ */
+.plan-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+/* Page-level table overrides load after PlanTable.css; preserve this cascade order. */
+.plan-table {
+  width: 100%;
+  min-width: 1050px;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.plan-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.65rem 0.7rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  text-align: left;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.plan-table td {
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+}
+
+.plan-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.plan-table tbody tr:hover {
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+.plan-date-cell {
+  min-width: 6rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.plan-time-cell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.plan-number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * Action pill.
+ */
+.plan-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.plan-action.is-charge {
+  background: color-mix(in srgb, var(--color-charge) 14%, transparent);
+  color: var(--color-charge);
+}
+
+.plan-action.is-export {
+  background: color-mix(in srgb, var(--color-export) 14%, transparent);
+  color: var(--color-export);
+}
+
+.plan-action.is-demand {
+  background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
+  color: var(--color-text-secondary);
+}
+
+.plan-action.is-neutral {
+  background: color-mix(in srgb, var(--color-text-muted) 10%, transparent);
+  color: var(--color-text-muted);
+}
+
+.plan-reason-column {
+  min-width: 18rem;
+}
+
+.plan-reason {
+  min-width: 18rem;
+  max-width: 28rem;
+  color: var(--color-text-muted);
+}
+
+/*
+ * Subtle indication of important scheduled action rows.
+ *
+ * We don't recolour the entire row because that would make a
+ * multi-day plan visually overwhelming.
+ */
+.plan-table tr.is-charge {
+  box-shadow: inset 3px 0 0 var(--color-charge);
+}
+
+.plan-table tr.is-export {
+  box-shadow: inset 3px 0 0 var(--color-export);
+}
+
+@media (max-width: 700px) {
+  .plan-view-tabs {
+    align-self: center;
+  }
+
+  .plan-page-header h1 {
+    font-size: 1.25rem;
+  }
+
+  .plan-detail-header {
+    padding: 0.8rem;
+  }
+
+  /* Size mobile columns from their content and scroll only when the data needs it. */
+  .plan-table,
+  .plan-table.is-debug {
+    width: max-content;
+    min-width: 100%;
+    table-layout: auto;
+    font-size: clamp(0.5rem, 1.7vw, 0.68rem);
+  }
+
+  .plan-table th {
+    width: 1%;
+    padding: 0.35rem 0.18rem;
+    font-size: 0.5rem;
+    line-height: 1.1;
+    letter-spacing: 0;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .plan-table td {
+    width: 1%;
+    padding: 0.35rem 0.18rem;
+    text-align: right;
+  }
+
+  .plan-table th:first-child,
+  .plan-table td:first-child,
+  .plan-table th:nth-child(2),
+  .plan-table td:nth-child(2) {
+    text-align: left;
+  }
+
+  .plan-table .plan-time,
+  .plan-table .plan-target-button {
+    min-width: 0;
+  }
+
+  .plan-table .plan-action {
+    padding: 0.15rem;
+  }
+
+  .plan-table .plan-action > span:first-of-type,
+  .plan-table .plan-action-chevron,
+  .plan-table .plan-now-label {
+    display: none;
+  }
+
+  .plan-table .plan-value-with-indicator {
+    gap: 0.12rem;
+  }
+
+  .plan-table .plan-value-indicator {
+    width: 0.3rem;
+    height: 0.3rem;
+  }
+
+  .plan-table .plan-column-heading {
+    justify-content: center;
+    gap: 0;
+  }
+
+  .plan-table .plan-column-heading > span:first-child,
+  .plan-table .plan-column-heading .plan-tooltip-trigger {
+    display: none;
+  }
+
+  .plan-table .plan-column-label-mobile {
+    display: inline;
+  }
+}

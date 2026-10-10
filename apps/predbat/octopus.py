@@ -4185,10 +4185,16 @@ class Octopus:
                             octopus_free_slot["start"] = start
                             octopus_free_slot["end"] = end
                             octopus_free_slot["rate"] = 0
+                            if event.get("event_type", None):
+                                octopus_free_slot["event_type"] = event["event_type"]
                             octopus_free_slots.append(octopus_free_slot)
         # Direct Octopus URL
         if "octopus_free_url" in self.args:
             free_online = self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False))
+            for slot in free_online:
+                # The public website feed exposes only times and a zero rate. Keep
+                # that provenance so the UI does not guess Power Up or Happy Hour.
+                slot.setdefault("event_type", "FREE_ELECTRICITY")
             octopus_free_slots.extend(free_online)
 
         # Load free electricity events from Octopus flexibility API
@@ -4205,6 +4211,8 @@ class Octopus:
                             octopus_free_slot["start"] = start
                             octopus_free_slot["end"] = end
                             octopus_free_slot["rate"] = 0
+                            if event.get("event_type", None):
+                                octopus_free_slot["event_type"] = event["event_type"]
                             octopus_free_slots.append(octopus_free_slot)
 
         # Octopus saving session
@@ -4364,7 +4372,7 @@ class Octopus:
                             continue
                         if abs((start_time - self.now_utc).days) <= 3:
                             self.log("Octopus: Joined Octopus Weekend Happy Hour {}-{} - treating as a free electricity session".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
-                            octopus_free_slots.append({"start": start, "end": end, "rate": 0})
+                            octopus_free_slots.append({"start": start, "end": end, "rate": 0, "event_type": "WEEKEND_HAPPY_HOUR"})
                         continue
 
                     # Skip events with no rate info unless default is configured

@@ -1,0 +1,197 @@
+.simple-power-flow {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas:
+    '. solar .'
+    'battery home grid'
+    '. car .';
+  align-items: start;
+  gap: 2rem 1rem;
+  min-height: 320px;
+  padding: 1rem 0;
+}
+
+/* Measured SVG connections sit below the nodes and must not intercept pointer input. */
+.simple-power-flow-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.simple-node {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  text-align: center;
+}
+
+.simple-solar {
+  grid-area: solar;
+}
+
+.simple-battery {
+  grid-area: battery;
+}
+
+.simple-home {
+  grid-area: home;
+}
+
+.right-100 {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  left: 50px;
+  top: -15px;
+}
+
+.simple-grid {
+  grid-area: grid;
+}
+
+.simple-car {
+  grid-area: car;
+}
+
+.simple-node-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin: 0.25rem;
+  border-radius: 50%;
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+}
+
+.simple-node-circle svg {
+  font-size: 1.7rem;
+}
+
+.simple-node strong {
+  font-size: 0.85rem;
+}
+
+.simple-node-power {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.simple-node span,
+.simple-node small {
+  color: var(--color-text-muted);
+}
+
+.simple-node small {
+  font-size: 0.7rem;
+}
+
+.grid-icon {
+  width: 1.8rem;
+  height: 1.8rem;
+}
+
+.simple-car.is-charging .simple-node-power,
+.simple-car.is-charging small {
+  color: var(--color-charge);
+}
+
+/* Base connection line */
+.simple-flow-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Semantic flow colours */
+.flow-solar {
+  color: var(--color-warning, #f59e0b);
+}
+
+.flow-battery {
+  color: var(--color-success, #16a34a);
+}
+
+.flow-grid {
+  color: var(--color-text-muted, #6b7280);
+}
+
+.flow-car {
+  color: var(--color-hold-car, #d97706);
+}
+
+.simple-flow-base {
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  transition:
+    opacity 0.2s ease,
+    stroke-width 0.2s ease;
+}
+
+/* Idle connection remains visible but subdued */
+.simple-flow-base.is-idle {
+  opacity: 0.2;
+}
+
+/* Active connection becomes a little stronger */
+.simple-flow-base.is-active {
+  opacity: 0.45;
+}
+
+/* Animated energy particles */
+.simple-flow-dot {
+  fill: currentColor;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px currentColor);
+}
+
+.simple-flow-dot-primary {
+  opacity: 1;
+}
+
+.simple-flow-dot-secondary {
+  opacity: 0.65;
+}
+
+.simple-flow-dot-tertiary {
+  opacity: 0.35;
+}
+
+/* Semantic colours */
+
+.flow-solar {
+  color: var(--color-flow-solar);
+}
+
+.flow-battery {
+  color: var(--color-flow-battery);
+}
+
+.flow-grid {
+  color: var(--color-flow-grid);
+}
+
+.flow-car {
+  color: var(--color-flow-car);
+}
+
+/* Remove animation for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .simple-flow-dot {
+    display: none;
+  }
+}

@@ -1,0 +1,302 @@
+/* Global notices and application layout. Component overrides retain their cascade order. */
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 11000;
+  padding: 0.65rem 0.85rem;
+  transform: translateY(calc(-100% - 1rem));
+  border-radius: 7px;
+  background: var(--color-text);
+  color: var(--color-surface);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform 0.15s ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.dashboard-loading {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 1rem;
+  color: var(--color-text-secondary);
+}
+
+.dashboard-loading-status {
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  font-size: 0.82rem;
+}
+.api-error-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: min(540px, calc(100% - 2rem));
+  padding: 0.8rem 0.9rem;
+  transform: translateX(-50%);
+  border: 1px solid var(--color-warning);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-tooltip);
+}
+
+.api-error-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.api-error-content strong {
+  font-size: 0.8rem;
+}
+
+.api-error-content span {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-secondary);
+}
+
+.api-error-content small {
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+.api-error-notice button,
+.dashboard-load-error button {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.api-error-notice button:hover,
+.dashboard-load-error button:hover {
+  border-color: var(--color-text-muted);
+}
+
+.dashboard-load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: 480px;
+  margin: 4rem auto;
+  padding: 1rem;
+  border: 1px solid var(--color-danger);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.dashboard-load-error span {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-content {
+  margin-left: 240px;
+  width: calc(100% - 240px);
+  min-width: 0;
+  transition:
+    margin-left 0.2s ease,
+    width 0.2s ease;
+}
+
+.app-shell.navigation-collapsed .app-content {
+  margin-left: 72px;
+  width: calc(100% - 72px);
+}
+
+@media (min-width: 701px) {
+  .app-shell.navigation-horizontal .app-content {
+    width: 100%;
+    margin-left: 0;
+    padding-top: 56px;
+  }
+}
+
+.app-content > main {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-main {
+  padding-inline: 1.5rem;
+}
+
+.dashboard-main > section {
+  min-width: 0;
+  margin-inline: 0;
+}
+
+@media (max-width: 700px) {
+  .app-shell {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .app-content,
+  .app-shell.navigation-collapsed .app-content {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .dashboard-main {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0.75rem;
+    overflow-x: clip;
+  }
+
+  .dashboard-main > section {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+  }
+}
+
+/*
+ * A software update replaces files and restarts Predbat, so the
+ * current page must remain read-only until it completes.
+ */
+.app-shell.is-calculating {
+  user-select: none;
+}
+
+/*
+ * Full-screen software-update blocker.
+ *
+ * backdrop-filter desaturates the existing UI while leaving it
+ * visible enough that the user can still see what is changing.
+ */
+.plan-calculating-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-bg) 45%, transparent);
+  backdrop-filter: grayscale(0.8) blur(1px);
+  -webkit-backdrop-filter: grayscale(0.8) blur(1px);
+  cursor: wait;
+}
+
+/* Plan recalculation is safe to leave running while the user continues working. */
+.plan-calculating-overlay.is-non-blocking {
+  inset: auto 1rem 1rem auto;
+  display: block;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+  cursor: default;
+}
+
+/*
+ * Small status card in the centre of the page.
+ */
+.plan-calculating-message {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 32px color-mix(in srgb, var(--color-text) 20%, transparent);
+  color: var(--color-text);
+}
+
+.plan-calculating-message > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.plan-calculating-message strong {
+  font-size: 0.8rem;
+}
+
+.plan-calculating-message span {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+/*
+ * Simple CSS spinner means App.tsx doesn't need another icon
+ * dependency merely for the loading state.
+ */
+.plan-calculating-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid color-mix(in srgb, var(--color-text-muted) 25%, transparent);
+  border-top-color: var(--color-text);
+  border-radius: 50%;
+  animation: plan-calculating-spin 0.8s linear infinite;
+}
+
+@keyframes plan-calculating-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 700px) {
+  .plan-calculating-overlay.is-non-blocking {
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+  }
+
+  .plan-calculating-overlay.is-non-blocking .plan-calculating-message {
+    width: 100%;
+  }
+}
+
+/* ============================================================
+ * Reduced motion
+ * ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .app-navigation {
+    transition: none;
+  }
+
+  .predbat-flying-bat {
+    animation-duration: 1s;
+  }
+
+  .predbat-flying-bat img {
+    animation: none;
+  }
+}

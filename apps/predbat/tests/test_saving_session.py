@@ -1547,7 +1547,7 @@ friendly_name: Octoplus Saving Session Events
     print("  Test 1: WEEKEND_HAPPY_HOUR is free, TURN_DOWN is a saving slot")
     octopus_free_slots, octopus_saving_slots = run(happy_hour + "\n" + turn_down_rewarded)
 
-    expected_free = [{"start": "{}T11:00:00+{}:00".format(date_today, tz_offset), "end": "{}T12:00:00+{}:00".format(date_today, tz_offset), "rate": 0}]
+    expected_free = [{"start": "{}T11:00:00+{}:00".format(date_today, tz_offset), "end": "{}T12:00:00+{}:00".format(date_today, tz_offset), "rate": 0, "event_type": "WEEKEND_HAPPY_HOUR"}]
     expected_saving = [{"start": "{}T17:00:00+{}:00".format(date_today, tz_offset), "end": "{}T18:00:00+{}:00".format(date_today, tz_offset), "rate": 50.0, "state": False}]
     if json.dumps(octopus_free_slots) != json.dumps(expected_free):
         print("ERROR: Expecting free slots {} got {}".format(expected_free, octopus_free_slots))
