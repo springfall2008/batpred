@@ -349,7 +349,7 @@ class GatewayMQTT(ComponentBase):
         self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
         self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
         self._assumed_ratings = frozenset()  # entity suffixes of inverters whose maximum rate has never been reported
-        self._discovery = {}  # upper-case serial -> what the hub last reported it to be, for gateway_inverter_serial
+        self._discovery = {}  # upper-case serial -> what the hub last reported it to be (see _update_discovery)
         self._discovery_dirty = False
         self._discovery_save_retry_at = 0
         self._unavailable_inverters = ((), ())
@@ -1247,8 +1247,10 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_battery_voltage", bat.voltage_v, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_voltage", {}), app="gateway")
         self.dashboard_item(f"sensor.{pfx}_battery_current", bat.current_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_current", {}), app="gateway")
         self.dashboard_item(f"sensor.{pfx}_battery_temperature", bat.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {}), app="gateway")
-        if bat.capacity_wh:
-            self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
+        # A size the hub leaves out keeps the last one known, as the ratings below do
+        capacity_wh = bat.capacity_wh or self._discovery.get(inv.serial.upper(), {}).get("capacity_wh")
+        if capacity_wh:
+            self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
         if bat.soh_percent:
             self.dashboard_item(f"sensor.{pfx}_battery_soh", bat.soh_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_soh", {}), app="gateway")
         # A rating the hub leaves out keeps the last real value it reported. A status with the
@@ -1543,8 +1545,9 @@ class GatewayMQTT(ComponentBase):
                 usable.add(inv.serial)
             elif inv.battery.ByteSize() > 0 and (inv.primary or not any_primary):
                 usable.add(inv.serial)
-        for record in self._discovery.values():
-            usable.add(record["serial"] if record.get("battery") else record["serial"] + ":pv")
+        if self.gateway_inverter_serial:
+            for record in self._discovery.values():
+                usable.add(record["serial"] if record.get("battery") else record["serial"] + ":pv")
         return frozenset(usable)
 
     def _discovery_filename(self):
@@ -1556,7 +1559,7 @@ class GatewayMQTT(ComponentBase):
         return set(serial.upper() for serial in self.gateway_inverter_serial)
 
     def _update_discovery(self, status):
-        """Record what the hub reports each inverter in ``gateway_inverter_serial`` to be.
+        """Record what the hub reports each inverter to be.
 
         The record - type, whether it has a battery, its size, ratings and model - is what lets a
         listed inverter keep its place when the hub cannot read it, including across a
@@ -1564,17 +1567,17 @@ class GatewayMQTT(ComponentBase):
         one never overwrites what is known about it. Having a battery only ever turns on: an
         early status can carry an inverter's other readings before its battery ones.
 
-        Nothing is recorded with no serial list - then auto-config uses what it finds.
+        With no serial list every inverter is recorded, for its last known size, ratings and
+        export limit only: there auto-config uses the inverters it finds, and one that is in
+        the records but not in the status is simply not there.
 
         Args:
             status: A decoded GatewayStatus protobuf message.
         """
         listed = self._listed_serials()
-        if not listed:
-            return
         for inv in status.inverters:
             key = inv.serial.upper()
-            if key not in listed or not self._has_telemetry(inv):
+            if not key or (listed and key not in listed) or not self._has_telemetry(inv):
                 continue
             known = self._discovery.get(key, {})
             record = {
@@ -1593,14 +1596,14 @@ class GatewayMQTT(ComponentBase):
                 self._discovery_dirty = True
 
     async def _load_discovery(self):
-        """Load the stored discovery records for the inverters in ``gateway_inverter_serial``.
+        """Load the stored discovery records.
 
-        A record for a serial that is no longer listed is dropped: the list is the setting,
-        and it wins over what was stored for an earlier one.
+        With ``gateway_inverter_serial`` set, a record for a serial that is not listed is
+        dropped: the list is the setting, and it wins over what was stored for an earlier one.
         """
         listed = self._listed_serials()
         storage = self.storage
-        if not listed or storage is None:
+        if storage is None:
             return
         try:
             saved = await storage.load(GATEWAY_STORAGE_MODULE, self._discovery_filename())
@@ -1615,7 +1618,7 @@ class GatewayMQTT(ComponentBase):
             record = self._valid_record(stored)
             if record is None:
                 self.log(f"Warn: GatewayMQTT: ignoring unreadable stored discovery for inverter {key}")
-            elif record["serial"].upper() in listed:
+            elif not listed or record["serial"].upper() in listed:
                 loaded[record["serial"].upper()] = record
         # Anything already learned from live telemetry is newer than the stored copy
         self._discovery = {**loaded, **self._discovery}
@@ -1803,7 +1806,8 @@ class GatewayMQTT(ComponentBase):
         self._update_discovery(status)
         serial_set = self._listed_serials()
         reported = set(inv.serial.upper() for inv in all_inverters)
-        all_inverters += [self._stored_unit(record) for key, record in sorted(self._discovery.items()) if key not in reported]
+        if serial_set:
+            all_inverters += [self._stored_unit(record) for key, record in sorted(self._discovery.items()) if key not in reported]
 
         # Classify discovered units and route control per GivTCP / GE-Cloud. Neither a
         # GivEnergy Gateway (INVERTER_TYPE_GIVENERGY_GATEWAY) nor a Plant EMS

@@ -3783,15 +3783,49 @@ class TestGatewayUnitControlBinding:
         assert gw._pv_only_serials == ("FD0000P001",)
         assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == 900
 
-    def test_no_serial_list_stores_nothing(self):
-        """With no serial list nothing is recorded or saved, and auto-config uses what it finds."""
-        gw = self._listed_gateway([])
-        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
-        asyncio.run(gw._save_discovery())
+    def test_no_serial_list_stores_last_known_values_but_inverters_come_and_go(self):
+        """With no serial list the last known values are stored and used, but a stored inverter is not held on to."""
+        first = self._listed_gateway([])
+        first._process_telemetry(self._rated_status(rate_max_w=3000, inverter_rate_max_w=3600).SerializeToString())
+        asyncio.run(first._save_discovery())
+        stored = first._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]
+        assert sorted(stored) == ["CE2223G800", "CE2225G400"]
+        assert stored["CE2225G400"]["rate_max_w"] == 3000
+        assert first._args["num_inverters"] == 2
 
-        assert gw._discovery == {}
-        assert gw._saved == {}
+        # After a restart the hub does not report the second inverter: it is simply not there
+        gw = self._listed_gateway([], stored=stored)
+        assert sorted(gw._discovery) == ["CE2223G800", "CE2225G400"]
+        gw._process_telemetry(self._two_ac_status("absent").SerializeToString())
+        assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["CE2223G800"]
+        assert self._errors(gw) == []
+        gw.non_fatal_error_occurred.assert_not_called()
+
+        # Nor is one the hub lists but is not reading
+        gw = self._listed_gateway([], stored=stored)
+        gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+        assert gw._args["num_inverters"] == 1
+
+        # But when it is there with its ratings and size unpopulated, the stored ones are used
+        gw = self._listed_gateway([], stored=stored)
+        blank = self._rated_status(rate_max_w=0, inverter_rate_max_w=0, export_limit_w=0)
+        blank.inverters[1].battery.capacity_wh = 0
+        gw._process_telemetry(blank.SerializeToString())
         assert gw._args["num_inverters"] == 2
+        assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000
+        assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3600
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 6000
+        assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5
+        assert gw._args["soc_max"] == ["sensor.predbat_gateway_23g800_battery_capacity", "sensor.predbat_gateway_25g400_battery_capacity"]
+
+    def test_inverter_with_no_serial_is_not_recorded(self):
+        """A slot the hub reports with an empty serial has nothing to be stored under."""
+        gw = self._listed_gateway([])
+        status = self._two_ac_status("ok")
+        status.inverters[1].serial = ""
+        gw._process_telemetry(status.SerializeToString())
+        assert sorted(gw._discovery) == ["CE2223G800"]
 
     def test_configured_inverter_offline_reports_an_error_until_it_returns(self):
         """A configured inverter the hub stops reading is an error on every frame, logged once, and clears when it returns."""
