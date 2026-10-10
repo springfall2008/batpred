@@ -675,8 +675,8 @@ def as_int(value, default=None):
     """Coerce an API status to int, returning default for None or junk.
 
     result_code is a string on this API ("1"), and nothing in the documentation promises the
-    task and parameter statuses are not as well. Comparing an uncoerced "8" with 8 would report
-    every successful write as failed.
+    task and parameter statuses are not as well. Comparing a status that has not been coerced,
+    such as "8", with 8 would report every successful write as failed.
     """
     numeric = as_float(value, None)
     if numeric is None:

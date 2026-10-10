@@ -29,14 +29,17 @@ pred_bat:
   load_filter_threshold: 30
 
   # Sungrow iSolarCloud OpenAPI - register at https://developer-api.isolarcloud.com/
-  # to get an appkey and an x-access-key. Authorisation is OAuth 2.0: on Predbat.com the
-  # access token is injected for you, and on a self-hosted install you supply the token
-  # you obtained from Sungrow's authorisation-code flow.
+  # to get an appkey and an x-access-key.
   # EXPERIMENTAL: nobody on the Predbat project has Sungrow hardware, so please report
   # what you see. Every request and response is traced to the log while this beds in.
+  # Authorisation is OAuth 2.0. On Predbat.com the access token is supplied and renewed
+  # for you. On a self-hosted install, supply the token you obtained from Sungrow's
+  # authorisation-code flow as sungrow_key and set sungrow_auth_method to 'token'; Predbat
+  # cannot renew it, so replace it when Sungrow expire it.
   sungrow_appkey: 'xxxx'
   sungrow_access_key: 'xxxx'
   sungrow_key: 'xxxx'
+  sungrow_auth_method: 'token'
 
   # Regional gateway. Europe is the default; use gateway.isolarcloud.com (China),
   # gateway.isolarcloud.com.hk (international), augateway.isolarcloud.com (Australia)
@@ -47,8 +50,8 @@ pred_bat:
   sungrow_automatic: True
 
   # Set False for monitoring only - Predbat will not write to the inverter.
-  # switch.predbat_set_read_only also holds back every write, including the heartbeat
-  # and Predbat's own periodic re-apply.
+  # switch.predbat_set_read_only stops every command and the heartbeat; the only thing
+  # Predbat still sends is the hand-back of an inverter it was controlling at the time.
   sungrow_control_enable: True
 
   # Optional: restrict to one inverter when the account has several
@@ -69,9 +72,9 @@ pred_bat:
   #sungrow_api_delay: 2
   #sungrow_min_write_interval: 300
 
-  # Optional: the measuring points do not carry a battery power limit for every model,
-  # so Predbat falls back to the inverter's nominal AC power. Set this if you know your
-  # pack's real limit.
+  # Optional: Predbat reads the battery's charge/discharge limit from the plant's
+  # "maximum rechargeable/dischargeable power" points. Set this if they are missing or
+  # wrong for your system - without either, Predbat assumes 2600 W.
   #sungrow_battery_rate_max: 5000
 
   # REQUIRED if your grid connection is capped below the inverter rating (G98/G99):

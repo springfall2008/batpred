@@ -40,6 +40,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [AlphaESS Cloud](#alphaess-cloud) | Predbat | [alphaess_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/alphaess_cloud.yaml) |
+   | [Sungrow Cloud](#sungrow-cloud) | Predbat | [sungrow.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sungrow.yaml) |
    | [Canadian Solar EP Cube](#canadian-solar-ep-cube) | [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) | [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) |
    | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
    | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
@@ -254,6 +255,30 @@ python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind -
 **`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
 
 See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the export-control limitation above, and the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
+
+## Sungrow Cloud
+
+**EXPERIMENTAL.** Nobody on the Predbat project has Sungrow hardware, so this integration is built from Sungrow's published iSolarCloud OpenAPI documentation and has not been confirmed against a real inverter. Every request and response is traced to the log by default so that your log is usable evidence in an issue report.
+
+Predbat has a built-in Sungrow integration for hybrid (energy-storage) inverters using the official iSolarCloud OpenAPI. It monitors the system and controls charging and exporting. No local Modbus connection is required.
+
+Things to know before you rely on it:
+
+- **Predbat must stay running and connected for the battery to follow the plan.** Control uses Sungrow's external energy dispatch, which is held open by a heartbeat. If Predbat stops or loses its network, nothing can tell the inverter to stand down, so it reverts to self-consumption by itself once the heartbeat lapses, within about five minutes. Turning on `switch.predbat_set_read_only` stops every command and the heartbeat immediately; Predbat sends a single hand-back to self-consumption for whatever it was controlling at that moment, falling back to the same five-minute lapse only if that write fails. That is deliberate: a stopped Predbat never leaves the battery forced.
+- **Freeze Export is not supported.** The API has no way to let the battery discharge while preventing it from charging, so Predbat does not plan it for this inverter.
+- **The reserve can only be set between 0% and 50%** on the inverter. A higher reserve is held by Predbat stopping the battery while it is at or below that level.
+- **The state of charge scale is unverified.** Sungrow do not document whether it is reported as 64 or 640. Check it with the diagnostics tool below before turning control on.
+- **Check the export limit Predbat found.** Predbat reads the inverter's own feed-in limitation and uses it as the export limit when the reported value agrees with the percentage of rated power it also reports; a read that fails is retried about an hour later. If the log says it could not establish the limit and your grid connection is capped below the inverter rating, set `sungrow_export_limit` (watts) in `apps.yaml`.
+
+### Verifying with the Sungrow diagnostics CLI
+
+Before turning on control, run the read-only tool from the `apps/predbat` directory:
+
+```bash
+python3 sungrow.py --appkey YOUR_APPKEY --access-key YOUR_ACCESS_KEY --token YOUR_ACCESS_TOKEN --gateway europe
+```
+
+Check that `inverter_limit` is your inverter's rating and that `export_limit` is your real grid export limit (99999 means the inverter has no limit set; `None` means Predbat could not establish it). Compare the printed `soc`, `battery_power`, `grid_power`, `pv_power` and `load_power` with the iSolarCloud app. In particular note whether `soc` matches the app or is ten times larger, the sign of `battery_power` while the battery is charging (it should be negative), and the sign of `grid_power` while importing (it should be negative). Add `--read-params` to read back the inverter's current control parameters; this changes nothing. Please report what you find in a GitHub issue.
 
 ## Canadian Solar EP Cube
 
