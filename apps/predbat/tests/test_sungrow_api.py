@@ -488,6 +488,41 @@ def _discovered_client(**kwargs):
     return client
 
 
+def _polled_client(**kwargs):
+    """Return a client that has discovered one inverter and polled telemetry once."""
+    client = MockSungrow(**kwargs)
+    with _mock_post([_envelope(PLANT_LIST), _envelope(DEVICE_LIST)]):
+        run_async_local(client.refresh_static())
+    with _mock_post([_envelope(PLANT_REALTIME), _envelope(DEVICE_REALTIME)]):
+        run_async_local(client.refresh_power())
+    return client
+
+
+def test_sungrow_plant_figures_are_shared_between_inverters_in_one_plant():
+    """Plant points describe the whole site; Predbat sums per-inverter sensors, so they must be split."""
+    failed = False
+    client = _polled_client()
+    first = client.device_list[0]
+    second = "111222"
+    client.device_list.append(second)
+    client.device_detail[second] = {"ps_id": client.device_detail[first]["ps_id"], "serial": "A2211TEST02"}
+    if client.battery_capacity(first) != 5.0 or client.battery_capacity(second) != 5.0:
+        print(f"ERROR: capacities {client.battery_capacity(first)}/{client.battery_capacity(second)}, expected the 10 kWh plant split 5/5")
+        failed = True
+    if client.battery_rate_max(second) != 2500.0:
+        print(f"ERROR: rate max {client.battery_rate_max(second)}, expected 2500")
+        failed = True
+    # The second inverter has no device read. A plant total is not its load.
+    if client.telemetry(second, "load_power") is not None or client.energy(second, "load_today") is not None:
+        print("ERROR: a plant total was published as one inverter's own figure")
+        failed = True
+    # SoC is a percentage, so the plant value is still the best available estimate.
+    if client.telemetry(second, "soc") != 64:
+        print(f"ERROR: soc fallback {client.telemetry(second, 'soc')}")
+        failed = True
+    assert not failed, "test_sungrow_plant_figures_are_shared_between_inverters_in_one_plant"
+
+
 def test_sungrow_telemetry_prefers_the_device_read_over_the_plant_read():
     """The device read describes THIS inverter; the plant read aggregates the whole site."""
     failed = False
@@ -793,6 +828,7 @@ def run_sungrow_api_tests(my_predbat):
         ("energy_units", test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours),
         ("battery_capacity", test_sungrow_battery_capacity_sums_the_two_halves),
         ("battery_rate_max", test_sungrow_battery_rate_max_prefers_the_override),
+        ("multi_inverter_plant", test_sungrow_plant_figures_are_shared_between_inverters_in_one_plant),
         ("publish_omits_missing", test_sungrow_publish_omits_values_the_inverter_did_not_report),
         ("automatic_config", test_sungrow_automatic_config_binds_sensors_and_controls),
         ("automatic_ignore_pv", test_sungrow_automatic_config_respects_ignore_pv),

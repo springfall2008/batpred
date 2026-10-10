@@ -668,6 +668,18 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.mark_refreshed("power")
         return any_ok
 
+    def _plant_share(self, uuid):
+        """Return (ps_id, how many discovered inverters are in that plant) for one inverter.
+
+        Plant-level points aggregate the whole site. Predbat sums its per-inverter sensors, so
+        anything taken from the plant has to be divided between the inverters that share it, or
+        not used at all where dividing would be a guess.
+        """
+        ps_id = self.device_detail.get(uuid, {}).get("ps_id")
+        if ps_id is None:
+            return None, 1
+        return ps_id, max(1, sum(1 for other in self.device_list if self.device_detail.get(other, {}).get("ps_id") == ps_id))
+
     def telemetry(self, uuid, leaf):
         """Return one telemetry value for an inverter, device read first then plant read.
 
@@ -678,9 +690,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         value = self.device_values.get(uuid, {}).get(leaf)
         if value is not None:
             return value
-        ps_id = self.device_detail.get(uuid, {}).get("ps_id")
+        ps_id, sharing = self._plant_share(uuid)
         plant_leaf = SUNGROW_PLANT_TELEMETRY.get(leaf)
         if ps_id is None or plant_leaf is None:
+            return None
+        # A percentage is the same for the plant and its parts; a power is not, and which
+        # inverter carries how much of it is not something the plant read can say.
+        if sharing > 1 and leaf != "soc":
             return None
         return self.plant_values.get(ps_id, {}).get(plant_leaf)
 
@@ -695,8 +711,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         value = self.device_energy.get(uuid, {}).get(leaf)
         if value is not None:
             return value
-        ps_id = self.device_detail.get(uuid, {}).get("ps_id")
-        if ps_id is None:
+        ps_id, sharing = self._plant_share(uuid)
+        if ps_id is None or sharing > 1:
             return None
         return self.plant_energy.get(ps_id, {}).get(leaf)
 
@@ -709,13 +725,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         so it moves a little with temperature and with the SoC limits in force. Returns 0.0
         when either half is missing, which leaves soc_max unbound rather than half-sized.
         """
-        ps_id = self.device_detail.get(uuid, {}).get("ps_id")
+        ps_id, sharing = self._plant_share(uuid)
         values = self.plant_values.get(ps_id, {}) if ps_id else {}
         chargeable = values.get("chargeable_energy")
         dischargeable = values.get("dischargeable_energy")
         if chargeable is None or dischargeable is None:
             return 0.0
-        return round((chargeable + dischargeable) * SUNGROW_WH_TO_KWH, 3)
+        return round((chargeable + dischargeable) * SUNGROW_WH_TO_KWH / sharing, 3)
 
     def battery_rate_max(self, uuid):
         """Return the battery charge/discharge power limit in watts.
@@ -728,11 +744,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         """
         if self.battery_rate_max_override > 0:
             return self.battery_rate_max_override
-        ps_id = self.device_detail.get(uuid, {}).get("ps_id")
+        ps_id, sharing = self._plant_share(uuid)
         values = self.plant_values.get(ps_id, {}) if ps_id else {}
         rates = [values.get("max_rechargeable_power"), values.get("max_dischargeable_power")]
         rates = [rate for rate in rates if rate]
-        return max(rates) if rates else 0.0
+        return (max(rates) / sharing) if rates else 0.0
 
     def power_limit(self, uuid=None):
         """Return the largest charge/discharge power, in watts, that may be written to 10005.
@@ -1544,6 +1560,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not devices:
             self.log("Warn: Sungrow automatic_config found no inverters")
             return
+        if len(devices) > len(set(self.device_detail.get(uuid, {}).get("ps_id") for uuid in devices)):
+            self.log("Warn: Sungrow found more than one inverter in a plant; battery capacity and rate are the plant figures split equally between them. Set soc_max and battery_rate_max in apps.yaml if the batteries differ")
         self.set_arg_auto("inverter_type", ["SungrowCloud" for _ in devices])
         self.set_arg_auto("num_inverters", len(devices))
         self.set_arg_auto("soc_percent", [self._sensor_name(uuid, "soc") for uuid in devices])
