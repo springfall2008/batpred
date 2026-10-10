@@ -4042,6 +4042,80 @@ class TestGatewayUnitControlBinding:
         assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 6000
         assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 99999
 
+    def _writable(self, gw):
+        """Let *gw* take control writes, recording the commands it publishes."""
+        from unittest.mock import MagicMock
+
+        gw._mqtt_connected = True
+        gw._mqtt_client = MagicMock()
+        gw._gateway_online = True
+        gw._rate_caps_sent = {}
+        gw.is_alive = lambda: True
+        gw.get_arg = lambda name, default=None, **kwargs: default
+        gw._published = []
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
+    def test_rate_writes_are_held_until_the_inverter_reports_its_rating(self):
+        """With no rating ever reported the 6000W default is only an assumption, so no rate above zero is written on it."""
+        gw = self._writable(self._listed_gateway([]))
+        gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0).SerializeToString())
+        assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 6000
+
+        asyncio.run(gw.number_event("number.predbat_gateway_25g400_discharge_rate", 6000))
+        asyncio.run(gw.number_event("number.predbat_gateway_25g400_charge_rate", 6000))
+        assert gw._published == []
+        assert self._logged(gw, "Warn", "CE2225G400", "has not reported its maximum rate")
+
+        # Stopping a charge or discharge is safe at any rating, as are the other controls and the other inverter
+        asyncio.run(gw.number_event("number.predbat_gateway_25g400_charge_rate", 0))
+        asyncio.run(gw.number_event("number.predbat_gateway_25g400_reserve_soc", 4))
+        asyncio.run(gw.number_event("number.predbat_gateway_23g800_discharge_rate", 3000))
+        assert gw._published == [
+            ("set_charge_rate", {"power_w": 0, "serial": "CE2225G400"}),
+            ("set_reserve", {"target_soc": 4, "serial": "CE2225G400"}),
+            ("set_discharge_rate", {"power_w": 3000, "serial": "CE2223G800"}),
+        ]
+
+        # Once the rating arrives the write goes through, and a later gap in the rating does not hold it again
+        for rate_max_w in (3000, 0):
+            gw._published.clear()
+            gw._process_telemetry(self._rated_status(rate_max_w=rate_max_w).SerializeToString())
+            asyncio.run(gw.number_event("number.predbat_gateway_25g400_discharge_rate", 3000))
+            assert gw._published == [("set_discharge_rate", {"power_w": 3000, "serial": "CE2225G400"})], rate_max_w
+
+    def test_rate_cap_is_not_sent_on_an_assumed_rating(self):
+        """The cap sent to the hub comes from the same rating, so it waits for the real one too."""
+        from types import SimpleNamespace
+
+        gw = self._writable(self._listed_gateway([]))
+        gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0).SerializeToString())
+        gw.base.inverters = [SimpleNamespace(inverter_type="GWMQTT", id=slot, battery_rate_max_charge=0.05, battery_rate_max_discharge=0.05) for slot in (0, 1)]
+        gw._inverter_rate_caps = lambda: {"CE2223G800": (3000, 3000), "CE2225G400": (6000, 6000)}
+
+        asyncio.run(gw._check_rate_caps())
+        assert gw._published == [("set_rate_cap", {"serial": "CE2223G800", "charge_cap_w": 3000, "discharge_cap_w": 3000})]
+
+        gw._process_telemetry(self._rated_status().SerializeToString())
+        gw._inverter_rate_caps = lambda: {"CE2223G800": (3000, 3000), "CE2225G400": (3000, 3000)}
+        asyncio.run(gw._check_rate_caps())
+        assert gw._published[1:] == [("set_rate_cap", {"serial": "CE2225G400", "charge_cap_w": 3000, "discharge_cap_w": 3000})]
+
+    def test_coordinator_rate_writes_are_not_held(self):
+        """A Gateway or Plant EMS is not judged on a battery rating of its own."""
+        gw = self._writable(self._listed_gateway([]))
+        status = self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"])
+        status.inverters[0].battery.rate_max_w = 0
+        gw._process_telemetry(status.SerializeToString())
+        assert gw._inverter_slot_serials == ["GW2347G077"]
+
+        asyncio.run(gw.number_event("number.predbat_gateway_47g077_charge_rate", 6000))
+        assert gw._published == [("set_charge_rate", {"power_w": 6000, "serial": "GW2347G077"})]
+
     def test_stored_ratings_are_used_after_a_restart(self):
         """With a serial list the ratings are in the discovery record, so a restart does not fall back to 6000W."""
         first = self._listed_gateway(["CE2223G800", "CE2225G400"])

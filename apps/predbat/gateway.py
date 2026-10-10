@@ -240,6 +240,7 @@ class GatewayMQTT(ComponentBase):
     _inverter_slot_serials = ()
     _slots_without_capacity = frozenset()
     _last_ratings = {}  # replaced, never changed in place
+    _assumed_ratings = frozenset()
     gateway_device_id = None
 
     def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=True, gateway_integrate_power=False, **kwargs):
@@ -347,6 +348,7 @@ class GatewayMQTT(ComponentBase):
         self._pv_only_serials = ()  # listed inverters with no battery: counted for PV, never written to
         self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
         self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
+        self._assumed_ratings = frozenset()  # entity suffixes of inverters whose maximum rate has never been reported
         self._discovery = {}  # upper-case serial -> what the hub last reported it to be, for gateway_inverter_serial
         self._discovery_dirty = False
         self._discovery_save_retry_at = 0
@@ -1253,7 +1255,13 @@ class GatewayMQTT(ComponentBase):
         # ratings unpopulated (seen for a few minutes after a hub restart) otherwise turned a 3kW
         # inverter into a 6kW one with no export limit, and those rates were written to it (#5478).
         record = self._discovery.get(inv.serial.upper(), {})
-        battery_rate_max = self._last_rating(suffix, "battery_rate_max", bat.rate_max_w) or record.get("rate_max_w") or 6000
+        battery_rate_max = self._last_rating(suffix, "battery_rate_max", bat.rate_max_w) or record.get("rate_max_w")
+        # With no rating ever reported the plan still needs a figure, but it is only an assumption:
+        # rate writes for the inverter are held until the real one arrives (see _rate_write_held)
+        assumed = not battery_rate_max and inv.type not in GATEWAY_COORDINATOR_TYPES
+        if assumed != (suffix in self._assumed_ratings):
+            self._assumed_ratings = self._assumed_ratings | {suffix} if assumed else self._assumed_ratings - {suffix}
+        battery_rate_max = battery_rate_max or 6000
         self.dashboard_item(f"sensor.{pfx}_battery_rate_max", battery_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
 
         self.dashboard_item(f"sensor.{pfx}_pv_power", inv.pv.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
@@ -2412,6 +2420,9 @@ class GatewayMQTT(ComponentBase):
         for serial, caps in self._inverter_rate_caps().items():
             if self._rate_caps_sent.get(serial) == caps:
                 continue
+            if _serial_suffix(serial) in self._assumed_ratings:
+                # The cap comes from a rating the inverter has not reported yet (see _rate_write_held)
+                continue
             charge_cap_w, discharge_cap_w = caps
             await self.publish_command("set_rate_cap", serial=serial, charge_cap_w=charge_cap_w, discharge_cap_w=discharge_cap_w)
             self._rate_caps_sent[serial] = caps
@@ -2643,6 +2654,8 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: number_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
+        if ("_discharge_rate" in entity_id or "_charge_rate" in entity_id) and self._rate_write_held(serial, val):
+            return
         if "_discharge_rate" in entity_id:
             await self._send_control(entity_id, "set_discharge_rate", power_w=val, serial=serial)
         elif "_charge_rate" in entity_id:
@@ -2651,6 +2664,27 @@ class GatewayMQTT(ComponentBase):
             await self._send_control(entity_id, "set_reserve", target_soc=val, serial=serial)
         elif "_target_soc" in entity_id:
             await self._send_control(entity_id, "set_target_soc", target_soc=val, serial=serial)
+
+    def _rate_write_held(self, serial, power_w):
+        """Whether a charge or discharge rate write must wait for the inverter's rating.
+
+        Until an inverter has reported its maximum rate, the rate Predbat works to is the 6000W
+        default, and writing that to a 3kW inverter is the fault in #5478. Such a write is not
+        sent. Predbat reads the unchanged rate back as a write that did not complete and tries
+        again, so it goes through once the rating is known. A rate of zero is safe on any
+        inverter and is always sent, so a charge or discharge can still be stopped.
+
+        Args:
+            serial: The inverter the write is for.
+            power_w: The rate being written.
+
+        Returns:
+            bool: True if the write is held.
+        """
+        if power_w <= 0 or _serial_suffix(serial) not in self._assumed_ratings:
+            return False
+        self.log(f"Warn: GatewayMQTT: inverter {serial} has not reported its maximum rate — rate write of {power_w}W held until it does")
+        return True
 
     async def switch_event(self, entity_id, service):
         """Handle switch entity service calls (charge/discharge enable).
