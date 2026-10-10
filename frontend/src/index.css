@@ -87,6 +87,16 @@ body {
   min-height: 100dvh;
 }
 
+@media (max-width: 700px) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

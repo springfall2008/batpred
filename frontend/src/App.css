@@ -158,6 +158,12 @@
 }
 
 @media (max-width: 700px) {
+  .app-shell {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
   .app-content,
   .app-shell.navigation-collapsed .app-content {
     margin-left: 0;

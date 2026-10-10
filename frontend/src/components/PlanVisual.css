@@ -403,6 +403,81 @@
   color: var(--color-text);
 }
 
+/* Energy-session colours take priority over the underlying battery action. */
+.plan-timeline-event.timeline-rate-event-power-down {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-power-up {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-axle-import {
+  border-color: var(--color-flow-grid);
+  background: var(--color-flow-grid);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-axle-export {
+  border-color: var(--color-export);
+  background: var(--color-export);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-axle-event {
+  border-color: var(--color-warning);
+  background: var(--color-warning);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-event.timeline-rate-event-generic {
+  border-color: var(--color-text-muted);
+  background: var(--color-text-muted);
+  color: var(--color-semantic-contrast);
+}
+
+.plan-timeline-rate-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.plan-timeline-rate-event.is-power-down {
+  color: var(--color-danger);
+}
+
+.plan-timeline-rate-event.is-power-up {
+  color: var(--color-success);
+}
+
+.plan-timeline-rate-event.is-axle-import {
+  color: var(--color-flow-grid);
+}
+
+.plan-timeline-rate-event.is-axle-export {
+  color: var(--color-export);
+}
+
+.plan-timeline-rate-event.is-axle-event {
+  color: var(--color-warning);
+}
+
+.plan-timeline-rate-event.is-generic {
+  color: var(--color-text-muted);
+}
+
 /*
  * SOC heading.
  */

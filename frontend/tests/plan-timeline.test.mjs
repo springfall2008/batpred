@@ -17,7 +17,7 @@ const currencyModule = { exports: {} }
 vm.runInNewContext(compile(currencySource), { module: currencyModule, exports: currencyModule.exports })
 
 const module = { exports: {} }
-vm.runInNewContext(compile(source), {
+vm.runInNewContext(compile(source.replace('function buildTimelineEvents(', 'export function buildTimelineEvents(')), {
   module,
   exports: module.exports,
   require(specifier) {
@@ -45,4 +45,36 @@ test('SOC hover interpolates the plotted value at the pointer time', () => {
   assert.equal(module.exports.interpolateSoc(points, 15), 35)
   assert.equal(module.exports.interpolateSoc(points, 45), 45)
   assert.equal(module.exports.interpolateSoc(points, 90), 40)
+})
+
+test('timeline splits a continuous charge action around a Power Up session', () => {
+  const row = (time, rateEventType) => ({
+    time,
+    state: 'Chrg',
+    state_target: 80,
+    soc_percent: 50,
+    import_rate: 0,
+    export_rate: 12,
+    car_charging: 0,
+    carbon_change: 0,
+    reasons: [],
+    import_rate_adjust_type: rateEventType ? 'saving' : undefined,
+    rate_event_type: rateEventType
+  })
+
+  const events = module.exports.buildTimelineEvents({
+    rows: [
+      row('2026-10-11T10:30:00+01:00'),
+      row('2026-10-11T11:00:00+01:00', 'octopus_power_up'),
+      row('2026-10-11T11:30:00+01:00', 'octopus_power_up'),
+      row('2026-10-11T12:00:00+01:00')
+    ],
+    currency_symbols: ['£', 'p'],
+    reason_templates: {}
+  }, 30 * 60 * 1000, 50)
+
+  assert.equal(events.length, 3)
+  assert.equal(events[1].rateEventType, 'octopus_power_up')
+  assert.equal(events[1].start.toISOString(), '2026-10-11T10:00:00.000Z')
+  assert.equal(events[1].end.toISOString(), '2026-10-11T11:00:00.000Z')
 })
