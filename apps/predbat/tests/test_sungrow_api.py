@@ -1181,6 +1181,42 @@ def test_sungrow_run_binds_a_setting_that_becomes_available_later():
     assert not failed, "test_sungrow_run_binds_a_setting_that_becomes_available_later"
 
 
+def test_sungrow_ignore_pv_never_triggers_a_rerun():
+    """With PV opted out, PV turning up later is not something automatic_config would bind, so it must not re-run."""
+    failed = False
+    client = _polled_client(automatic=True)
+    client.automatic_ignore_pv = True
+    uuid = client.device_list[0]
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
+    pv_power = client.device_values[uuid].pop("pv_power", None)
+    plant_pv = client.plant_values["1234567"].pop("total_active_power_of_pv", None)
+    run_async_local(client.run(0, True))
+    runs = []
+    original = client.automatic_config
+
+    async def counting_config():
+        """Count re-runs of automatic_config."""
+        runs.append(1)
+        await original()
+
+    client.automatic_config = counting_config
+    client.device_values[uuid]["pv_power"] = pv_power if pv_power is not None else 2400.0
+    client.plant_values["1234567"]["total_active_power_of_pv"] = plant_pv if plant_pv is not None else 2500.0
+    run_async_local(client.run(0, False))
+    if runs:
+        print(f"ERROR: automatic_config re-ran {len(runs)} time(s) for PV the user opted out of")
+        failed = True
+    if "pv_power" in client.base.args:
+        print("ERROR: pv_power was bound despite automatic_ignore_pv")
+        failed = True
+    assert not failed, "test_sungrow_ignore_pv_never_triggers_a_rerun"
+
+
 def run_sungrow_api_tests(my_predbat):
     """Run all Sungrow API tests."""
     failed = False
@@ -1227,6 +1263,7 @@ def run_sungrow_api_tests(my_predbat):
         ("limits_backoff", test_sungrow_failed_limits_read_backs_off),
         ("limits_after_control", test_sungrow_run_reads_limits_after_the_control_loop),
         ("late_binding", test_sungrow_run_binds_a_setting_that_becomes_available_later),
+        ("ignore_pv_no_rerun", test_sungrow_ignore_pv_never_triggers_a_rerun),
     ]:
         try:
             if fn():

@@ -1697,16 +1697,22 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         automatic_config() itself binds by. run() compares this with what has already been
         bound, so a figure that was missing on the first cycle is bound when it turns up
         rather than at the next restart. The export limit's name carries its kind as well,
-        because switching the inverter's limitation on or off changes what is bound.
+        because switching the inverter's limitation on or off changes what is bound. Settings
+        the user has opted out of with automatic_ignore_pv are never listed, exactly as
+        automatic_config() never binds them.
         """
         devices = list(self.device_list)
         if not devices:
             return set()
         found = set()
         for arg, leaf in SUNGROW_POWER_ARGS:
+            if arg == "pv_power" and self.automatic_ignore_pv:
+                continue
             if all(self.telemetry(uuid, leaf) is not None for uuid in devices):
                 found.add(arg)
         for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if leaf == "pv_today" and self.automatic_ignore_pv:
+                continue
             if all(self.energy(uuid, leaf) is not None for uuid in devices):
                 found.add(leaf)
         if all(self.battery_capacity(uuid) > 0 for uuid in devices):
