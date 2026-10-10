@@ -5,6 +5,8 @@ Tests for GatewayMQTT component.
 import sys
 import os
 import math
+import json
+import asyncio
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -3502,6 +3504,11 @@ class TestGatewayUnitControlBinding:
         gw.api_started = False
         gw._last_telemetry_time = 0
         gw.update_success_timestamp = MagicMock()
+        gw.non_fatal_error_occurred = MagicMock()
+        # Entity states as the gateway published them, so a test can tell stale from rewritten
+        gw._states = {}
+        gw.dashboard_item = lambda entity_id, state, attributes=None, app=None: gw._states.__setitem__(entity_id, state)
+        gw.get_state_wrapper = lambda entity_id=None, default=None, **kwargs: gw._states.get(entity_id, default)
         return gw
 
     def _pv_only_site_status(self, battery_ready):
@@ -3561,6 +3568,342 @@ class TestGatewayUnitControlBinding:
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"] == ["select.predbat_gateway_00b002_charge_slot1_start"]
         assert all("00p001" not in entity for entity in gw._args["charge_start_time"])
+
+    # ------------------------------------------------------------------
+    # gateway_inverter_serial is authoritative, and an unusable inverter is picked up later (#5471)
+    # ------------------------------------------------------------------
+
+    def _two_ac_status(self, second="ok"):
+        """Two AC battery inverters on one hub; *second* is how CE2225G400 is reported.
+
+        "ok" is healthy, "no_battery" has no readings at all (the hub is not reading it), "disconnected" also has
+        connected false, "not_primary" has battery data but no primary flag, and "absent"
+        leaves it out of the status message.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_two_ac"
+        status.firmware = "1.0.34"
+        status.schema_version = 1
+        for serial in ("CE2223G800", "CE2225G400"):
+            if serial == "CE2225G400" and second == "absent":
+                continue
+            inv = status.inverters.add()
+            inv.type = pb.INVERTER_TYPE_GIVENERGY
+            inv.serial = serial
+            inv.primary = True
+            inv.connected = True
+            inv.active = True
+            inv.battery.soc_percent = 50
+            inv.battery.capacity_wh = 9500
+            inv.battery.rate_max_w = 3000
+        if second in ("no_battery", "disconnected"):
+            status.inverters[1].ClearField("battery")
+        if second == "disconnected":
+            status.inverters[1].connected = False
+        if second == "not_primary":
+            status.inverters[1].primary = False
+        return status
+
+    def _errors(self, gw):
+        """The Error lines the gateway has logged."""
+        return [str(c.args[0]) for c in gw.log.call_args_list if str(c.args[0]).startswith("Error")]
+
+    def _logged(self, gw, level, *words):
+        """Whether a log line of this level holds every one of *words*."""
+        return any(str(c.args[0]).startswith(level) and all(word in str(c.args[0]) for word in words) for c in gw.log.call_args_list)
+
+    def _listed_gateway(self, serials, stored=None):
+        """A handler gateway with a serial list and a storage holding *stored*, loaded as run() does at start-up."""
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = list(serials)
+        gw.gateway_device_id = "pbgw_two_ac"
+        saved = {}
+        if stored is not None:
+            saved[("gateway", "discovery_pbgw_two_ac")] = {"inverters": stored}
+
+        class FakeStorage:
+            """Storage holding what the gateway saved."""
+
+            async def load(self, module, filename):
+                """Return the saved data."""
+                return saved.get((module, filename))
+
+            async def save(self, module, filename, data, format="yaml", expiry=None, indent=None):
+                """Keep the data."""
+                saved[(module, filename)] = json.loads(json.dumps(data))
+                return True
+
+        gw._saved = saved
+        gw.base.components.get_component.return_value = FakeStorage()
+        asyncio.run(gw._load_discovery())
+        return gw
+
+    _STORED_400 = {"CE2225G400": {"serial": "CE2225G400", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": True, "capacity_wh": 9500, "model": ""}}
+
+    def test_listed_inverter_never_read_is_left_out_until_the_hub_reads_it(self):
+        """A listed inverter the hub has never read is left out, with a warning and no error, and bound once it is read."""
+        for second in ("no_battery", "disconnected", "absent"):
+            gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+
+            gw._process_telemetry(self._two_ac_status(second).SerializeToString())
+
+            assert gw._args["num_inverters"] == 1, second
+            assert self._logged(gw, "Warn", "CE2225G400", "not been read by the hub yet"), second
+            assert self._errors(gw) == [], second
+            gw.non_fatal_error_occurred.assert_not_called()
+
+            gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+
+            assert gw._args["num_inverters"] == 2, second
+            assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"], second
+
+    def test_listed_inverter_is_bound_whatever_its_primary_flag(self):
+        """The list decides which battery inverters are used, not the hub's primary flag."""
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+
+        gw._process_telemetry(self._two_ac_status("not_primary").SerializeToString())
+
+        assert gw._args["num_inverters"] == 2
+        assert gw._args["soc_percent"] == ["sensor.predbat_gateway_23g800_soc", "sensor.predbat_gateway_25g400_soc"]
+
+    def test_stored_inverter_unread_at_startup_is_still_bound(self):
+        """An inverter discovered on an earlier run keeps its slot when the hub cannot read it at start-up (the #5471 incident)."""
+        for second in ("no_battery", "disconnected", "absent"):
+            gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=self._STORED_400)
+
+            gw._process_telemetry(self._two_ac_status(second).SerializeToString())
+
+            assert gw._auto_configured is True, second
+            assert gw._args["num_inverters"] == 2, second
+            assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"], second
+            assert gw._args["soc_max"] == ["sensor.predbat_gateway_23g800_battery_capacity", "sensor.predbat_gateway_25g400_battery_capacity"], second
+            # Nothing was published for it before, so it gets default entities and its stored size
+            assert gw._states["sensor.predbat_gateway_25g400_soc"] == 0, second
+            assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5, second
+            assert gw._states["select.predbat_gateway_25g400_charge_slot1_start"] == "00:00:00", second
+            assert self._logged(gw, "Error", "CE2225G400", "not being read"), second
+            assert gw.non_fatal_error_occurred.call_count == 1, second
+
+    def test_changed_serial_list_wins_over_stored_discovery(self):
+        """A stored record for a serial no longer in the list is not used: the list is the setting."""
+        gw = self._listed_gateway(["CE2223G800"], stored=self._STORED_400)
+        assert gw._discovery == {}
+
+        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+        asyncio.run(gw._save_discovery())
+
+        assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["CE2223G800"]
+        assert sorted(gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]) == ["CE2223G800"]
+        gw.non_fatal_error_occurred.assert_not_called()
+
+    def test_discovery_is_saved_and_not_overwritten_while_an_inverter_is_offline(self):
+        """Discovery is stored from an inverter the hub is reading, updated when it changes, and left alone while it is offline."""
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+        asyncio.run(gw._save_discovery())
+        stored = gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]
+        assert stored["CE2225G400"] == self._STORED_400["CE2225G400"]
+
+        for second in ("no_battery", "disconnected", "absent"):
+            gw._process_telemetry(self._two_ac_status(second).SerializeToString())
+            assert gw._discovery_dirty is False, second
+            assert gw._discovery["CE2225G400"] == self._STORED_400["CE2225G400"], second
+
+        bigger = self._two_ac_status("ok")
+        bigger.inverters[1].battery.capacity_wh = 13500
+        gw._process_telemetry(bigger.SerializeToString())
+        asyncio.run(gw._save_discovery())
+        assert gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]["CE2225G400"]["capacity_wh"] == 13500
+
+        # A second gateway started from that storage knows both inverters before any telemetry
+        restarted = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=gw._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"])
+        assert sorted(restarted._discovery) == ["CE2223G800", "CE2225G400"]
+
+    def test_no_serial_list_stores_nothing(self):
+        """With no serial list nothing is recorded or saved, and auto-config uses what it finds."""
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+        asyncio.run(gw._save_discovery())
+
+        assert gw._discovery == {}
+        assert gw._saved == {}
+        assert gw._args["num_inverters"] == 2
+
+    def test_configured_inverter_offline_reports_an_error_until_it_returns(self):
+        """A configured inverter the hub stops reading is an error on every frame, logged once, and clears when it returns."""
+        for second in ("no_battery", "disconnected", "absent"):
+            gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+            gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+            assert self._errors(gw) == []
+
+            gw._process_telemetry(self._two_ac_status(second).SerializeToString())
+            gw._process_telemetry(self._two_ac_status(second).SerializeToString())
+
+            unread = [line for line in self._errors(gw) if "not being read" in line]
+            assert len(unread) == 1 and "CE2225G400" in unread[0] and "CE2223G800" not in unread[0], (second, unread)
+            assert gw.non_fatal_error_occurred.call_count == 2, second
+            assert gw._args["num_inverters"] == 2, second
+
+            gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+
+            assert gw.non_fatal_error_occurred.call_count == 2, second
+            assert self._logged(gw, "Info", "being read by the hub again"), second
+
+    def test_configured_inverter_going_offline_keeps_its_slot_and_its_last_data(self):
+        """An inverter that stops being read stays configured and its entities go stale, they are not zeroed."""
+        for listed in (["CE2223G800", "CE2225G400"], []):
+            gw = self._listed_gateway(listed)
+            healthy = self._two_ac_status("ok")
+            healthy.inverters[1].battery.soc_percent = 84
+            gw._process_telemetry(healthy.SerializeToString())
+            assert gw._states["sensor.predbat_gateway_25g400_soc"] == 84
+
+            offline = self._two_ac_status("no_battery")
+            offline.inverters[0].battery.soc_percent = 61
+            for _ in range(2):
+                gw._process_telemetry(offline.SerializeToString())
+
+            assert gw._args["num_inverters"] == 2, listed
+            assert gw._states["sensor.predbat_gateway_25g400_soc"] == 84, listed
+            assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5, listed
+            assert gw._states["sensor.predbat_gateway_23g800_soc"] == 61, listed
+
+            # Gone from the status message altogether: still configured, still stale
+            gw._process_telemetry(self._two_ac_status("absent").SerializeToString())
+            assert gw._args["num_inverters"] == 2, listed
+            assert gw._states["sensor.predbat_gateway_25g400_soc"] == 84, listed
+            assert gw.non_fatal_error_occurred.call_count == (3 if listed else 0), listed
+
+            healthy.inverters[1].battery.soc_percent = 80
+            gw._process_telemetry(healthy.SerializeToString())
+            assert gw._states["sensor.predbat_gateway_25g400_soc"] == 80, listed
+
+    def test_listed_inverters_all_healthy_report_no_error(self):
+        """A healthy site with a serial list raises nothing."""
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+
+        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+
+        assert gw._args["num_inverters"] == 2
+        assert self._errors(gw) == []
+        gw.non_fatal_error_occurred.assert_not_called()
+
+    def test_serial_list_is_not_added_to(self):
+        """An inverter outside gateway_inverter_serial is never bound, healthy or not."""
+        gw = self._listed_gateway(["CE2223G800"])
+
+        gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+
+        assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["CE2223G800"]
+        gw.non_fatal_error_occurred.assert_not_called()
+
+    def test_serial_list_with_a_coordinator_still_binds_only_the_coordinator(self):
+        """A list naming a Gateway, with or without its AIOs, binds the Gateway alone: the list never splits a coordinated system."""
+        for listed in (["GW2347G077", "CH2414G318", "CH9999G999"], ["GW2347G077"]):
+            gw = self._listed_gateway(listed)
+
+            gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"]).SerializeToString())
+
+            assert gw._args["num_inverters"] == 1, listed
+            assert gw._args["charge_start_time"] == ["select.predbat_gateway_47g077_charge_slot1_start"], listed
+            assert gw._pv_only_serials == (), listed
+            gw.non_fatal_error_occurred.assert_not_called()
+
+    def _pv_and_battery_status(self, pv_power=1200, pv_has_battery=False):
+        """A PV-only inverter that reports generation, plus one battery inverter."""
+        status = self._pv_only_site_status(battery_ready=True)
+        status.inverters[0].pv.power_w = pv_power
+        if pv_has_battery:
+            status.inverters[0].battery.soc_percent = 40
+            status.inverters[0].battery.capacity_wh = 5000
+        return status
+
+    def test_listed_pv_only_inverter_is_configured_as_pv_only(self):
+        """A listed inverter with no battery has no slot and is never a write target; its generation is counted."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+
+        for power in (1200, 1500):
+            gw._process_telemetry(self._pv_and_battery_status(pv_power=power).SerializeToString())
+            assert gw._states["sensor.predbat_gateway_00p001_pv_power"] == power
+
+        assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["CH0000B002"]
+        assert gw._pv_only_serials == ("FD0000P001",)
+        assert "00p001" not in gw._suffix_to_serial
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00b002_pv_power", "sensor.predbat_gateway_00p001_pv_power"]
+        assert gw._args["pv_today"] == ["sensor.predbat_gateway_00b002_pv_today", "sensor.predbat_gateway_00p001_pv_today"]
+        for arg in ("soc_percent", "charge_rate", "discharge_rate", "reserve", "charge_limit", "charge_start_time", "scheduled_charge_enable", "load_power", "grid_power"):
+            assert len(gw._args[arg]) == 1 and "00p001" not in str(gw._args[arg][0]), arg
+        assert self._errors(gw) == []
+        gw.non_fatal_error_occurred.assert_not_called()
+
+    def test_unlisted_pv_only_inverter_is_left_out_as_before(self):
+        """With no serial list a PV-only inverter is not configured at all, as before."""
+        gw = self._listed_gateway([])
+
+        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+
+        assert gw._args["num_inverters"] == 1
+        assert gw._pv_only_serials == ()
+        assert gw._args["pv_power"] == ["sensor.predbat_gateway_00b002_pv_power"]
+
+    def test_pv_only_inverter_that_reports_a_battery_later_gets_a_slot(self):
+        """Having a battery is learned when the hub reports it, and re-runs auto-config; it is never unlearned."""
+        gw = self._listed_gateway(["FD0000P001", "CH0000B002"])
+        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+        assert gw._args["num_inverters"] == 1
+
+        gw._process_telemetry(self._pv_and_battery_status(pv_has_battery=True).SerializeToString())
+        assert gw._args["num_inverters"] == 2
+        assert gw._pv_only_serials == ()
+        assert gw._discovery["FD0000P001"]["battery"] is True
+
+        gw._process_telemetry(self._pv_and_battery_status().SerializeToString())
+        assert gw._args["num_inverters"] == 2
+        assert gw._discovery["FD0000P001"]["battery"] is True
+
+    def test_unlisted_site_picks_up_an_inverter_that_becomes_usable(self):
+        """With no serial list, an inverter unusable at first telemetry is registered when it becomes usable, with no restart."""
+        for second in ("no_battery", "disconnected", "not_primary"):
+            gw = self._make_handler_gateway()
+
+            gw._process_telemetry(self._two_ac_status(second).SerializeToString())
+            assert gw._args["num_inverters"] == 1, second
+            assert gw._inverter_slot_serials == ["CE2223G800"], second
+
+            gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+            assert gw._args["num_inverters"] == 2, second
+            assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"], second
+
+    def test_unusable_inverter_does_not_rerun_auto_config_every_frame(self):
+        """An inverter that stays unusable is not a reason to re-run auto-config, and nor is a steady healthy site."""
+        for listed in ([], ["CE2223G800", "CE2225G400"]):
+            gw = self._listed_gateway(listed)
+            gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+
+            runs = []
+            real_config = gw.automatic_config
+
+            def counted_config():
+                runs.append(1)
+                return real_config()
+
+            gw.automatic_config = counted_config
+            for _ in range(3):
+                gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+            assert runs == [], listed
+
+            for _ in range(3):
+                gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+            assert runs == [1], listed
+
+            # Losing its telemetry again is a removal, which stays ignored: the inverter keeps its slot
+            gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+            assert runs == [1], listed
+            assert gw._args["num_inverters"] == 2, listed
 
     def test_scenario_second_aio_via_telemetry_moves_control_to_gateway(self):
         """End-to-end through the telemetry handler (_process_telemetry).
