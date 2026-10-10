@@ -1471,7 +1471,7 @@ Integrates with Sungrow hybrid (energy-storage) inverters through the official i
 #### Important notes (sungrow)
 
 - **EXPERIMENTAL:** not confirmed against real hardware. Run the [diagnostics CLI](inverter-setup.md#verifying-with-the-sungrow-diagnostics-cli) before trusting Predbat with control
-- **Control needs Predbat running.** If Predbat stops or loses its network, the heartbeat lapses and the inverter reverts to self-consumption by itself within about five minutes. Turning on `switch.predbat_set_read_only` stops every command and the heartbeat immediately, sending one hand-back to self-consumption for whatever Predbat was controlling at that moment (falling back to the same five-minute lapse only if that write fails)
+- **Control needs Predbat running.** If Predbat stops or loses its network, the heartbeat lapses and the inverter reverts to self-consumption by itself within about five minutes. Turning on `switch.predbat_set_read_only` stops Predbat sending any new command from that moment; an inverter it was controlling is then handed back to self-consumption within half the heartbeat interval (about two and a half minutes at the default), falling back to the same five-minute heartbeat lapse only if that hand-back cannot be delivered
 - **Stale telemetry does not stop control.** When telemetry is more than 15 minutes old the component reports itself unhealthy - shown as a component error with the reason `telemetry is N minutes old` - and logs a warning once; it keeps running rather than failing its cycle
 - **Freeze Export is not supported**, and the inverter's own reserve only covers 0-50%
 - Configuration options are listed under [Sungrow iSolarCloud API](apps-yaml.md#sungrow-isolarcloud-api)

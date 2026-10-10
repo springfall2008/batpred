@@ -1052,6 +1052,8 @@ Register an application at [developer-api.isolarcloud.com](https://developer-api
 - **sungrow_appkey** and **sungrow_access_key** - identify your application. Both are required.
 - **sungrow_key** - the access token for the plant owner's account.
 - **sungrow_auth_method** - `oauth` (the default) is for Predbat.com, which supplies and renews the token for you. On a self-hosted install set `token`: Predbat then uses the token exactly as you supplied it. Predbat cannot renew a token in this mode, so when Sungrow expire it you must obtain a new one and update `sungrow_key`.
+- **sungrow_token_expires_at** - the OAuth access token's expiry. Set by Predbat.com only; leave unset on a self-hosted install.
+- **sungrow_token_hash** - the OAuth refresh token hash, used to renew `sungrow_key` automatically. Set by Predbat.com only; leave unset on a self-hosted install.
 - **sungrow_gateway** - your account's region: `europe` (default), `australia`, `international`, `china` or `india`, or the full gateway URL from your authorisation instructions. The wrong region signs in successfully and then finds no plants.
 - **sungrow_automatic** - set `True` to have Predbat configure the inverter sensors and controls for you, binding only the sensors your inverter actually reports; if a setting becomes available later, Predbat binds it then too, without needing a restart.
 - **sungrow_automatic_ignore_pv** - set `True` to leave `pv_power` and `pv_today` for you to configure.
