@@ -5833,6 +5833,7 @@ charge_start_service:
     # deduplicated as a repeat - confirming the fallback isn't re-issued every cycle.
     failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True, stop_discharge=True)
     failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 75, freeze=True, no_freeze=True, repeat=True)
+    failed |= test_call_adjust_export_immediate("export_immediate_freeze_at_100_soc", my_predbat, ha, inv, dummy_items, 100, freeze=True, clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 30, freeze=True, no_freeze=True, repeat=True)
     if failed:
