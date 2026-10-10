@@ -1513,7 +1513,8 @@ def minute_data(
             minutes_to = int(timed_to.total_seconds() / 60)
             minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
-        if minutes < newest_age:
+        # <= so that of several changes in the same minute the newest wins (history is oldest first)
+        if minutes <= newest_age:
             newest_age = minutes
             newest_state = state
 
