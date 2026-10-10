@@ -77,6 +77,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    str2time,
     minutes_since_yesterday,
     minutes_since_midnight,
     dp1,
@@ -843,7 +844,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         try:
-            saved_dt = datetime.fromisoformat(saved_updated)
+            saved_dt = str2time(saved_updated)
         except (ValueError, TypeError):
             self.log("Warning: Saved plan timestamp is invalid, ignoring")
             return
@@ -1984,8 +1985,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return False
 
         try:
-            predbat_last_updated = datetime.fromisoformat(predbat_last_updated)
-        except ValueError:
+            predbat_last_updated = str2time(predbat_last_updated)
+        except (ValueError, TypeError):
             return False
 
         # Check if the last updated time is within the last 15 minutes. An install upgraded
