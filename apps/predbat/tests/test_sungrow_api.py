@@ -799,10 +799,11 @@ def test_sungrow_run_requires_credentials():
     assert not failed, "test_sungrow_run_requires_credentials"
 
 
-def test_sungrow_run_fails_once_telemetry_is_stale():
-    """One missed poll is noise; fifteen minutes without telemetry is a component that is not working."""
+def test_sungrow_stale_telemetry_is_reported_without_failing_the_cycle():
+    """Stale telemetry makes the component unhealthy; it must not fail run(), which would flag all of Predbat."""
     failed = False
     client = _polled_client()
+    client.api_started = True
     stamps = []
     client.update_success_timestamp = lambda: stamps.append(1)
 
@@ -812,14 +813,25 @@ def test_sungrow_run_fails_once_telemetry_is_stale():
 
     client.refresh_power = no_telemetry
     client.mark_refreshed("power", age_minutes=6)
-    if run_async_local(client.run(0, False)) is not True or len(stamps) != 1:
-        print("ERROR: a single missed telemetry poll failed the cycle")
+    if run_async_local(client.run(0, False)) is not True or len(stamps) != 1 or not client.is_alive() or client.health_message() is not None:
+        print("ERROR: a single missed telemetry poll was treated as stale")
         failed = True
     client.mark_refreshed("power", age_minutes=20)
-    if run_async_local(client.run(0, False)) is not False or len(stamps) != 1:
-        print("ERROR: 20-minute-old telemetry was still reported as a healthy cycle")
+    result = run_async_local(client.run(0, False))
+    if result is not True:
+        print(f"ERROR: run returned {result!r} on stale telemetry; False here marks the whole of Predbat as errored")
         failed = True
-    assert not failed, "test_sungrow_run_fails_once_telemetry_is_stale"
+    if len(stamps) != 1:
+        print("ERROR: a cycle with 20-minute-old telemetry was stamped as a success")
+        failed = True
+    if client.is_alive() or "telemetry" not in str(client.health_message()):
+        print(f"ERROR: stale telemetry was not reported: alive={client.is_alive()} message={client.health_message()}")
+        failed = True
+    run_async_local(client.run(0, False))
+    if sum(1 for message in client.log_messages if "telemetry is" in message and "stale" in message) != 1:
+        print("ERROR: the stale warning was not logged exactly once for the episode")
+        failed = True
+    assert not failed, "test_sungrow_stale_telemetry_is_reported_without_failing_the_cycle"
 
 
 def test_sungrow_run_saves_discovery_when_it_refreshes():
@@ -873,7 +885,7 @@ def run_sungrow_api_tests(my_predbat):
         ("record_no_solar_claim", test_sungrow_discovery_record_omits_solar_when_pv_was_never_reported),
         ("run_defers_without_telemetry", test_sungrow_run_defers_startup_without_telemetry),
         ("run_requires_credentials", test_sungrow_run_requires_credentials),
-        ("stale_telemetry", test_sungrow_run_fails_once_telemetry_is_stale),
+        ("stale_telemetry", test_sungrow_stale_telemetry_is_reported_without_failing_the_cycle),
         ("static_saved_on_discovery", test_sungrow_run_saves_discovery_when_it_refreshes),
     ]:
         try:

@@ -294,6 +294,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # precisely which stage failed.
         self.last_api_error = ""
         self.discovery_ok = None
+        self._stale_logged = False
         if not self.control_enable:
             self.log("Info: Sungrow control is disabled (sungrow_control_enable is false); monitoring only")
         if self.forced_charge_schedule:
@@ -556,6 +557,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if last is None:
             return float("inf")
         return (time.time() - last) / 60.0
+
+    def telemetry_stale(self):
+        """Return whether the last successful telemetry read is too old to plan on."""
+        return self.tier_age_minutes("power") > SUNGROW_TELEMETRY_STALE_MINUTES
 
     # -------------------------------------------------------------------------
     # Telemetry
@@ -1862,16 +1867,30 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Sungrow first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
             return False
 
-        if not live_ok and self.tier_age_minutes("power") > SUNGROW_TELEMETRY_STALE_MINUTES:
-            # The sensors above were republished from the last good read so the entities do not
-            # vanish, but a cycle that has had no telemetry for this long has not succeeded.
+        stale = self.telemetry_stale()
+        if stale and not self._stale_logged:
+            # Logged once per episode, not once a minute. The cycle is NOT failed: a False from
+            # run() after start-up marks the whole of Predbat as having had an error and stops
+            # its status being recorded, which is far out of proportion to one cloud being down.
+            # is_alive() and health_message() below are what report it.
             self.log("Warn: Sungrow telemetry is {:.0f} minutes old and could not be refreshed; SoC and power are stale".format(self.tier_age_minutes("power")))
-            return False
+        self._stale_logged = stale
 
         if first and self.automatic:
             await self.automatic_config()
-        self.update_success_timestamp()
+        if not stale:
+            self.update_success_timestamp()
         return True
+
+    def is_alive(self):
+        """Return whether the component has started, has an inverter and has current telemetry."""
+        return bool(self.api_started and self.device_list and not self.telemetry_stale())
+
+    def health_message(self):
+        """Return why the component is unhealthy, for the run status, or None."""
+        if self.api_started and self.device_list and self.telemetry_stale():
+            return "telemetry is {:.0f} minutes old".format(self.tier_age_minutes("power"))
+        return None
 
     async def final(self):
         """Persist state and hand every held inverter back to self-consumption on shutdown.
