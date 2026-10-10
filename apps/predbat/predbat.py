@@ -77,6 +77,7 @@ from const import (
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
 from utils import (
+    str2time,
     minutes_since_yesterday,
     minutes_since_midnight,
     dp1,
@@ -1984,8 +1985,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return False
 
         try:
-            predbat_last_updated = datetime.fromisoformat(predbat_last_updated)
-        except ValueError:
+            try:
+                predbat_last_updated = str2time(predbat_last_updated)
+            except ValueError:
+                # str2time() requires a timezone offset, so a legacy naive last_updated (written
+                # before record_status() went timezone-aware) lands here - fall back to the
+                # naive-tolerant parser and let the tzinfo check below handle it (#5181).
+                predbat_last_updated = datetime.fromisoformat(predbat_last_updated)
+        except (ValueError, TypeError):
             return False
 
         # Check if the last updated time is within the last 15 minutes. An install upgraded

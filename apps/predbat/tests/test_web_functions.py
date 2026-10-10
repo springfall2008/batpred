@@ -10,7 +10,9 @@
 
 import asyncio
 import os
+from datetime import datetime, timezone
 
+import predbat as predbat_module
 from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
 
@@ -220,6 +222,47 @@ def run_web_functions_tests(my_predbat):
         if result is not False:
             print(f"  ERROR: expected is_running() False for a stale (2026-07-10) aware last_updated, got: {result}")
             failed += 1
+
+    # A fresh last_updated must report running in every format the attribute can hold:
+    # the colon-less +0100 that record_status() writes (strftime('%z') never emits a colon,
+    # which datetime.fromisoformat() only accepts from Python 3.11 - issue #5181), the
+    # colon form, and the legacy naive form. Naive must still reach the naive-now branch
+    # rather than being rejected as unparseable.
+    now_local = datetime.now(timezone.utc).astimezone()
+    fresh_formats = {
+        "colon-less offset (record_status writer format)": now_local.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "colon offset": now_local.isoformat(),
+        "naive legacy": str(datetime.now()),
+    }
+    # The Python that CI runs accepts all three formats through datetime.fromisoformat() alone,
+    # so also check that is_running() hands the value to str2time() - without that, reverting
+    # the fix would leave these cases passing everywhere except Python 3.9/3.10.
+    original_str2time = predbat_module.str2time
+    str2time_calls = []
+
+    def str2time_spy(time_str):
+        str2time_calls.append(time_str)
+        return original_str2time(time_str)
+
+    predbat_module.str2time = str2time_spy
+    try:
+        for label, stamp in fresh_formats.items():
+            set_entity(my_predbat, status_entity, state="Idle", error=False, last_updated=stamp)
+            del str2time_calls[:]
+            try:
+                result = my_predbat.is_running()
+            except (TypeError, ValueError) as e:
+                print(f"  ERROR: is_running() raised on a fresh {label} ({stamp}): {e}")
+                failed += 1
+            else:
+                if result is not True:
+                    print(f"  ERROR: expected is_running() True for a fresh {label} ({stamp}), got: {result}")
+                    failed += 1
+                if str2time_calls != [stamp]:
+                    print(f"  ERROR: expected is_running() to parse a fresh {label} ({stamp}) with str2time(), got calls: {str2time_calls}")
+                    failed += 1
+    finally:
+        predbat_module.str2time = original_str2time
 
     my_predbat.dashboard_index = original_dashboard_index
     my_predbat.stop_thread = original_stop_thread
