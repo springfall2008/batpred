@@ -929,6 +929,31 @@ def test_read_only_releases_a_held_inverter_but_changes_nothing_else():
     assert not failed, "test_read_only_releases_a_held_inverter_but_changes_nothing_else"
 
 
+def test_forced_charge_window_is_cleared_on_release_and_tracked_for_change():
+    """The in-inverter window outlives Predbat, so a release must switch it off explicitly."""
+    failed = False
+    client = _controlled_client(forced_charge_schedule=True)
+    client.set_mock_clock(3 * 60)
+    sent = _capture_dispatch(client)
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, export={"power": 5000})
+    client.local_schedule[UUID] = schedule
+    run_async_local(client.apply_settings(UUID, schedule))
+    # Same command, later end time: the stored window changed, so it must be rewritten.
+    moved = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:30:00"}, export={"power": 5000})
+    client.local_schedule[UUID] = moved
+    run_async_local(client.apply_settings(UUID, moved))
+    if len(sent) != 2 or sent[1][1].get(SUNGROW_PARAM_FORCED_CHARGING) != str(SUNGROW_ENABLE):
+        print(f"ERROR: a moved forced-charge window was not rewritten: {len(sent)} writes")
+        failed = True
+    client.set_mock_clock(12 * 60)
+    run_async_local(client.apply_settings(UUID, moved))
+    released = sent[-1][1]
+    if released.get(SUNGROW_PARAM_FORCED_CHARGING) != str(SUNGROW_DISABLE):
+        print(f"ERROR: release left the forced-charge window in the inverter: {released}")
+        failed = True
+    assert not failed, "test_forced_charge_window_is_cleared_on_release_and_tracked_for_change"
+
+
 def run_sungrow_control_tests(my_predbat):
     """Run all Sungrow control-logic tests."""
     failed = False
@@ -976,6 +1001,7 @@ def run_sungrow_control_tests(my_predbat):
         ("restart_re_establishes", test_a_restart_rewrites_the_command_and_remembers_it_drives_the_inverter),
         ("read_only_button", test_the_write_button_sends_nothing_in_read_only),
         ("read_only_release", test_read_only_releases_a_held_inverter_but_changes_nothing_else),
+        ("forced_window_cleared", test_forced_charge_window_is_cleared_on_release_and_tracked_for_change),
     ]:
         try:
             if fn():

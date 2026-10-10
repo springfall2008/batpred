@@ -1289,6 +1289,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             return False
         if self._write_supported.get(uuid) is False:
             return False
+        if self.forced_charge_schedule:
+            # The stored window is part of what is written, so it is part of what is compared.
+            charge = self.local_schedule.get(uuid, {}).get("charge", {}) or {}
+            decision = dict(decision, forced_window=[bool(charge.get("enable")), str(charge.get("start")), str(charge.get("end")), int(as_float(charge.get("soc"), 0))])
         if not force and self.applied_command.get(uuid) == decision:
             return True
         if not self._write_allowed(uuid, force=force):
@@ -1372,7 +1376,12 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not was_held and not self._write_allowed(uuid):
             return False
         self.last_write_time[uuid] = time.time()
-        results = await self.dispatch_params(uuid, self._release_params(release["soc_lower"]), task_name="Predbat release")
+        params = self._release_params(release["soc_lower"])
+        if self.forced_charge_schedule:
+            # Stored IN THE INVERTER and recurring daily, so leaving it would force-charge at
+            # the same hours tomorrow whether or not anything planned it.
+            params.append(param_entry(SUNGROW_PARAM_FORCED_CHARGING, scale_for_write(SUNGROW_PARAM_FORCED_CHARGING, SUNGROW_DISABLE)))
+        results = await self.dispatch_params(uuid, params, task_name="Predbat release")
         if results is None:
             self.log("Info: Sungrow could not confirm the release of {} to self-consumption; the external EMS heartbeat has stopped so the inverter reverts on its own, and the release will be retried".format(self._serial(uuid)))
             await self.save_control()
