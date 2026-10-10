@@ -329,9 +329,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     def redact(payload):
         """Return a log-safe copy of a payload with credentials masked.
 
-        Only credentials are masked. result_msg, result_code and req_serial_num are never
-        masked: nobody on the project has Sungrow hardware, so a tester's log is the only
-        diagnostic available and hiding the error text would defeat the point of api_debug.
+        Credentials and the personal fields listed in SUNGROW_DEBUG_REDACT_KEYS (location,
+        coordinates, contact details) are masked at any depth; the payload passed in is not
+        modified. result_msg, result_code and req_serial_num are never masked: nobody on the
+        project has Sungrow hardware, so a tester's log is the only diagnostic available and
+        hiding the error text would defeat the point of api_debug.
         """
         if isinstance(payload, dict):
             return {key: ("***" if key in SUNGROW_DEBUG_REDACT_KEYS else SungrowAPI.redact(value)) for key, value in payload.items()}
@@ -349,7 +351,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         try:
             rendered = json.dumps(self.redact(payload), default=str)[:2000]
         except (TypeError, ValueError):
-            rendered = str(payload)[:2000]
+            rendered = str(self.redact(payload))[:2000]
         self.log("Info: Sungrow API {} {} {}".format(direction, what, rendered))
 
     def _note_failure(self, path, body):

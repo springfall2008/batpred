@@ -433,6 +433,22 @@ def test_sungrow_redact_reaches_nested_fields_and_personal_data():
     assert not failed, "test_sungrow_redact_reaches_nested_fields_and_personal_data"
 
 
+def test_sungrow_debug_trace_redacts_even_when_json_fails():
+    """A payload json cannot render still goes through redact before it reaches the log."""
+    failed = False
+    client = MockSungrow()
+    # A tuple key is not a valid JSON object key, so json.dumps raises TypeError and the fallback runs.
+    client.debug_api("response", "/test", {"token": "super-secret", ("a", "b"): 1})
+    logged = " ".join(client.log_messages)
+    if "/test" not in logged:
+        print("ERROR: the fallback trace was not logged at all")
+        failed = True
+    if "super-secret" in logged:
+        print("ERROR: the fallback trace logged a credential unmasked")
+        failed = True
+    assert not failed, "test_sungrow_debug_trace_redacts_even_when_json_fails"
+
+
 def test_sungrow_discovery_finds_plants_and_energy_storage_inverters():
     """Discovery lists plants, then the energy-storage devices in each, keyed by UUID."""
     failed = False
@@ -887,6 +903,7 @@ def run_sungrow_api_tests(my_predbat):
         ("capacity_diagnostic_only", test_sungrow_reported_capacity_is_diagnostic_only),
         ("redact", test_sungrow_redact_masks_credentials_but_not_errors),
         ("redact_nested", test_sungrow_redact_reaches_nested_fields_and_personal_data),
+        ("debug_fallback_redacts", test_sungrow_debug_trace_redacts_even_when_json_fails),
         ("discovery", test_sungrow_discovery_finds_plants_and_energy_storage_inverters),
         ("discovery_failure_keeps_list", test_sungrow_discovery_failure_keeps_the_previous_device_list),
         ("serial_filter", test_sungrow_inverter_sn_filter),
