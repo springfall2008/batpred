@@ -10,6 +10,7 @@
 
 import asyncio
 import os
+from datetime import datetime, timezone
 
 from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
@@ -220,6 +221,29 @@ def run_web_functions_tests(my_predbat):
         if result is not False:
             print(f"  ERROR: expected is_running() False for a stale (2026-07-10) aware last_updated, got: {result}")
             failed += 1
+
+    # A fresh last_updated must report running in every format the attribute can hold:
+    # the colon-less +0100 that record_status() writes (strftime('%z') never emits a colon,
+    # which datetime.fromisoformat() only accepts from Python 3.11 - issue #5181), the
+    # colon form, and the legacy naive form. Naive must still reach the naive-now branch
+    # rather than being rejected as unparseable.
+    now_local = datetime.now(timezone.utc).astimezone()
+    fresh_formats = {
+        "colon-less offset (record_status writer format)": now_local.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "colon offset": now_local.isoformat(),
+        "naive legacy": str(datetime.now()),
+    }
+    for label, stamp in fresh_formats.items():
+        set_entity(my_predbat, status_entity, state="Idle", error=False, last_updated=stamp)
+        try:
+            result = my_predbat.is_running()
+        except (TypeError, ValueError) as e:
+            print(f"  ERROR: is_running() raised on a fresh {label} ({stamp}): {e}")
+            failed += 1
+        else:
+            if result is not True:
+                print(f"  ERROR: expected is_running() True for a fresh {label} ({stamp}), got: {result}")
+                failed += 1
 
     my_predbat.dashboard_index = original_dashboard_index
     my_predbat.stop_thread = original_stop_thread
