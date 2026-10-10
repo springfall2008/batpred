@@ -14,11 +14,20 @@ Arguments: `<issue-number> [scratch=<dir>]`, same convention as `/issue-triage`.
 
 Fetch it with `gh issue view <number> --json title,body,labels,comments`. Find the bot's most recent prior comment (opens with "automated first-pass triage" or "automated follow-up triage review"). Everything posted **after** that comment — reporter replies, new logs, a maintainer's note — is the new information this review exists to act on.
 
+Comments from people other than the reporter ("me too" posts) are evidence for this issue by default, but not proven to be the same problem. Their files describe someone else's system. Use them, and keep the difference in mind:
+
+- Leave out any post that an "automated me-too check" comment has recorded with `Looks unrelated to this issue: <its url>`.
+- If you conclude a post is clearly a different problem, leave it out as well. Record it the same way in your comment, on its own line, and ask its author to open their own issue. The same bar applies as in `/issue-me-too` step 3: a clearly different symptom, not just a different inverter brand.
+
 If there's nothing posted since the last bot comment, say so plainly in your follow-up comment rather than inventing a reason to change anything.
+
+If the previous bot comment was a split request or an evidence request (`/issue-triage` step 1a or 1b) and nothing was ever investigated, there is no earlier assessment to revise. Re-apply both gates to the ticket as it now stands. If the problems have now been split out and the files have arrived, do the full first-pass work from `/issue-triage` steps 2–8 (attachments, classification, duplicates, investigation, labels, priority). Investigate only the problem that stays on this ticket, not the ones moved elsewhere. If either is still outstanding, don't investigate or give a theory. Just repeat what is still missing.
+
+The daemon removes `waiting_for_user` and queues this review when the reporter comments on an issue carrying it. So if you still need something from the reporter after this review, whatever the earlier comment asked for, apply `waiting_for_user` again. That way their next reply triggers another review.
 
 ## 2. Fetch any new attachments
 
-Same as `/issue-triage` step 2: if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.
+Same as `/issue-triage` step 2 (including files on a source ticket this one was spun out of): if the new information links a log file, a `predbat_debug.yaml`, or a zip of either, download it into the scratch directory and size/grep it rather than reading it whole.
 
 ## 3. Re-investigate against current main
 
@@ -41,11 +50,18 @@ Compare your updated understanding against the original triage comment's classif
 - If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`) — never remove a label a human added.
 - Apply the same duplicate check as `/issue-triage` step 4 if the new information suggests one.
 
+If the bot's most recent prior comment (the one you found in step 1) carries a one-line bug statement (`/issue-triage` step 3), that statement is a standing claim and this review must settle it rather than silently carry it forward or drop it — including when nothing material changed, one of:
+
+- **Still a bug** — restate the one-line statement in this comment, unchanged if the new evidence doesn't bear on it, updated if it sharpens or changes what the fault actually is.
+- **Not a bug after all** — say so plainly, retract the statement, and give the corrected classification. This is the expected outcome when, as happened on #5390, a maintainer's own reply shows the reported behaviour is Predbat doing what the config says.
+
+If this review concludes the issue is a bug and there is no live statement to restate — the bot's most recent prior comment has none, or retracted one — write the one-line statement now, to the same standard as `/issue-triage` step 3. That covers this review changing the classification **to** `bug` (for the first time, or back to `bug` after an earlier follow-up retracted the statement), and this review confirming a `bug` label that an early-exit gate (`/issue-triage` step 1a or 1b) applied without investigating — those gates stop before step 3, so the first full investigation after one is where the statement gets written, even though the label is already there. A statement in an older comment that a later one retracted is not live, so it never stands in for a new one.
+
 ## 5. Post one follow-up comment
 
 Check the comment history first: if the most recent comment is already a bot comment with nothing from a human posted after it, stop — this review already happened and nothing new has arrived since.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), and any further information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), the one-line bug statement from step 4 whenever one is restated, newly written, or retracted there — restated as-is if the new evidence didn't bear on it — and any further information request.
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 

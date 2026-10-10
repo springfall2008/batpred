@@ -282,6 +282,7 @@ SUNSYNK_TTL_LIVE = 5  # telemetry; four endpoint calls per inverter, so slower t
 # next write is wrongly SKIPPED and the battery silently diverges from the plan. A
 # redundant write is cheap; a skipped one is not.
 SUNSYNK_RESTORE_MAX_CONTROL = 15
+SUNSYNK_RESTORE_MAX_CONTROL_ACTIVE = 8 * 60
 
 # Cycles a written payload may remain absent from the read-back before warning. Sunsynk
 # acknowledges a write at the cloud, but the dongle only collects it on its next poll —
@@ -292,7 +293,8 @@ SUNSYNK_STORAGE_MODULE = "sunsynk"
 SUNSYNK_CACHE_STATIC = "static"  # inverter serials, detail
 SUNSYNK_CACHE_CONFIG = "config"  # last-read settings object
 SUNSYNK_CACHE_RATINGS = "ratings"  # derived capacity, pack voltage, rated power
-SUNSYNK_CACHE_CONTROL = "control"  # last-applied payload for change detection
+SUNSYNK_CACHE_CONTROL = "control"  # control_active ownership cache for reconciliation
+SUNSYNK_CACHE_APPLIED_PAYLOAD = "applied_payload"  # last-applied payload cache for change detection
 
 # Sunsynk answers an expired token with HTTP 200 carrying a body-level failure, so
 # status-code-only handling never triggers a refresh and the component stays broken

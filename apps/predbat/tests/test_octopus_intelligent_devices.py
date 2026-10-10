@@ -26,6 +26,93 @@ def test_octopus_intelligent_devices_wrapper(my_predbat):
     failed += test_build_discovery_car_uuid_device_id_not_published_in_clear(my_predbat)
     failed += test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat)
     failed += test_discovery_report_produced_when_automatic_is_false(my_predbat)
+    failed += test_intelligent_dispatch_change_requests_replan(my_predbat)
+    failed += test_car_slots_rewired_when_owner_changes(my_predbat)
+    failed += test_car_slots_not_taken_without_a_device_to_wire(my_predbat)
+    return failed
+
+
+def test_intelligent_dispatch_change_requests_replan(my_predbat):
+    """
+    A poll whose Octopus Intelligent dispatches differ from the last one asks for a replan straight away,
+    through ComponentBase.request_replan(). Before, nothing did: a dispatch that appeared at 17:00:40 was
+    only planned around at the 17:05 cycle, as nothing had the entity on its watch list.
+
+    Compared on the same signature fetch uses (dispatch_slots_signature()), so an in-progress dispatch whose
+    start and energy drift every poll does not replan each time, and the first poll after startup - when
+    the startup cycle runs anyway - does not either.
+    """
+    print("\n*** Test: a change in Intelligent dispatches requests a replan ***")
+    api = _make_discovery_api(my_predbat, "dispatch-replan")
+    requests = []
+    api.request_replan = lambda reason: requests.append(reason)
+    now = api.now_utc_exact.replace(second=0, microsecond=0)
+
+    def dispatch(start_offset, end_offset, kwh):
+        """A dispatch start_offset to end_offset minutes from now, in the component's format."""
+        return {
+            "start": (now + timedelta(minutes=start_offset)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "end": (now + timedelta(minutes=end_offset)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "charge_in_kwh": kwh,
+            "source": "smart-charge",
+            "location": "AT_HOME",
+        }
+
+    def poll(planned):
+        """One component poll publishing planned as the car's dispatches."""
+        api.intelligent_devices = {"car-1": {"device_id": "car-1", "planned_dispatches": planned, "completed_dispatches": []}}
+        asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+
+    failed = 0
+    poll([dispatch(-10, 30, 3.5)])
+    if requests:
+        print(f"ERROR: the first poll after startup should not request a replan, got {requests}")
+        failed += 1
+    # The in-progress dispatch's start is advanced to now and its energy scaled - not a real change
+    poll([dispatch(0, 30, 2.6)])
+    if requests:
+        print(f"ERROR: a drifting in-progress dispatch should not request a replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 3.5)])
+    if len(requests) != 1:
+        print(f"ERROR: a new dispatch should request one replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 3.5)])
+    if len(requests) != 1:
+        print(f"ERROR: an unchanged poll should not request another replan, got {requests}")
+        failed += 1
+    # Octopus revising a future dispatch's energy is left to the next scheduled cycle
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 4.2)])
+    if len(requests) != 1:
+        print(f"ERROR: a revised energy on a future dispatch should not request a replan, got {requests}")
+        failed += 1
+    # ...but its energy going to none removes the car slot, which the plan must pick up
+    poll([dispatch(0, 30, 2.6), dispatch(120, 150, 0)])
+    if len(requests) != 2:
+        print(f"ERROR: a future dispatch's energy going to none should request a replan, got {requests}")
+        failed += 1
+    poll([dispatch(0, 30, 2.6)])
+    if len(requests) != 3:
+        print(f"ERROR: a withdrawn dispatch should request a replan, got {requests}")
+        failed += 1
+    # Octopus's completed record for a dispatch that has already ended cannot change the plan ahead
+    api.intelligent_devices = {"car-1": {"device_id": "car-1", "planned_dispatches": [dispatch(0, 30, 2.6)], "completed_dispatches": [dispatch(-120, -90, 3.4)]}}
+    asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+    if len(requests) != 3:
+        print(f"ERROR: a completed record for a past dispatch should not request a replan, got {requests}")
+        failed += 1
+    # The last car deregistered: its dispatches are gone, which the plan must pick up
+    api.intelligent_devices = {}
+    asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+    if len(requests) != 4:
+        print(f"ERROR: losing the last car should request a replan, got {requests}")
+        failed += 1
+    asyncio.run(api.async_intelligent_update_sensor("dispatch-replan"))
+    if len(requests) != 4:
+        print(f"ERROR: still no cars should not request another replan, got {requests}")
+        failed += 1
+    if not failed:
+        print("PASS: new and withdrawn dispatches request a replan, a drifting in-progress one does not")
     return failed
 
 
@@ -690,6 +777,70 @@ async def test_octopus_intelligent_devices(my_predbat):
         else:
             print("PASS: Cache empties once the last EV is deregistered")
 
+    # ------------------------------------------------------------------
+    # Test 14: a failed dispatch query keeps the device's last known planned dispatches, as a failed
+    # settings query keeps its settings (Test 11). Publishing an empty list instead removed the car's
+    # dispatches until the next successful poll - and a change in them now requests a replan, so the
+    # plan was recomputed without them and then recomputed again two minutes later.
+    #
+    # Planned dispatches are never pruned, so the kept list must drop any that have ended since the last
+    # poll, and re-trim the one in progress: the cache holds it as trimmed at the previous poll, so
+    # reusing it as-is would count the energy delivered since then twice.
+    # ------------------------------------------------------------------
+    print("\n*** Test 14: A failed dispatch query keeps the last known planned dispatches ***")
+    api = make_api()
+
+    def slot_at(start_offset, end_offset, kwh):
+        """A cached planned dispatch start_offset to end_offset minutes from ref_now."""
+        return {
+            "start": (ref_now + timedelta(minutes=start_offset)).strftime(DATE_TIME_STR_FORMAT),
+            "end": (ref_now + timedelta(minutes=end_offset)).strftime(DATE_TIME_STR_FORMAT),
+            "charge_in_kwh": kwh,
+            "source": "smart-charge",
+            "location": "AT_HOME",
+        }
+
+    ended_slot = slot_at(-60, -30, 3.5)
+    # As the previous poll, 2 minutes ago, left it: start advanced to then, energy for the 20 minutes left
+    running_slot = slot_at(-2, 18, 2.0)
+    future_slot = slot_at(120, 180, 7.0)
+    cached_planned = [ended_slot, running_slot, future_slot]
+    cached_copy = [dict(x) for x in cached_planned]
+    # Re-trimmed to the 18 of those 20 minutes still to run
+    known_planned = [slot_at(0, 18, 1.8), future_slot]
+
+    async def mock_query_dispatch_fail(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return None
+        elif "get-intelligent-settings" in context:
+            return {"devices": [{"id": "device-abc", "status": {"isSuspended": False}, "chargingPreferences": {}}]}
+        return None
+
+    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": False, "completed_dispatches": [], "planned_dispatches": cached_planned}}
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_dispatch_fail)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+    if result.get("device-abc", {}).get("planned_dispatches") != known_planned:
+        print(f"ERROR: Expected the upcoming planned dispatches kept, the running one re-trimmed, got {result.get('device-abc', {}).get('planned_dispatches')}")
+        failed += 1
+    elif cached_planned != cached_copy:
+        print(f"ERROR: Reusing the cached planned dispatches must not modify them in place, got {cached_planned}")
+        failed += 1
+    else:
+        print("PASS: Last known planned dispatches kept when the dispatch query fails - ended dropped, running re-trimmed")
+
+    # A device never seen before has nothing to keep
+    api2 = make_api()
+    api2.intelligent_devices = {}
+    api2.async_graphql_query = AsyncMock(side_effect=mock_query_dispatch_fail)
+    result2 = await api2.async_get_intelligent_devices("test-account", "device-abc")
+    if result2.get("device-abc", {}).get("planned_dispatches") != []:
+        print(f"ERROR: A never-seen device has no dispatches to keep, got {result2.get('device-abc', {}).get('planned_dispatches')}")
+        failed += 1
+    else:
+        print("PASS: A never-seen device gets no planned dispatches when the dispatch query fails")
+
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")
     else:
@@ -1148,6 +1299,157 @@ def _stub_run_dependencies(api):
     api.async_update_intelligent_devices = _async_none
     api.async_intelligent_update_sensor = _async_none
     api.save_octopus_cache = _async_none
+
+
+def test_car_slots_rewired_when_owner_changes(my_predbat):
+    """
+    Issue #5402: the Ohme component claims the car slots when it takes the Intelligent slots itself,
+    and gives the claim up again once it finds Octopus Intelligent is driving the car and not the
+    charger. The device set has not moved when that happens, so run() has to re-wire the slots on the
+    change of owner alone - otherwise they are left pointing at nothing until the next restart.
+    """
+    print("\n**** Running Octopus car slot owner change test ****")
+    failed = 0
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+
+    api = _make_discovery_api(my_predbat, "owner-change")
+    device_id = "smart-flex-vehicle-7001"
+    api.intelligent_devices = {device_id: {"suspended": False, "is_charger": False, "provider": "BMW"}}
+    api.tariffs = {"import": {"tariffCode": "E-1R-INTELLI-VAR-22-10-14-A", "productCode": "INTELLI-VAR-22-10-14", "deviceID": "meter-1"}}
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    api.report_discovery = lambda report: None
+    own_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix(device_id))
+
+    # Ohme holds the car slots on the first cycle, so Octopus leaves them alone
+    my_predbat.car_slot_owner = "ohme"
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    asyncio.run(api.run(seconds=0, first=True))
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
+        print(f"ERROR: expected the Ohme wiring left alone while claimed, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Ohme lets go and clears its wiring. Nothing about the devices has changed...
+    my_predbat.car_slot_owner = None
+    my_predbat.args["octopus_intelligent_slot"] = []
+    # ...and a cycle that does not refresh the sensors does not wire entities it may not have published
+    asyncio.run(api.run(seconds=60, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != []:
+        print(f"ERROR: expected no re-wire off a sensor refresh, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+    # The next sensor refresh wires the car's own dispatch entity
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=120, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_entity]:
+        print(f"ERROR: expected the car slots wired to {own_entity} once released, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # And with the owner settled it is not done again: the user's later change is left alone
+    my_predbat.args["octopus_intelligent_slot"] = ["binary_sensor.set_by_hand"]
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=240, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != ["binary_sensor.set_by_hand"]:
+        print(f"ERROR: expected no repeat re-wire with the owner unchanged, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+    if failed == 0:
+        print("PASS: the car slots were re-wired when their owner changed")
+    return failed
+
+
+def test_car_slots_not_taken_without_a_device_to_wire(my_predbat):
+    """
+    PR #5405 review: the Ohme component also gives up its claim on the car slots when there are no
+    dispatches to be had from anyone - the Intelligent device suspended, or the tariff no longer
+    Intelligent - and then wires them to the charger's own schedule. The Octopus component must
+    not clear or overwrite that: it has nothing to wire them to. It still clears wiring of its own
+    when its last device goes (issue #4648).
+    """
+    print("\n**** Running Octopus car slots left alone test ****")
+    failed = 0
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+    ohme_entity = "binary_sensor.predbat_ohme_slot_active"
+    iog_tariff = {"import": {"tariffCode": "E-1R-INTELLI-VAR-22-10-14-A", "productCode": "INTELLI-VAR-22-10-14", "deviceID": "meter-1"}}
+    cosy_tariff = {"import": {"tariffCode": "E-1R-COSY-22-12-08-A", "productCode": "COSY-22-12-08", "deviceID": "meter-1"}}
+    device_id = "smart-flex-charger-8001"
+
+    def make_api(account_id, tariffs, suspended):
+        """An OctopusAPI with one Ohme Intelligent device, started while the Ohme component holds the car slots"""
+        api = _make_discovery_api(my_predbat, account_id)
+        api.intelligent_devices = {device_id: {"suspended": suspended, "is_charger": True, "provider": "Ohme"}}
+        api.tariffs = tariffs
+        _publish_car_entities(my_predbat, api, device_id)
+        _stub_run_dependencies(api)
+        api.report_discovery = lambda report: None
+        my_predbat.car_slot_owner = "ohme"
+        my_predbat.args["octopus_intelligent_slot"] = ohme_entity
+        asyncio.run(api.run(seconds=0, first=True))
+        return api
+
+    def release_and_run(api, cycles=2):
+        """The Ohme component lets go, keeping the slots on its own entity, then sensor refreshes follow"""
+        my_predbat.car_slot_owner = None
+        for cycle in range(cycles):
+            api.sensor_updated_at = None
+            asyncio.run(api.run(seconds=120 * (cycle + 1), first=False))
+
+    # The Ohme is suspended in the Octopus app: Ohme releases the slots and uses its own schedule.
+    # Two refreshes, as the owner and the device set are noticed one at a time
+    api = make_api("left-alone-suspended", iog_tariff, suspended=False)
+    api.intelligent_devices[device_id]["suspended"] = True
+    release_and_run(api)
+    if my_predbat.args.get("octopus_intelligent_slot") != ohme_entity:
+        print(f"ERROR: expected the Ohme schedule wiring kept with every device suspended, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Off the Intelligent tariff: the device is still cached as live, as it is not refreshed off
+    # Intelligent, but its dispatch entities are stale and must not replace the Ohme schedule
+    api = make_api("left-alone-tariff", iog_tariff, suspended=False)
+    api.tariffs = cosy_tariff
+    release_and_run(api)
+    if my_predbat.args.get("octopus_intelligent_slot") != ohme_entity:
+        print(f"ERROR: expected the Ohme schedule wiring kept off an Intelligent tariff, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Started with only a suspended device and someone else's wiring in place: not cleared either
+    api = make_api("left-alone-start", iog_tariff, suspended=True)
+    release_and_run(api, cycles=1)
+    my_predbat.args["octopus_intelligent_slot"] = ohme_entity
+    api.automatic_config(api.tariffs)
+    if my_predbat.args.get("octopus_intelligent_slot") != ohme_entity:
+        print(f"ERROR: expected wiring that is not Octopus's own left alone, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    # Wiring Octopus made itself is still cleared when its last device is suspended (#4648)
+    my_predbat.car_slot_owner = None
+    my_predbat.args["octopus_intelligent_slot"] = []
+    api = _make_discovery_api(my_predbat, "left-alone-own")
+    api.intelligent_devices = {device_id: {"suspended": False, "is_charger": True, "provider": "Ohme"}}
+    api.tariffs = iog_tariff
+    _publish_car_entities(my_predbat, api, device_id)
+    _stub_run_dependencies(api)
+    api.report_discovery = lambda report: None
+    asyncio.run(api.run(seconds=0, first=True))
+    own_entity = api.get_entity_name("binary_sensor", "intelligent_dispatch", index=api.device_id_to_index_suffix(device_id))
+    if my_predbat.args.get("octopus_intelligent_slot") != [own_entity]:
+        print(f"ERROR: expected Octopus to wire its own device, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+    api.intelligent_devices[device_id]["suspended"] = True
+    api.sensor_updated_at = None
+    asyncio.run(api.run(seconds=120, first=False))
+    if my_predbat.args.get("octopus_intelligent_slot") != []:
+        print(f"ERROR: expected Octopus's own wiring cleared once its device is suspended, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed += 1
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+    if failed == 0:
+        print("PASS: the car slots were left alone with no device to wire them to")
+    return failed
 
 
 def test_discovery_report_retried_via_unconditional_run_call_after_first_cycle_failure(my_predbat):

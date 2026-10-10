@@ -120,8 +120,9 @@ def test_agreement_names_each_disagreement():
 
 
 def test_dummied_settings_follow_the_row():
-    """SolisCloud has no reserve, and no cloud type has a GE mode entity."""
-    assert "reserve" in dummied_settings("SolisCloud")
+    """GS has no reserve, SolisCloud now does (its Battery Reserve SOC), and no cloud type has a GE mode entity."""
+    assert "reserve" in dummied_settings("GS")
+    assert "reserve" not in dummied_settings("SolisCloud")
     assert "reserve" not in dummied_settings("SunsynkCloud")
     assert "inverter_mode" in dummied_settings("SunsynkCloud")
     assert "inverter_mode" not in dummied_settings("GE")

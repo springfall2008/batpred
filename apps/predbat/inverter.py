@@ -19,6 +19,7 @@ Assistant entity writes with polling validation.
 
 import math
 import os
+import re
 import time
 import pytz
 from datetime import datetime, timedelta
@@ -31,6 +32,8 @@ from const import (
     INVERTER_TEST,
     TIME_FORMAT_SECONDS,
     INVERTER_MAX_RETRY,
+    INVERTER_WRITE_BACKOFF_FAILURES,
+    INVERTER_WRITE_DEGRADED_INTERVAL,
     EXPORT_MODE_TARGET,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
@@ -53,6 +56,16 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 _NOT_COMMITTED = object()
 
 
+def within_fuzzy(value, target, fuzzy, fuzzy_below=None):
+    """
+    Whether a numeric read counts as target: within fuzzy either side, or within fuzzy_below when it is
+    short of target and fuzzy_below is given - for a value the device rounds down (#5324).
+    """
+    if fuzzy_below is not None and value < target:
+        return target - value <= fuzzy_below
+    return abs(value - target) <= fuzzy
+
+
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
 
@@ -61,6 +74,12 @@ class Inverter:
     window programming, target SoC setting, and reserve management via both
     REST API and Home Assistant entity writes with polling validation.
     """
+
+    # Write retry policy, set per type from INVERTER_DEF by refresh_config(). Declared here too so an
+    # Inverter built without __init__ (the test stubs) gets the default policy: INVERTER_MAX_RETRY
+    # attempts per write and no per-control backoff. Only GWMQTT sets anything else.
+    inv_write_max_retry = INVERTER_MAX_RETRY
+    inv_write_backoff = False
 
     def self_test(self, minutes_now):
         self.base.log("======= INVERTER CONTROL SELF TEST START ========")
@@ -311,6 +330,40 @@ class Inverter:
             # then looked up as one.
             self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
 
+    def user_configured_entity(self, arg):
+        """
+        The entity id the user gave this inverter for arg in apps.yaml, or None.
+
+        "Set in apps.yaml" is judged from args_from_apps_yaml, the snapshot taken before Predbat's
+        own defaulting touches args: apps.yaml must name an entity (or a re: pattern) for this
+        inverter. The entity itself is read from the live args, which by now has any re: pattern
+        resolved, and is never Predbat's own dummy for this slot - so a dummy written on an earlier
+        refresh never counts, even behind a pattern that matched nothing. A bare placeholder such as
+        '00:00:00', an unmatched pattern, or a malformed value gives None.
+        """
+        raw = (getattr(self.base, "args_from_apps_yaml", None) or {}).get(arg)
+        if isinstance(raw, list):
+            # Per inverter: a list naming inverter 0 only says nothing about inverter 1, whose live
+            # slot may by now hold the dummy an earlier refresh wrote there
+            raw = raw[self.id] if self.id < len(raw) else None
+        elif self.id > 0:
+            # A single value is inverter 0's, as create_missing_arg() has always treated it
+            raw = None
+        # Judged on what apps.yaml itself says, not just that it said something: a placeholder such as
+        # Sofar's '00:00:00' is set, but the live slot holds Predbat's own dummy from the first cycle on
+        if not (isinstance(raw, str) and (is_entity_id(raw) or raw.startswith("re:"))):
+            return None
+        value = self.base.args.get(arg)
+        if isinstance(value, list):
+            value = value[self.id] if self.id < len(value) else None
+        if not is_entity_id(value) or value.startswith("re:"):
+            return None
+        # A re: pattern that matched nothing leaves the slot empty, so from the second cycle on it holds
+        # the dummy Predbat wrote there - under whichever inverter type was current at the time
+        if re.fullmatch(r"sensor\.{}_.+_{}_{}".format(re.escape(self.base.prefix), self.id, re.escape(arg)), value):
+            return None
+        return value
+
     def __init__(self, base, id=0, quiet=False):
         """
         Inverter class
@@ -348,6 +401,8 @@ class Inverter:
         # the new value back afterwards. Callers take the difference across their own writes to
         # learn whether something outside Predbat had changed what they manage - see commit_needed().
         self.registers_moved = 0
+        # Per-control write backoff state, keyed by entity_id - see _write_attempts().
+        self.write_backoff = {}
 
         self._init_attribute_defaults()
 
@@ -459,6 +514,8 @@ class Inverter:
         if "inverter" in self.base.args:
             if self.inverter_type not in INVERTER_DEF:
                 INVERTER_DEF[self.inverter_type] = INVERTER_DEF["GE"].copy()
+                # GivEnergy's rate quantisation is a fact about its hardware, not a default for other inverters
+                INVERTER_DEF[self.inverter_type].pop("rate_step_percent_of_capacity", None)
 
             inverter_def = self.base.args["inverter"]
             if isinstance(inverter_def, list):
@@ -505,11 +562,25 @@ class Inverter:
         self.inv_has_ge_eco_toggle = INVERTER_DEF[self.inverter_type].get("has_ge_eco_toggle", False)
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
+        # Only take effect when a row sets them explicitly - currently only GWMQTT does
+        self.inv_write_max_retry = INVERTER_DEF[self.inverter_type].get("write_max_retry", INVERTER_MAX_RETRY)
+        self.inv_write_backoff = INVERTER_DEF[self.inverter_type].get("write_backoff", False)
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_solis_energy_control = INVERTER_DEF[self.inverter_type].get("has_solis_energy_control", False)
+        # The charge_rate entity can carry the step itself, for a type that covers more than one brand: the
+        # hub is GWMQTT whatever it drives, and marks only its GivEnergy inverters. The row's value stands otherwise
+        self.inv_rate_step_percent_of_capacity = INVERTER_DEF[self.inverter_type].get("rate_step_percent_of_capacity", 0)
+        rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+        if rate_entity:
+            try:
+                rate_step = float(self.base.get_state_wrapper(rate_entity, attribute="step_percent_of_capacity"))
+            except (ValueError, TypeError):
+                rate_step = 0
+            if 0 < rate_step <= 100:
+                self.inv_rate_step_percent_of_capacity = rate_step
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -735,11 +806,19 @@ class Inverter:
             self.base.args["inverter_mode"][self.id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
+            # Some formats (H M) decompose the write into separate hour/minute entities and never
+            # expect the user to set this directly; others (no time window at all) ship a bare
+            # placeholder string. Either way Predbat needs somewhere to read/write for its own window
+            # bookkeeping. But if the user has genuinely pointed this at a real entity - a custom
+            # inverter definition using a non-HH:MM:SS format together with a real time window, e.g.
+            # #4738 - that's the one to use, not a self-created dummy that silently discards it.
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
                     entity_name = f"{x}_{y}_time"
+                    # Read before create_missing_arg(), which turns a single value into a list of defaults
+                    configured = self.user_configured_entity(entity_name)
                     self.create_missing_arg(entity_name, "23:59:00")
-                    self.base.args[entity_name][self.id] = self.create_entity(entity_name, "23:59:00")
+                    self.base.args[entity_name][self.id] = configured if configured else self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:
@@ -801,6 +880,11 @@ class Inverter:
             else:
                 # Store None to prevent recalculation every cycle when data is unavailable
                 self.update_soc_max_calculated_sensor(None, self.nominal_capacity)
+        elif self.base.get_state_wrapper(soc_max_sensor_name) is None and all(isinstance(key, str) and (value is None or (type(value) in (int, float) and math.isfinite(value))) for key, value in existing_history.items()):
+            # Recorder has today's result, but a restart removed the live sensor.
+            # Preserve the recorded state as the planning mean; an all-None history
+            # publishes the nominal capacity but returns no newly calculated mean.
+            self.update_soc_max_calculated_sensor(existing_history[today_key], self.nominal_capacity)
 
         if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
             if self.nominal_capacity > 0:
@@ -2060,6 +2144,30 @@ class Inverter:
 
         return current_rate
 
+    def rate_tolerances(self, rate_max):
+        """
+        (fuzzy, fuzzy_below) in watts for checking a charge/discharge rate read-back against the rate written.
+
+        fuzzy is 5% of rate_max - the rate ceiling, battery_rate_max_charge/discharge per minute. On an
+        inverter that stores the rate coarsely, fuzzy_below widens a read-back SHORT of the rate to one
+        hardware step. GivEnergy holds it as a whole percent of nominal battery capacity, rounded down:
+        1300W on a 13.41kWh battery reads back 1206W, a 94W miss that a 1300W ceiling's 65W tolerance
+        rejected - re-writing it ten times every cycle (#5324). A read-back over the rate is never that
+        rounding, so it keeps fuzzy: a rate held one step up (134W) is still written down to a 0W hold.
+
+        Deliberately relaxed rather than predicting the exact read-back, which would need Predbat's
+        capacity to match the inverter's to the watt. The cost is a ~1W boundary: a short read-back can
+        miss by just under one step plus 1W of read-back truncation, so a request landing exactly one step
+        above the held rate is taken as already set and the rate stays one step low - the same error the
+        rounding makes anyway. The step is only as right as nominal_capacity; GivTCP supplies its own.
+        """
+        fuzzy = rate_max * MINUTE_WATT / 20
+        fuzzy_below = None
+        if self.inv_rate_step_percent_of_capacity and self.nominal_capacity:
+            step = self.nominal_capacity * 1000 * self.inv_rate_step_percent_of_capacity / 100
+            fuzzy_below = max(fuzzy, step + 1)
+        return fuzzy, fuzzy_below
+
     def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
@@ -2084,10 +2192,18 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 20):
+        fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
+        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "charge_rate" in self.base.args:
-                self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
+                self.write_and_poll_value(
+                    "charge_rate",
+                    self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
+                    new_rate,
+                    fuzzy=fuzzy,
+                    required_unit="W",
+                    fuzzy_below=fuzzy_below,
+                )
             if "charge_rate_percent" in self.base.args:
                 self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -2125,10 +2241,18 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_discharge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
+        fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
+        if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if "discharge_rate" in self.base.args:
-                self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
+                self.write_and_poll_value(
+                    "discharge_rate",
+                    self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                    new_rate,
+                    fuzzy=fuzzy,
+                    required_unit="W",
+                    fuzzy_below=fuzzy_below,
+                )
             if "discharge_rate_percent" in self.base.args:
                 self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -2163,12 +2287,6 @@ class Inverter:
         """
         # SoC has no decimal places and clamp in min
         soc = int(max(soc, self.reserve_percent))
-
-        # A Solis with a target SoC (FB00) still needs its Energy Storage Control Switch managed - the
-        # target SoC does not bring it through mimic_target_soc below, and a switch left without its
-        # grid charging bit (a SolisCloud session leaves it that way) holds the battery through a charge slot
-        if self.inv_has_target_soc and self.inv_has_solis_energy_control:
-            self.alt_charge_discharge_enable("charge" if isCharging else "discharge" if isExporting else "eco", True)
 
         if isExporting and self.inv_has_target_soc and not self.inv_target_soc_used_for_discharge:
             self.log("Inverter {} Exporting, not adjusting SoC target".format(self.id))
@@ -2262,6 +2380,57 @@ class Inverter:
         self.base.record_status(message, had_errors=True)
         return False
 
+    def _write_attempts(self, name, entity_id, new_value):
+        """
+        How many times to send a write of new_value to this control before giving up on it.
+
+        Normally inv_write_max_retry. For inverter types with write_backoff set, a control whose
+        write of this same target has failed INVERTER_WRITE_BACKOFF_FAILURES times in a row is
+        degraded: re-sending a burst every cycle can swamp a device that applies writes slowly and
+        one at a time, which only makes the read-back lag further behind. A degraded control gets a
+        single attempt, at most once per INVERTER_WRITE_DEGRADED_INTERVAL seconds; in between it
+        gets 0, so the caller only checks the read it already took and, if that still differs,
+        reports the failure as usual. A different target is new work and gets the full ladder at once.
+        """
+        if not self.inv_write_backoff:
+            return self.inv_write_max_retry
+        state = self.write_backoff.get(entity_id)
+        if state is not None and state["value"] != new_value:
+            if state["failures"] >= INVERTER_WRITE_BACKOFF_FAILURES:
+                self.base.log(f"Inverter {self.id} {name} target changed to {new_value}, retrying writes normally again")
+            del self.write_backoff[entity_id]
+            state = None
+        if state is None or state["failures"] < INVERTER_WRITE_BACKOFF_FAILURES:
+            return self.inv_write_max_retry
+        now = time.monotonic()
+        if state.get("published_at") is not None and now - state["published_at"] < INVERTER_WRITE_DEGRADED_INTERVAL:
+            return 0
+        state["published_at"] = now
+        return 1
+
+    def _write_backoff_result(self, name, entity_id, new_value, verified):
+        """
+        Record whether a write to this control verified, for _write_attempts().
+
+        Logged once when a control drops to a single attempt per write and once when it recovers.
+        """
+        if not self.inv_write_backoff:
+            return
+        state = self.write_backoff.get(entity_id)
+        if verified:
+            if state is not None and state["failures"] >= INVERTER_WRITE_BACKOFF_FAILURES:
+                self.base.log(f"Inverter {self.id} {name} write verified, retrying writes normally again")
+            self.write_backoff.pop(entity_id, None)
+            return
+        if state is None or state["value"] != new_value:
+            state = {"value": new_value, "failures": 0}
+            self.write_backoff[entity_id] = state
+        state["failures"] += 1
+        if state["failures"] == INVERTER_WRITE_BACKOFF_FAILURES:
+            # This failing call has just published, so the degraded interval runs from now
+            state["published_at"] = time.monotonic()
+            self.base.log(f"Warn: Inverter {self.id} write of {new_value} to {name} has failed {state['failures']} times in a row, sending it at most once every {INVERTER_WRITE_DEGRADED_INTERVAL} seconds until it verifies")
+
     def write_and_poll_switch(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
@@ -2306,10 +2475,12 @@ class Inverter:
             # weaker but sufficient evidence.
             if ledger is not None:
                 ledger.record_ownership_from_read(entity_id, name, raw_state, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
 
+        attempts = self._write_attempts(name, entity_id, new_value)
         retry = 0
-        while not switch_matched(raw_state) and retry < INVERTER_MAX_RETRY:
+        while not switch_matched(raw_state) and retry < attempts:
             retry += 1
             if domain == "sensor":
                 if new_value:
@@ -2334,6 +2505,7 @@ class Inverter:
             # like a change - PredBat accusing somebody else of its own successful write.
             if ledger is not None:
                 ledger.record_write(entity_id, name, raw_state, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
         else:
             self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
@@ -2342,11 +2514,13 @@ class Inverter:
             # confirmation would report the next read of a control we have just failed to set.
             if ledger is not None:
                 ledger.clear(entity_id)
+            self._write_backoff_result(name, entity_id, new_value, False)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None, fuzzy_below=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
+        # fuzzy_below, when given, replaces fuzzy for a read short of new_value - for a value the device rounds down
         if not self.check_write_entity("write_and_poll_value", name, entity_id, new_value):
             return False
         domain, entity_name = entity_id.split(".")
@@ -2376,7 +2550,7 @@ class Inverter:
             state = value_state(state)
             if isinstance(new_value, str):
                 return state == new_value
-            return abs(state - new_value) <= fuzzy
+            return within_fuzzy(state, new_value, fuzzy, fuzzy_below)
 
         raw_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
         current_state = value_state(raw_state, warn=True)
@@ -2388,8 +2562,9 @@ class Inverter:
             if not matched:
                 ledger.note_write_attempt(entity_id)
 
+        attempts = self._write_attempts(name, entity_id, new_value) if not matched else 0
         retry = 0
-        while (not matched) and (retry < INVERTER_MAX_RETRY):
+        while (not matched) and (retry < attempts):
             retry += 1
             if domain == "sensor":
                 self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}), required_unit=required_unit)
@@ -2410,12 +2585,13 @@ class Inverter:
             current_state = value_state(raw_state)
             matched = value_matched(raw_state)
 
-        if retry == 0:
+        if retry == 0 and matched:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
             # Re-arm - see write_and_poll_switch() for why this early return would otherwise leave
             # the control unwatched for good once ownership had been dropped.
             if ledger is not None:
                 ledger.record_ownership_from_read(entity_id, name, raw_state, fuzzy=fuzzy, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
         elif matched:
             self.base.log(f"Inverter {self.id} write_and_poll_value: Wrote {new_value} to {name}, successfully now {current_state}")
@@ -2427,12 +2603,14 @@ class Inverter:
             # 0.0 read-back would otherwise be stored as a confirmed owned value.
             if ledger is not None:
                 ledger.record_write(entity_id, name, raw_state, fuzzy=fuzzy, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
             return True
         else:
             self.base.log(f"Warn: Inverter {self.id} Trying to write {new_value} to {name} didn't complete got {current_state}")
             self.base.record_status(f"Warn: Inverter {self.id} write to {name} failed", had_errors=True)
             if ledger is not None:
                 ledger.clear(entity_id)
+            self._write_backoff_result(name, entity_id, new_value, False)
             return False
 
     def write_and_poll_option(self, name, entity_id, new_value, ignore_fail=False):
@@ -2465,7 +2643,15 @@ class Inverter:
             if old_value != new_value:
                 ledger.note_write_attempt(entity_id)
 
-        for _retry in range(INVERTER_MAX_RETRY):
+        attempts = self._write_attempts(name, entity_id, new_value)
+        if attempts == 0 and old_value == new_value:
+            # A degraded control between publishes that already reads back as wanted
+            self.base.log("Inverter {} {} already reads {}".format(self.id, name, new_value))
+            if ledger is not None:
+                ledger.record_ownership_from_read(entity_id, name, old_value, now=time.time(), generation=self._ledger_generation(entity_id))
+            self._write_backoff_result(name, entity_id, new_value, True)
+            return True
+        for _retry in range(attempts):
             if entity_base == "time":
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
@@ -2488,11 +2674,13 @@ class Inverter:
                     self.registers_moved += 1
                 if ledger is not None:
                     ledger.record_write(entity_id, name, old_value, now=time.time(), generation=self._ledger_generation(entity_id))
+                self._write_backoff_result(name, entity_id, new_value, True)
                 return True
         self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id, refresh=True)))
         self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         if ledger is not None:
             ledger.clear(entity_id)
+        self._write_backoff_result(name, entity_id, new_value, False)
         return False
 
     def write_hm_time_part(self, name, new_time):
@@ -3024,32 +3212,12 @@ class Inverter:
         current_rate_discharge = self.get_current_discharge_rate()
 
         if self.inv_has_solis_energy_control:
-            # Solis just has a single switch for both directions
-            # Need to check the logic of how this is called if both charging and exporting
-            entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            if not entity_id:
-                if direction == "charge" and enable:
-                    self.base.log(f"Warn: Inverter {self.id} energy_control_switch is not set in apps.yaml, so Predbat cannot make sure the inverter allows grid charging")
-            else:
-                if self.inv_has_charge_enable_time:
-                    # FB00 firmware: the slot enables turn timed charge and export on and off, so the switch
-                    # only has to stay on Self-Use - without its grid charging bit a charge slot cannot charge
-                    solax_modes = SOLAX_SOLIS_MODES_FB00
-                    new_switch = 33
-                else:
-                    # Older firmware: the switch's Timed Charge/Discharge bit is the enable itself
-                    solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
-                    new_switch = 35 if (enable or direction == "eco") else 33
-
-                old_mode = str(self.base.get_state_wrapper(entity_id, ""))
-                switch = solax_modes.get(old_mode, 0)
-                new_mode = {value: name for name, value in solax_modes.items()}[new_switch]
-
-                if new_switch != switch:
-                    self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
-                    self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
-                else:
-                    self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
+            # Reached from mimic_target_soc, so only for GS (no target SoC): on older firmware the switch's
+            # Timed Charge/Discharge bit is the enable itself, for both directions. FB00 is driven from
+            # adjust_charge_immediate / adjust_export_immediate instead.
+            solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
+            new_switch = 35 if (enable or direction == "eco") else 33
+            self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", warn_missing=(direction == "charge" and enable))
 
         # MQTT
         if direction == "charge" and enable:
@@ -3061,6 +3229,31 @@ class Inverter:
             self.mqtt_message("set/discharge", payload=int(current_rate_discharge))
         else:
             self.mqtt_message("set/auto", payload="true")
+
+    def write_solis_energy_control(self, new_switch, solax_modes, reason, warn_missing=False):
+        """
+        Put the Solis Energy Storage Control Switch on mode value new_switch, writing only when it differs.
+
+        solax_modes maps the Solax Modbus plugin's option names to their values, which differ between the
+        pre-FB00 and FB00 plugins. A switch state the table does not know (e.g. unavailable) counts as a
+        difference. With no energy_control_switch configured nothing is written, and warn_missing says
+        whether that deserves a warning - only while charging, when a switch without grid charging stops it.
+        """
+        entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
+        if not entity_id:
+            if warn_missing:
+                self.base.log(f"Warn: Inverter {self.id} energy_control_switch is not set in apps.yaml, so Predbat cannot make sure the inverter allows grid charging")
+            return
+
+        old_mode = str(self.base.get_state_wrapper(entity_id, ""))
+        switch = solax_modes.get(old_mode, 0)
+        new_mode = {value: name for name, value in solax_modes.items()}[new_switch]
+
+        if new_switch != switch:
+            self.base.log(f"Inverter {self.id} Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {reason}")
+            self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
+        else:
+            self.base.log(f"Inverter {self.id} Solis Energy Control Switch setting {switch} {new_mode} unchanged for {reason}")
 
     def mqtt_message(self, topic, payload):
         """
@@ -3194,6 +3387,16 @@ class Inverter:
         """
         Adjust from charging or not charging based on passed target soc
         """
+        # A Solis with a target SoC (FB00) has its Energy Storage Control Switch driven from here on every cycle
+        # that is not exporting. It stays on Backup/Reserve - Self-Use with the Battery Reserve bit, which makes the
+        # reserve Predbat writes (the Reserved SOC) a real discharge floor, so the existing reserve holds work.
+        # A freeze or hold (car, iBoost, hold on reserve) also turns grid charging off - Backup/Reserve - No Grid
+        # Charging - or the inverter would import to reach a reserve raised to SoC + 1, and again each cycle as it
+        # is raised. Exporting cycles drive it from adjust_export_immediate, and GS from mimic_target_soc instead.
+        if self.inv_has_target_soc and self.inv_has_solis_energy_control:
+            reason = "freeze or hold" if freeze else "charge" if target_soc > 0 else "idle"
+            self.write_solis_energy_control(17 if freeze else 49, SOLAX_SOLIS_MODES_FB00, reason, warn_missing=(target_soc > 0 and not freeze))
+
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
@@ -3233,6 +3436,14 @@ class Inverter:
         """
         Adjust from exporting or not exporting based on passed target soc
         """
+        # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
+        # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
+        # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and
+        # Backup/Reserve for a real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate,
+        # which owns it then.
+        if self.inv_has_target_soc and self.inv_has_solis_energy_control and target_soc < 100:
+            self.write_solis_energy_control(64 if freeze else 49, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
+
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
         if target_soc < 100:

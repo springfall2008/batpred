@@ -1852,6 +1852,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
+        "rate_step_percent_of_capacity": 1,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -1960,8 +1961,13 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 4,
         "has_time_window": True,
-        "support_charge_freeze": False,
-        "support_discharge_freeze": False,
+        # Freeze charge and holds turn grid charging off on the Energy Storage Control Switch (Backup/Reserve - No Grid
+        # Charging): the charge slot or the Reserved SOC holds the battery (inverter.py adjust_charge_immediate)
+        "support_charge_freeze": True,
+        # Freeze Export selects Feed-in priority on the Energy Storage Control Switch (inverter.py adjust_export_immediate),
+        # which exports PV ahead of charging the battery - so PV past the export limit still reaches the battery
+        "support_feedin_first": True,
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -2455,7 +2461,8 @@ INVERTER_DEF = {
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
         "has_target_soc": True,
-        "has_reserve_soc": False,
+        # The Battery Reserve SOC (CID 157), a floor while the component keeps the Battery Reserve bit on
+        "has_reserve_soc": True,
         "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
@@ -2524,7 +2531,15 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%H:%M:%S",
-        "write_and_poll_sleep": 2,
+        # The hub applies register writes one at a time and a single write can take 10-20s (longer
+        # under an EMS), so re-sending every couple of seconds only queues more work ahead of the
+        # read-back. Allow each attempt 10s to verify, give up after 3, and when a control keeps
+        # failing from one cycle to the next send it once, at most every few minutes (see
+        # INVERTER_WRITE_BACKOFF_FAILURES and INVERTER_WRITE_DEGRADED_INTERVAL). Only this row sets
+        # write_max_retry/write_backoff.
+        "write_and_poll_sleep": 10,
+        "write_max_retry": 3,
+        "write_backoff": True,
         "has_time_window": True,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
@@ -2762,6 +2777,11 @@ APPS_SCHEMA = {
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
+    "wallbox_username": {"type": "string", "empty": False},
+    "wallbox_password": {"type": "string", "empty": False},
+    "wallbox_automatic": {"type": "boolean"},
+    "wallbox_control": {"type": "boolean"},
+    "wallbox_poll_seconds": {"type": "integer", "zero": False},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2812,6 +2832,7 @@ APPS_SCHEMA = {
     "teslemetry_base_url": {"type": "string", "empty": False},
     "teslemetry_automatic": {"type": "boolean"},
     "teslemetry_tbc_control": {"type": "boolean"},
+    "teslemetry_hybrid": {"type": "boolean"},
     "teslemetry_auth_method": {"type": "string", "empty": False},
     "teslemetry_token_expires_at": {"type": "string", "empty": False},
     "teslemetry_token_hash": {"type": "string", "empty": False},
@@ -2883,6 +2904,8 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA

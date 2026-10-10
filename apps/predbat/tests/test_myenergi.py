@@ -1603,7 +1603,9 @@ def test_automatic_config_wires_car_charging_power():
         "sensor.predbat_myenergi_zappi_12345678_power",
         "sensor.predbat_myenergi_zappi_22223333_power",
     ], component.base.args["car_charging_power"]
-    print("  ✓ Automatic configuration wires the Zappi power sensors for the flow diagram")
+    # The same power sensors tell Predbat each car is drawing power now, per car in the same order
+    assert component.base.args["car_charging_now"] == component.base.args["car_charging_power"], component.base.args["car_charging_now"]
+    print("  ✓ Automatic configuration wires the Zappi power sensors for the flow diagram and car_charging_now")
 
 
 def test_automatic_config_eddi_only_leaves_car_charging_power_alone():
@@ -1612,7 +1614,8 @@ def test_automatic_config_eddi_only_leaves_car_charging_power_alone():
     component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     component.automatic_config()
     assert "car_charging_power" not in component.base.args
-    print("  ✓ Eddi-only site leaves car_charging_power unset")
+    assert "car_charging_now" not in component.base.args
+    print("  ✓ Eddi-only site leaves car_charging_power and car_charging_now unset")
 
 
 def test_automatic_config_single_zappi_is_still_a_list():
@@ -1665,6 +1668,7 @@ def test_automatic_config_zappi_disabled_still_wires_the_eddi():
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
     assert component.base.args["car_charging_energy"] == ["sensor.other_charger_energy"], component.base.args["car_charging_energy"]
     assert "car_charging_planned" not in component.base.args
+    assert "car_charging_now" not in component.base.args
     assert "car_charging_power" not in component.base.args
     print("  ✓ automatic_zappi off wires the Eddi only and leaves another charger's car inputs alone")
 
@@ -1674,7 +1678,7 @@ def test_automatic_config_zappi_disabled_on_a_zappi_only_site():
     component = _make_component(automatic_zappi=False)
     component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
     component.automatic_config()
-    for key in ("car_charging_energy", "car_charging_planned", "car_charging_power", "iboost_energy_today"):
+    for key in ("car_charging_energy", "car_charging_planned", "car_charging_now", "car_charging_power", "iboost_energy_today"):
         assert key not in component.base.args, key
     print("  ✓ automatic_zappi off on a Zappi-only site wires nothing")
 
@@ -1714,7 +1718,7 @@ def test_automatic_config_eddi_disabled_on_an_eddi_only_site():
     component = _make_component(automatic_eddi=False)
     component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     component.automatic_config()
-    for key in ("car_charging_energy", "car_charging_planned", "car_charging_power", "iboost_energy_today"):
+    for key in ("car_charging_energy", "car_charging_planned", "car_charging_now", "car_charging_power", "iboost_energy_today"):
         assert key not in component.base.args, key
     print("  ✓ automatic_eddi off on an Eddi-only site wires nothing")
 
@@ -1747,6 +1751,19 @@ def test_automatic_config_uses_set_arg_auto():
     component.automatic_config()
     assert "car_charging_energy" in component.base.apps_yaml_override_warned, component.base.apps_yaml_override_warned
     print("  ✓ Automatic configuration uses set_arg_auto, not set_arg")
+
+
+def test_automatic_config_keeps_user_car_charging_now():
+    """A car_charging_now sensor the user set in apps.yaml is kept, while the rest is still wired."""
+    component = _make_component()
+    component.base.args_from_apps_yaml = {"car_charging_now": ["binary_sensor.my_car_charging"]}
+    component.base.apps_yaml_override_warned = set()
+    component.base.args["car_charging_now"] = ["binary_sensor.my_car_charging"]
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.automatic_config()
+    assert component.base.args["car_charging_now"] == ["binary_sensor.my_car_charging"], component.base.args["car_charging_now"]
+    assert component.base.args["car_charging_power"] == ["sensor.predbat_myenergi_zappi_12345678_power"]
+    print("  ✓ Automatic configuration keeps the user's own car_charging_now")
 
 
 def test_automatic_config_disabled():
@@ -2555,6 +2572,7 @@ def test_myenergi(my_predbat=None):
     test_automatic_config_eddi_disabled_on_an_eddi_only_site()
     test_boost_still_works_with_the_zappi_half_disabled()
     test_automatic_config_uses_set_arg_auto()
+    test_automatic_config_keeps_user_car_charging_now()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
     test_automatic_config_ignores_unsupported_kinds()

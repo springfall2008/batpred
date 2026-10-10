@@ -4383,6 +4383,355 @@ def test_pv_calibration_cap_published_pv10_matches_planner(my_predbat):
     return failed
 
 
+def _band_scenario(calibration_on, raw_kw=1.0, max_kwh=20.0, band_ratios=None):
+    """Run pv_calibration with a history that calibrates the morning up and the afternoon down.
+
+    Three past days each have two one-hour generation windows against a recorded forecast of
+    1 kW: the morning window (10:00) produced 1.5x the forecast and the afternoon window (13:00)
+    0.4x, so slot_adjustment is well above 1.0 in one and well below it in the other. The days
+    themselves ran at 0.8x, 1.0x and 1.2x of that shape, which gives a worst/best day scaling
+    either side of 1.0 without changing the shape. Today's raw forecast is raw_kw in both windows;
+    the default 1 kW sits below the 1.8 kW observed peak, so the array cap leaves room for the
+    morning to be scaled up.
+
+    band_ratios, when given, maps each window start to the provider's own (P10, P90) as fractions
+    of its P50. The forecast then carries that band (as Open-Meteo's ensemble spread does) and
+    pv_calibration is asked to keep it rather than create one.
+
+    Returns (test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows). The caller owns the
+    returned test_api and must call cleanup() on it.
+    """
+    windows = {600: 1.5, 780: 0.4}
+    day_factors = [0.8, 1.0, 1.2]
+    window_length = 60
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    base.set_arg("metric_pv_calibration_enable", calibration_on)
+    plan_interval = base.plan_interval_minutes
+    minutes_now = base.minutes_now
+    days_back = len(day_factors)
+
+    # Cumulative pv_today kWh keyed by minutes-ago
+    hist = {}
+    for day_idx, day_factor in enumerate(day_factors):
+        midnight_ago = (day_idx + 1) * 1440 + minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago < 0:
+                continue
+            cumulative = 0.0
+            for start, shape in windows.items():
+                cumulative += shape * day_factor * min(max(step - start, 0), window_length) / 60.0
+            hist[minute_ago] = cumulative
+
+    # Recorded forecast history of 1 kW in both windows on every past day
+    pv_forecast_hist = {}
+    for day_num in range(1, days_back + 1):
+        for start in windows:
+            for m_of_day in range(start, start + window_length):
+                pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
+
+    def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Return the synthetic pv_today history."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    def in_window(minute):
+        """True when the minute of today falls inside a generation window."""
+        return any(start <= minute < start + window_length for start in windows)
+
+    raw_m = {m: (raw_kw / 60.0) if in_window(m) else 0.0 for m in range(4 * 24 * 60)}
+    raw_m10 = {}
+    raw_m90 = {}
+    if band_ratios:
+        for m in raw_m:
+            p10_ratio, p90_ratio = next((band_ratios[start] for start in windows if start <= m < start + window_length), (0.0, 0.0))
+            raw_m10[m] = raw_m[m] * p10_ratio
+            raw_m90[m] = raw_m[m] * p90_ratio
+
+    midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+    pv_data = []
+    for start in windows:
+        for slot in range(start, start + window_length, plan_interval):
+            ts = midnight + timedelta(minutes=slot)
+            entry = {"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": raw_kw * plan_interval / 60.0}
+            if band_ratios:
+                entry["pv_estimate10"] = entry["pv_estimate"] * band_ratios[start][0]
+                entry["pv_estimate90"] = entry["pv_estimate"] * band_ratios[start][1]
+            pv_data.append(entry)
+
+    with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
+        if band_ratios:
+            adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(dict(raw_m), raw_m10, raw_m90, pv_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days, calibrate_band=True)
+        else:
+            adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(dict(raw_m), {}, {}, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+
+    return test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows
+
+
+def test_pv_calibration_off_band_built_from_raw(my_predbat):
+    """
+    With the calibration switch off, the 10% and 90% scenarios must be built from the raw forecast.
+
+    Regression test for GH#5345: pv_calibration always built pv_forecast_minute10/90 (and the
+    published pv_estimate10/90) from the calibrated series, and only consulted
+    metric_pv_calibration_enable at the final return, where it swapped P50 back to the raw
+    series. The centre line and its band then came from two different curves, so wherever
+    calibration scaled a slot up by more than 1 / worst_day_scaling the "pessimistic" P10 sat
+    above P50, and wherever it scaled a slot down by more than 1 / best_day_scaling the
+    "optimistic" P90 sat below it. That also made the P50-P10 gap the cloud model reads arbitrary.
+
+    _band_scenario calibrates the morning up (1.5x) and the afternoon down (0.4x), with a
+    worst/best day scaling of roughly 0.8/1.2, so before the fix both inversions appear.
+    """
+    print("  - test_pv_calibration_off_band_built_from_raw")
+    failed = False
+    tolerance = 0.0002  # the series are rounded to 4 decimal places
+
+    test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows = _band_scenario(calibration_on=False)
+    try:
+        worst = test_api.solar.pv_calibration_worst_scaling
+        best = test_api.solar.pv_calibration_best_scaling
+        if not (worst < 0.95 and best > 1.05):
+            print("ERROR: scenario did not produce a band, worst {} best {}".format(worst, best))
+            failed = True
+
+        for start, shape in windows.items():
+            minute = start + 30
+            raw = raw_m[minute]
+            if abs(adj_m[minute] - raw) > tolerance:
+                print("ERROR: with calibration off P50 at minute {} is {}, expected the raw {}".format(minute, adj_m[minute], raw))
+                failed = True
+            if abs(adj_m10[minute] - raw * worst) > tolerance:
+                print("ERROR: with calibration off P10 at minute {} is {}, expected raw {} x worst {} = {} (window calibrated {}x)".format(minute, adj_m10[minute], raw, worst, raw * worst, shape))
+                failed = True
+            if abs(adj_m90[minute] - raw * best) > tolerance:
+                print("ERROR: with calibration off P90 at minute {} is {}, expected raw {} x best {} = {} (window calibrated {}x)".format(minute, adj_m90[minute], raw, best, raw * best, shape))
+                failed = True
+
+        for minute in sorted(raw_m):
+            if not (adj_m10.get(minute, 0) <= adj_m[minute] + tolerance and adj_m[minute] <= adj_m90.get(minute, 0) + tolerance):
+                print("ERROR: with calibration off minute {} breaks P10 <= P50 <= P90: {} / {} / {}".format(minute, adj_m10.get(minute, 0), adj_m[minute], adj_m90.get(minute, 0)))
+                failed = True
+                break
+
+        calibration_moved = False
+        for entry in adj_data:
+            p50 = entry["pv_estimate"]
+            p10 = entry.get("pv_estimate10")
+            p90 = entry.get("pv_estimate90")
+            if p10 is None or p90 is None:
+                print("ERROR: published entry {} is missing pv_estimate10/pv_estimate90".format(entry["period_start"]))
+                failed = True
+                break
+            if not (p10 <= p50 + tolerance and p50 <= p90 + tolerance):
+                print("ERROR: with calibration off published entry {} breaks P10 <= P50 <= P90: {} / {} / {}".format(entry["period_start"], p10, p50, p90))
+                failed = True
+                break
+            if abs(p10 - p50 * worst) > tolerance or abs(p90 - p50 * best) > tolerance:
+                print("ERROR: with calibration off published entry {} band {} / {} is not the raw {} scaled by {} / {}".format(entry["period_start"], p10, p90, p50, worst, best))
+                failed = True
+                break
+            if abs(entry.get("pv_estimateCL", p50) - p50) > 0.1 * p50:
+                calibration_moved = True
+        if not calibration_moved:
+            print("ERROR: pv_estimateCL never differs from pv_estimate - the scenario is not calibrating, so the test proves nothing")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    # Raw forecast above the array ceiling (10 kW against 1.2 x 4 kW = 4.8 kW): switching calibration
+    # off does not switch the ceiling off, so P50 is clipped to it and P90 sits on it, not below P50.
+    test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows = _band_scenario(calibration_on=False, raw_kw=10.0, max_kwh=4.0)
+    try:
+        ceiling_minute = 4.8 / 60.0
+        worst = test_api.solar.pv_calibration_worst_scaling
+        for start in windows:
+            minute = start + 30
+            if abs(adj_m[minute] - ceiling_minute) > tolerance:
+                print("ERROR: with calibration off and a raw forecast above the ceiling, P50 {} at minute {} is not clipped to the ceiling {}".format(adj_m[minute], minute, ceiling_minute))
+                failed = True
+            if abs(adj_m90[minute] - ceiling_minute) > tolerance:
+                print("ERROR: with calibration off and a raw forecast above the ceiling, P90 {} at minute {} is not held at the ceiling {}".format(adj_m90[minute], minute, ceiling_minute))
+                failed = True
+            if abs(adj_m10[minute] - ceiling_minute * worst) > tolerance:
+                print("ERROR: with calibration off and a raw forecast above the ceiling, P10 {} at minute {} is not the clipped P50 x worst {}".format(adj_m10[minute], minute, worst))
+                failed = True
+        if abs(raw_m[630] - 10.0 / 60.0) > 1e-9:
+            print("ERROR: the caller's raw series was modified by the ceiling clip")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    # Calibration on is unchanged: the band is a scaling of the calibrated series that is returned.
+    test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows = _band_scenario(calibration_on=True)
+    try:
+        worst = test_api.solar.pv_calibration_worst_scaling
+        best = test_api.solar.pv_calibration_best_scaling
+        for start in windows:
+            minute = start + 30
+            if abs(adj_m[minute] - raw_m[minute]) < 0.1 * raw_m[minute]:
+                print("ERROR: with calibration on P50 at minute {} is {}, expected it to move away from the raw {}".format(minute, adj_m[minute], raw_m[minute]))
+                failed = True
+            if abs(adj_m10[minute] - adj_m[minute] * worst) > tolerance or abs(adj_m90[minute] - adj_m[minute] * best) > tolerance:
+                print("ERROR: with calibration on the band {} / {} at minute {} is not the calibrated {} scaled by {} / {}".format(adj_m10[minute], adj_m90[minute], minute, adj_m[minute], worst, best))
+                failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_keeps_provider_band(my_predbat):
+    """
+    A provider's own P10 and P90 must survive calibration, following the P50 they are returned with.
+
+    Open-Meteo's ensemble gives a spread that varies hour by hour, but pv_calibration used to be
+    told to create the band for it, which replaced the provider's figures with P50 scaled by the
+    flat worst/best day scaling. With calibrate_band the provider's P10 and P90 are kept and scaled
+    by exactly the calibration applied to P50 in that minute, so their ratios to P50 are preserved.
+
+    The provider band here is 0.9x/1.1x of P50 in the morning and 0.3x/1.8x in the afternoon,
+    neither of which is the worst/best day scaling (about 0.81/1.22) a created band would show.
+    """
+    print("  - test_pv_calibration_keeps_provider_band")
+    failed = False
+    tolerance = 0.0002  # the series are rounded to 4 decimal places
+    band_ratios = {600: (0.9, 1.1), 780: (0.3, 1.8)}
+
+    for calibration_on in (True, False):
+        label = "on" if calibration_on else "off"
+        test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows = _band_scenario(calibration_on=calibration_on, band_ratios=band_ratios)
+        try:
+            plan_interval = test_api.mock_base.plan_interval_minutes
+            for start in windows:
+                minute = start + 30
+                p10_ratio, p90_ratio = band_ratios[start]
+                moved = abs(adj_m[minute] - raw_m[minute]) > 0.1 * raw_m[minute]
+                if moved != calibration_on:
+                    print("ERROR: calibration {}: P50 at minute {} is {} against the raw {}".format(label, minute, adj_m[minute], raw_m[minute]))
+                    failed = True
+                if abs(adj_m10[minute] - adj_m[minute] * p10_ratio) > tolerance:
+                    print("ERROR: calibration {}: P10 at minute {} is {}, expected the provider's {} x P50 {} = {}".format(label, minute, adj_m10[minute], p10_ratio, adj_m[minute], adj_m[minute] * p10_ratio))
+                    failed = True
+                if abs(adj_m90[minute] - adj_m[minute] * p90_ratio) > tolerance:
+                    print("ERROR: calibration {}: P90 at minute {} is {}, expected the provider's {} x P50 {} = {}".format(label, minute, adj_m90[minute], p90_ratio, adj_m[minute], adj_m[minute] * p90_ratio))
+                    failed = True
+
+            midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+            for entry in adj_data:
+                slot = int((datetime.strptime(entry["period_start"], "%Y-%m-%dT%H:%M:%S%z") - midnight).total_seconds() / 60)
+                for key, series in (("pv_estimate10", adj_m10), ("pv_estimate90", adj_m90)):
+                    planner_total = sum(series.get(slot + offset, 0) for offset in range(plan_interval))
+                    if abs(entry[key] - planner_total) > tolerance * plan_interval:
+                        print("ERROR: calibration {}: published {} {} at {} does not match the planner's total {}".format(label, key, entry[key], entry["period_start"], planner_total))
+                        failed = True
+        finally:
+            test_api.cleanup()
+
+    # A provider P90 above the array ceiling (1 kW x 1.8 against 1.2 x 1 kW) is held at the ceiling,
+    # and a raw P50 above it (10 kW against 1.2 x 4 kW) drags the whole band down with it.
+    test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows = _band_scenario(calibration_on=False, max_kwh=1.0, band_ratios=band_ratios)
+    try:
+        ceiling_minute = max(1.2 * 1.0, 1.8) / 60.0
+        if abs(adj_m90[810] - min(raw_m[810] * 1.8, ceiling_minute)) > tolerance or adj_m90[810] > ceiling_minute + tolerance:
+            print("ERROR: provider P90 {} at minute 810 is not held at the array ceiling {}".format(adj_m90[810], ceiling_minute))
+            failed = True
+    finally:
+        test_api.cleanup()
+    test_api, raw_m, adj_m, adj_m10, adj_m90, adj_data, windows = _band_scenario(calibration_on=False, raw_kw=10.0, max_kwh=4.0, band_ratios=band_ratios)
+    try:
+        ceiling_minute = 4.8 / 60.0
+        for start in windows:
+            minute = start + 30
+            if abs(adj_m[minute] - ceiling_minute) > tolerance or abs(adj_m90[minute] - ceiling_minute) > tolerance or abs(adj_m10[minute] - ceiling_minute * band_ratios[start][0]) > tolerance:
+                print("ERROR: raw forecast above the ceiling: band {} / {} / {} at minute {} is not clipped to the ceiling {} with the provider's P10 ratio".format(adj_m10[minute], adj_m[minute], adj_m90[minute], minute, ceiling_minute))
+                failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_uses_ensemble_band(my_predbat):
+    """
+    fetch_pv_forecast must keep Open-Meteo's ensemble band when it has one, and create one when not.
+
+    The ensemble's P10 and P90 are taken as ratios of the ensemble's own median and applied to the
+    deterministic P50, because the two are different model runs and can disagree on the level of
+    the day. Here the three members sit at 0.5x, 1.0x and 1.5x of a median that is deliberately
+    twice the deterministic irradiance: the published band must still be 0.5x / 1.5x of the
+    deterministic P50, where the absolute ensemble P10 would have equalled P50 and left no gap.
+
+    With the ensemble endpoint answering, pv_calibration is called with create_pv10 False and
+    calibrate_band True. When the ensemble download fails the entries only carry fixed 0.7x / 1.3x
+    placeholders, so the history-based band is the better figure and create_pv10 stays True.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_uses_ensemble_band")
+    failed = False
+
+    for with_ensemble in (True, False):
+        test_api = create_test_solar_api()
+        try:
+            test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+            test_api.solar.open_meteo_forecast_max_age = 1.0
+            times = ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"]
+            # "//api." so the forecast mock does not also match the ensemble-api host: the mock session
+            # returns the first response whose key is a substring of the URL.
+            test_api.set_mock_response("//api.open-meteo.com", {"hourly": {"time": times, "global_tilted_irradiance": [500.0, 500.0, 500.0], "temperature_2m": [25.0, 25.0, 25.0], "wind_speed_10m": [1.0, 1.0, 1.0]}})
+            if with_ensemble:
+                members = {"global_tilted_irradiance_member01": [500.0] * 3, "global_tilted_irradiance_member02": [1000.0] * 3, "global_tilted_irradiance_member03": [1500.0] * 3}
+                test_api.set_mock_response("ensemble-api.open-meteo.com", {"hourly": dict(members, time=times)})
+            else:
+                test_api.set_mock_response("ensemble-api.open-meteo.com", {}, 500)
+
+            captured = {}
+            real_pv_calibration = test_api.solar.pv_calibration
+
+            def spy_pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, *args, _captured=captured, _real=real_pv_calibration, **kwargs):
+                """Record how pv_calibration was asked to treat the band, then run it."""
+                _captured["create_pv10"] = create_pv10
+                _captured["calibrate_band"] = kwargs.get("calibrate_band")
+                return _real(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, *args, **kwargs)
+
+            test_api.solar.pv_calibration = spy_pv_calibration
+
+            def create_mock_session(*args, _api=test_api, **kwargs):
+                """Create a mock aiohttp session."""
+                return _api.mock_aiohttp_session()
+
+            with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+                run_async(test_api.solar.fetch_pv_forecast())
+
+            label = "available" if with_ensemble else "missing"
+            expected = {"create_pv10": not with_ensemble, "calibrate_band": with_ensemble}
+            if captured != expected:
+                print("ERROR: ensemble {}: pv_calibration was called with {}, expected {}".format(label, captured, expected))
+                failed = True
+
+            # No generation history in this fixture, so P50 is uncalibrated and a created band is the fixed 0.7 / 1.3
+            expected_ratios = (0.5, 1.5) if with_ensemble else (0.7, 1.3)
+            forecast = test_api.dashboard_items.get("sensor.predbat_pv_today", {}).get("attributes", {}).get("detailedForecast", [])
+            checked = 0
+            for entry in forecast:
+                if entry["pv_estimate"] > 0.5:
+                    checked += 1
+                    got = (entry["pv_estimate10"] / entry["pv_estimate"], entry["pv_estimate90"] / entry["pv_estimate"])
+                    if abs(got[0] - expected_ratios[0]) > 0.02 or abs(got[1] - expected_ratios[1]) > 0.02:
+                        print("ERROR: ensemble {}: published band at {} is {:.2f}x / {:.2f}x of P50, expected {}x / {}x".format(label, entry["period_start"], got[0], got[1], expected_ratios[0], expected_ratios[1]))
+                        failed = True
+            if not checked:
+                print("ERROR: ensemble {}: no published forecast slots to check".format(label))
+                failed = True
+        finally:
+            test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_no_history_not_zeroed(my_predbat):
     """
     Regression test: when there is no valid historical data (e.g. all days excluded as
@@ -6500,6 +6849,9 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_cap_applied_to_planner_data(my_predbat)
     failed |= test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50(my_predbat)
     failed |= test_pv_calibration_cap_published_pv10_matches_planner(my_predbat)
+    failed |= test_pv_calibration_off_band_built_from_raw(my_predbat)
+    failed |= test_pv_calibration_keeps_provider_band(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_uses_ensemble_band(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_no_history_ceiling_clips_raw(my_predbat)
     failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)
