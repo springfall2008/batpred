@@ -1323,7 +1323,7 @@ class OctopusAPI(ComponentBase):
         # Default saving session rate in octopoints/kWh
         # octopus_saving_session_rate is in p/kWh, convert to octopoints
         octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)
-        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100)  # 100p/kWh default
+        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100.0)  # 100p/kWh default
         default_octopoints = default_rate_pence * octopoints_per_penny
 
         if not has_joined:
@@ -3397,8 +3397,8 @@ class Octopus:
 
         # Background: '-' where importing is cheap (at or below the planner's own low-rate
         # threshold), '.' where it is not, and '?' where the rate for that block is not known.
-        # Uses the same threshold the planner uses to pick charge windows, so the render agrees
-        # with the decision rather than approximating it.
+        # Uses the planner's tariff low-rate threshold, so the render agrees with the cheap windows it
+        # picks (ahead of a saving session or Axle event the plan may also charge at other tariff rates).
         #
         # The '?' matters: rate_import is rebuilt each cycle and is briefly empty while apps.yaml
         # is re-read, so a missing rate is a real state the render can hit. Drawing those blocks
@@ -4212,7 +4212,7 @@ class Octopus:
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
-            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0)
+            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0.0)
             join_lead_hours = self.get_arg("octopus_saving_auto_join_lead_hours", 0)
 
             joined_events = []
@@ -4327,7 +4327,7 @@ class Octopus:
 
             # Default saving session rate for when octopoints_per_kwh is not available
             # (e.g. new flexibility API events that don't report reward rates)
-            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0)
+            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0.0)
 
             if joined_events:
                 for event in joined_events:

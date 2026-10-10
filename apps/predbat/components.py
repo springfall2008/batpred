@@ -123,9 +123,9 @@ COMPONENT_LIST = {
             "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
             "solcast_api_key": {"required": False, "secret": True, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
-            "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
+            "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8.0},
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
-            "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
+            "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8.0},
             "forecast_solar_open_meteo_backup": {"required": False, "config": "forecast_solar_open_meteo_backup", "default": False},
             "forecast_solar_open_meteo_first": {"required": False, "config": "forecast_solar_open_meteo_first", "default": False},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
@@ -134,7 +134,7 @@ COMPONENT_LIST = {
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
             "open_meteo_forecast": {"required": False, "config": "open_meteo_forecast", "default": False},
-            "open_meteo_forecast_max_age": {"required": False, "config": "open_meteo_forecast_max_age", "default": 4},
+            "open_meteo_forecast_max_age": {"required": False, "config": "open_meteo_forecast_max_age", "default": 4.0},
         },
         "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today", "open_meteo_forecast"],
         "phase": 2,  # Solar component moved to phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
@@ -458,7 +458,7 @@ COMPONENT_LIST = {
             # one from, so it is estimated from poinv. This is the escape hatch for a user
             # who knows their pack's real limit.
             "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
-            "api_delay": {"required": False, "default": 2, "config": "alphaess_api_delay"},
+            "api_delay": {"required": False, "default": 2.0, "config": "alphaess_api_delay"},
             "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
         },
         # Gate activation on having an AppID. Without this the component would start for
@@ -605,7 +605,7 @@ COMPONENT_LIST = {
         "event_filter": "predbat_axle_",
         "args": {
             "api_key": {"required": False, "secret": True, "config": "axle_api_key"},
-            "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
+            "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100.0},
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
             "managed_mode": {"required": False, "config": "axle_managed_mode", "default": False},
             "site_id": {"required": False, "secret": True, "config": "axle_site_id"},

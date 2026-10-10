@@ -114,11 +114,15 @@ against the obvious mistakes, not a sandbox boundary.
 """
 
 import argparse
+import functools
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import time
+import traceback
 from pathlib import Path
 
 REPO = "springfall2008/batpred"
@@ -715,7 +719,139 @@ def mark_pr_opened(issue_number, cleanup=False):
         flag_pr_for_review(pr_number, cleanup=cleanup)
 
 
-def mark_triage_failed(issue_number, attempts):
+class FlowFailed(subprocess.CalledProcessError):
+    """A claude run that exited non-zero, carrying the log its output went to.
+
+    A CalledProcessError on its own says only that something exited non-zero. Keeping the log
+    path lets failure_cause() look inside the run for why, and lets the comment name the file
+    a maintainer on the bot's host should open.
+    """
+
+    def __init__(self, returncode, cmd, log_path):
+        """Record the log the failed run wrote to alongside the usual exit status and command."""
+        super().__init__(returncode, cmd)
+        self.log_path = log_path
+
+
+# What a failed claude run says in its own log, most specific first. Matched only against the
+# end of the last run's output (see failure_log_cause), because the agent quotes the issue it is
+# reading and an issue about "Reached max turns" must not classify its own triage. These are the
+# strings Claude Code prints at the point it gives up; an unrecognised failure falls back to the
+# exit status, so a wrong or stale entry costs a less specific comment, not a wrong label.
+FAILURE_LOG_SIGNATURES = (
+    (re.compile(r"Reached max turns", re.IGNORECASE), "Claude ran out of turns before finishing (--max-turns)"),
+    (re.compile(r"Exceeded USD budget|budget .{0,40}exceeded", re.IGNORECASE), "Claude hit the spend limit set for this run (--max-budget-usd)"),
+    (re.compile(r"credit balance is too low|usage limit reached|usage limit exceeded", re.IGNORECASE), "The bot's Claude account is out of credit or at its usage limit"),
+    (re.compile(r"Invalid API key|authentication_error|OAuth token has expired|API Error: 401|Please run /login", re.IGNORECASE), "Claude could not authenticate - the bot's login has expired or been revoked"),
+    (re.compile(r"API Error: 429|rate_limit_error", re.IGNORECASE), "Claude was rate limited by the API"),
+    (re.compile(r"API Error: 529|overloaded_error", re.IGNORECASE), "The Claude API reported it was overloaded"),
+    (re.compile(r"ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|Connection error|fetch failed", re.IGNORECASE), "Claude lost its network connection to the API"),
+)
+FAILURE_LOG_SECTION_CHARS = 4000
+FAILURE_LOG_READ_BYTES = 262144
+FAILURE_RUN_START = re.compile(r"^==== .* started .* ====$", re.MULTILINE)
+
+
+def failure_log_cause(log_path):
+    """Name why the last run in a flow's log gave up, or "" if the log says nothing recognisable.
+
+    The log is appended to across retries, so only the text after the final "started" marker
+    belongs to this failure, and only its last few thousand characters are searched.
+    """
+    try:
+        with open(log_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - FAILURE_LOG_READ_BYTES))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    starts = list(FAILURE_RUN_START.finditer(text))
+    if starts:
+        text = text[starts[-1].end() :]
+    text = text[-FAILURE_LOG_SECTION_CHARS:]
+    for pattern, reason in FAILURE_LOG_SIGNATURES:
+        if pattern.search(text):
+            return reason
+    return ""
+
+
+def failure_cause(exc):
+    """Say in a sentence what failed, from the exit status, the command and the run's log.
+
+    Commands are named by their leading words only: the arguments of a `gh ... --body` call can
+    be a whole comment, and these sentences are posted publicly.
+    """
+    status = exc.returncode
+    command = exc.cmd if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd).split()
+    program = Path(str(command[0])).name if command else "a command"
+    if status < 0:
+        try:
+            name = signal.Signals(-status).name
+        except ValueError:
+            name = f"signal {-status}"
+        return f"`{program}` was killed by {name}, which usually means the bot's host ran out of memory or the process was stopped by hand"
+    if program in ("gh", "git"):
+        words = [str(word) for word in command[1:] if not str(word).startswith("-")][:2]
+        return f"`{' '.join([program] + words)}` exited with status {status}"
+    cause = failure_log_cause(exc.log_path) if isinstance(exc, FlowFailed) else ""
+    if cause:
+        return f"{cause} (exit status {status})"
+    return f"The Claude run exited with status {status} and its log shows no recognised cause"
+
+
+@functools.lru_cache(maxsize=1)
+def daemon_version():
+    """Short commit of the checkout the daemon is running from, so a line number can be read
+    against the right file, or "" when it is not in a git checkout."""
+    try:
+        result = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def failure_origin(exc=None):
+    """Return "file:line in function()" for where in this file a failure arose.
+
+    With an exception, the innermost frame in this file: a subprocess.run(check=True) fails
+    inside the subprocess module, but the line that matters is the call in the daemon. Without
+    one - a run that exited 0 and left its work undone - the place that spotted the problem,
+    which is the caller of the mark_*_failed() function that called failure_detail().
+    """
+    this_file = Path(__file__).resolve()
+    if exc is not None and exc.__traceback__ is not None:
+        frames = [frame for frame in traceback.extract_tb(exc.__traceback__) if Path(frame.filename).resolve() == this_file]
+    else:
+        frames = [frame for frame in traceback.extract_stack() if Path(frame.filename).resolve() == this_file]
+        while frames and (frames[-1].name in ("failure_origin", "failure_detail") or frames[-1].name.startswith("mark_")):
+            frames.pop()
+    if not frames:
+        return ""
+    frame = frames[-1]
+    version = daemon_version()
+    return f"{this_file.name}:{frame.lineno} in {frame.name}(){f' (daemon {version})' if version else ''}"
+
+
+def failure_detail(reason="", exc=None):
+    """Build the part of a BOT_FAILED comment that says why, where and which log.
+
+    `reason` is a specific explanation a caller already has; `exc` adds what the exception
+    itself shows. Never includes log text - only a classification of it - because a log can
+    hold a reporter's attachment, a token or the bot's paths.
+    """
+    causes = [text for text in (reason, failure_cause(exc) if exc is not None else "") if text]
+    parts = []
+    if causes:
+        parts.append("**Reason:** " + "; ".join(text.rstrip(".") for text in causes) + ".")
+    origin = failure_origin(exc)
+    if origin:
+        parts.append(f"**Failed at:** `{origin}`.")
+    if isinstance(exc, FlowFailed):
+        parts.append(f"**Log:** `{Path(exc.log_path).name}` in the bot's logs directory.")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def mark_triage_failed(issue_number, attempts, exc=None):
     """Note on an issue that triage never completed, label it, and let the queue move on.
 
     The watermark advances past the issue afterwards, so nothing re-triages it by itself.
@@ -734,7 +870,7 @@ def mark_triage_failed(issue_number, attempts):
             "--repo",
             REPO,
             "--body",
-            f"Automated triage did not complete for this issue after {attempts} attempts - see the triage bot's logs for details. "
+            f"Automated triage did not complete for this issue after {attempts} attempts.{failure_detail(exc=exc)} "
             "It has been skipped so that it does not hold up triage of later issues. Remove `BOT_FAILED` and add `BOT_REVIEW` "
             "to have the bot look at it again - nothing removes `BOT_FAILED` on its own, so leaving it on would outlive a later successful run.",
         ],
@@ -1251,7 +1387,7 @@ def triage(issue_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== issue #{issue_number} exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
@@ -1293,7 +1429,7 @@ def triage_followup(issue_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== issue #{issue_number} follow-up exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[review] issue #{issue_number}: follow-up exited {result.returncode}", flush=True)
 
 
@@ -1621,7 +1757,7 @@ def remove_review_label(issue_number):
     subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
 
-def mark_review_failed(issue_number):
+def mark_review_failed(issue_number, exc=None):
     """Post a note and swap BOT_REVIEW for BOT_FAILED, so a failing triage isn't
     retried (and re-billed) every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW
     to retry once the underlying issue is fixed.
@@ -1635,7 +1771,7 @@ def mark_review_failed(issue_number):
             "--repo",
             REPO,
             "--body",
-            "Automated triage failed to complete for this issue - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+            f"Automated triage failed to complete for this issue.{failure_detail(exc=exc)} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
         ],
         check=True,
     )
@@ -1650,13 +1786,15 @@ def remove_pr_review_label(pr_number):
     subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
 
-def mark_pr_review_failed(pr_number, reason=""):
+def mark_pr_review_failed(pr_number, reason="", exc=None):
     """Post a note and swap BOT_REVIEW for BOT_FAILED on a PR, so a failing review isn't
     retried every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW to retry. `reason`
-    names the specific failure when there is one - "see the logs" is poor advice for the
-    run that exits 0 having posted nothing, because its log reads like a finished review.
+    names the specific failure when there is one, and `exc` is the exception behind it, if
+    any: the comment says why, where in the daemon it arose and which log to open. "See the
+    logs" alone is poor advice for the run that exits 0 having posted nothing, because its
+    log reads like a finished review.
     """
-    detail = f" {reason}" if reason else ""
+    detail = failure_detail(reason, exc)
     subprocess.run(
         [
             "gh",
@@ -1666,7 +1804,7 @@ def mark_pr_review_failed(pr_number, reason=""):
             "--repo",
             REPO,
             "--body",
-            f"Automated review failed to complete for this PR - see the triage bot's logs for details.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+            f"Automated review failed to complete for this PR.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
         ],
         check=True,
     )
@@ -1709,12 +1847,12 @@ def mark_pr_cleanup_unsupported(pr_number):
     )
 
 
-def mark_pr_cleanup_failed(pr_number, reason=""):
+def mark_pr_cleanup_failed(pr_number, reason="", exc=None):
     """Post a note and swap BOT_CLEANUP for BOT_FAILED on a PR, so a failing cleanup
     isn't retried every poll cycle. Remove BOT_FAILED and re-add BOT_CLEANUP to retry.
-    `reason` names the failure when there is one, as for mark_pr_review_failed().
+    `reason` and `exc` name the failure when there is one, as for mark_pr_review_failed().
     """
-    detail = f" {reason}" if reason else ""
+    detail = failure_detail(reason, exc)
     subprocess.run(
         [
             "gh",
@@ -1724,7 +1862,7 @@ def mark_pr_cleanup_failed(pr_number, reason=""):
             "--repo",
             REPO,
             "--body",
-            f"Automated cleanup failed to complete for this PR - see the triage bot's logs for details.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_CLEANUP` to try again.",
+            f"Automated cleanup failed to complete for this PR.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_CLEANUP` to try again.",
         ],
         check=True,
     )
@@ -1767,7 +1905,7 @@ def process_bot_review_issue(issue):
         action(issue_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review] issue #{issue_number}: {action_name} failed: {exc}", flush=True)
-        mark_review_failed(issue_number)
+        mark_review_failed(issue_number, exc=exc)
         return
     remove_review_label(issue_number)
 
@@ -1809,7 +1947,7 @@ def review_pr(pr_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env(review_only=True))
         log_handle.write(f"==== PR #{pr_number} review exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[review-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
 
 
@@ -1845,21 +1983,21 @@ def process_bot_review_pr(pr):
         before = pr_review_activity_count(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: failed to sample activity count before review: {exc}", flush=True)
-        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.")
+        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.", exc)
         return
 
     try:
         review_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: review failed: {exc}", flush=True)
-        mark_pr_review_failed(pr_number)
+        mark_pr_review_failed(pr_number, exc=exc)
         return
 
     try:
         after = pr_review_activity_count(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: failed to sample activity count after review: {exc}", flush=True)
-        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.")
+        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.", exc)
         return
 
     if after <= before:
@@ -1911,7 +2049,7 @@ def cleanup_pr(pr_number):
         result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT, env=claude_env())
         log_handle.write(f"==== PR #{pr_number} cleanup exited {result.returncode} ====\n")
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise FlowFailed(result.returncode, cmd, log_path)
     print(f"[cleanup-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
 
 
@@ -1967,7 +2105,7 @@ def process_new_issue(issue, state):
             return False
         print(f"[triage] issue #{number}: failed {count} times - marking it and moving on", flush=True)
         try:
-            mark_triage_failed(number, count)
+            mark_triage_failed(number, count, exc)
         except subprocess.CalledProcessError as mark_exc:
             # Advancing matters more than the label. Letting this escape would abort the rest
             # of the poll cycle and leave the watermark behind - the precise failure this
@@ -2003,7 +2141,7 @@ def process_bot_cleanup_pr(pr):
         cleanup_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[cleanup-pr] PR #{pr_number}: cleanup failed: {exc}", flush=True)
-        mark_pr_cleanup_failed(pr_number)
+        mark_pr_cleanup_failed(pr_number, exc=exc)
         return
     reason = unfinished_cleanup_reason()
     if reason:

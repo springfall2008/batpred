@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.3.6"
+THIS_VERSION = "v9.3.7"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -430,6 +430,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
@@ -460,8 +461,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_max = 0
         self.rate_max_minute = 0
         self.rate_max_base = 0
+        self.rate_import_tariff_max = 0
         self.rate_export_cost_threshold = 99
         self.rate_import_cost_threshold = 99
+        self.rate_import_pre_event_end = None
+        self.rate_import_pre_event_threshold = None
         self.rate_best_cost_threshold_charge = None
         self.rate_best_cost_threshold_export = None
         self.rate_average = 0
@@ -606,10 +610,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.carbon_yesterday = 0.0
         self.rate_import = {}
         self.rate_import_replicated = {}
+        self.rate_import_saving_minutes = set()
+        self.rate_import_pre_saving = {}
         self.rate_export = {}
         self.rate_export_replicated = {}
+        self.rate_export_saving_minutes = set()
+        self.rate_export_pre_saving = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.axle_sessions = []
         self.cost_today_sofar = 0
@@ -653,6 +662,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.count_inverter_writes = {}
         self.rate_slots = []
         self.low_rates = []
+        self.low_rates_tariff = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(8)]
         self.cost_today_sofar = 0

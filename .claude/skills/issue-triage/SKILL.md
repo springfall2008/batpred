@@ -73,11 +73,13 @@ A `predbat_debug.yaml` can also be replayed against current main to reproduce th
 
 Apply exactly one of: `bug`, `question`, `configuration` (user error/misconfiguration), `enhancement` (feature request). If genuinely ambiguous, apply `unclear` instead of guessing.
 
+If you classify as `bug`, write a one-line statement of the bug in your own words — what Predbat actually does wrong, not the reporter's symptom description. State the faulty behaviour and, if you have one, the mechanism, e.g. "The dispatch-cancel check re-reads the car's live status instead of the status at cancel time, so a car that resumes charging a second later still loses its slot." A restatement of the title ("battery charging not working") is not acceptable. This line carries into step 9.
+
 ## 4. Check for duplicates
 
 Search existing issues (`gh issue list --search ...`, both open and closed) for the same symptom.
 
-- High confidence match: label `duplicate`, comment linking the original issue, and close this one.
+- High confidence match: label `duplicate`, comment linking the original issue (including the step 3 one-line bug statement, if you wrote one), and close this one.
 - Low confidence: mention "possibly related to #N" in your triage comment; don't close.
 
 Then look for **similar** issues and PRs as well, whether or not they are duplicates: search both open and closed ones for the symptom, the integration and the component it touches (`gh issue list --state all --search ...` and `gh pr list --state all --search ...`). Read the findings in the best matches — what was diagnosed, what was fixed, and what was ruled out — before forming a hypothesis, and link the relevant ones in your triage comment as "related to #N". An issue that shares a symptom or a trigger is not necessarily the same problem: only call it a duplicate when the cause matches, not just the symptom, and treat a past finding as a lead to confirm against current main, not as a conclusion.
@@ -106,6 +108,7 @@ Then look for **similar** issues and PRs as well, whether or not they are duplic
 
 - Form a root-cause hypothesis with a `file:line` pointer if the investigation supports one. It's fine to say the cause needs maintainer review if it doesn't.
 - You may edit files locally to test a hypothesis (e.g. a temporary debug print, a tweaked test fixture) — this clone is hard-reset and cleaned before the next run, so nothing here persists. Never `git commit` or `git push`.
+- If this investigation changes your mind about step 3's classification — e.g. you classified `bug` but the investigation shows Predbat is doing what the config says — go back and revise it, and drop or rewrite the one-line bug statement to match. Don't let step 9 post a statement step 3 wrote before you knew better.
 
 ## 6. Apply component labels
 
@@ -130,6 +133,8 @@ Skip priority for pure questions and feature requests.
 Check existing comments first — if one from you is already there, stop; don't post again.
 
 Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated first-pass triage (a maintainer will review before any action is taken), followed by: classification, priority (if set), what you investigated and found (including test result if you ran one), a root-cause pointer if you have one, and any information request.
+
+If you reached step 3 and classified as `bug`, lead with the one-line bug statement immediately after the classification. Gates 1a/1b apply a type label without ever reaching step 3, so there's nothing to include if you took one of those paths.
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
 
