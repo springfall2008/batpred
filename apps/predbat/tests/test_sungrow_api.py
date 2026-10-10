@@ -211,6 +211,25 @@ def test_sungrow_request_treats_string_result_code_as_success():
     assert not failed, "test_sungrow_request_treats_string_result_code_as_success"
 
 
+def test_sungrow_request_survives_a_body_that_is_not_json():
+    """A gateway error page is a failed call, not an exception that unwinds the caller."""
+    failed = False
+    client = MockSungrow()
+    response = create_aiohttp_mock_response(json_data=_envelope(PLANT_LIST))
+
+    async def bad_json(*args, **kwargs):
+        """Fail the way aiohttp does on a body that will not parse."""
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    response.json = bad_json
+    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        ok, data = run_async_local(client._request("plant_list", {"page": 1}))
+    if ok is not False or data is not None:
+        print(f"ERROR: a non-JSON body returned ({ok}, {data})")
+        failed = True
+    assert not failed, "test_sungrow_request_survives_a_body_that_is_not_json"
+
+
 def test_sungrow_request_retries_once_on_401():
     """A 401 refreshes the token exactly once and retries, as fox.py does."""
     failed = False
@@ -757,6 +776,7 @@ def run_sungrow_api_tests(my_predbat):
     for name, fn in [
         ("request_credentials", test_sungrow_request_sends_appkey_and_access_key),
         ("string_result_code", test_sungrow_request_treats_string_result_code_as_success),
+        ("non_json_body", test_sungrow_request_survives_a_body_that_is_not_json),
         ("retry_on_401", test_sungrow_request_retries_once_on_401),
         ("skip_on_dead_token", test_sungrow_request_skips_the_call_when_refresh_fails),
         ("auth_and_rate_limit_codes", test_sungrow_auth_and_rate_limit_codes_are_reported_differently),

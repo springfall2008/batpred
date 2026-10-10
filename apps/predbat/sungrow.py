@@ -133,6 +133,7 @@ from sungrow_const import (
     SUNGROW_DISABLE,
     SUNGROW_FORCED_EVERYDAY,
     SUNGROW_HEARTBEAT_DEFAULT_SECONDS,
+    SUNGROW_HEARTBEAT_MAX_MISSES,
     SUNGROW_ESS_POINTS,
     SUNGROW_ESS_ENERGY,
     SUNGROW_ERROR_CODES,
@@ -157,6 +158,7 @@ from sungrow_const import (
     gateway_url,
     strip_point_prefix,
     as_float,
+    as_int,
     scale_for_write,
     heartbeat_send_interval,
     heartbeat_declared_interval,
@@ -424,6 +426,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                     return False, None
                 await asyncio.sleep(1 + attempt)
                 continue
+            except ValueError as error:
+                # A body that is not JSON at all - a gateway error page, typically. Not retried
+                # in place: it is the far end misbehaving, and the next tier refresh retries.
+                self.log("Warn: Sungrow {} returned a body that is not JSON: {}".format(path, error))
+                return False, None
 
             if not isinstance(data, dict):
                 self.log("Warn: Sungrow {} returned a non-object body".format(path))
@@ -1185,7 +1192,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             ok, data = await self._request("param_task", {"uuid": str(uuid), "task_id": str(task_id)})
             if not ok:
                 return None
-            status = (data or {}).get("command_status")
+            status = as_int((data or {}).get("command_status"))
             if status == SUNGROW_TASK_DONE:
                 param_list = (data or {}).get("param_list") or []
                 # A COMPLETED TASK IS NOT A SUCCESSFUL WRITE. The status is two-level: the task
@@ -1194,9 +1201,9 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 # a whole "completed". Reading only the task level reports a setpoint as landed
                 # when the inverter never took it, which is the worst possible failure here -
                 # Predbat would cache the decision as applied and never retry it.
-                bad = [entry for entry in param_list if entry.get("command_status") not in (None, SUNGROW_PARAM_STATUS_SUCCESS)]
+                bad = [entry for entry in param_list if as_int(entry.get("command_status")) not in (None, SUNGROW_PARAM_STATUS_SUCCESS)]
                 if bad:
-                    detail = ", ".join("{} {}".format(describe_param(entry.get("param_code")), SUNGROW_PARAM_STATUS.get(entry.get("command_status"), entry.get("command_status"))) for entry in bad)
+                    detail = ", ".join("{} {}".format(describe_param(entry.get("param_code")), SUNGROW_PARAM_STATUS.get(as_int(entry.get("command_status")), entry.get("command_status"))) for entry in bad)
                     self.log("Warn: Sungrow task {} for {} completed but {} of {} parameter(s) did not take: {}".format(task_id, self._serial(uuid), len(bad), len(param_list), detail))
                     return None
                 return param_list
@@ -1462,7 +1469,21 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 self._drop_control(list(self.control_held), "heartbeat paused")
                 break
             for uuid in list(self.control_held):
-                await self.send_heartbeat(uuid)
+                try:
+                    confirmed = await self.send_heartbeat(uuid)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    # Nothing may end this task except its own exit conditions: it is the only
+                    # thing keeping control of the battery, and run() cannot see it fail.
+                    self.log("Warn: Sungrow heartbeat for {} raised {}: {}".format(self._serial(uuid), type(error).__name__, error))
+                    confirmed = False
+                if confirmed:
+                    self._beat_failures.pop(uuid, None)
+                    continue
+                self._beat_failures[uuid] = self._beat_failures.get(uuid, 0) + 1
+                if self._beat_failures[uuid] >= SUNGROW_HEARTBEAT_MAX_MISSES:
+                    self._drop_control([uuid], "{} heartbeats in a row were not confirmed".format(self._beat_failures[uuid]))
         self.log("Info: Sungrow heartbeat loop stopped")
 
     async def send_heartbeat(self, uuid):
@@ -1771,6 +1792,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 self.log("Warn: Sungrow schedule read failed for {}: {}".format(self._serial(uuid), error))
             await self._reconcile_control(uuid)
             await self.publish_schedule_settings_ha(uuid)
+
+        # Restart the heartbeat if it is not running while something is held. It should never
+        # be needed - the loop guards its own body - but a held inverter with no heartbeat is
+        # the one state this component must not sit in.
+        self._ensure_heartbeat()
 
         await self.publish_data()
 

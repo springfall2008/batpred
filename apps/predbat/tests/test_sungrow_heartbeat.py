@@ -133,19 +133,34 @@ def test_taking_control_starts_the_heartbeat_loop():
         return real_ensure()
 
     client._ensure_heartbeat = counting_ensure
+
+    async def drive():
+        """Write, read the just-started state, then stop the loop - all in one task.
+
+        Stopping has to be chained onto the SAME write rather than run as a separate
+        run_async_local() call: with asyncio.sleep faked, the real loop _ensure_heartbeat()
+        starts has nothing that truly suspends it, so it runs inline once control returns to
+        the event loop - against this test's two-response mock, missing twice and dropping
+        control before a later, separate call could ever cancel it. Awaiting _stop_heartbeat()
+        immediately cancels the task before it gets a turn to run at all.
+        """
+        ok = await client._write_params(UUID, {"command": SUNGROW_CMD_CHARGE, "power": 3000, "reason": "test"})
+        held = UUID in client.control_held
+        await client._stop_heartbeat()
+        return ok, held
+
     with patch("asyncio.sleep", new=_no_sleep()):
         with _mock_post([_envelope(DISPATCH_OK), _envelope(TASK_DONE)]):
-            ok = run_async_local(client._write_params(UUID, {"command": SUNGROW_CMD_CHARGE, "power": 3000, "reason": "test"}))
+            ok, held = run_async_local(drive())
     if not ok:
         print("ERROR: the control write did not succeed")
         failed = True
-    if UUID not in client.control_held:
+    if not held:
         print("ERROR: the device was not marked as held after a confirmed write")
         failed = True
     if started["count"] != 1:
         print(f"ERROR: the heartbeat was ensured {started['count']} times")
         failed = True
-    run_async_local(client._stop_heartbeat())
     assert not failed, "test_taking_control_starts_the_heartbeat_loop"
 
 
@@ -415,6 +430,54 @@ def test_heartbeat_loop_survives_being_cancelled():
     assert not failed, "test_heartbeat_loop_survives_being_cancelled"
 
 
+def test_heartbeat_loop_survives_a_beat_that_raises():
+    """One unexpected exception must not end the task that keeps control of the battery."""
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    calls = []
+
+    async def flaky_beat(uuid):
+        """Raise on the first beat, then succeed and stop the loop."""
+        calls.append(uuid)
+        if len(calls) == 1:
+            raise ValueError("response was not JSON")
+        client._heartbeat_stop = True
+        return True
+
+    client.send_heartbeat = flaky_beat
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if len(calls) != 2:
+        print(f"ERROR: the loop made {len(calls)} beat(s); an exception ended it")
+        failed = True
+    assert not failed, "test_heartbeat_loop_survives_a_beat_that_raises"
+
+
+def test_missed_beats_drop_control_so_it_is_re_established():
+    """Two misses span the whole declared interval: the inverter has reverted, so say so."""
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
+    beats = []
+
+    async def failed_beat(uuid):
+        """Report every beat as unconfirmed, with a guard against an endless loop."""
+        beats.append(uuid)
+        if len(beats) > 5:
+            client._heartbeat_stop = True
+        return False
+
+    client.send_heartbeat = failed_beat
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if len(beats) != 2 or UUID in client.control_held or UUID in client.applied_command:
+        print(f"ERROR: after {len(beats)} missed beats held={client.control_held} applied={client.applied_command}")
+        failed = True
+    assert not failed, "test_missed_beats_drop_control_so_it_is_re_established"
+
+
 def run_sungrow_heartbeat_tests(my_predbat):
     """Run all Sungrow EMS heartbeat tests."""
     failed = False
@@ -434,6 +497,8 @@ def run_sungrow_heartbeat_tests(my_predbat):
         ("held_not_persisted", test_control_held_is_not_persisted_across_a_restart),
         ("loop_cancellable", test_heartbeat_loop_survives_being_cancelled),
         ("read_only_drops_control", test_a_read_only_pause_forgets_the_applied_command),
+        ("loop_survives_exception", test_heartbeat_loop_survives_a_beat_that_raises),
+        ("missed_beats_drop_control", test_missed_beats_drop_control_so_it_is_re_established),
     ]:
         try:
             if fn():

@@ -43,6 +43,7 @@ from sungrow_const import (
     gateway_url,
     strip_point_prefix,
     as_float,
+    as_int,
     clamp_range,
     scale_for_write,
     scale_from_read,
@@ -296,6 +297,27 @@ def test_as_float_tolerates_the_apis_unavailable_marker():
         print("ERROR: the default was not honoured")
         failed = True
     assert not failed, "test_as_float_tolerates_the_apis_unavailable_marker"
+
+
+def test_as_int_coerces_string_statuses_to_int():
+    """result_code is a string on this API, and nothing promises task/parameter statuses are not."""
+    failed = False
+    if as_int("8") != 8:
+        print(f"ERROR: '8' coerced to {as_int('8')!r}, expected the int 8")
+        failed = True
+    if as_int(8) != 8:
+        print(f"ERROR: the int 8 coerced to {as_int(8)!r}")
+        failed = True
+    if as_int(None) is not None:
+        print("ERROR: None should stay None, not become a number")
+        failed = True
+    if as_int("junk") is not None:
+        print("ERROR: junk did not fall back to the default")
+        failed = True
+    if as_int(None, 0) != 0:
+        print("ERROR: the default was not honoured")
+        failed = True
+    assert not failed, "test_as_int_coerces_string_statuses_to_int"
 
 
 def test_signed_battery_power_combines_the_two_unsigned_halves():
@@ -573,6 +595,7 @@ def run_sungrow_const_tests(my_predbat):
         ("heartbeat_interval", test_heartbeat_send_interval_beats_inside_the_promised_window),
         ("strip_point_prefix", test_strip_point_prefix_separates_points_from_metadata),
         ("as_float", test_as_float_tolerates_the_apis_unavailable_marker),
+        ("as_int", test_as_int_coerces_string_statuses_to_int),
         ("signed_battery_power", test_signed_battery_power_combines_the_two_unsigned_halves),
         ("signed_grid_power", test_signed_grid_power_is_negative_on_import),
         ("hhmmss_split", test_hhmmss_to_hour_minute_splits_for_the_window_parameters),

@@ -438,6 +438,20 @@ def test_dispatch_returns_none_when_the_task_fails():
     assert not failed, "test_dispatch_returns_none_when_the_task_fails"
 
 
+def test_dispatch_accepts_statuses_returned_as_strings():
+    """result_code is a string on this API; nothing guarantees command_status is not one too."""
+    failed = False
+    client = _controlled_client()
+    done = {"command_status": "8", "param_list": [{"param_code": "10004", "set_value": "170", "command_status": "4"}]}
+    with patch("asyncio.sleep", new=_no_sleep()):
+        with _mock_post([_envelope(DISPATCH_OK), _envelope({"command_status": "2"}), _envelope(done)]):
+            result = run_async_local(client.dispatch_params(UUID, [{"param_code": "10004", "set_value": "170"}]))
+    if result is None:
+        print("ERROR: a task reporting its statuses as strings was treated as failed")
+        failed = True
+    assert not failed, "test_dispatch_accepts_statuses_returned_as_strings"
+
+
 def test_dispatch_rejects_a_response_with_no_task_id():
     """An accepted dispatch with no task_id cannot be polled, so it is not a success."""
     failed = False
@@ -598,6 +612,10 @@ def test_write_params_skips_an_unchanged_decision():
     failed = False
     client = _controlled_client()
     client._write_supported[UUID] = True
+    # A real heartbeat loop started here would run against a mock session with no responses
+    # left once this call's two are consumed, miss twice, and drop control - clearing
+    # applied_command and making the second call below send a write that is not expected.
+    client._ensure_heartbeat = lambda: None
     decision = {"command": SUNGROW_CMD_CHARGE, "power": 3000, "reason": "test"}
     with patch("asyncio.sleep", new=_no_sleep()):
         with _mock_post([_envelope(DISPATCH_OK), _envelope(TASK_DONE)]):
@@ -616,6 +634,10 @@ def test_write_params_holds_a_change_inside_the_pacing_window():
     failed = False
     client = _controlled_client(min_write_interval=300)
     client._write_supported[UUID] = True
+    # See test_write_params_skips_an_unchanged_decision: a real heartbeat loop here would miss
+    # against the exhausted mock session and drop control, clearing applied_command before the
+    # pacing assertion below gets to look at it.
+    client._ensure_heartbeat = lambda: None
     with patch("asyncio.sleep", new=_no_sleep()):
         with _mock_post([_envelope(DISPATCH_OK), _envelope(TASK_DONE)]):
             run_async_local(client._write_params(UUID, {"command": SUNGROW_CMD_CHARGE, "power": 3000, "reason": "a"}))
@@ -897,6 +919,7 @@ def run_sungrow_control_tests(my_predbat):
         ("forced_off_by_default", test_forced_charge_schedule_is_not_written_by_default),
         ("dispatch_polls", test_dispatch_polls_until_the_task_completes),
         ("dispatch_failure", test_dispatch_returns_none_when_the_task_fails),
+        ("status_strings", test_dispatch_accepts_statuses_returned_as_strings),
         ("dispatch_no_task_id", test_dispatch_rejects_a_response_with_no_task_id),
         ("param_status_failure", test_dispatch_fails_when_a_parameter_inside_a_completed_task_failed),
         ("param_status_absent_ok", test_dispatch_tolerates_a_task_that_omits_per_parameter_status),

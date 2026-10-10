@@ -410,6 +410,10 @@ SUNGROW_HEARTBEAT_MARGIN = 0.5
 # second forever, which is a self-inflicted rate-limit rather than tighter control.
 SUNGROW_HEARTBEAT_MIN_SEND_SECONDS = 30
 
+# Beats go out at half the declared interval, so two consecutive misses mean the whole
+# declared interval has passed without one and the inverter has reverted.
+SUNGROW_HEARTBEAT_MAX_MISSES = 2
+
 # -----------------------------------------------------------------------------
 # Measuring points
 # -----------------------------------------------------------------------------
@@ -631,6 +635,19 @@ def as_float(value, default=None):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def as_int(value, default=None):
+    """Coerce an API status to int, returning default for None or junk.
+
+    result_code is a string on this API ("1"), and nothing in the documentation promises the
+    task and parameter statuses are not as well. Comparing an uncoerced "8" with 8 would report
+    every successful write as failed.
+    """
+    numeric = as_float(value, None)
+    if numeric is None:
+        return default
+    return int(numeric)
 
 
 def clamp_range(param_code, value):
