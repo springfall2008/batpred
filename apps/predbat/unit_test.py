@@ -46,6 +46,7 @@ from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
+from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
 from tests.test_new_install_detection import test_new_install_detection
 from tests.test_history_attribute import test_history_attribute
@@ -240,7 +241,10 @@ from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
+from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
+from tests.test_iog_early_slot_flat_battery import run_iog_early_slot_flat_battery_tests
+from tests.test_multi_car_load import run_multi_car_load_tests
 from tests.test_dispatch_timeline import run_dispatch_timeline_tests
 from tests.test_log_rotation import run_log_rotation_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
@@ -256,6 +260,8 @@ from tests.test_integer_config import (
     test_get_ha_config_normalises_int_default_for_fractional_step,
     test_metric_battery_cycle_fractional_value_not_truncated,
     test_metric_battery_value_scaling_step_resolves_export_margin,
+    test_float_declared_keys_never_read_with_int_default,
+    test_component_arg_specs_resolve_float_declared_keys_as_float,
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
@@ -266,6 +272,7 @@ from tests.test_plan_why_reason import run_test_plan_why_reason
 from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
+from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -279,6 +286,7 @@ from tests.test_memory_release import run_memory_release_tests
 from tests.test_inverter_write_poll import run_inverter_write_poll_tests
 from tests.test_givtcp_rest import run_givtcp_rest_tests
 from tests.test_myenergi import test_myenergi
+from tests.test_wallbox import test_wallbox
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -462,6 +470,7 @@ def main():
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
+        ("car_plan_windows", test_car_plan_windows, "parse_car_plan_windows year anchoring: New Year either side, long windows, leap day", False),
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
@@ -573,11 +582,15 @@ def main():
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
+        ("iog_car_need_gate", run_iog_car_need_gate_tests, "IOG car-need gate: no cheap rate for dispatch minutes no car needs", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
+        ("iog_early_slot_flat_battery", run_iog_early_slot_flat_battery_tests, "IOG bonus dispatch before the night window with a flat battery", False),
+        ("multi_car_load", run_multi_car_load_tests, "Cars charging at once each add their own energy to the load", False),
         ("dispatch_timeline", run_dispatch_timeline_tests, "Dispatch timeline diagnostic tests (#4516 Stage 1)", False),
         ("log_rotation", run_log_rotation_tests, "Configurable log rotation and two-digit naming (#5076)", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
+        ("set_rate_thresholds", run_set_rate_thresholds_tests, "Rate threshold saving-session exclusion tests (GH#5050)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
@@ -672,6 +685,8 @@ def main():
         ("get_ha_config_fractional_default", test_get_ha_config_normalises_int_default_for_fractional_step, "get_ha_config normalises int default to float for fractional-step items (#4296)", False),
         ("metric_battery_cycle_fractional", test_metric_battery_cycle_fractional_value_not_truncated, "metric_battery_cycle fractional value not truncated by get_arg (#4296)", False),
         ("metric_battery_value_scaling_step", test_metric_battery_value_scaling_step_resolves_export_margin, "metric_battery_value_scaling step resolves the export margin (#4840)", False),
+        ("float_keys_float_defaults", test_float_declared_keys_never_read_with_int_default, "No float-declared APPS_SCHEMA key is read with an int default (#4925)", False),
+        ("component_arg_float_specs", test_component_arg_specs_resolve_float_declared_keys_as_float, "COMPONENT_LIST arg specs resolve float-declared keys as float (#4925)", False),
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("control_conflicts_metrics", test_control_conflicts_metrics_round_trip, "Metrics dashboard control_conflicts round-trip tests", False),
         ("control_conflicts_dashboard", test_control_conflicts_dashboard_renders_section, "Metrics dashboard control_conflicts section render tests", False),
@@ -713,6 +728,7 @@ def main():
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
+        ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),

@@ -33,6 +33,12 @@ PREDICT_STEP = 5
 DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
 DYNAMIC_LOAD_CAR_START_MINUTES = 3
 DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# The load test reads "low" - no car can be charging - under this fraction of car_charging_threshold. The
+# margin below the threshold allows for a load sensor that under-reads while the battery is charging (GH#5461)
+DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
+# A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
+# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
+DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 
 # Extra cloud divergence applied to the PV10 scenario on top of the computed cloud factor, so the
 # downside case diverges harder than the central one
@@ -60,6 +66,9 @@ CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_DAILY = "%Y-%m-%d"
+# Dispatch source for a charger's own schedule on a tariff with no dispatch rate (e.g. Ohme off Octopus
+# Intelligent): the slots are when the car will charge, but they are billed at the normal tariff rate
+DISPATCH_SOURCE_CHARGER_SCHEDULE = "charger-schedule"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
@@ -70,6 +79,13 @@ INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_WRITE_POLL_INTERVAL = 0.25  # Seconds before the second look, doubling after each miss
 INVERTER_WRITE_POLL_MAX_INTERVAL = 2.0  # Ceiling for that backoff
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
+# Per-control write backoff, for inverter types that opt in with write_backoff in INVERTER_DEF (only
+# GWMQTT). A control whose write of the same target has failed to verify this many times in a row
+# (one write per plan cycle) is degraded: it is sent once rather than retried in a burst, and at most
+# once per INVERTER_WRITE_DEGRADED_INTERVAL seconds, until a write verifies, it reads back as wanted,
+# or the target changes. Every call still checks the read-back and reports a mismatch as a failure.
+INVERTER_WRITE_BACKOFF_FAILURES = 2
+INVERTER_WRITE_DEGRADED_INTERVAL = 300
 # Inverter clock skew bands, measured as (inverter time - Predbat computer time) in minutes.
 # At or above the restart threshold Predbat warns loudly and triggers auto_restart. Between the warn
 # and restart thresholds nothing used to be said at all, yet the drift still shifts every charge and

@@ -161,6 +161,14 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
   octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
 ```
 
+The Octopus Integration Power Down event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_down_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
+
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_saving_session_events` to `..._octoplus_power_down_events`. The above pattern matches either name, so existing configurations keep working unchanged.
 The old sensor is retained by the integration until **January 2027**, after which only the Power Down naming will exist. The new sensor ships disabled by default in Home Assistant
 (`entity_registry_enabled_default: False`) - if Predbat's Octopus entity list does not show a Power Down sensor, [enable it in the entity registry first](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them), otherwise Predbat will keep silently using the old sensor with no visible warning.
@@ -186,6 +194,8 @@ reduction in this period. E.g. setting to a value of 0.8 would indicate you will
 
 As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
+This needs the automatic import threshold (**input_number.predbat_rate_low_threshold** set to 0): a manual threshold is a cap
+Predbat will not charge above, even ahead of a session - see [rate thresholds](customisation.md#battery-margins-and-metrics-options).
 
 Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
 or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
@@ -211,6 +221,14 @@ all the free events.
 ```yaml
   octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 ```
+
+The Octopus Integration Power Up event:
+
+```yaml
+  event.octopus_energy_xxxxxxxx_octoplus_power_up_events
+```
+
+is disabled by default and will need [to be enabled as described above](#octopus-energy-integration-setup).
 
 Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_free_electricity_session_events` to `..._octoplus_power_up_events`. The above pattern matches either name, so existing
 configurations keep working unchanged. The old sensor is retained by the integration until **January 2027**, after which only the Power Up naming will exist.

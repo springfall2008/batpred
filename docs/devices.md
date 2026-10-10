@@ -268,6 +268,8 @@ Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
 
 ## Wallbox Pulsar
 
+Predbat can talk to Wallbox directly, with no Home Assistant integration needed: see [Wallbox Charger](components.md#wallbox-charger-wallbox). The configuration below is for the Home Assistant Wallbox integration instead.
+
 <https://www.home-assistant.io/integrations/wallbox/>
 
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
