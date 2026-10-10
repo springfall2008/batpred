@@ -2832,11 +2832,20 @@ charge_enable:
   - select.ss_prog1_charge_2
 ```
 
-Predbat writes the charge window directly into Timer 1, for example:
+Predbat controls Timer 1 through three entities:
 
-- `sensor.predbat_SK_0_charge_start_time = 15:30:00`
-- `sensor.predbat_SK_0_charge_end_time = 16:00:00`
-- `select.ss_prog1_charge_2 = Allow Grid`
+- `charge_enable` (`select.ss_prog1_charge_2`) — toggles charging on and off
+- `charge_limit` (`number.ss_prog1_capacity_2`) — sets the target SoC
+- `charge_rate` (`number.ss_prog1_power_2`) — sets the charge power
+
+The timer window itself (start and end times) stays fixed. Configure it wide
+enough to cover any charge window Predbat schedules — for example, Timer 1
+from `00:30` to the start of Timer 2 at `23:00` provides a 22.5-hour window.
+
+Predbat's internal sensors such as `sensor.predbat_SK_0_charge_start_time`
+show the planned charge window, but these are not written back to the
+inverter's timer entities. The inverter charges whenever the timer window is
+active and Predbat has enabled charging via `charge_enable`.
 
 ### Why one slot?
 
