@@ -920,6 +920,7 @@ def test_build_discovery_cars_entity_map_matches_automatic_config(my_predbat):
     entities = report["cars"][0]["entities"]
     expected = {
         "octopus_intelligent_slot": api.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix),
+        "octopus_intelligent_smart_control": api.get_entity_name("switch", "intelligent_smart_charge", index=index_suffix),
         "octopus_ready_time": api.get_entity_name("select", "intelligent_target_time", index=index_suffix),
         "octopus_charge_limit": api.get_entity_name("number", "intelligent_target_soc", index=index_suffix),
     }

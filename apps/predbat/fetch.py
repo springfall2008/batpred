@@ -32,6 +32,8 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    OCTOPUS_MANUAL_DISPATCH_SOURCES,
+    DISPATCH_SOURCE_CHARGER_SCHEDULE,
     CAR_CHARGING_NOW_POWER_W,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
@@ -1468,6 +1470,33 @@ class Fetch:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
+    def octopus_smart_control_off(self, car_n, save=True):
+        """
+        Whether Octopus Smart Control is explicitly switched off for car_n, so its planned dispatches will not happen.
+
+        The switch is octopus_intelligent_smart_control (one per car), which the apps.yaml template points at the Octopus
+        Energy integration's intelligent smart charge switch. Only an explicit "off" counts - an unset, missing or
+        unavailable switch leaves the planned slots trusted as before.
+
+        The change is logged once, and only when save is True (not in compare.py's re-runs for other tariffs).
+        """
+        switch_config = self.get_arg("octopus_intelligent_smart_control", None, indirect=False)
+        if switch_config and not isinstance(switch_config, list):
+            switch_config = [switch_config]
+        switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
+        if not switch_id:
+            return False
+        state = self.get_state_wrapper(entity_id=switch_id)
+        off = isinstance(state, str) and state.lower() == "off"
+        if save and off != self.octopus_smart_control_off_logged.get(car_n, False):
+            self.octopus_smart_control_off_logged[car_n] = off
+            if off:
+                self.log("Car {} Octopus Smart Control is now Off ({}), planned Octopus dispatches are ignored".format(car_n, switch_id))
+            else:
+                # Not necessarily On: unknown or unavailable is no evidence either way, so say what the switch reports
+                self.log("Car {} Octopus Smart Control is no longer Off ({} is {}), planned Octopus dispatches are used".format(car_n, switch_id, state))
+        return off
+
     def fetch_sensor_data_cars(self, save=True):
         """
         Fetch car specific data such as Octopus intelligent slots and vehicle data if we can get it, and calculate current SoC and limits based on that
@@ -1540,10 +1569,17 @@ class Fetch:
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
+                # on it (#5339). Slots already delivered (completed) are real, so those are still counted above, as are
+                # the manual bump/boost charges the user asked for themselves. So is a charger's own schedule: the Ohme
+                # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it
+                planned_used = planned
+                if self.octopus_smart_control_off(car_n, save=save):
+                    planned_used = [slot for slot in (planned or []) if isinstance(slot, dict) and (slot.get("source") or (slot.get("meta") or {}).get("source")) in OCTOPUS_MANUAL_DISPATCH_SOURCES + (DISPATCH_SOURCE_CHARGER_SCHEDULE,)]
+                if planned_used and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
-                    self.octopus_slots[car_n] += planned
+                    self.octopus_slots[car_n] += planned_used
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
