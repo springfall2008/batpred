@@ -166,6 +166,47 @@ test('future rates show a prediction indicator', () => {
   assert.match(html, /data-icon="nord-pool"/)
 })
 
+test('event-adjusted slots show their backend event type once', () => {
+  const html = renderPlanTable(false, {
+    ...plan,
+    rows: [{
+      ...row,
+      import_rate_adjust_type: 'saving',
+      export_rate_adjust_type: 'saving',
+      rate_event_type: 'octopus_power_down'
+    }]
+  })
+
+  assert.match(html, /Octopus Power Down \/ Saving Session/)
+  assert.match(html, /plan-saving-session-badge/)
+  assert.match(html, /plan-saving-session-badge is-power-down/)
+  assert.equal((html.match(/>Power Down</g) ?? []).length, 1)
+})
+
+test('energy event types use their semantic badge colour', () => {
+  const eventColours = {
+    octopus_power_up: 'power-up',
+    octopus_happy_hour: 'power-up',
+    axle_import: 'axle-import',
+    axle_export: 'axle-export',
+    axle_event: 'axle-event',
+    energy_event: 'generic'
+  }
+
+  for (const [rateEventType, colour] of Object.entries(eventColours)) {
+    const html = renderPlanTable(false, {
+      ...plan,
+      rows: [{
+        ...row,
+        import_rate_adjust_type: 'saving',
+        rate_event_type: rateEventType
+      }]
+    })
+
+    assert.match(html, new RegExp(`plan-saving-session-badge is-${colour}`))
+  }
+})
+
 test('iBoost column appears when iBoost is enabled', () => {
   const enabledHtml = renderPlanTable(false, {
     ...plan,

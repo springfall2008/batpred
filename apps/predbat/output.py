@@ -22,7 +22,7 @@ from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored, minutes_to_time, str2time
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -55,6 +55,34 @@ REASON_TEMPLATES = {
     "manual_override_demand": "You manually set this slot to demand mode.",
     "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
 }
+
+
+def event_slot_contains_minute(slot, minute, midnight_utc, start_key="start", end_key="end"):
+    """Return whether an event slot contains an absolute plan minute."""
+    start = slot.get(start_key)
+    end = slot.get(end_key)
+    if not start or not end:
+        return False
+    try:
+        start_minute = minutes_to_time(str2time(start), midnight_utc)
+        end_minute = minutes_to_time(str2time(end), midnight_utc)
+    except (TypeError, ValueError):
+        return False
+    return start_minute <= minute < end_minute
+
+
+def plan_rate_event_type(base, minute):
+    """Return the programme that produced a plan row's generic ``saving`` rate tag."""
+    if any(event_slot_contains_minute(slot, minute, base.midnight_utc) for slot in base.octopus_free_slots):
+        return "octopus_power_up"
+    for slot in base.octopus_saving_slots:
+        active_undated_slot = slot.get("state") and not slot.get("start") and not slot.get("end") and (base.minutes_now // 30) * 30 <= minute < (base.minutes_now // 30) * 30 + 30
+        if active_undated_slot or event_slot_contains_minute(slot, minute, base.midnight_utc):
+            return "octopus_power_down"
+    for slot in base.axle_sessions:
+        if event_slot_contains_minute(slot, minute, base.midnight_utc, "start_time", "end_time"):
+            return "axle_{}".format(slot.get("import_export", "event"))
+    return "energy_event"
 
 
 def yesterday_slot_is_exporting(slot_status):
@@ -1803,6 +1831,8 @@ class Output:
             export_rate_adjust_type = self.rate_export_replicated.get(minute)
             if export_rate_adjust_type is not None:
                 json_row["export_rate_adjust_type"] = export_rate_adjust_type
+            if import_rate_adjust_type == "saving" or export_rate_adjust_type == "saving":
+                json_row["rate_event_type"] = plan_rate_event_type(self, minute_start)
             # Add adjusted rates (always included for client-side debug toggle)
             json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
             json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)

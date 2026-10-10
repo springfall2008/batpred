@@ -490,6 +490,53 @@
   background: currentColor;
 }
 
+.plan-saving-session-badge {
+  --event-colour: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  margin-left: 0.12rem;
+  padding: 0.12rem 0.32rem;
+  border: 1px solid color-mix(in srgb, var(--event-colour) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--event-colour) 14%, transparent);
+  color: var(--event-colour);
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.plan-saving-session-badge.is-power-down {
+  --event-colour: var(--color-danger);
+}
+
+.plan-saving-session-badge.is-power-up {
+  --event-colour: var(--color-success);
+}
+
+.plan-saving-session-badge.is-axle-import {
+  --event-colour: var(--color-flow-grid);
+}
+
+.plan-saving-session-badge.is-axle-export {
+  --event-colour: var(--color-export);
+}
+
+.plan-saving-session-badge.is-axle-event {
+  --event-colour: var(--color-warning);
+}
+
+@media (max-width: 720px) {
+  .plan-saving-session-badge > span {
+    display: none;
+  }
+
+  .plan-saving-session-badge {
+    padding-inline: 0.22rem;
+  }
+}
+
 /*
  * Don't leave the explanation tooltip sitting over the menu
  * once the action has been clicked.

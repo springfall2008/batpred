@@ -41,6 +41,44 @@ type PlanTableProps = {
 
 type PlanRow = Plan['rows'][number]
 
+const RATE_EVENT_DETAILS: Record<string, { label: string; description: string; colour: string }> = {
+  octopus_power_down: {
+    label: 'Power Down',
+    description: 'Octopus Power Down / Saving Session: Predbat has applied the joined session reward to this slot.',
+    colour: 'power-down'
+  },
+  octopus_power_up: {
+    label: 'Power Up',
+    description: 'Octopus Power Up / free electricity session: Predbat has applied the event rate to this slot.',
+    colour: 'power-up'
+  },
+  octopus_happy_hour: {
+    label: 'Happy Hour',
+    description: 'Octopus Weekend Happy Hour: Predbat has applied the free electricity rate to this slot.',
+    colour: 'power-up'
+  },
+  axle_import: {
+    label: 'Axle import',
+    description: 'Axle import event: Predbat has applied the event reward to this slot.',
+    colour: 'axle-import'
+  },
+  axle_export: {
+    label: 'Axle export',
+    description: 'Axle export event: Predbat has applied the event reward to this slot.',
+    colour: 'axle-export'
+  },
+  axle_event: {
+    label: 'Axle event',
+    description: 'Axle VPP event: Predbat has applied the event reward to this slot.',
+    colour: 'axle-event'
+  },
+  energy_event: {
+    label: 'Energy event',
+    description: 'A joined energy event has adjusted this slot’s rate.',
+    colour: 'generic'
+  }
+}
+
 function cellColour(colour?: string): CSSProperties | undefined {
   return colour ? { '--plan-cell-colour': colour } as CSSProperties : undefined
 }
@@ -1297,6 +1335,19 @@ export default function PlanTable({
 
               const saving = savingOverrideTime === row.time
 
+              const isSavingSession =
+                row.import_rate_adjust_type === 'saving' ||
+                row.export_rate_adjust_type === 'saving'
+
+              const rateEvent = isSavingSession
+                ? RATE_EVENT_DETAILS[row.rate_event_type ?? 'energy_event'] ?? RATE_EVENT_DETAILS.energy_event
+                : null
+
+              const actionTooltip = [
+                rateEvent?.description ?? '',
+                reason || 'No additional explanation is available for this slot.'
+              ].filter(Boolean).join(' ')
+
               return (
                 <Fragment key={row.time}>
                   {newDay && (
@@ -1335,9 +1386,7 @@ export default function PlanTable({
                           ]
                             .filter(Boolean)
                             .join(' ')}
-                          data-tooltip={
-                            reason || 'No additional explanation is available for this slot.'
-                          }
+                          data-tooltip={actionTooltip}
                           aria-expanded={menuOpen}
                           aria-haspopup={!isPast ? 'menu' : undefined}
                           aria-disabled={isPast}
@@ -1358,6 +1407,14 @@ export default function PlanTable({
                           {getActionIcon(action)}
 
                           <span>{getActionLabel(action)}</span>
+
+                          {rateEvent && (
+                            <span className={`plan-saving-session-badge is-${rateEvent.colour}`}>
+                              <FontAwesomeIcon icon={faBolt} aria-hidden="true" />
+
+                              <span>{rateEvent.label}</span>
+                            </span>
+                          )}
 
                           {manualOverride && (
                             <span
