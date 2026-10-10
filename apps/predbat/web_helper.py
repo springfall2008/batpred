@@ -8374,6 +8374,11 @@ window.onload = function() {
 };
 function applyDarkMode() {
     const darkModeEnabled = getDarkModePreference();
+    const themeMode = document.getElementById('theme-mode');
+    if (themeMode) {
+        const storedDarkMode = localStorage.getItem('darkMode');
+        themeMode.value = storedDarkMode === null ? 'system' : (storedDarkMode === 'true' ? 'dark' : 'light');
+    }
     if (darkModeEnabled) {
         document.body.classList.add('dark-mode');
         document.documentElement.classList.add('dark-mode');
@@ -8410,9 +8415,12 @@ if (window.matchMedia) {
     }
 }
 
-function toggleDarkMode() {
-    const isDarkMode = document.body.classList.toggle('dark-mode');
-    localStorage.setItem('darkMode', isDarkMode);
+function setThemeMode(mode) {
+    if (mode === 'system') {
+        localStorage.removeItem('darkMode');
+    } else {
+        localStorage.setItem('darkMode', mode === 'dark' ? 'true' : 'false');
+    }
     // Force reload to apply dark mode styles
     location.reload();
 }
@@ -8634,7 +8642,7 @@ padding: 14px 16px;
 flex-shrink: 0; /* Prevent from shrinking */
 }
 
-.dark-mode-toggle button {
+.dark-mode-toggle select {
 background-color: #f0f0f0;
 color: #333;
 border: 1px solid #ddd;
@@ -8644,7 +8652,7 @@ cursor: pointer;
 white-space: nowrap;
 }
 
-.dark-mode-toggle button:hover {
+.dark-mode-toggle select:hover {
 background-color: #e0e0e0;
 }
 
@@ -8685,13 +8693,13 @@ body.dark-mode .idle-icon {
 color: #6CFF72 !important;
 }
 
-body.dark-mode .dark-mode-toggle button {
+body.dark-mode .dark-mode-toggle select {
 background-color: #444;
 color: #e0e0e0;
 border-color: #555;
 }
 
-body.dark-mode .dark-mode-toggle button:hover {
+body.dark-mode .dark-mode-toggle select:hover {
 background-color: #666;
 }
 </style>
@@ -8952,7 +8960,11 @@ setTimeout(function() {
     """
         + THIS_VERSION
         + """
-    <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+    <select id="theme-mode" aria-label="Theme" onchange="setThemeMode(this.value)">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+    </select>
 </div>
 </div>
 """

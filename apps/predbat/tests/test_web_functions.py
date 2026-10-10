@@ -600,5 +600,36 @@ def run_web_dark_mode_preference_tests(my_predbat):
         print("  ERROR: expected a fallback to the deprecated addListener() for older Safari/Chrome")
         failed += 1
 
+    print("Test: the menu offers System, Light and Dark with an accessible theme selector")
+    from web_helper import get_menu_html
+
+    menu = get_menu_html(False, "./dash", [], "v1.0", "")
+    if 'id="theme-mode" aria-label="Theme" onchange="setThemeMode(this.value)"' not in menu or any(f'<option value="{mode}">{mode.title()}</option>' not in menu for mode in ("system", "light", "dark")):
+        print("  ERROR: expected an accessible System / Light / Dark selector")
+        failed += 1
+
+    print("Test: System clears the existing override; Light and Dark preserve the existing storage format")
+    setter_start = header.find("function setThemeMode(mode)")
+    setter_end = header.find("\n}", setter_start)
+    setter = header[setter_start:setter_end]
+    if "localStorage.removeItem('darkMode')" not in setter or "mode === 'dark' ? 'true' : 'false'" not in setter or "location.reload();" not in setter:
+        print("  ERROR: expected System to remove the override and explicit modes to persist before reloading")
+        failed += 1
+
+    # Run the actual generated JavaScript when Node.js is available, without a browser or live instance.
+    import shutil
+    import subprocess
+    import sys
+
+    node = shutil.which("node")
+    if node:
+        result = subprocess.run([node, os.path.join(os.path.dirname(__file__), "test_web_theme.cjs"), sys.executable], capture_output=True, text=True)
+        print(result.stdout, end="")
+        if result.returncode:
+            print(result.stderr)
+            failed += 1
+    else:
+        print("  SKIP: JavaScript behaviour tests require Node.js")
+
     print("**** Web dark mode preference tests completed ****")
     return failed
