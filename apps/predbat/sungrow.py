@@ -226,6 +226,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         forced_charge_schedule=False,
         api_delay=2,
         min_write_interval=300,
+        api_debug=True,
         **kwargs,
     ):
         """Initialise the Sungrow component from its resolved config args.
@@ -237,6 +238,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         apps.yaml, so it would always return the default.
         """
         self.log("Info: SungrowAPI initialising")
+        self.api_debug = bool(api_debug)
         self.appkey = appkey or ""
         self.access_key = access_key or ""
         self.base_url = gateway_url(gateway)
@@ -331,9 +333,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         masked: nobody on the project has Sungrow hardware, so a tester's log is the only
         diagnostic available and hiding the error text would defeat the point of api_debug.
         """
-        if not isinstance(payload, dict):
-            return payload
-        return {key: ("***" if key in SUNGROW_DEBUG_REDACT_KEYS else value) for key, value in payload.items()}
+        if isinstance(payload, dict):
+            return {key: ("***" if key in SUNGROW_DEBUG_REDACT_KEYS else SungrowAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, list):
+            return [SungrowAPI.redact(item) for item in payload]
+        return payload
 
     def debug_api(self, direction, what, payload=None):
         """Trace one API request or response while api_debug is on."""

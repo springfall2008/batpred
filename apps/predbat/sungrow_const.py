@@ -588,7 +588,10 @@ SUNGROW_TTL_POWER = 5
 # Predbat is not left planning on an SoC from the previous half-hour slot.
 SUNGROW_TELEMETRY_STALE_MINUTES = 15
 
-SUNGROW_DEBUG_REDACT_KEYS = ("appkey", "access_key", "x-access-key", "token", "access_token", "Authorization")
+# Credentials, plus the personal fields plant and device listings are known or likely to carry.
+# The names beyond the credentials are a best-effort list taken from the documented response
+# fields: a tester's first log should be read for anything personal this misses.
+SUNGROW_DEBUG_REDACT_KEYS = ("appkey", "access_key", "x-access-key", "token", "access_token", "refresh_token", "Authorization", "ps_location", "latitude", "longitude", "email", "user_account", "user_name", "mobile_tel", "ps_holder")
 
 # -----------------------------------------------------------------------------
 # Pure helpers

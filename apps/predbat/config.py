@@ -2872,6 +2872,7 @@ APPS_SCHEMA = {
     "sungrow_battery_rate_max": {"type": "float"},
     "sungrow_api_delay": {"type": "float"},
     "sungrow_min_write_interval": {"type": "integer"},
+    "sungrow_api_debug": {"type": "boolean"},
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},

@@ -496,6 +496,9 @@ COMPONENT_LIST = {
             "battery_rate_max": {"required": False, "config": "sungrow_battery_rate_max"},
             "api_delay": {"required": False, "default": 2, "config": "sungrow_api_delay"},
             "min_write_interval": {"required": False, "default": 300, "config": "sungrow_min_write_interval"},
+            # On by default while the integration is unverified against hardware: a tester's log
+            # is the only evidence there is. Credentials and location fields are masked.
+            "api_debug": {"required": False, "default": True, "config": "sungrow_api_debug"},
         },
         # Gate activation on having the application credential. Without this the component
         # would start for every instance, since all individual args are optional to allow the

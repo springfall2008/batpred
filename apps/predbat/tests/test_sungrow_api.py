@@ -415,6 +415,24 @@ def test_sungrow_redact_masks_credentials_but_not_errors():
     assert not failed, "test_sungrow_redact_masks_credentials_but_not_errors"
 
 
+def test_sungrow_redact_reaches_nested_fields_and_personal_data():
+    """Plant listings carry an address and coordinates several levels down; logs get shared."""
+    failed = False
+    payload = {"result_code": "1", "result_data": {"pageList": [{"ps_id": 1, "ps_location": "1 Example Road", "latitude": 51.5, "longitude": -0.1, "ps_name": "Home"}], "token": "secret"}}
+    safe = SungrowAPI.redact(payload)
+    row = safe["result_data"]["pageList"][0]
+    if row["ps_location"] != "***" or row["latitude"] != "***" or row["longitude"] != "***" or safe["result_data"]["token"] != "***":
+        print(f"ERROR: nested fields were not masked: {safe}")
+        failed = True
+    if row["ps_id"] != 1 or safe["result_code"] != "1":
+        print("ERROR: diagnostic fields were masked")
+        failed = True
+    if payload["result_data"]["pageList"][0]["ps_location"] != "1 Example Road":
+        print("ERROR: redact modified the payload it was given")
+        failed = True
+    assert not failed, "test_sungrow_redact_reaches_nested_fields_and_personal_data"
+
+
 def test_sungrow_discovery_finds_plants_and_energy_storage_inverters():
     """Discovery lists plants, then the energy-storage devices in each, keyed by UUID."""
     failed = False
@@ -868,6 +886,7 @@ def run_sungrow_api_tests(my_predbat):
         ("energy_prefers_device", test_sungrow_energy_prefers_the_device_counters),
         ("capacity_diagnostic_only", test_sungrow_reported_capacity_is_diagnostic_only),
         ("redact", test_sungrow_redact_masks_credentials_but_not_errors),
+        ("redact_nested", test_sungrow_redact_reaches_nested_fields_and_personal_data),
         ("discovery", test_sungrow_discovery_finds_plants_and_energy_storage_inverters),
         ("discovery_failure_keeps_list", test_sungrow_discovery_failure_keeps_the_previous_device_list),
         ("serial_filter", test_sungrow_inverter_sn_filter),

@@ -57,6 +57,7 @@ def test_sungrow_component_registered():
         ("battery_rate_max", "sungrow_battery_rate_max", None),
         ("api_delay", "sungrow_api_delay", 2),
         ("min_write_interval", "sungrow_min_write_interval", 300),
+        ("api_debug", "sungrow_api_debug", True),
     ]:
         info = entry["args"].get(arg)
         if not info:
@@ -133,6 +134,7 @@ def test_sungrow_apps_schema_keys():
         ("sungrow_battery_rate_max", "float"),
         ("sungrow_api_delay", "float"),
         ("sungrow_min_write_interval", "integer"),
+        ("sungrow_api_debug", "boolean"),
     ]:
         entry = APPS_SCHEMA.get(key)
         if entry is None:
