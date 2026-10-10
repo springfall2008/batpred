@@ -107,6 +107,7 @@ from sungrow_const import (
     SUNGROW_PARAM_SOC_UPPER,
     SUNGROW_PARAM_SOC_LOWER,
     SUNGROW_PARAM_RANGE,
+    SUNGROW_POWER_DOCUMENTED_MAX,
     SUNGROW_PARAM_EMS_MODE,
     SUNGROW_PARAM_COMMAND,
     SUNGROW_PARAM_POWER,
@@ -166,6 +167,7 @@ from sungrow_const import (
     window_is_empty,
     param_entry,
     describe_param,
+    clamp_range,
 )
 
 # The behaviour a SungrowCloud inverter has, stated for the discovery record's capabilities.
@@ -188,6 +190,10 @@ SUNGROW_CAPABILITIES = {
     "charge_control_immediate": False,
     "target_soc_used_for_discharge": True,
 }
+
+# Not a wire value. Marks a cached applied_command entry as "released to self-consumption
+# with these limits", so the release goes through the same change detection as a command.
+SUNGROW_CMD_RELEASE = "release"
 
 
 class SungrowAPI(ComponentBase, OAuthMixin):
@@ -720,6 +726,16 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         rates = [rate for rate in rates if rate]
         return max(rates) if rates else 0.0
 
+    def power_limit(self, uuid=None):
+        """Return the largest charge/discharge power, in watts, that may be written to 10005.
+
+        The documented range stops at 5000 W, so that is the cap when nothing better is known.
+        A device that reports (or is configured with) a higher battery rate is trusted over the
+        table: a 10 kW hybrid asked for 8 kW must not silently get 5.
+        """
+        known = self.battery_rate_max(uuid) if uuid is not None else 0.0
+        return float(max(SUNGROW_POWER_DOCUMENTED_MAX, known))
+
     # -------------------------------------------------------------------------
     # Publishing
     # -------------------------------------------------------------------------
@@ -1050,7 +1066,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
 
         return None
 
-    def build_param_list(self, decision):
+    def build_param_list(self, decision, uuid=None):
         """Turn a decision into the param_list paramSetting expects.
 
         10003 is written FIRST and in the same task as the command. The portal is explicit
@@ -1066,7 +1082,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             param_entry(SUNGROW_PARAM_EMS_MODE, scale_for_write(SUNGROW_PARAM_EMS_MODE, SUNGROW_EMS_EXTERNAL_DISPATCH)),
             param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, heartbeat_declared_interval(self.heartbeat_interval))),
             param_entry(SUNGROW_PARAM_COMMAND, scale_for_write(SUNGROW_PARAM_COMMAND, decision["command"])),
-            param_entry(SUNGROW_PARAM_POWER, scale_for_write(SUNGROW_PARAM_POWER, decision.get("power", 0))),
+            param_entry(SUNGROW_PARAM_POWER, scale_for_write(SUNGROW_PARAM_POWER, max(0.0, min(as_float(decision.get("power"), 0.0), self.power_limit(uuid))))),
         ]
         if "soc_upper" in decision:
             params.append(param_entry(SUNGROW_PARAM_SOC_UPPER, scale_for_write(SUNGROW_PARAM_SOC_UPPER, decision["soc_upper"])))
@@ -1270,7 +1286,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if supported is False:
             return False
 
-        params = self.build_param_list(decision)
+        params = self.build_param_list(decision, uuid)
         if self.forced_charge_schedule:
             params.extend(self.build_forced_charge_params(self.local_schedule.get(uuid, {})))
 
@@ -1286,6 +1302,14 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             return False
 
         self.applied_command[uuid] = dict(decision)
+        for key, code in (("soc_upper", SUNGROW_PARAM_SOC_UPPER), ("soc_lower", SUNGROW_PARAM_SOC_LOWER)):
+            if key in decision and clamp_range(code, decision[key]) != decision[key]:
+                low, high = SUNGROW_PARAM_RANGE[code]
+                self.log(
+                    "Info: Sungrow {} only accepts {}-{}% for {}, so {}% was written as {}%; Predbat enforces the real target itself from telemetry".format(
+                        self._serial(uuid), low, high, describe_param(code), decision[key], clamp_range(code, decision[key])
+                    )
+                )
         # Control is only marked as HELD once the task has actually completed. Starting the
         # heartbeat for a task that never landed would beat for a mode the inverter is not in.
         self.control_held.add(uuid)
@@ -1294,27 +1318,50 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         await self.save_control()
         return True
 
-    async def release_control(self, uuid):
-        """Hand the inverter back to self-consumption and stop beating for it.
+    @staticmethod
+    def _release_params(reserve):
+        """Return the param_list that hands an inverter back to self-consumption.
 
-        Called when the plan has nothing to hold. Writing mode 0 explicitly is faster and more
-        legible than letting the heartbeat lapse - the inverter would get there on its own
-        within one interval, which is the safety net, not the normal path. The device leaves
-        control_held even if the write fails, because in that case the lapsing heartbeat will
-        do it anyway and continuing to beat would hold a mode Predbat no longer wants.
+        A dispatch narrows 10001 and 10002 to the plan's targets, and nothing says the inverter
+        widens them again by itself when it leaves external dispatch. So release writes them
+        explicitly: the ceiling back to 100%, and the floor to Predbat's reserve, which is also
+        the only point at which the reserve reaches the inverter at all.
         """
-        if uuid not in self.control_held:
-            return True
+        return [
+            param_entry(SUNGROW_PARAM_EMS_MODE, scale_for_write(SUNGROW_PARAM_EMS_MODE, SUNGROW_EMS_SELF_CONSUMPTION)),
+            param_entry(SUNGROW_PARAM_SOC_UPPER, scale_for_write(SUNGROW_PARAM_SOC_UPPER, 100)),
+            param_entry(SUNGROW_PARAM_SOC_LOWER, scale_for_write(SUNGROW_PARAM_SOC_LOWER, reserve)),
+        ]
+
+    async def release_control(self, uuid, reserve=0):
+        """Hand the inverter back to self-consumption with full-range limits and Predbat's reserve.
+
+        Returns True when the inverter is known to be released with these limits. The device
+        leaves control_held before anything is sent, so the beats stop even if the write fails -
+        the lapsing heartbeat then reverts the mode on its own, and the write is retried on a
+        later cycle because nothing is cached as applied until it lands.
+
+        Also called while already released: a changed reserve is a changed release and is
+        written, paced by sungrow_min_write_interval like any other change of plan.
+        """
+        was_held = uuid in self.control_held
         self.control_held.discard(uuid)
-        self.applied_command.pop(uuid, None)
-        if not self.control_enable or self._is_read_only():
+        release = {"command": SUNGROW_CMD_RELEASE, "soc_lower": int(clamp_range(SUNGROW_PARAM_SOC_LOWER, as_float(reserve, 0.0)))}
+        if not was_held and self.applied_command.get(uuid) == release:
             return True
-        params = [param_entry(SUNGROW_PARAM_EMS_MODE, scale_for_write(SUNGROW_PARAM_EMS_MODE, SUNGROW_EMS_SELF_CONSUMPTION))]
-        results = await self.dispatch_params(uuid, params, task_name="Predbat release")
-        if results is None:
-            self.log("Info: Sungrow could not confirm the release of {} to self-consumption; the external EMS heartbeat will lapse and the inverter will revert on its own".format(self._serial(uuid)))
+        self.applied_command.pop(uuid, None)
+        if not self.control_enable or self._is_read_only() or self._write_supported.get(uuid) is False:
+            return True
+        if not was_held and not self._write_allowed(uuid):
             return False
-        self.log("Info: Sungrow released {} back to self-consumption".format(self._serial(uuid)))
+        self.last_write_time[uuid] = time.time()
+        results = await self.dispatch_params(uuid, self._release_params(release["soc_lower"]), task_name="Predbat release")
+        if results is None:
+            self.log("Info: Sungrow could not confirm the release of {} to self-consumption; the external EMS heartbeat has stopped so the inverter reverts on its own, and the release will be retried".format(self._serial(uuid)))
+            await self.save_control()
+            return False
+        self.applied_command[uuid] = release
+        self.log("Info: Sungrow released {} to self-consumption with a {}% floor".format(self._serial(uuid), release["soc_lower"]))
         await self.save_control()
         return True
 
@@ -1324,7 +1371,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             return False
         decision = self.decide_command(uuid, schedule)
         if decision is None:
-            return await self.release_control(uuid)
+            return await self.release_control(uuid, int(as_float(schedule.get("reserve"), 0)))
         return await self._write_params(uuid, decision, force=force)
 
     async def apply_schedule(self, uuid, force=False):
@@ -1740,7 +1787,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         await self._stop_heartbeat()
         for uuid in list(self.control_held):
             try:
-                await self.release_control(uuid)
+                await self.release_control(uuid, int(as_float(self.local_schedule.get(uuid, {}).get("reserve"), 0)))
             except Exception as error:
                 self.log("Warn: Sungrow could not release {} on shutdown: {}; the heartbeat has stopped, so it will revert to self-consumption on its own".format(self._serial(uuid), error))
         await self.save_static()

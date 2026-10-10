@@ -326,7 +326,7 @@ def test_final_stops_the_heartbeat_before_releasing():
         """Record that the heartbeat was stopped."""
         order.append("stop")
 
-    async def record_release(uuid):
+    async def record_release(uuid, reserve=0):
         """Record that the release ran, and for which device."""
         order.append("release")
         client.control_held.discard(uuid)

@@ -377,11 +377,15 @@ SUNGROW_PARAM_SCALE_UNVERIFIED = {
 SUNGROW_PARAM_RANGE = {
     SUNGROW_PARAM_SOC_UPPER: (70, 100),
     SUNGROW_PARAM_SOC_LOWER: (0, 50),
-    SUNGROW_PARAM_POWER: (0, 5000),
     SUNGROW_PARAM_FORCED_TARGET_SOC_1: (0, 100),
     SUNGROW_PARAM_FORCED_TARGET_SOC_2: (0, 100),
     SUNGROW_PARAM_HEARTBEAT: (1, 1000),
 }
+
+# 10005's documented range is 0-5000 W. It is NOT clamped in the table above because larger
+# hybrids exist and the cap that matters is the device's own limit, which the component knows
+# and this module does not - see SungrowAPI.power_limit(). This is the floor of that cap.
+SUNGROW_POWER_DOCUMENTED_MAX = 5000
 
 # -----------------------------------------------------------------------------
 # The heartbeat

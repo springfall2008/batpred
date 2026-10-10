@@ -166,12 +166,14 @@ def test_scale_for_write_clamps_to_the_documented_range():
     if scale_for_write(SUNGROW_PARAM_SOC_LOWER, 80) != "500":
         print("ERROR: an over-range lower limit was not clamped to 50%")
         failed = True
-    # 10005 accepts 0-5000 W.
-    if scale_for_write(SUNGROW_PARAM_POWER, 9000) != "5000":
-        print("ERROR: an over-range power was not clamped")
+    # 10005 is deliberately NOT in SUNGROW_PARAM_RANGE - the cap that matters is the device's
+    # own limit (SungrowAPI.power_limit()), applied in build_param_list, not this generic table.
+    # scale_for_write therefore passes a watt value through unclamped.
+    if scale_for_write(SUNGROW_PARAM_POWER, 9000) != "9000":
+        print("ERROR: power is no longer in SUNGROW_PARAM_RANGE and should pass through unclamped")
         failed = True
-    if scale_for_write(SUNGROW_PARAM_POWER, -100) != "0":
-        print("ERROR: a negative power was not clamped to zero")
+    if scale_for_write(SUNGROW_PARAM_POWER, -100) != "-100":
+        print("ERROR: power is no longer in SUNGROW_PARAM_RANGE and should pass through unclamped")
         failed = True
     # A parameter with no documented range passes through untouched.
     if clamp_range(SUNGROW_PARAM_COMMAND, 187) != 187:

@@ -322,6 +322,20 @@ def test_build_param_list_writes_the_mode_and_heartbeat_with_the_command():
     assert not failed, "test_build_param_list_writes_the_mode_and_heartbeat_with_the_command"
 
 
+def test_power_is_capped_at_the_device_limit_not_a_fixed_5kw():
+    """10005 is documented as 0-5000 W, but larger hybrids exist; the device's own limit is the cap."""
+    failed = False
+    client = _controlled_client()
+    client.battery_rate_max_override = 8000.0
+    wide = _params_as_map(client.build_param_list({"command": SUNGROW_CMD_DISCHARGE, "power": 8000}, UUID))
+    over = _params_as_map(client.build_param_list({"command": SUNGROW_CMD_DISCHARGE, "power": 12000}, UUID))
+    blind = _params_as_map(client.build_param_list({"command": SUNGROW_CMD_DISCHARGE, "power": 8000}))
+    if wide.get(SUNGROW_PARAM_POWER) != "8000" or over.get(SUNGROW_PARAM_POWER) != "8000" or blind.get(SUNGROW_PARAM_POWER) != "5000":
+        print(f"ERROR: power caps were {wide.get(SUNGROW_PARAM_POWER)}, {over.get(SUNGROW_PARAM_POWER)}, {blind.get(SUNGROW_PARAM_POWER)}")
+        failed = True
+    assert not failed, "test_power_is_capped_at_the_device_limit_not_a_fixed_5kw"
+
+
 def test_build_forced_charge_params_disables_an_empty_window():
     """No usable window means the forced-charging schedule is switched off, not left stale."""
     failed = False
@@ -666,6 +680,62 @@ def test_release_control_gives_up_holding_even_when_the_write_fails():
     assert not failed, "test_release_control_gives_up_holding_even_when_the_write_fails"
 
 
+def _capture_dispatch(client, result=True):
+    """Replace dispatch_params with a recorder; returns the list of (task_name, {code: value})."""
+    sent = []
+
+    async def fake_dispatch(uuid, param_list, set_type=0, task_name="Predbat"):
+        """Record the task and report it as landed, or as failed when result is False."""
+        sent.append((task_name, _params_as_map(param_list)))
+        return param_list if result else None
+
+    client.dispatch_params = fake_dispatch
+    client._write_supported[UUID] = True
+    client._ensure_heartbeat = lambda: None
+    return sent
+
+
+def test_release_restores_the_soc_limits_and_writes_the_reserve():
+    """Release is mode 0 plus a full-range ceiling and Predbat's reserve as the floor."""
+    failed = False
+    client = _controlled_client()
+    sent = _capture_dispatch(client)
+    client.control_held.add(UUID)
+    run_async_local(client.release_control(UUID, reserve=10))
+    values = sent[0][1] if sent else {}
+    if values.get(SUNGROW_PARAM_EMS_MODE) != "0" or values.get(SUNGROW_PARAM_SOC_UPPER) != "1000" or values.get(SUNGROW_PARAM_SOC_LOWER) != "100":
+        print(f"ERROR: release wrote {values}")
+        failed = True
+    run_async_local(client.release_control(UUID, reserve=10))
+    if len(sent) != 1:
+        print(f"ERROR: an unchanged release was written again ({len(sent)} writes)")
+        failed = True
+    run_async_local(client.release_control(UUID, reserve=20))
+    if len(sent) != 2 or sent[1][1].get(SUNGROW_PARAM_SOC_LOWER) != "200":
+        print(f"ERROR: a reserve change while released was not written: {sent}")
+        failed = True
+    assert not failed, "test_release_restores_the_soc_limits_and_writes_the_reserve"
+
+
+def test_a_failed_release_is_retried_and_does_not_stay_held():
+    """A release that does not land stops the beats at once and is sent again on a later cycle."""
+    failed = False
+    client = _controlled_client()
+    sent = _capture_dispatch(client, result=False)
+    client.control_held.add(UUID)
+    if run_async_local(client.release_control(UUID, reserve=10)) is not False:
+        print("ERROR: a failed release reported success")
+        failed = True
+    if UUID in client.control_held:
+        print("ERROR: a failed release left the device held")
+        failed = True
+    run_async_local(client.release_control(UUID, reserve=10))
+    if len(sent) != 2:
+        print(f"ERROR: the failed release was not retried ({len(sent)} attempts)")
+        failed = True
+    assert not failed, "test_a_failed_release_is_retried_and_does_not_stay_held"
+
+
 def test_reconcile_control_is_gated_on_read_only():
     """The decision is time-aware, so a window boundary changes it with no plan change at all.
 
@@ -780,6 +850,7 @@ def run_sungrow_control_tests(my_predbat):
         ("decide_zero_power_charge", test_decide_ignores_a_charge_window_with_no_power),
         ("window_crosses_midnight", test_window_active_now_handles_a_window_crossing_midnight),
         ("param_list_mode_and_heartbeat", test_build_param_list_writes_the_mode_and_heartbeat_with_the_command),
+        ("power_cap_follows_device", test_power_is_capped_at_the_device_limit_not_a_fixed_5kw),
         ("forced_disable", test_build_forced_charge_params_disables_an_empty_window),
         ("forced_hour_minute", test_build_forced_charge_params_splits_the_window_into_hour_and_minute),
         ("forced_off_by_default", test_forced_charge_schedule_is_not_written_by_default),
@@ -796,6 +867,8 @@ def run_sungrow_control_tests(my_predbat):
         ("pacing_holds", test_write_params_holds_a_change_inside_the_pacing_window),
         ("release_writes_self_consumption", test_release_control_writes_self_consumption),
         ("release_on_failure", test_release_control_gives_up_holding_even_when_the_write_fails),
+        ("release_restores_limits", test_release_restores_the_soc_limits_and_writes_the_reserve),
+        ("release_retried", test_a_failed_release_is_retried_and_does_not_stay_held),
         ("reconcile_read_only", test_reconcile_control_is_gated_on_read_only),
         ("reconcile_only_when_driven", test_reconcile_control_only_runs_for_inverters_predbat_drives),
         ("control_disabled", test_control_enable_false_writes_nothing),
