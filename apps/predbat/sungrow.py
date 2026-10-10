@@ -154,6 +154,7 @@ from sungrow_const import (
     SUNGROW_CACHE_CONTROL,
     SUNGROW_TTL_STATIC,
     SUNGROW_TTL_POWER,
+    SUNGROW_TELEMETRY_STALE_MINUTES,
     SUNGROW_DEBUG_REDACT_KEYS,
     gateway_url,
     strip_point_prefix,
@@ -548,6 +549,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     def mark_refreshed(self, tier, age_minutes=0.0):
         """Stamp a refresh tier as just completed, optionally aged by age_minutes."""
         self._tier_refreshed[tier] = time.time() - (age_minutes * 60)
+
+    def tier_age_minutes(self, tier):
+        """Return how long ago a refresh tier last completed, in minutes (infinite if never)."""
+        last = self._tier_refreshed.get(tier)
+        if last is None:
+            return float("inf")
+        return (time.time() - last) / 60.0
 
     # -------------------------------------------------------------------------
     # Telemetry
@@ -1812,7 +1820,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             return False
 
         if self.tier_expired("static", SUNGROW_TTL_STATIC) or not self.device_list:
-            await self.refresh_static()
+            if await self.refresh_static() and self.device_list:
+                await self.save_static()
         if not self.device_list:
             self.log("Warn: Sungrow found no energy-storage inverters on this account")
             return False
@@ -1851,6 +1860,12 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             # first cycle ALONE, so it would map only the args backed by cached ratings and
             # permanently skip soc_max and the energy args for the whole session.
             self.log("Warn: Sungrow first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
+            return False
+
+        if not live_ok and self.tier_age_minutes("power") > SUNGROW_TELEMETRY_STALE_MINUTES:
+            # The sensors above were republished from the last good read so the entities do not
+            # vanish, but a cycle that has had no telemetry for this long has not succeeded.
+            self.log("Warn: Sungrow telemetry is {:.0f} minutes old and could not be refreshed; SoC and power are stale".format(self.tier_age_minutes("power")))
             return False
 
         if first and self.automatic:

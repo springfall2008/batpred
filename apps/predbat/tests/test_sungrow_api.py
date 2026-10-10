@@ -799,6 +799,48 @@ def test_sungrow_run_requires_credentials():
     assert not failed, "test_sungrow_run_requires_credentials"
 
 
+def test_sungrow_run_fails_once_telemetry_is_stale():
+    """One missed poll is noise; fifteen minutes without telemetry is a component that is not working."""
+    failed = False
+    client = _polled_client()
+    stamps = []
+    client.update_success_timestamp = lambda: stamps.append(1)
+
+    async def no_telemetry():
+        """Stand in for a telemetry refresh that reaches nothing."""
+        return False
+
+    client.refresh_power = no_telemetry
+    client.mark_refreshed("power", age_minutes=6)
+    if run_async_local(client.run(0, False)) is not True or len(stamps) != 1:
+        print("ERROR: a single missed telemetry poll failed the cycle")
+        failed = True
+    client.mark_refreshed("power", age_minutes=20)
+    if run_async_local(client.run(0, False)) is not False or len(stamps) != 1:
+        print("ERROR: 20-minute-old telemetry was still reported as a healthy cycle")
+        failed = True
+    assert not failed, "test_sungrow_run_fails_once_telemetry_is_stale"
+
+
+def test_sungrow_run_saves_discovery_when_it_refreshes():
+    """The static cache must not depend on a clean shutdown to exist."""
+    failed = False
+    client = MockSungrow()
+    saved = []
+
+    async def capture(name, data):
+        """Record which cache blobs are written."""
+        saved.append(name)
+
+    client.save_cache = capture
+    with _mock_post([_envelope(PLANT_LIST), _envelope(DEVICE_LIST), _envelope(PLANT_REALTIME), _envelope(DEVICE_REALTIME)]):
+        run_async_local(client.run(0, True))
+    if "static" not in saved:
+        print(f"ERROR: discovery was not cached when it ran; saved {saved}")
+        failed = True
+    assert not failed, "test_sungrow_run_saves_discovery_when_it_refreshes"
+
+
 def run_sungrow_api_tests(my_predbat):
     """Run all Sungrow API tests."""
     failed = False
@@ -831,6 +873,8 @@ def run_sungrow_api_tests(my_predbat):
         ("record_no_solar_claim", test_sungrow_discovery_record_omits_solar_when_pv_was_never_reported),
         ("run_defers_without_telemetry", test_sungrow_run_defers_startup_without_telemetry),
         ("run_requires_credentials", test_sungrow_run_requires_credentials),
+        ("stale_telemetry", test_sungrow_run_fails_once_telemetry_is_stale),
+        ("static_saved_on_discovery", test_sungrow_run_saves_discovery_when_it_refreshes),
     ]:
         try:
             if fn():

@@ -583,6 +583,11 @@ SUNGROW_CACHE_CONTROL = "control"
 SUNGROW_TTL_STATIC = 8 * 60
 SUNGROW_TTL_POWER = 5
 
+# How old telemetry may get before a cycle that could not refresh it counts as a failure.
+# Three missed five-minute polls: long enough to ride out one bad request, short enough that
+# Predbat is not left planning on an SoC from the previous half-hour slot.
+SUNGROW_TELEMETRY_STALE_MINUTES = 15
+
 SUNGROW_DEBUG_REDACT_KEYS = ("appkey", "access_key", "x-access-key", "token", "access_token", "Authorization")
 
 # -----------------------------------------------------------------------------
