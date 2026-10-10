@@ -3638,7 +3638,7 @@ class TestGatewayUnitControlBinding:
         asyncio.run(gw._load_discovery())
         return gw
 
-    _STORED_400 = {"CE2225G400": {"serial": "CE2225G400", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": True, "capacity_wh": 9500, "rate_max_w": 3000, "inverter_rate_max_w": 0, "model": ""}}
+    _STORED_400 = {"CE2225G400": {"serial": "CE2225G400", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": True, "capacity_wh": 9500, "rate_max_w": 3000, "inverter_rate_max_w": 0, "export_limit_w": 0, "model": ""}}
 
     def test_listed_inverter_never_read_is_left_out_until_the_hub_reads_it(self):
         """A listed inverter the hub has never read is left out, with a warning and no error, and bound once it is read."""
@@ -3947,7 +3947,7 @@ class TestGatewayUnitControlBinding:
 
     def test_stored_pv_only_inverter_missing_at_startup_has_its_pv_entities(self):
         """A PV-only inverter known only from its stored record still has the PV entities auto-config binds."""
-        stored = {"FD0000P001": {"serial": "FD0000P001", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": False, "capacity_wh": 0, "rate_max_w": 0, "inverter_rate_max_w": 0, "model": ""}}
+        stored = {"FD0000P001": {"serial": "FD0000P001", "type": pb.INVERTER_TYPE_GIVENERGY, "battery": False, "capacity_wh": 0, "rate_max_w": 0, "inverter_rate_max_w": 0, "export_limit_w": 0, "model": ""}}
         gw = self._listed_gateway(["FD0000P001", "CH0000B002"], stored=stored)
         status = self._pv_only_site_status(battery_ready=True)
         del status.inverters[0]
@@ -4124,18 +4124,64 @@ class TestGatewayUnitControlBinding:
         stored = first._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]
         assert stored["CE2225G400"]["rate_max_w"] == 3000
         assert stored["CE2225G400"]["inverter_rate_max_w"] == 3600
+        assert stored["CE2225G400"]["export_limit_w"] == 6000
 
         # Reporting, but with its ratings unpopulated
         gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=stored)
-        gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0).SerializeToString())
+        gw._process_telemetry(self._rated_status(rate_max_w=0, inverter_rate_max_w=0, export_limit_w=0).SerializeToString())
         assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000
         assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3600
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 6000
 
         # Not being read at all
         gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=stored)
         gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
         assert gw._states["sensor.predbat_gateway_25g400_battery_rate_max"] == 3000
         assert gw._states["sensor.predbat_gateway_25g400_inverter_rate_max"] == 3600
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 6000
+
+    def test_stored_zero_export_limit_is_used_after_a_restart(self):
+        """A stored limit of zero (the hub's value 1) comes back as zero, not as no limit."""
+        first = self._listed_gateway(["CE2223G800", "CE2225G400"])
+        first._process_telemetry(self._rated_status(export_limit_w=1).SerializeToString())
+        asyncio.run(first._save_discovery())
+        stored = first._saved[("gateway", "discovery_pbgw_two_ac")]["inverters"]
+
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"], stored=stored)
+        gw._process_telemetry(self._rated_status(export_limit_w=0).SerializeToString())
+        assert gw._states["sensor.predbat_gateway_25g400_export_limit_w"] == 0
+
+    def test_reserve_the_hub_stops_reporting_keeps_its_last_good_value(self):
+        """A status with the reserve unpopulated must not read as a reserve of 0%, which Predbat would then rewrite."""
+        gw = self._writable(self._listed_gateway([]))
+        gw._process_telemetry(self._rated_status().SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 4
+
+        blank = self._rated_status()
+        blank.inverters[1].control.reserve_soc = 0
+        gw._process_telemetry(blank.SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 4
+
+        changed = self._rated_status()
+        changed.inverters[1].control.reserve_soc = 20
+        gw._process_telemetry(changed.SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 20
+
+        # A reserve of 0% that Predbat itself wrote is real, so the next 0 is published as 0
+        asyncio.run(gw.number_event("number.predbat_gateway_25g400_reserve_soc", 0))
+        assert gw._published == [("set_reserve", {"target_soc": 0, "serial": "CE2225G400"})]
+        gw._process_telemetry(blank.SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 0
+        # The other inverter's reserve is its own
+        assert gw._states["number.predbat_gateway_23g800_reserve_soc"] == 4
+
+    def test_reserve_never_reported_is_published_as_zero(self):
+        """An inverter that has never reported a reserve still publishes 0, as before."""
+        gw = self._listed_gateway([])
+        blank = self._rated_status()
+        blank.inverters[1].control.reserve_soc = 0
+        gw._process_telemetry(blank.SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 0
 
     def test_listed_inverters_all_healthy_report_no_error(self):
         """A healthy site with a serial list raises nothing."""

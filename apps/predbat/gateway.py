@@ -1287,7 +1287,7 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
         # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is.
         # Undefined only means unlimited for an inverter that has never reported a limit.
-        _raw_export_limit = self._last_rating(suffix, "export_limit", control.export_limit_w) or 0
+        _raw_export_limit = self._last_rating(suffix, "export_limit", control.export_limit_w) or record.get("export_limit_w") or 0
         export_limit_publish = 99999 if _raw_export_limit == 0 else (0 if _raw_export_limit == 1 else _raw_export_limit)
         self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
         # The hub reports the rate the inverter holds, so a GivEnergy one reads back short of the rate written
@@ -1308,7 +1308,10 @@ class GatewayMQTT(ComponentBase):
         reserve_attributes = dict(GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}))
         reserve_soc_max = getattr(control, "reserve_soc_max", 0)
         reserve_attributes["max"] = reserve_soc_max if 1 <= reserve_soc_max <= 100 else 100
-        self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=reserve_attributes, app="gateway")
+        # A reserve the hub leaves out keeps the last real one, like the ratings above: read as 0% it
+        # is rewritten by Predbat for nothing (#5478). A 0% that Predbat wrote is real (see number_event).
+        reserve_soc = self._last_rating(suffix, "reserve", control.reserve_soc) or 0
+        self.dashboard_item(f"number.{pfx}_reserve_soc", reserve_soc, attributes=reserve_attributes, app="gateway")
         self.dashboard_item(f"number.{pfx}_target_soc", control.target_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("target_soc", {}), app="gateway")
         # Schedule times (convert HHMM uint32 → HH:MM:SS string)
         # Always set with defaults so PredBat doesn't crash on missing charge_start_time
@@ -1581,6 +1584,8 @@ class GatewayMQTT(ComponentBase):
                 "capacity_wh": int(inv.battery.capacity_wh) or int(known.get("capacity_wh", 0)),
                 "rate_max_w": int(inv.battery.rate_max_w) or int(known.get("rate_max_w", 0)),
                 "inverter_rate_max_w": int(inv.inverter.rate_max_w) or int(known.get("inverter_rate_max_w", 0)),
+                # The hub's own value: 1 means a limit of zero, 0 means it has never reported one
+                "export_limit_w": int(inv.control.export_limit_w) or int(known.get("export_limit_w", 0)),
                 "model": inv.model or known.get("model", ""),
             }
             if record != known:
@@ -1639,6 +1644,7 @@ class GatewayMQTT(ComponentBase):
                 "capacity_wh": max(int(stored.get("capacity_wh") or 0), 0),
                 "rate_max_w": max(int(stored.get("rate_max_w") or 0), 0),
                 "inverter_rate_max_w": max(int(stored.get("inverter_rate_max_w") or 0), 0),
+                "export_limit_w": max(int(stored.get("export_limit_w") or 0), 0),
                 "model": str(stored.get("model") or ""),
             }
         except (AttributeError, KeyError, TypeError, ValueError):
@@ -2661,6 +2667,10 @@ class GatewayMQTT(ComponentBase):
         elif "_charge_rate" in entity_id:
             await self._send_control(entity_id, "set_charge_rate", power_w=val, serial=serial)
         elif "_reserve" in entity_id:
+            if val == 0:
+                # A reserve of 0% asked for here is real, so the next 0 from the hub is not a gap
+                # to fill with the last value (see _last_rating)
+                self._last_ratings = {key: kept for key, kept in self._last_ratings.items() if key != (_serial_suffix(serial), "reserve")}
             await self._send_control(entity_id, "set_reserve", target_soc=val, serial=serial)
         elif "_target_soc" in entity_id:
             await self._send_control(entity_id, "set_target_soc", target_soc=val, serial=serial)
