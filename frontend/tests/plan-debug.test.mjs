@@ -187,6 +187,7 @@ test('energy event types use their semantic badge colour', () => {
   const eventColours = {
     octopus_power_up: 'power-up',
     octopus_happy_hour: 'power-up',
+    octopus_free_electricity: 'power-up',
     axle_import: 'axle-import',
     axle_export: 'axle-export',
     axle_event: 'axle-event',

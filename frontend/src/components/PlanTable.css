@@ -33,15 +33,11 @@
 }
 
 .plan-table {
-  width: 100%;
-  min-width: 1120px;
-  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
   border-collapse: collapse;
   font-size: 0.72rem;
-}
-
-.plan-table.is-debug {
-  min-width: 1420px;
 }
 
 .plan-debug-notice {

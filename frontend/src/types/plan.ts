@@ -14,7 +14,7 @@ export type PlanRow = {
   export_rate_adjusted: number
   import_rate_adjust_type?: string
   export_rate_adjust_type?: string
-  rate_event_type?: 'octopus_power_down' | 'octopus_power_up' | 'octopus_happy_hour' | 'axle_import' | 'axle_export' | 'axle_event' | 'energy_event'
+  rate_event_type?: 'octopus_power_down' | 'octopus_power_up' | 'octopus_happy_hour' | 'octopus_free_electricity' | 'axle_import' | 'axle_export' | 'axle_event' | 'energy_event'
   rate_color_import?: string
 
   state: string

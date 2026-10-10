@@ -355,6 +355,10 @@
   grid-column: 4;
 }
 
+.plan-summary-next-label-compact {
+  display: none;
+}
+
 .plan-summary-context-now,
 .plan-summary-context-next {
   position: relative;
@@ -374,4 +378,15 @@
 
 .plan-summary-context-next::after {
   right: 0;
+}
+
+@media (max-width: 900px) {
+  .plan-summary-context,
+  .plan-summary-next-label-desktop {
+    display: none;
+  }
+
+  .plan-summary-next-label-compact {
+    display: block;
+  }
 }

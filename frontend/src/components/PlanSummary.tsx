@@ -613,7 +613,9 @@ function PlanSummary({ plan, showPlanLink = true }: PlanSummaryProps) {
                     Next action family, its window and final planned limit.
                    -------------------------------------------------------- */}
         <div className="plan-summary-metric">
-          <span className="metric-label">Action</span>
+          <span className="metric-label plan-summary-next-label-desktop">Action</span>
+
+          <span className="metric-label plan-summary-next-label-compact">Next action</span>
 
           <strong className={`metric-value action-value ${getActionClass(nextActionType)}`}>
             {nextActionType && getActionIcon(nextActionType)}

@@ -152,6 +152,14 @@ def run_test_plan_json_rate_adjust(my_predbat):
     event_cases = [
         ("octopus_power_down", [{"start": event_start, "end": event_end}], [], []),
         ("octopus_power_up", [], [{"start": event_start, "end": event_end}], []),
+        ("octopus_free_electricity", [], [{"start": event_start, "end": event_end, "event_type": "FREE_ELECTRICITY"}], []),
+        ("octopus_happy_hour", [], [{"start": event_start, "end": event_end, "event_type": "WEEKEND_HAPPY_HOUR"}], []),
+        (
+            "octopus_happy_hour",
+            [],
+            [{"start": event_start, "end": event_end}, {"start": event_start, "end": event_end, "event_type": "WEEKEND_HAPPY_HOUR"}],
+            [],
+        ),
         ("axle_export", [], [], [{"start_time": event_start, "end_time": event_end, "import_export": "export"}]),
     ]
     try:

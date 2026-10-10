@@ -80,6 +80,7 @@ const RATE_EVENT_DETAILS: Record<NonNullable<PlanRow['rate_event_type']>, { labe
   octopus_power_down: { label: 'Power Down', colour: 'power-down' },
   octopus_power_up: { label: 'Power Up', colour: 'power-up' },
   octopus_happy_hour: { label: 'Happy Hour', colour: 'power-up' },
+  octopus_free_electricity: { label: 'Free electricity', colour: 'power-up' },
   axle_import: { label: 'Axle import', colour: 'axle-import' },
   axle_export: { label: 'Axle export', colour: 'axle-export' },
   axle_event: { label: 'Axle event', colour: 'axle-event' },

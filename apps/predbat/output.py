@@ -73,7 +73,12 @@ def event_slot_contains_minute(slot, minute, midnight_utc, start_key="start", en
 
 def plan_rate_event_type(base, minute):
     """Return the programme that produced a plan row's generic ``saving`` rate tag."""
-    if any(event_slot_contains_minute(slot, minute, base.midnight_utc) for slot in base.octopus_free_slots):
+    matching_free_slots = [slot for slot in base.octopus_free_slots if event_slot_contains_minute(slot, minute, base.midnight_utc)]
+    if any(slot.get("event_type") == "WEEKEND_HAPPY_HOUR" for slot in matching_free_slots):
+        return "octopus_happy_hour"
+    if any(slot.get("event_type") == "FREE_ELECTRICITY" for slot in matching_free_slots):
+        return "octopus_free_electricity"
+    if matching_free_slots:
         return "octopus_power_up"
     for slot in base.octopus_saving_slots:
         active_undated_slot = slot.get("state") and not slot.get("start") and not slot.get("end") and (base.minutes_now // 30) * 30 <= minute < (base.minutes_now // 30) * 30 + 30

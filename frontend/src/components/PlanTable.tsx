@@ -57,6 +57,11 @@ const RATE_EVENT_DETAILS: Record<string, { label: string; description: string; c
     description: 'Octopus Weekend Happy Hour: Predbat has applied the free electricity rate to this slot.',
     colour: 'power-up'
   },
+  octopus_free_electricity: {
+    label: 'Free electricity',
+    description: 'Free electricity session from an untyped public feed: Predbat has applied the zero rate to this slot.',
+    colour: 'power-up'
+  },
   axle_import: {
     label: 'Axle import',
     description: 'Axle import event: Predbat has applied the event reward to this slot.',
