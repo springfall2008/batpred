@@ -416,6 +416,41 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: HoldChrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
+    # --- Test 2b: a genuine full-rate charge must not misclassify as HoldChrg just because the
+    # window's "target" (plan.py's predicted end-of-window SoC) sits below the real charge_limit_best -
+    # this is the #4445 regression: a charge that can't complete within one window previously showed
+    # HoldChrg -> target% instead of Chrg -> limit% ---
+    print("Test Chrg reason is not hidden by a target below the real limit (#4445)")
+    my_predbat.charge_window_best[0]["target"] = 6.0  # predicted to only reach 60% (6kWh of 10kWh soc_max) by window end
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)  # 20%, well below the 80% limit
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: #4445 Chrg reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"].get("target_percent") != 80:
+        print("ERROR: #4445 Chrg should classify against the real limit (80), not target: {}".format(row["reasons"][0]["params"]))
+        failed = True
+    elif "Charging up to 80" not in _render(row, templates):
+        print("ERROR: #4445 Chrg rendered text unexpected: {}".format(_render(row, templates)))
+        failed = True
+    del my_predbat.charge_window_best[0]["target"]
+
+    # --- Test 2c: get_charge_export_text has the same #4445 fix, and keeps surfacing the
+    # predicted-achievable SoC (PR #2358's original point) alongside the real limit when they diverge ---
+    print("Test get_charge_export_text shows the real limit, with the predicted SoC noted when it diverges")
+    text = my_predbat.get_charge_export_text(minutes_now, 0, -1)
+    if "charging to 80%" not in text or "predicted" in text:
+        print("ERROR: get_charge_export_text with no target divergence unexpected: {}".format(text))
+        failed = True
+
+    my_predbat.charge_window_best[0]["target"] = 6.0  # predicted to only reach 60% (6kWh of 10kWh soc_max) by window end
+    text = my_predbat.get_charge_export_text(minutes_now, 0, -1)
+    if "charging to 80%" not in text or "predicted 60%" not in text:
+        print("ERROR: get_charge_export_text with a diverging target unexpected: {}".format(text))
+        failed = True
+    del my_predbat.charge_window_best[0]["target"]
+
     # --- Test 3: FrzChrg ---
     print("Test FrzChrg reason")
     my_predbat.charge_limit_best = [my_predbat.reserve]  # target == reserve level

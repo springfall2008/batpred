@@ -861,11 +861,20 @@ class Output:
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
-            target_charge = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n]), self.soc_max)
-            if self.charge_limit_best[charge_window_n] == self.reserve:
-                text = "freeze charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+            limit = self.charge_limit_best[charge_window_n]
+            target_charge = calc_percent_limit(limit, self.soc_max)
+            predicted = self.charge_window_best[charge_window_n].get("target", limit)
+            predicted_percent = calc_percent_limit(predicted, self.soc_max)
+            # The real instruction sent to the inverter is charge_limit_best - PR #4445 fixed this text
+            # showing the window's predicted-achievable SoC (plan.py's "target") as if it were that
+            # instruction, which misreported a genuine full-rate charge as a lower, partial one. Where the
+            # window genuinely can't reach the limit in time, still surface the achievable SoC alongside it
+            # so that information (the original point of PR #2358) isn't lost outside of plan_debug.
+            target_suffix = "" if predicted_percent == target_charge else " (predicted {}%)".format(predicted_percent)
+            if limit == self.reserve:
+                text = "freeze charging to {}%{} for the next {}".format(target_charge, target_suffix, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
             else:
-                text = "charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+                text = "charging to {}%{} for the next {}".format(target_charge, target_suffix, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
         else:
             charge_window_n = self.get_next_charge_window(minutes_now)
             export_window_n = self.get_next_export_window(minutes_now)
@@ -1432,7 +1441,7 @@ class Output:
                 if "target" in self.charge_window_best[charge_window_n]:
                     target = self.charge_window_best[charge_window_n]["target"]
 
-                limit_percent = calc_percent_limit(target, self.soc_max)
+                limit_percent = calc_percent_limit(limit, self.soc_max)
                 if limit > 0.0:
                     if self.is_freeze_charge(limit):
                         state = "FrzChrg&rarr;"
@@ -1463,7 +1472,7 @@ class Output:
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
-                        show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
+                        show_limit += " ({})".format(str(calc_percent_limit(target, self.soc_max)))
                     raw_state_target = str(limit_percent)
             else:
                 if export_window_n >= 0:
