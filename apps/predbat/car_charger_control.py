@@ -414,7 +414,8 @@ class CarChargerControl:
         Returns True once at least one car's plan has been read, False while no slot sensor
         has ever been published - which is what stops a restart stopping a charge before
         Predbat has decided anything. A car whose own plan has not been published yet is left
-        out of charger_control_windows, so it reads as unknown rather than as an empty plan.
+        out of charger_control_windows, so it reads as unknown rather than as an empty plan; one
+        whose plan has gone missing after being read keeps the windows last read.
         """
         windows = {}
         found = False
@@ -422,6 +423,12 @@ class CarChargerControl:
             postfix = "" if car_n == 0 else "_{}".format(car_n)
             planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
             if planned is None:
+                # A plan read before and missing now (the sensor recreated, say) keeps its last
+                # windows - they are absolute times - rather than turning into an empty plan that
+                # would stop a car mid-charge
+                if car_n in self.charger_control_windows:
+                    windows[car_n] = self.charger_control_windows[car_n]
+                    found = True
                 continue
             found = True
             windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)

@@ -791,6 +791,24 @@ def test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends():
     assert component.commands[-1] == ("b", "off", 1), component.commands
 
 
+def test_plan_that_goes_missing_keeps_its_last_windows():
+    """A plan read once and then missing for a cycle keeps its windows, so a held charger is not
+    stopped mid-window just because the slot sensor lost its planned attribute."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    _plan(component, 0, [("06-01 01:00:00", "06-01 02:00:00")])
+    _plan(component, 1, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0), ("b", "off", 1)], component.commands
+
+    del component.plans["binary_sensor.predbat_car_charging_slot"]
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "on", 0), ("b", "off", 1)], component.commands
+    # ...and the last windows are still judged against the clock
+    run_async(component.charger_control_tick(_now() + datetime.timedelta(hours=1)))
+    assert component.commands[-1] == ("a", "off", 0), component.commands
+
+
 def _guest_component():
     """A component with a guest switch, holding its charger stopped outside any window."""
     component = FakeComponent([FakeCharger("a")])
@@ -914,6 +932,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
     test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends()
+    test_plan_that_goes_missing_keeps_its_last_windows()
     test_guest_charging_releases_and_resumes()
     test_guest_charging_ends_when_the_car_is_unplugged()
     test_guest_charging_survives_the_owner_unplugging()
