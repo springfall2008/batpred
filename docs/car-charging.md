@@ -147,6 +147,8 @@ which is on while Octopus Smart Control is on for the car. Octopus keeps reporti
 Predbat ignores the *planned* Octopus slots (including any bonus slots) as they will not happen; slots already delivered, and bump/boost charges you asked for yourself, still count.
 It holds the entity ID of the switch, not a value, so Predbat follows the switch live, however it is turned off (the Octopus app, Home Assistant or an automation).
 If you set up `apps.yaml` before this item existed, add it to pick up the change. If the switch cannot be found, planned slots are used as normal.
+If `octopus_intelligent_slot` points at your charger's own integration (for example Ohme) rather than the Octopus Energy integration, comment out `octopus_intelligent_smart_control`,
+otherwise the charger's own planned slots are ignored whenever Octopus Smart Control is off.
 For **multiple IOG-enrolled vehicles**, set this to a list with one switch per car.
 
 - **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
