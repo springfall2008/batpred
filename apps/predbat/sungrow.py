@@ -293,6 +293,9 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self.device_detail = {}
         self.device_values = {}
         self.device_energy = {}
+        # Inverters whose own realtime read is currently failing, so the fallback to plant
+        # figures is logged once per episode rather than once a minute.
+        self._device_read_failing = set()
         # What was read back of each inverter's own feed-in limitation (10012-10014).
         self.device_limits = {}
         self.local_schedule = {}
@@ -456,6 +459,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                             if await self.handle_oauth_401():
                                 return await self._request(endpoint_key, body=body, _retry_after_refresh=True)
                             self.log("Warn: Sungrow {} returned HTTP 401 and the token could not be refreshed".format(path))
+                            return False, None
+                        if status == 401 and self.auth_method != "oauth":
+                            # Nothing can renew a pasted token, so say which setting to change
+                            # rather than leaving a bare status code to be read as an outage.
+                            self.log("Warn: Sungrow {} returned HTTP 401 - the access token in sungrow_key was rejected and has probably expired; obtain a new one (Predbat cannot renew a token when sungrow_auth_method is token)".format(path))
                             return False, None
                         if status != 200:
                             self.log("Warn: Sungrow {} returned HTTP {}".format(path, status))
@@ -705,7 +713,11 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         return False
 
     async def refresh_power(self):
-        """Refresh the telemetry tier. True when at least one plant answered."""
+        """Refresh the telemetry tier. True when at least one plant answered.
+
+        The device read is optional - not every account and model serves it - so its failure
+        does not fail the tier. It does discard that inverter's previous device values.
+        """
         any_ok = False
         for ps_id in list(self.plant_list):
             if await self.fetch_plant_realtime(ps_id):
@@ -713,7 +725,19 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
         for uuid in list(self.device_list):
-            await self.fetch_device_realtime(uuid)
+            if await self.fetch_device_realtime(uuid):
+                self._device_read_failing.discard(uuid)
+            else:
+                # Drop what the last good read left behind. telemetry() and energy() prefer
+                # the device read, and the plant read above still marks this tier fresh, so
+                # keeping it would freeze SoC at its last value with the component reporting
+                # healthy. Without it they fall back to the plant read - which, for a plant
+                # with more than one inverter, deliberately gives None for power and energy.
+                self.device_values.pop(uuid, None)
+                self.device_energy.pop(uuid, None)
+                if uuid not in self._device_read_failing:
+                    self._device_read_failing.add(uuid)
+                    self.log("Info: Sungrow {} own telemetry could not be read; plant-level figures are being used until it answers again".format(self._serial(uuid)))
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
         if any_ok:
@@ -831,12 +855,21 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         The inverter's feed-in limitation is read back as an enable flag, a value and a ratio
         of rated power. The value's unit is not documented, so it is only believed when it
         matches the ratio applied to the rating: a limit that is ten times too low would stop
-        Predbat planning exports altogether, silently, which is worse than no limit.
+        Predbat planning exports altogether, silently, which is worse than no limit. A flag
+        that could not be read is None too - only an explicit "disabled" means no limit.
+
+        sungrow_export_limit overrides the read-back and is the limit of the whole SITE.
+        Predbat sums export_limit across inverters, so it is shared equally between the
+        discovered inverters here rather than handed to each of them in full.
         """
         if self.export_limit_override > 0:
-            return self.export_limit_override
+            return self.export_limit_override / max(1, len(self.device_list))
         limits = self.device_limits.get(uuid)
         if not limits:
+            return None
+        if limits.get("feed_in_enabled") is None:
+            # The flag was blank, missing or not a value this component knows. That is not
+            # "limitation off", and the value and ratio mean nothing without it.
             return None
         if limits.get("feed_in_enabled") is False:
             return float(SUNGROW_NO_EXPORT_LIMIT)
@@ -875,12 +908,19 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             if values is None:
                 continue
             answered = True
+            # Three states, not two. Only an explicit SUNGROW_DISABLE is "limitation off"; a
+            # blank, missing or unrecognised flag is None, because reading it as off would bind
+            # "no export limit" as though it were a known answer.
+            raw_flag = values.get(SUNGROW_PARAM_FEED_IN_LIMIT)
+            flag = as_int(raw_flag)
             limits = {
-                "feed_in_enabled": as_int(values.get(SUNGROW_PARAM_FEED_IN_LIMIT)) == SUNGROW_ENABLE,
+                "feed_in_enabled": True if flag == SUNGROW_ENABLE else (False if flag == SUNGROW_DISABLE else None),
                 "feed_in_value": scale_from_read(SUNGROW_PARAM_FEED_IN_LIMIT_VALUE, values.get(SUNGROW_PARAM_FEED_IN_LIMIT_VALUE)),
                 "feed_in_ratio": scale_from_read(SUNGROW_PARAM_FEED_IN_LIMIT_RATIO, values.get(SUNGROW_PARAM_FEED_IN_LIMIT_RATIO)),
             }
             self.device_limits[uuid] = limits
+            if limits["feed_in_enabled"] is None:
+                self.log("Warn: Sungrow {} feed-in limitation flag could not be read (raw value {!r}), so the export limit is not being set automatically. Set sungrow_export_limit in apps.yaml (watts)".format(self._serial(uuid), raw_flag))
             if limits["feed_in_enabled"] and self.export_limit(uuid) is None:
                 self.log(
                     "Warn: Sungrow {} has feed-in limitation on, but its value ({}) and ratio ({}%) of a {}W rating do not agree, so the export limit is not being set automatically. Set sungrow_export_limit in apps.yaml (watts)".format(
@@ -1125,26 +1165,42 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         await self._handle_control_event(entity_id, service)
 
     async def _handle_control_event(self, entity_id, value):
-        """Route one control-entity event to the right inverter and apply it."""
+        """Route one control-entity event to the right inverter and record it.
+
+        Nothing is sent to the inverter from here; see the note on the write button below.
+        """
         uuid = self._uuid_from_entity(entity_id)
         if not uuid:
             self.log("Warn: Sungrow could not resolve an inverter for {}".format(entity_id))
             return
-        # The write button is NOT forced. Predbat presses it on every cycle as its normal
-        # "apply the schedule" action (INVERTER_DEF time_button_press), not only when the plan
-        # actually changed, so force=True here would bypass the change-detection gate on every
-        # single cycle. DEYE hit this exact bug first: PR #4371 measured 40 button presses
-        # producing 36 byte-identical control orders over two hours on a live site once the
-        # button forced the write. Do not reintroduce force=True here.
+        # The write button does NOT write. A press records that Predbat is driving this
+        # inverter and returns; run() reads the control entities and calls _reconcile_control()
+        # for every driven inverter on every tick, so the command goes out at most 60 seconds
+        # later, on the component's own loop. Writing here instead was wrong three ways:
+        #
+        # 1. This runs inside the Home Assistant event handler. A cloud write is a dispatched
+        #    task polled to completion, so a slow cloud would block every HA state change
+        #    behind it.
+        # 2. Taking control starts the heartbeat task, which would be created on whichever
+        #    loop happened to deliver the event rather than the component's own.
+        # 3. execute.py presses the button BEFORE it writes the target SoC and the rates, so
+        #    the decision would be taken from half-written entities - and the correction a
+        #    moment later would then be held by sungrow_min_write_interval.
+        #
+        # Nor is the button a FORCED write when the cycle acts on it. Predbat presses it on
+        # every cycle as its normal "apply the schedule" action (INVERTER_DEF
+        # time_button_press), not only when the plan actually changed, so forcing would bypass
+        # the change-detection gate on every single cycle. DEYE hit this exact bug first:
+        # PR #4371 measured 40 button presses producing 36 byte-identical control orders over
+        # two hours on a live site once the button forced the write. Do not introduce
+        # force=True on this path.
         if str(entity_id).endswith("battery_schedule_charge_write"):
             if self._to_bool(value):
-                # Predbat is now actively driving this inverter, so the reconcile loop may
-                # re-apply from here on. Marked on the press itself rather than on a successful
-                # write: a write that failed still means Predbat owns this inverter and the
-                # next tick should retry.
+                # Marked on the press itself rather than on a successful write: a write that
+                # fails still means Predbat owns this inverter and the next tick should retry.
                 self.control_active.add(uuid)
                 await self.save_control()
-                await self.apply_schedule(uuid)
+                self.log("Info: Sungrow {} write button pressed; the schedule will be applied on the next cycle".format(self._serial(uuid)))
             return
         self.update_local_schedule(uuid, entity_id, value)
         await self.publish_schedule_settings_ha(uuid)
@@ -1487,6 +1543,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # Control is only marked as HELD once the task has actually completed. Starting the
         # heartbeat for a task that never landed would beat for a mode the inverter is not in.
         self.control_held.add(uuid)
+        # A fresh hold starts with a clean count; a miss from an earlier hold is not this one's.
+        self._beat_failures.pop(uuid, None)
         self._ensure_heartbeat()
         self.log("Info: Sungrow wrote {} for {} ({})".format(describe_param(SUNGROW_PARAM_COMMAND), self._serial(uuid), decision.get("reason", "")))
         await self.save_control()
@@ -1518,6 +1576,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         Also called while already released: a changed reserve is a changed release and is
         written, paced by sungrow_min_write_interval like any other change of plan.
         """
+        self._beat_failures.pop(uuid, None)
         was_held = uuid in self.control_held
         self.control_held.discard(uuid)
         release = {"command": SUNGROW_CMD_RELEASE, "soc_lower": int(clamp_range(SUNGROW_PARAM_SOC_LOWER, as_float(reserve, 0.0)))}
@@ -1595,6 +1654,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.control_held.discard(uuid)
             self.applied_command.pop(uuid, None)
             self._beat_failures.pop(uuid, None)
+            # The inverter's state is now unknown, so the write that re-establishes control
+            # must not wait out sungrow_min_write_interval. This cannot become a retry storm:
+            # a re-establishing write that fails stamps the clock again in _write_params.
+            self.last_write_time.pop(uuid, None)
             self.log("Info: Sungrow no longer holds {} ({}); control will be re-established on the next cycle that needs it".format(self._serial(uuid), reason))
 
     def _ensure_heartbeat(self):
@@ -1621,11 +1684,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         The loop exits when nothing is held any more, which is what makes it safe to restart
         from _ensure_heartbeat() without tracking its lifetime anywhere else.
 
-        Beats go out at a fraction of the promised interval (heartbeat_send_interval) so a
-        single lost request does not immediately cost control. A failed beat is logged and
-        retried on the next pass rather than escalated: the consequence of beats stopping
-        altogether is a revert to self-consumption, which is the safe state, so there is
-        nothing to escalate to.
+        Beats go out at a fraction of the promised interval (heartbeat_send_interval), which
+        leaves room for a slow dispatch. It does not leave room for a lost one: the next beat
+        is half an interval plus its own duration away, so after SUNGROW_HEARTBEAT_MAX_MISSES
+        (one) unconfirmed beat the inverter can no longer be assumed to be in external dispatch.
+        Control is dropped there and then, and the next run() cycle writes the full command
+        again. Nothing else is escalated: the inverter's own response to missing beats is a
+        revert to self-consumption, which is the safe state.
         """
         interval = heartbeat_send_interval(self.heartbeat_interval)
         self.log("Info: Sungrow heartbeat loop started, beating every {:.0f}s for a declared interval of {}s".format(interval, self.heartbeat_interval))
@@ -1662,7 +1727,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                     continue
                 self._beat_failures[uuid] = self._beat_failures.get(uuid, 0) + 1
                 if self._beat_failures[uuid] >= SUNGROW_HEARTBEAT_MAX_MISSES:
-                    self._drop_control([uuid], "{} heartbeats in a row were not confirmed".format(self._beat_failures[uuid]))
+                    self._drop_control([uuid], "a heartbeat was not confirmed")
         self.log("Info: Sungrow heartbeat loop stopped")
 
     async def send_heartbeat(self, uuid):
@@ -2055,9 +2120,10 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             await self._reconcile_control(uuid)
             await self.publish_schedule_settings_ha(uuid)
 
-        # Restart the heartbeat if it is not running while something is held. It should never
-        # be needed - the loop guards its own body - but a held inverter with no heartbeat is
-        # the one state this component must not sit in.
+        # Start the heartbeat if it is not running while something is held. This is the normal
+        # way the loop is (re)started after it has exited - it ends itself whenever nothing is
+        # held, and when control is dropped - and not only a safety net: a held inverter with
+        # no heartbeat is the one state this component must not sit in.
         self._ensure_heartbeat()
 
         # After the control loop on purpose: a read-back is a dispatched task that can take a

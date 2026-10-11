@@ -16,6 +16,7 @@ or holding a stale forced setpoint. These tests exist to stop anyone accidentall
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import asyncio
+import time
 from unittest.mock import patch
 from sungrow_const import SUNGROW_PARAM_HEARTBEAT, SUNGROW_CMD_CHARGE, heartbeat_send_interval
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -443,10 +444,15 @@ def test_heartbeat_loop_survives_being_cancelled():
 
 
 def test_heartbeat_loop_survives_a_beat_that_raises():
-    """One unexpected exception must not end the task that keeps control of the battery."""
+    """One unexpected exception must not end the task that keeps control of the other batteries.
+
+    The raising beat is an unconfirmed one, so that inverter's control is dropped; what must not
+    happen is the exception unwinding the loop before the next inverter has had its beat.
+    """
     failed = False
     client = _controlled_client()
-    client.control_held.add(UUID)
+    other = "111222"
+    client.control_held.update([UUID, other])
     calls = []
 
     async def flaky_beat(uuid):
@@ -463,15 +469,23 @@ def test_heartbeat_loop_survives_a_beat_that_raises():
     if len(calls) != 2:
         print(f"ERROR: the loop made {len(calls)} beat(s); an exception ended it")
         failed = True
+    elif calls[0] in client.control_held or calls[1] not in client.control_held:
+        print(f"ERROR: after {calls[0]} raised and {calls[1]} landed, held={client.control_held}")
+        failed = True
+    if not any("heartbeat loop stopped" in message for message in client.log_messages):
+        print("ERROR: the loop did not reach its own exit")
+        failed = True
     assert not failed, "test_heartbeat_loop_survives_a_beat_that_raises"
 
 
 def test_missed_beats_drop_control_so_it_is_re_established():
-    """Two misses span the whole declared interval: the inverter has reverted, so say so."""
+    """One miss cannot be made up in time by the next beat: the inverter may have reverted, so say so."""
     failed = False
     client = _controlled_client()
     client.control_held.add(UUID)
     client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
+    # The pacing clock goes with control: the re-establishing write must not wait it out.
+    client.last_write_time[UUID] = time.time()
     beats = []
 
     async def failed_beat(uuid):
@@ -484,10 +498,44 @@ def test_missed_beats_drop_control_so_it_is_re_established():
     client.send_heartbeat = failed_beat
     with patch("asyncio.sleep", new=_no_sleep()):
         run_async_local(client._heartbeat_loop())
-    if len(beats) != 2 or UUID in client.control_held or UUID in client.applied_command:
-        print(f"ERROR: after {len(beats)} missed beats held={client.control_held} applied={client.applied_command}")
+    if len(beats) != 1 or UUID in client.control_held or UUID in client.applied_command:
+        print(f"ERROR: after {len(beats)} missed beat(s) held={client.control_held} applied={client.applied_command}")
+        failed = True
+    if UUID in client.last_write_time:
+        print("ERROR: dropping control left the pacing clock set, so re-establishing it would be held by sungrow_min_write_interval")
         failed = True
     assert not failed, "test_missed_beats_drop_control_so_it_is_re_established"
+
+
+def test_one_missed_beat_then_success_cannot_leave_control_half_held():
+    """A miss followed by a success spans more than the declared interval, so the miss alone ends it.
+
+    Were the loop to carry on, the second beat would reset the miss counter while the inverter
+    had already reverted, and the cached applied command would stop the command being re-sent.
+    """
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
+    beats = []
+
+    async def miss_then_land(uuid):
+        """Report the first beat as unconfirmed and any later one as landed."""
+        beats.append(uuid)
+        if len(beats) >= 3:
+            client._heartbeat_stop = True
+        return len(beats) > 1
+
+    client.send_heartbeat = miss_then_land
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if len(beats) != 1:
+        print(f"ERROR: the loop sent {len(beats)} beat(s) after one miss, expected it to stop at 1")
+        failed = True
+    if UUID in client.control_held or UUID in client.applied_command:
+        print(f"ERROR: one missed beat left held={client.control_held} applied={client.applied_command}")
+        failed = True
+    assert not failed, "test_one_missed_beat_then_success_cannot_leave_control_half_held"
 
 
 def test_a_read_only_pause_releases_explicitly():
@@ -533,6 +581,7 @@ def run_sungrow_heartbeat_tests(my_predbat):
         ("read_only_drops_control", test_a_read_only_pause_forgets_the_applied_command),
         ("loop_survives_exception", test_heartbeat_loop_survives_a_beat_that_raises),
         ("missed_beats_drop_control", test_missed_beats_drop_control_so_it_is_re_established),
+        ("one_miss_then_success", test_one_missed_beat_then_success_cannot_leave_control_half_held),
         ("read_only_releases", test_a_read_only_pause_releases_explicitly),
     ]:
         try:

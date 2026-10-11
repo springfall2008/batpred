@@ -425,17 +425,23 @@ SUNGROW_RATING_DRIFT = 0.05
 # one heartbeat interval. It does NOT sit stopped, and it does NOT hold the last forced
 # setpoint indefinitely. Nothing in this component should ever try to defeat that.
 SUNGROW_HEARTBEAT_DEFAULT_SECONDS = 300
-# Beats go out at a fraction of the promised interval so a single lost request, a slow
-# dispatch or one skipped component tick does not spend the whole budget and drop control.
+# Beats go out at a fraction of the promised interval so a slow dispatch does not spend the
+# whole budget and let the inverter revert. It is not enough margin to ride out a LOST beat -
+# see SUNGROW_HEARTBEAT_MAX_MISSES below.
 SUNGROW_HEARTBEAT_MARGIN = 0.5
 # Floor on the derived send cadence. Without it a user setting sungrow_heartbeat_interval to
 # the documented minimum of 1 second would have the component dispatching a task every half
 # second forever, which is a self-inflicted rate-limit rather than tighter control.
 SUNGROW_HEARTBEAT_MIN_SEND_SECONDS = 30
 
-# Beats go out at half the declared interval, so two consecutive misses mean the whole
-# declared interval has passed without one and the inverter has reverted.
-SUNGROW_HEARTBEAT_MAX_MISSES = 2
+# Beats go out at half the declared interval PLUS however long the beat itself takes (a beat
+# is a dispatched task that is polled to completion), so after one unconfirmed beat the next
+# cannot be relied on to arrive inside the declared window. Control is therefore treated as
+# lost at once and re-established by the next cycle, which costs one redundant write if the
+# beat had in fact landed. Waiting for a second miss is what goes wrong: a miss followed by a
+# success resets the count while the inverter has already reverted, and the command is never
+# sent again.
+SUNGROW_HEARTBEAT_MAX_MISSES = 1
 
 # -----------------------------------------------------------------------------
 # Measuring points

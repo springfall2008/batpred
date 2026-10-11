@@ -825,6 +825,38 @@ def test_write_button_press_marks_the_inverter_as_driven():
     assert not failed, "test_write_button_press_marks_the_inverter_as_driven"
 
 
+def test_the_write_button_defers_the_write_to_the_next_cycle():
+    """The press only marks the inverter as driven; the component's own cycle sends the command.
+
+    execute.py presses the button BEFORE it writes the target SoC and the rates, so a write
+    taken on the press would be decided from half-written entities, inside Home Assistant's
+    event handler, and the correction would then wait out sungrow_min_write_interval.
+    """
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(3 * 60)
+    sent = _capture_dispatch(client)
+    client.local_schedule[UUID] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, export={"power": 5000})
+    run_async_local(client._handle_control_event("switch.predbat_sungrow_a2211test01_battery_schedule_charge_write", "turn_on"))
+    if sent:
+        print(f"ERROR: the button press wrote to the inverter from inside the event handler: {sent}")
+        failed = True
+    if UUID not in client.control_active:
+        print("ERROR: the button press did not mark the inverter as driven")
+        failed = True
+    if not any(message.startswith("Info:") and "next cycle" in message for message in client.log_messages):
+        print("ERROR: the button press did not say the schedule will be applied on the next cycle")
+        failed = True
+    # What run() does on its next tick: read the entities, then reconcile.
+    run_async_local(client.publish_schedule_settings_ha(UUID))
+    run_async_local(client.get_schedule_settings_ha(UUID))
+    run_async_local(client._reconcile_control(UUID))
+    if len(sent) != 1 or sent[0][1].get(SUNGROW_PARAM_COMMAND) != str(SUNGROW_CMD_CHARGE):
+        print(f"ERROR: the next cycle sent {sent}, expected exactly one charge command")
+        failed = True
+    assert not failed, "test_the_write_button_defers_the_write_to_the_next_cycle"
+
+
 def test_control_entities_round_trip_through_home_assistant():
     """What is published is what is read back, so Predbat's write-and-poll confirm succeeds."""
     failed = False
@@ -1008,6 +1040,7 @@ def run_sungrow_control_tests(my_predbat):
         ("reconcile_only_when_driven", test_reconcile_control_only_runs_for_inverters_predbat_drives),
         ("control_disabled", test_control_enable_false_writes_nothing),
         ("write_button", test_write_button_press_marks_the_inverter_as_driven),
+        ("write_button_deferred", test_the_write_button_defers_the_write_to_the_next_cycle),
         ("entities_round_trip", test_control_entities_round_trip_through_home_assistant),
         ("select_options", test_time_selects_publish_their_options),
         ("entity_resolution", test_entity_ids_resolve_back_to_the_right_inverter),

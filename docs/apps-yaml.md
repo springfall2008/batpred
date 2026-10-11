@@ -1082,10 +1082,10 @@ Register an application at [developer-api.isolarcloud.com](https://developer-api
 - **sungrow_automatic_ignore_pv** - set `True` to leave `pv_power` and `pv_today` for you to configure.
 - **sungrow_control_enable** - `True` by default. Set `False` for monitoring only.
 - **sungrow_inverter_sn** - restrict Predbat to one serial, or a list of serials.
-- **sungrow_heartbeat_interval** - seconds (default 300) the inverter waits for a heartbeat before returning to self-consumption. Predbat sends one at half this interval. Values below 60 are raised to 60.
-- **sungrow_battery_rate_max** - the battery's charge/discharge limit in watts, if the API does not report it or reports it wrongly.
-- **sungrow_inverter_limit** - the inverter's AC rating in watts. Predbat normally reads it from the model name (an SH10RT is 10000); set this if the log says it could not.
-- **sungrow_export_limit** - your grid export limit in watts. Predbat normally reads it from the inverter's feed-in limitation; set this if the log says it could not establish it, or if your limit is enforced somewhere other than the inverter.
+- **sungrow_heartbeat_interval** - seconds (default 300) the inverter waits for a heartbeat before returning to self-consumption. Predbat sends a heartbeat about every half interval, and if one cannot be confirmed it treats control as lost and re-sends the full command on its next cycle. Values below 60 are raised to 60.
+- **sungrow_battery_rate_max** - the battery's charge/discharge limit in watts, per inverter, if the API does not report it or reports it wrongly.
+- **sungrow_inverter_limit** - the inverter's AC rating in watts, per inverter. Predbat normally reads it from the model name (an SH10RT is 10000); set this if the log says it could not.
+- **sungrow_export_limit** - the grid export limit for the whole site in watts. With more than one inverter it is shared equally between them; if your inverters differ, set `export_limit` per inverter in `apps.yaml` instead. Predbat normally reads the limit from the inverter's feed-in limitation; set this if the log says it could not establish it, or if your limit is enforced somewhere other than the inverter.
 - **sungrow_min_write_interval** - minimum seconds between changes of command (default 300). Heartbeats are not affected.
 - **sungrow_api_delay** - seconds between consecutive API calls (default 2).
 - **sungrow_api_debug** - `True` by default: logs each request and response with credentials and location fields masked. Set `False` once your system is working.

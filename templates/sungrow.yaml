@@ -74,8 +74,18 @@ pred_bat:
 
   # Optional: Predbat reads the battery's charge/discharge limit from the plant's
   # "maximum rechargeable/dischargeable power" points. Set this if they are missing or
-  # wrong for your system - without either, Predbat assumes 2600 W.
+  # wrong for your system - without either, Predbat assumes 2600 W. Watts, per inverter.
   #sungrow_battery_rate_max: 5000
+
+  # Optional: the inverter's AC rating in watts, per inverter, if Predbat cannot read it
+  # from the model name.
+  #sungrow_inverter_limit: 10000
+
+  # Optional: the grid export limit for the WHOLE SITE in watts, shared equally between
+  # the inverters. Predbat normally reads it from the inverter's feed-in limitation; set
+  # this if the log says it could not. If your inverters differ, set export_limit per
+  # inverter (below) instead.
+  #sungrow_export_limit: 3680
 
   # REQUIRED if your grid connection is capped below the inverter rating (G98/G99):
   # the API does not report a grid export limit, so without this Predbat will plan

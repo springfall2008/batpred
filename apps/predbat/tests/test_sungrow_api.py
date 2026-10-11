@@ -9,6 +9,7 @@
 """Tests for the Sungrow iSolarCloud OpenAPI component (``sungrow.py``)."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
+import copy
 import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -269,6 +270,28 @@ def test_sungrow_request_retries_once_on_401():
         print(f"ERROR: refresh called {refreshed['count']} times, expected exactly 1")
         failed = True
     assert not failed, "test_sungrow_request_retries_once_on_401"
+
+
+def test_sungrow_token_auth_401_points_at_the_token():
+    """Under token auth nothing can renew the token, so a 401 has to say which setting to change."""
+    failed = False
+    client = MockSungrow(auth_method="token", key="t")
+    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session([create_aiohttp_mock_response(status=401, json_data={})])):
+        ok, _ = run_async_local(client._request("plant_list", {"page": 1}))
+    if ok is not False:
+        print(f"ERROR: an HTTP 401 under token auth returned ok={ok}")
+        failed = True
+    if not any("sungrow_key" in message for message in client.log_messages):
+        print(f"ERROR: an HTTP 401 under token auth did not point at sungrow_key: {client.log_messages}")
+        failed = True
+    # Any other status keeps the generic message: it says nothing about the token.
+    client = MockSungrow(auth_method="token", key="t")
+    with patch("aiohttp.ClientSession", return_value=create_aiohttp_mock_session([create_aiohttp_mock_response(status=503, json_data={})])):
+        run_async_local(client._request("plant_list", {"page": 1}))
+    if any("sungrow_key" in message for message in client.log_messages) or not any("HTTP 503" in message for message in client.log_messages):
+        print(f"ERROR: an HTTP 503 was reported as {client.log_messages}")
+        failed = True
+    assert not failed, "test_sungrow_token_auth_401_points_at_the_token"
 
 
 def test_sungrow_request_skips_the_call_when_refresh_fails():
@@ -630,6 +653,44 @@ def test_sungrow_telemetry_falls_back_when_the_device_read_fails():
             print(f"ERROR: {leaf} fell back to {client.telemetry('987654', leaf)}, expected {expected}")
             failed = True
     assert not failed, "test_sungrow_telemetry_falls_back_when_the_device_read_fails"
+
+
+def test_sungrow_failed_device_read_falls_back_instead_of_freezing():
+    """A device endpoint that stops answering must not leave its last values in force for ever."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    if client.telemetry(uuid, "soc") != 64:
+        print(f"ERROR: fixture SoC {client.telemetry(uuid, 'soc')}, expected 64 from the device read")
+        failed = True
+    plant = copy.deepcopy(PLANT_REALTIME)
+    plant["device_point_list"][0]["p83252"] = "50"
+    for _ in range(2):
+        with _mock_post([_envelope(plant), _envelope(None, code="E00000")]):
+            run_async_local(client.refresh_power())
+    if client.telemetry(uuid, "soc") != 50:
+        print(f"ERROR: SoC is {client.telemetry(uuid, 'soc')} after the device read failed, expected the plant's 50")
+        failed = True
+    if uuid in client.device_values or uuid in client.device_energy:
+        print("ERROR: the failed device read left the old device values in force")
+        failed = True
+    # 9500 Wh from the plant, where the stale device counter said 9000.
+    if client.energy(uuid, "load_today") != 9.5:
+        print(f"ERROR: load_today is {client.energy(uuid, 'load_today')} after the device read failed, expected the plant's 9.5")
+        failed = True
+    told = [message for message in client.log_messages if "own telemetry could not be read" in message]
+    if len(told) != 1 or not told[0].startswith("Info:"):
+        print(f"ERROR: two failed device reads in a row logged {told}, expected one Info line")
+        failed = True
+    # Answering again clears the episode, so the next failure is reported afresh.
+    with _mock_post([_envelope(plant), _envelope(DEVICE_REALTIME)]):
+        run_async_local(client.refresh_power())
+    with _mock_post([_envelope(plant), _envelope(None, code="E00000")]):
+        run_async_local(client.refresh_power())
+    if len([message for message in client.log_messages if "own telemetry could not be read" in message]) != 2:
+        print("ERROR: a second episode of failed device reads was not logged")
+        failed = True
+    assert not failed, "test_sungrow_failed_device_read_falls_back_instead_of_freezing"
 
 
 def test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours():
@@ -1028,11 +1089,64 @@ def test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted():
     if client.export_limit(uuid) != 0.0:
         print(f"ERROR: a zero-export limit gave {client.export_limit(uuid)}")
         failed = True
+    # A flag that could not be read says nothing either way, however good the value looks.
+    client.device_limits[uuid] = {"feed_in_enabled": None, "feed_in_value": 3680.0, "feed_in_ratio": 36.8}
+    if client.export_limit(uuid) is not None:
+        print(f"ERROR: an unreadable feed-in flag was reported as {client.export_limit(uuid)}")
+        failed = True
     client.export_limit_override = 5000.0
     if client.export_limit(uuid) != 5000.0:
         print("ERROR: sungrow_export_limit did not override the read-back")
         failed = True
     assert not failed, "test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted"
+
+
+def test_sungrow_export_limit_override_is_shared_between_inverters():
+    """sungrow_export_limit is the SITE's limit; Predbat sums export_limit across inverters."""
+    failed = False
+    client = _polled_client()
+    first = client.device_list[0]
+    client.export_limit_override = 3680.0
+    if client.export_limit(first) != 3680.0:
+        print(f"ERROR: one inverter was given {client.export_limit(first)} of a 3680 W site limit")
+        failed = True
+    second = "111222"
+    client.device_list.append(second)
+    client.device_detail[second] = {"ps_id": "1234567", "serial": "A2211TEST02"}
+    if client.export_limit(first) != 1840.0 or client.export_limit(second) != 1840.0:
+        print(f"ERROR: two inverters were given {client.export_limit(first)}/{client.export_limit(second)}, expected the 3680 W site limit split 1840/1840")
+        failed = True
+    assert not failed, "test_sungrow_export_limit_override_is_shared_between_inverters"
+
+
+def test_sungrow_refresh_limits_does_not_guess_an_unreadable_flag():
+    """A blank, missing or unknown feed-in flag is not "limitation off" - only an explicit 85 is."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    answers = [{"10012": "", "10013": "3680", "10014": "368"}, {"10013": "3680", "10014": "368"}, {"10012": "85", "10013": "3680", "10014": "368"}]
+
+    async def fake_read(device, codes):
+        """Return the next canned read-back."""
+        return answers.pop(0)
+
+    client.read_params = fake_read
+    for label, expected_flag, expected_limit in (("blank", None, None), ("missing", None, None), ("explicitly off", False, SUNGROW_NO_EXPORT_LIMIT)):
+        client._tier_refreshed.pop("limits", None)
+        client.log_messages.clear()
+        run_async_local(client.refresh_limits())
+        flag = client.device_limits.get(uuid, {}).get("feed_in_enabled", "unset")
+        if flag is not expected_flag:
+            print(f"ERROR: a {label} feed-in flag read as {flag!r}, expected {expected_flag!r}")
+            failed = True
+        if client.export_limit(uuid) != expected_limit:
+            print(f"ERROR: a {label} feed-in flag gave an export limit of {client.export_limit(uuid)}, expected {expected_limit}")
+            failed = True
+        told = [message for message in client.log_messages if "could not be read" in message and "sungrow_export_limit" in message]
+        if len(told) != (1 if expected_flag is None else 0):
+            print(f"ERROR: a {label} feed-in flag logged {len(told)} unreadable-flag message(s)")
+            failed = True
+    assert not failed, "test_sungrow_refresh_limits_does_not_guess_an_unreadable_flag"
 
 
 def test_sungrow_refresh_limits_reads_the_feed_in_parameters():
@@ -1324,6 +1438,7 @@ def run_sungrow_api_tests(my_predbat):
         ("string_result_code", test_sungrow_request_treats_string_result_code_as_success),
         ("non_json_body", test_sungrow_request_survives_a_body_that_is_not_json),
         ("retry_on_401", test_sungrow_request_retries_once_on_401),
+        ("token_401", test_sungrow_token_auth_401_points_at_the_token),
         ("skip_on_dead_token", test_sungrow_request_skips_the_call_when_refresh_fails),
         ("token_auth", test_sungrow_token_auth_sends_the_pasted_token_and_never_refreshes),
         ("auth_and_rate_limit_codes", test_sungrow_auth_and_rate_limit_codes_are_reported_differently),
@@ -1339,6 +1454,7 @@ def run_sungrow_api_tests(my_predbat):
         ("serial_filter", test_sungrow_inverter_sn_filter),
         ("telemetry_prefers_device", test_sungrow_telemetry_prefers_the_device_read_over_the_plant_read),
         ("telemetry_falls_back", test_sungrow_telemetry_falls_back_when_the_device_read_fails),
+        ("device_read_failure_not_frozen", test_sungrow_failed_device_read_falls_back_instead_of_freezing),
         ("energy_units", test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours),
         ("battery_capacity", test_sungrow_battery_capacity_sums_the_two_halves),
         ("battery_rate_max", test_sungrow_battery_rate_max_prefers_the_override),
@@ -1357,6 +1473,8 @@ def run_sungrow_api_tests(my_predbat):
         ("static_saved_on_discovery", test_sungrow_run_saves_discovery_when_it_refreshes),
         ("inverter_limit", test_sungrow_inverter_limit_comes_from_the_model_or_the_override),
         ("export_limit_trust", test_sungrow_export_limit_is_only_reported_when_it_can_be_trusted),
+        ("export_limit_shared", test_sungrow_export_limit_override_is_shared_between_inverters),
+        ("limits_unreadable_flag", test_sungrow_refresh_limits_does_not_guess_an_unreadable_flag),
         ("limits_read_back", test_sungrow_refresh_limits_reads_the_feed_in_parameters),
         ("limits_bound", test_sungrow_automatic_config_binds_the_limits),
         ("limits_backoff", test_sungrow_failed_limits_read_backs_off),
