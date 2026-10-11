@@ -231,6 +231,7 @@ class GatewayMQTT(ComponentBase):
     gateway_shared_ct = True
     gateway_integrate_power = False
     gateway_inverter_serial = ()
+    gateway_display_only = False
     _integrated_energy = None
     _unavailable_inverters = ((), ())
     _discovery = {}  # replaced, never changed in place, so this default is not shared state
@@ -244,11 +245,26 @@ class GatewayMQTT(ComponentBase):
     _reserve_before_zero = {}  # replaced, never changed in place
     gateway_device_id = None
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=True, gateway_integrate_power=False, **kwargs):
+    def initialize(
+        self,
+        gateway_device_id=None,
+        mqtt_host=None,
+        mqtt_port=8883,
+        mqtt_token=None,
+        gateway_inverter_serial=None,
+        gateway_evc_automatic=False,
+        gateway_evc_control=False,
+        gateway_shared_ct=True,
+        gateway_integrate_power=False,
+        gateway_display_only=False,
+        **kwargs,
+    ):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
             gateway_device_id: The gateway's device ID (e.g. "pbgw_abc123").
+            gateway_display_only: Publish display data without registering or controlling any inverter
+                or EV charger. The hub must already be parked by its standby controller.
             mqtt_host: MQTT broker hostname.
             mqtt_port: MQTT broker port (default 8883 for TLS).
             mqtt_token: JWT access token for MQTT authentication.
@@ -270,6 +286,14 @@ class GatewayMQTT(ComponentBase):
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
+        if isinstance(gateway_display_only, str):
+            value = gateway_display_only.strip().lower()
+            if value not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+                raise ValueError("gateway_display_only must be a boolean")
+            gateway_display_only = value in ("true", "1", "yes", "on")
+        if not isinstance(gateway_display_only, bool):
+            raise ValueError("gateway_display_only must be a boolean")
+        self.gateway_display_only = gateway_display_only
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
         self.gateway_shared_ct = bool(gateway_shared_ct)
@@ -415,6 +439,8 @@ class GatewayMQTT(ComponentBase):
         the optimizer's charge/export windows into ExecutionPlan entries and
         queues them for MQTT publishing on the next run() cycle.
         """
+        if self.gateway_display_only:
+            return
         plan_entries = []
 
         # Reserve as a percentage — used to detect freeze charge (charge limit == reserve)
@@ -631,6 +657,11 @@ class GatewayMQTT(ComponentBase):
             ticks = await self._startup_wait(0, lambda: self._first_connection_attempted)
             if not self._first_connection_attempted and not self.api_stop:
                 self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
+            if self.gateway_display_only:
+                await self._startup_wait(ticks, lambda: self.api_started)
+                if not self.api_started and not self.api_stop:
+                    self.log("Warn: GatewayMQTT: No display telemetry received, continuing startup")
+                return True
             # The auto-config wait runs even when the first attempt failed: the MQTT loop
             # retries with backoff in the background, so a transient broker failure at
             # startup usually still yields telemetry inside the window. Returning early
@@ -650,6 +681,14 @@ class GatewayMQTT(ComponentBase):
                     self.log(f"Warn: GatewayMQTT: MQTT task died with: {exc}")
                 self.log("Info: GatewayMQTT: Restarting MQTT listener task")
                 self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
+
+            if self.gateway_display_only:
+                # The JSON display topic is separate from the executable schedule. Never
+                # refresh schedules, release read-only, reset inverters or control EVs here.
+                if self._mqtt_connected and self._last_status is not None:
+                    await self._publish_predbat_data()
+                await self._check_token_refresh()
+                return True
 
             # Publish any queued plan from on_plan_executed hook
             if self._pending_plan:
@@ -858,6 +897,15 @@ class GatewayMQTT(ComponentBase):
             return
 
         self._debug_dump("RX telemetry", status, raw=data)
+
+        if self.gateway_display_only:
+            # A desk display need not discover an inverter. Do not inject the hub's
+            # inverter entities or register hardware against the selected provider.
+            self._last_status = status
+            self._last_telemetry_time = time.time()
+            self.update_success_timestamp()
+            self.api_started = True
+            return
 
         if len(status.inverters) == 0:
             if not (self.gateway_inverter_serial and self._discovery):
@@ -1807,6 +1855,8 @@ class GatewayMQTT(ComponentBase):
         (see ``_needs_reconfigure``). Maps proto fields to PredBat args so the plan
         engine has data to work with.
         """
+        if self.gateway_display_only:
+            return
         if not self._last_status:
             self.log("Error: GatewayMQTT: automatic_config called with no status data")
             return
@@ -2469,6 +2519,8 @@ class GatewayMQTT(ComponentBase):
             plan_entries: List of plan entry dicts.
             timezone_str: IANA timezone string (e.g. "Europe/London").
         """
+        if self.gateway_display_only:
+            return
         if not self._plan_changed(plan_entries):
             return  # No change, skip publish
 
@@ -2556,6 +2608,9 @@ class GatewayMQTT(ComponentBase):
             payload: Bytes to publish.
             retain: Whether to set the retain flag.
         """
+        if self.gateway_display_only and topic != f"{self._topic_base}/predbat_data":
+            self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
+            return
         if not (self._mqtt_client and self._mqtt_connected):
             return
 
