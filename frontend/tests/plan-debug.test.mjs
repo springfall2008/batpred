@@ -13,6 +13,7 @@ const require = createRequire(import.meta.url)
 const componentPath = fileURLToPath(new URL('../src/components/PlanTable.tsx', import.meta.url))
 const currencyUtilityPath = fileURLToPath(new URL('../src/utils/currency.ts', import.meta.url))
 const planUtilityPath = fileURLToPath(new URL('../src/utils/plan.ts', import.meta.url))
+const splitActionsFixturePath = fileURLToPath(new URL('./fixtures/plan-data-split-actions.json', import.meta.url))
 
 function loadTypeScriptModule(path) {
   const source = fs.readFileSync(path, 'utf8')
@@ -153,6 +154,21 @@ test('debug mode exposes the diagnostic plan values supplied by Predbat', () => 
   assert.match(html, /0\.10, 0\.05/)
   assert.match(html, /Internal optimiser limit/)
   assert.match(html, />\(55\)</)
+})
+
+test('a split charge and export slot displays both planned actions', () => {
+  const fixture = JSON.parse(fs.readFileSync(splitActionsFixturePath, 'utf8'))
+
+  const html = renderPlanTable(false, {
+    ...plan,
+    ...fixture.plan
+  })
+
+  assert.match(html, /plan-action-multiple/)
+  assert.match(html, /plan-action-badge plan-action-charge/)
+  assert.match(html, /plan-action-badge plan-action-export/)
+  assert.match(html, />Charge<\/span>/)
+  assert.match(html, />Export<\/span>/)
 })
 
 test('future rates show a prediction indicator', () => {

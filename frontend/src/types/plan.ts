@@ -18,6 +18,13 @@ export type PlanRow = {
   rate_color_import?: string
 
   state: string
+  /**
+   * Legacy Predbat exposes two state labels when a slot is split between
+   * charging and exporting. The modern table uses these to display both
+   * planned actions instead of only the final state.
+   */
+  state_text?: string
+  state2_text?: string | null
   state_target: string
   state_override: string
 
