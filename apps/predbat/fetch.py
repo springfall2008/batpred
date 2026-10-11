@@ -36,6 +36,7 @@ from const import (
     CAR_ENERGY_LOAD_CHECK_WINDOW,
     CAR_ENERGY_LOAD_CHECK_MIN_KWH,
     CAR_ENERGY_LOAD_CHECK_RATIO,
+    CAR_ENERGY_LOAD_CHECK_LAG,
     CAR_ENERGY_LOAD_CHECK_WINDOWS,
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
@@ -3448,16 +3449,30 @@ class Fetch:
         so each such window is evidence it does not (see CAR_ENERGY_LOAD_CHECK_* in const.py). Both series are the raw
         incrementing data, indexed in minutes back from now - load_minutes has nothing subtracted from it yet.
 
+        The load is compared over the window shifted by every offset up to CAR_ENERGY_LOAD_CHECK_LAG minutes either way,
+        and the window only counts if the car exceeds it at every shift. Where a session starts or ends part-way through a
+        window, a sensor that lags the other shows only part of that charge there, so an unshifted comparison would count it.
+
         The window in progress is left out: a cloud-polled load sensor can be many minutes behind the charger's, so it
         reads short there. A window with no load at all is skipped - a house always draws something, so a flat stretch
         is the load sensor missing data (the history is padded, so missing minutes read as no increment), not evidence.
         """
-        windows = 0
         window = CAR_ENERGY_LOAD_CHECK_WINDOW
+        lag = CAR_ENERGY_LOAD_CHECK_LAG
+        end = 24 * 60 + window + lag
+        # Running totals of the per-minute energy, so any window's energy is one subtraction: total[b] - total[a] covers minutes a to b-1
+        car_total = [0.0]
+        load_total = [0.0]
+        for minute in range(end):
+            car_total.append(car_total[-1] + self.get_from_incrementing(self.car_charging_energy, minute))
+            load_total.append(load_total[-1] + self.get_from_incrementing(self.load_minutes, minute))
+
+        windows = 0
         for start in range(window, 24 * 60 + window, window):
-            car_energy = sum(self.get_from_incrementing(self.car_charging_energy, minute) for minute in range(start, start + window))
-            load_energy = sum(self.get_from_incrementing(self.load_minutes, minute) for minute in range(start, start + window))
-            if load_energy > 0 and car_energy >= CAR_ENERGY_LOAD_CHECK_MIN_KWH and car_energy > load_energy * CAR_ENERGY_LOAD_CHECK_RATIO:
+            car_energy = car_total[start + window] - car_total[start]
+            load_energy = load_total[start + window] - load_total[start]
+            load_shifted = max(load_total[start + shift + window] - load_total[start + shift] for shift in range(-lag, lag + 1))
+            if load_energy > 0 and car_energy >= CAR_ENERGY_LOAD_CHECK_MIN_KWH and car_energy > load_shifted * CAR_ENERGY_LOAD_CHECK_RATIO:
                 windows += 1
         return windows
 

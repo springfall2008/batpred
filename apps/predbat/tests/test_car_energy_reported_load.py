@@ -161,6 +161,22 @@ def test_car_energy_reported_load(my_predbat):
         # The load sensor has not reported the last 20 minutes of the charge yet
         my_predbat.load_minutes = {minute: (value if minute >= 20 else my_predbat.load_minutes[20]) for minute, value in my_predbat.load_minutes.items()}
         check("t10 skipped", my_predbat.car_energy_exceeds_load_windows() == 0, "windows {}".format(my_predbat.car_energy_exceeds_load_windows()))
+
+        print("Test 11: sessions that start and end part-way through a window, with the load sensor up to 15 minutes either side, are silent")
+        # The window a session starts in holds car minutes the lagging load sensor has not reported yet, and with the
+        # car sensor late the same happens in the window it ends in - only a load window shifted by the lag lines them up
+        for car_kw in (7.0, 11.0):
+            for lag in (10, 15, -10, -15):
+                for offset in range(0, 30, 5):
+                    sessions = ((60 + offset, 120 + offset), (240 + offset, 300 + offset), (420 + offset, 480 + offset))
+                    _setup(my_predbat, load_includes_car=True, lag=lag, sessions=sessions, car_kw=car_kw)
+                    windows = my_predbat.car_energy_exceeds_load_windows()
+                    check("t11 {} kW lag {} offset {}".format(car_kw, lag, offset), windows == 0, "windows {}".format(windows))
+
+        print("Test 12: a load sensor that excludes the charger still warns when the sessions are not aligned to the windows")
+        _setup(my_predbat, load_includes_car=False, sessions=((70, 190),))
+        windows = my_predbat.car_energy_exceeds_load_windows()
+        check("t12 counts", windows == 5, "windows {}".format(windows))
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)
