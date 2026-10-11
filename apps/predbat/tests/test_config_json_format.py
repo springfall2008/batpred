@@ -26,7 +26,8 @@ def test_config_json_format(my_predbat):
     original_config_root_p = my_predbat.config_root_p
     original_db_primary = my_predbat.ha_interface.db_primary
     item = my_predbat.config_index["load_scaling"]
-    original_value = item["value"]
+    # load_current_config() rewrites every saved setting on the shared fixture, so snapshot them all to put back afterwards
+    original_values = {config_item["name"]: config_item.get("value", None) for config_item in my_predbat.CONFIG_ITEMS if "value" in config_item}
 
     try:
         with tempfile.TemporaryDirectory() as tmp_root:
@@ -58,6 +59,8 @@ def test_config_json_format(my_predbat):
         my_predbat.config_root = original_config_root
         my_predbat.config_root_p = original_config_root_p
         my_predbat.ha_interface.db_primary = original_db_primary
-        item["value"] = original_value
+        for config_item in my_predbat.CONFIG_ITEMS:
+            if config_item["name"] in original_values:
+                config_item["value"] = original_values[config_item["name"]]
 
     return failed
