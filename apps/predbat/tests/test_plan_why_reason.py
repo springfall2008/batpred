@@ -450,6 +450,15 @@ def run_test_plan_why_reason(my_predbat):
     elif row["state"] != "Chrg" or row["state_target"] != "80":
         print("ERROR: #4445 SoC between target and limit state unexpected: {} -> {}".format(row["state"], row["state_target"]))
         failed = True
+
+    # With plan_debug on, the Limit cell shows the real limit with the predicted end-of-window SoC in brackets
+    plan_debug_saved = my_predbat.plan_debug
+    my_predbat.plan_debug = True
+    html, _ = render()
+    my_predbat.plan_debug = plan_debug_saved
+    if "80 (60)" not in html:
+        print("ERROR: #4445 plan_debug Limit cell should read '80 (60)' (limit, then predicted SoC)")
+        failed = True
     del my_predbat.charge_window_best[0]["target"]
 
     # --- Test 2c: get_charge_export_text has the same #4445 fix, and keeps surfacing the
