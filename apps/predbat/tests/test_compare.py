@@ -743,19 +743,23 @@ def test_compare(my_predbat):
         {"id": "bad_config", "name": "Bad Config", "config": ["metric_battery_cycle"]},
         {"id": "empty_config", "name": "Empty Config", "config": None},
         {"id": "empty_list_config", "name": "  Empty List Config  ", "config": []},
+        {"id": "empty_string_config", "name": "Empty String Config", "config": ""},
+        {"id": "empty_dict_config", "name": "Empty Dict Config", "config": {}},
+        {"id": "false_config", "name": "False Config", "config": False},
+        {"id": "string_config", "name": "String Config", "config": "best_soc_min: 2.0"},
     ]
     kept = valid_compare_list(entries, log=logged.append)
     kept_ids = [entry["id"] for entry in kept]
     skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
 
-    if kept_ids != ["agile", "2024", "numeric_name", "empty_config", "empty_list_config"]:
-        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name', 'empty_config' and 'empty_list_config' (ids as strings), got {}".format(kept_ids))
+    if kept_ids != ["agile", "2024", "numeric_name", "empty_config", "empty_list_config", "empty_string_config", "empty_dict_config"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name' and the four empty-config entries (ids as strings), got {}".format(kept_ids))
         failed += 1
-    elif skipped_positions != [1, 2, 3, 5, 6, 8, 10, 11]:
-        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6, 8 (padded duplicate id), 10 (blank name) and 11 (non-mapping config), got {}".format(logged))
+    elif skipped_positions != [1, 2, 3, 5, 6, 8, 10, 11, 16, 17]:
+        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6, 8 (padded duplicate id), 10 (blank name), 11, 16 and 17 (unusable config), got {}".format(logged))
         failed += 1
-    elif "config" in kept[3] or "config" in kept[4]:
-        print("ERROR T27: an empty 'config:' (None or []) should be dropped as no overrides, got {} / {}".format(kept[3], kept[4]))
+    elif any("config" in entry for entry in kept[3:7]):
+        print("ERROR T27: an empty 'config:' (None, [], \"\" or {{}}) should be dropped as no overrides, got {}".format(kept[3:7]))
         failed += 1
     elif kept[4]["name"] != "Empty List Config":
         print("ERROR T27: a kept entry's name should be stripped, got {!r}".format(kept[4]["name"]))

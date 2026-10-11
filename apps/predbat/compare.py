@@ -28,7 +28,11 @@ import copy
 
 
 def check_compare_list(compare_list):
-    """Split compare_list into the entries that can be compared (ids and names as strings) and a message per skipped entry (#5472)."""
+    """Split compare_list into the entries that can be compared and a message per skipped entry (#5472).
+
+    Each kept entry is a copy with its id and name as stripped strings, and its config either a
+    mapping of overrides or absent, so run_all() and fetch_config() can rely on that shape.
+    """
     if not compare_list:
         return [], []
     if not isinstance(compare_list, list):
@@ -54,9 +58,9 @@ def check_compare_list(compare_list):
                 problem = "has a duplicate id '{}'".format(entry_id)
             elif not entry_name:
                 problem = "('{}') requires a non-empty 'name'".format(entry_id)
-            elif entry.get("config") and not isinstance(entry["config"], dict):
-                # run_all() snapshots each override by key before any tariff runs, outside every try,
-                # so a list of overrides there crashed the whole comparison
+            elif entry.get("config") not in (None, "", []) and not isinstance(entry["config"], dict):
+                # run_all() and fetch_config() look overrides up by key; a list of them raised TypeError
+                # there and ended the whole comparison, and any other value was never a usable override
                 problem = "('{}') has a 'config' that isn't a set of 'setting: value' overrides".format(entry_id)
         if problem:
             problems.append("compare_list entry {} {}".format(index + 1, problem))
@@ -64,7 +68,7 @@ def check_compare_list(compare_list):
         seen_ids.add(entry_id)
         checked = dict(entry, id=entry_id, name=entry_name)
         if not checked.get("config"):
-            # An empty 'config:' line (None, [] or "") means no overrides, as it always has
+            # An empty 'config:' line (None, "", [] or {}) means no overrides, as it always has
             checked.pop("config", None)
         valid.append(checked)
     return valid, problems
