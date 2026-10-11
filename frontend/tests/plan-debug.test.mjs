@@ -301,7 +301,7 @@ test('normal mode keeps diagnostic plan values hidden', () => {
   assert.match(html, /background-color:#F18261/)
   assert.match(html, /background-color:#FFFF00/)
   assert.match(html, /\+€0\.12/)
-  assert.match(html, /<span>Total<\/span>/)
+  assert.match(html, /plan-column-label">Total<\/span>/)
   assert.match(html, /Plan total/)
   assert.match(html, /€2\.34/)
 })
