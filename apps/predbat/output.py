@@ -852,20 +852,11 @@ class Output:
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
-            limit = self.charge_limit_best[charge_window_n]
-            target_charge = calc_percent_limit(limit, self.soc_max)
-            predicted = self.charge_window_best[charge_window_n].get("target", limit)
-            predicted_percent = calc_percent_limit(predicted, self.soc_max)
-            # Report the real instruction sent to the inverter (charge_limit_best), not the window's
-            # predicted-achievable SoC (plan.py's "target"), which would show a full-rate charge as a
-            # lower, partial one (issue #4445). Where the window can't reach the limit in time, the
-            # achievable SoC is still shown alongside it, so that information (the point of PR #2358)
-            # isn't confined to plan_debug.
-            target_suffix = "" if predicted_percent == target_charge else " (predicted {}%)".format(predicted_percent)
-            if limit == self.reserve:
-                text = "freeze charging to {}%{} for the next {}".format(target_charge, target_suffix, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+            target_charge = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n]), self.soc_max)
+            if self.charge_limit_best[charge_window_n] == self.reserve:
+                text = "freeze charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
             else:
-                text = "charging to {}%{} for the next {}".format(target_charge, target_suffix, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+                text = "charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
         else:
             charge_window_n = self.get_next_charge_window(minutes_now)
             export_window_n = self.get_next_export_window(minutes_now)
@@ -1432,7 +1423,12 @@ class Output:
                 if "target" in self.charge_window_best[charge_window_n]:
                     target = self.charge_window_best[charge_window_n]["target"]
 
-                limit_percent = calc_percent_limit(limit, self.soc_max)
+                # Classify Chrg vs HoldChrg against the real instruction (charge_limit_best), but display the
+                # window's predicted end-of-window SoC ("target", from plan.py), which is what the Limit column
+                # documents. Classifying against the prediction showed a full-rate charge that can't finish
+                # within the window as HoldChrg whenever the row's SoC sat above that prediction (issue #4445).
+                instruction_percent = calc_percent_limit(limit, self.soc_max)
+                limit_percent = calc_percent_limit(target, self.soc_max)
                 if limit > 0.0:
                     if self.is_freeze_charge(limit):
                         state = "FrzChrg&rarr;"
@@ -1440,7 +1436,7 @@ class Output:
                         raw_state = "FrzChrg"
                         limit_percent = soc_percent
                         reason_parts.append({"code": "freeze_charge", "params": {"rate": rate_text_import, "threshold": "{:.2f}".format(import_cost_threshold)}})
-                    elif limit_percent <= soc_percent_min_window:
+                    elif instruction_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
                         raw_state = "HoldChrg"
@@ -1463,7 +1459,7 @@ class Output:
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
-                        show_limit += " ({})".format(str(calc_percent_limit(target, self.soc_max)))
+                        show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
                     raw_state_target = str(limit_percent)
             else:
                 if export_window_n >= 0:
