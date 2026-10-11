@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { SavingsChartData, SavingsChartSeries } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { useStoredState } from '../hooks/useStoredState'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 import { formatMajorCurrency } from '../utils/currency'
@@ -160,7 +161,7 @@ export default function SavingsChart({ data }: { data: SavingsChartData }) {
               color: textColour,
               maxTicksLimit: 10,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(Number(value))
+                return formatChartTimestamp(value, { day: 'numeric', month: 'short' })
               }
             }
           },
@@ -219,8 +220,8 @@ export default function SavingsChart({ data }: { data: SavingsChartData }) {
       <div className="battery-chart-summary">
         <div><span>Latest Predbat saving</span><strong>{formatMajorCurrency(latestValue(points.daily_predbat) ?? 0, data.currency_symbol)}</strong></div>
         <div><span>Latest solar and battery saving</span><strong>{formatMajorCurrency(latestValue(points.daily_pv_battery) ?? 0, data.currency_symbol)}</strong></div>
-        <div><span>Total Predbat saving</span><strong>{formatMajorCurrency(latestValue(points.total_predbat) ?? 0, data.currency_symbol)}</strong></div>
-        <div><span>Total solar and battery saving</span><strong>{formatMajorCurrency(latestValue(points.total_pv_battery) ?? 0, data.currency_symbol)}</strong></div>
+        <div><span>Total Predbat saving</span><strong>{formatMajorCurrency(data.totals.predbat, data.currency_symbol)}</strong></div>
+        <div><span>Total solar and battery saving</span><strong>{formatMajorCurrency(data.totals.pv_battery, data.currency_symbol)}</strong></div>
       </div>
 
       <div className="battery-chart-legend" aria-label="Chart series">

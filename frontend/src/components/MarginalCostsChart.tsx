@@ -14,6 +14,7 @@ import {
 
 import { useStoredState } from '../hooks/useStoredState'
 import type { MarginalCostsChartData } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 import { formatRate } from '../utils/currency'
 
@@ -21,7 +22,7 @@ import './BatteryChart.css'
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend)
 
-const colours = ['#0891b2', '#d97706', '#dc2626', '#7c3aed']
+const colours = ['#0891b2', '#d97706', '#dc2626', '#16a34a']
 
 function nowMarker(now: number, colour: string): Plugin<'line'> {
   return {
@@ -99,8 +100,8 @@ export default function MarginalCostsChart({ data }: { data: MarginalCostsChartD
       {
         label: 'Export rate',
         data: pointsInWindow(toChartPoints(data.grid_export), window),
-        borderColor: '#16a34a',
-        backgroundColor: '#16a34a',
+        borderColor: '#7c3aed',
+        backgroundColor: '#7c3aed',
         borderWidth: 1.5,
         borderDash: [5, 5],
         pointRadius: 0,
@@ -128,7 +129,7 @@ export default function MarginalCostsChart({ data }: { data: MarginalCostsChartD
             ticks: {
               color: textColour,
               maxTicksLimit: 9,
-              callback: (value) => new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(Number(value))
+              callback: (value) => formatChartTimestamp(value, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
             }
           },
           y: {
@@ -185,8 +186,8 @@ export default function MarginalCostsChart({ data }: { data: MarginalCostsChartD
             <span className="battery-chart-help-popup" role="tooltip">The effective cost per kWh if an extra {level.kwh} kWh is used during this time window.</span>
           </span>
         ))}
-        <span className="battery-chart-legend-item power-chart-legend-item is-line"><span className="battery-chart-legend-marker" style={{ '--battery-chart-legend-colour': '#2563eb' } as React.CSSProperties} /><span>Import rate</span></span>
-        <span className="battery-chart-legend-item power-chart-legend-item is-line"><span className="battery-chart-legend-marker" style={{ '--battery-chart-legend-colour': '#16a34a' } as React.CSSProperties} /><span>Export rate</span></span>
+        <span className="battery-chart-legend-item power-chart-legend-item is-line is-hollow"><span className="battery-chart-legend-marker" style={{ '--battery-chart-legend-colour': '#2563eb' } as React.CSSProperties} /><span>Import rate</span></span>
+        <span className="battery-chart-legend-item power-chart-legend-item is-line is-hollow"><span className="battery-chart-legend-marker" style={{ '--battery-chart-legend-colour': '#7c3aed' } as React.CSSProperties} /><span>Export rate</span></span>
       </div>
 
       <div className="battery-chart-canvas">

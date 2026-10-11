@@ -14,6 +14,7 @@ import {
 
 import { useStoredState } from '../hooks/useStoredState'
 import type { CarbonChartData, TimestampSeries } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 import { getCostChartWindow, latestCostValue } from '../utils/costChart'
 
@@ -121,7 +122,7 @@ export default function CarbonChart({ data }: { data: CarbonChartData }) {
         scales: {
           x: {
             type: 'linear', min: window.start, max: window.end, grid: { color: grid },
-            ticks: { color: text, maxTicksLimit: 9, callback: (value) => new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(Number(value)) }
+            ticks: { color: text, maxTicksLimit: 9, callback: (value) => formatChartTimestamp(value, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }
           },
           y: { grid: { color: grid }, ticks: { color: text, callback: (value) => `${value} kg` }, title: { display: true, text: 'Household CO₂', color: text } },
           yIntensity: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: colours.intensity, callback: (value) => `${value} g/kWh` }, title: { display: true, text: 'Grid intensity', color: colours.intensity } }
@@ -162,7 +163,7 @@ export default function CarbonChart({ data }: { data: CarbonChartData }) {
       </div>
       <div className="battery-chart-legend" aria-label="Chart series">
         {legends.map(([key, label, colour, description]) => (
-          <span className="battery-chart-legend-item is-line" tabIndex={0} key={key}>
+          <span className={`battery-chart-legend-item is-line ${key === 'base' ? 'is-hollow' : ''}`} tabIndex={0} key={key}>
             <span className="battery-chart-legend-marker" style={{ '--battery-chart-legend-colour': colour } as React.CSSProperties} aria-hidden="true" />
             <span>{label}</span><span className="battery-chart-help-popup" role="tooltip">{description}</span>
           </span>

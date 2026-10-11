@@ -13,6 +13,7 @@ import {
 
 import { useStoredState } from '../hooks/useStoredState'
 import type { BatteryDegradationChartData } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 
 import './BatteryChart.css'
@@ -100,7 +101,7 @@ export default function BatteryDegradationChart({ data }: { data: BatteryDegrada
             ticks: {
               color: textColour,
               maxTicksLimit: 10,
-              callback: (value) => new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(Number(value))
+              callback: (value) => formatChartTimestamp(value, { day: 'numeric', month: 'short' })
             }
           },
           y: {

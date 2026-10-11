@@ -19,6 +19,7 @@ import PlanTable from '../components/PlanTable'
 import type { Plan, PlanOverrides } from '../types/plan'
 import { formatMajorCurrency } from '../utils/currency'
 import { toChartPoints, type ChartPoint } from '../utils/batteryChart'
+import { formatChartTimestamp } from '../utils/chartZoom'
 
 import './ComparePage.css'
 
@@ -114,7 +115,7 @@ function ComparisonChart({ data, rolling = false }: { data: CompareData, rolling
           x: {
             type: 'linear',
             grid: { color: gridColour },
-            ticks: { color: textColour, callback: (tick) => new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' }).format(Number(tick)) }
+            ticks: { color: textColour, callback: (tick) => formatChartTimestamp(tick, { day: 'numeric', month: 'short' }) }
           },
           y: {
             grid: { color: gridColour },

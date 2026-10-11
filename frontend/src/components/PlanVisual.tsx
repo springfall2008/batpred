@@ -738,6 +738,15 @@ function formatEventRange(start: Date, end: Date) {
 // oxlint-disable-next-line react/only-export-components -- exported for the timeline spacing test
 export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   const ticks: TimelineTick[] = []
+  const minimumDateLabelGap = 6 * 60 * 60 * 1000
+
+  function makeRoomForDateLabel(time: number) {
+    const previousDateTick = ticks.findLast((tick) => tick.dateLabel)
+
+    if (previousDateTick && time - previousDateTick.time < minimumDateLabelGap) {
+      previousDateTick.dateLabel = undefined
+    }
+  }
 
   const start = new Date(startMs)
 
@@ -771,6 +780,19 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
 
   while (cursor.getTime() < endMs) {
     const midnight = cursor.getHours() === 0
+    const dateLabel = midnight
+      ? cursor.toLocaleDateString('en-GB', {
+        weekday: 'short',
+
+        day: 'numeric',
+
+        month: 'short'
+      })
+      : undefined
+
+    if (dateLabel) {
+      makeRoomForDateLabel(cursor.getTime())
+    }
 
     ticks.push({
       time: cursor.getTime(),
@@ -781,15 +803,7 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
         minute: '2-digit'
       }),
 
-      dateLabel: midnight
-        ? cursor.toLocaleDateString('en-GB', {
-          weekday: 'short',
-
-          day: 'numeric',
-
-          month: 'short'
-        })
-        : undefined,
+      dateLabel,
 
       edge: 'middle'
     })
@@ -805,6 +819,20 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
   const lastTick = ticks[ticks.length - 1]
 
   if (!lastTick || endMs - lastTick.time > 60 * 60 * 1000) {
+    const dateLabel = end.getHours() === 0
+      ? end.toLocaleDateString('en-GB', {
+        weekday: 'short',
+
+        day: 'numeric',
+
+        month: 'short'
+      })
+      : undefined
+
+    if (dateLabel) {
+      makeRoomForDateLabel(endMs)
+    }
+
     ticks.push({
       time: endMs,
 
@@ -814,15 +842,7 @@ export function buildTimeTicks(startMs: number, endMs: number): TimelineTick[] {
         minute: '2-digit'
       }),
 
-      dateLabel: end.getHours() === 0
-        ? end.toLocaleDateString('en-GB', {
-          weekday: 'short',
-
-          day: 'numeric',
-
-          month: 'short'
-        })
-        : undefined,
+      dateLabel,
 
       edge: 'end'
     })

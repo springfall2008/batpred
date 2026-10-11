@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { BatteryChartData, BatteryChartSeries } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import type { Plan } from '../types/plan'
 import { useStoredState } from '../hooks/useStoredState'
 import {
@@ -50,6 +51,7 @@ type LegendItem = {
   label: string
   description: string
   colour: string
+  dashed?: boolean
 }
 
 const primaryLegendItems: LegendItem[] = [
@@ -69,13 +71,15 @@ const primaryLegendItems: LegendItem[] = [
     key: 'charge-limit',
     label: 'Charge limit',
     description: 'The battery energy target Predbat plans to charge to during a charge window.',
-    colour: 'var(--color-charge)'
+    colour: 'var(--color-charge)',
+    dashed: true
   },
   {
     key: 'export-limit',
     label: 'Export limit',
     description: 'The battery energy target Predbat plans to discharge to during an export window.',
-    colour: 'var(--color-export)'
+    colour: 'var(--color-export)',
+    dashed: true
   }
 ]
 
@@ -84,50 +88,57 @@ const comparisonOptions: Array<LegendItem & { key: ComparisonKey }> = [
     key: 'base',
     label: 'Base forecast',
     description: 'Expected battery energy if Predbat takes no further action and leaves the inverter on its current settings.',
-    colour: '#0891b2'
+    colour: '#0891b2',
+    dashed: true
   },
   {
     key: 'base10',
     label: 'Base forecast (10%)',
     description: 'The base forecast using Predbat’s pessimistic solar and household-load scenario.',
-    colour: '#d97706'
+    colour: '#d97706',
+    dashed: true
   },
   {
     key: 'optimized10',
     label: 'Optimised forecast (10%)',
     description: 'The optimised plan using Predbat’s pessimistic solar and household-load scenario.',
-    colour: '#9333ea'
+    colour: '#9333ea',
+    dashed: true
   },
   {
     key: 'predicted_h1',
     label: 'Previous +1h prediction',
     description: 'What earlier plans predicted the battery level would be one hour later, aligned with the time that prediction was for.',
-    colour: '#ea580c'
+    colour: '#ea580c',
+    dashed: true
   },
   {
     key: 'predicted_h8',
     label: 'Previous +8h prediction',
     description: 'What earlier plans predicted the battery level would be eight hours later, aligned with the time that prediction was for.',
-    colour: '#7c3aed'
+    colour: '#7c3aed',
+    dashed: true
   },
   {
     key: 'charge_limit_base',
     label: 'Base charge limit',
     description: 'The charge target already configured on the inverter before Predbat applies its optimised plan.',
-    colour: '#059669'
+    colour: '#059669',
+    dashed: true
   },
   {
     key: 'record',
     label: 'Prediction end',
     description: 'A vertical marker showing where Predbat’s recorded prediction data ends.',
-    colour: '#64748b'
+    colour: '#64748b',
+    dashed: true
   }
 ]
 
 function LegendHelpItem({ item, square = false }: { item: LegendItem; square?: boolean }) {
   return (
     <span
-      className={`battery-chart-legend-item ${square ? 'is-square' : ''}`}
+      className={`battery-chart-legend-item ${square ? 'is-square' : ''} ${item.dashed ? 'is-hollow' : ''}`}
       tabIndex={0}
       aria-label={`${item.label}: ${item.description}`}
     >
@@ -390,11 +401,11 @@ export default function BatteryChart({ data, plan }: BatteryChartProps) {
               color: textColour,
               maxTicksLimit: 9,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, {
+                return formatChartTimestamp(value, {
                   weekday: 'short',
                   hour: '2-digit',
                   minute: '2-digit'
-                }).format(Number(value))
+                })
               }
             }
           },

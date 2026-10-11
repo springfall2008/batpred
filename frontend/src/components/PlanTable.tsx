@@ -7,14 +7,22 @@ import {
 
 import {
   faArrowRight,
+  faArrowDown,
   faArrowUpFromBracket,
+  faArrowUp,
   faArrowTrendUp,
+  faBatteryThreeQuarters,
   faBan,
   faBolt,
   faCar,
   faCircleInfo,
+  faClock,
+  faCrosshairs,
+  faGaugeSimpleHigh,
   faHouse,
   faPause,
+  faPlay,
+  faSolarPanel,
   faSnowflake,
   faWater,
   faCheck,
@@ -113,6 +121,7 @@ const OVERRIDE_OPTIONS: {
   action: OverrideAction
   label: string
   icon: IconDefinition
+  tone?: 'charge' | 'export'
 }[] = [
     {
       action: 'Manual Demand',
@@ -122,22 +131,26 @@ const OVERRIDE_OPTIONS: {
     {
       action: 'Manual Charge',
       label: 'Charge',
-      icon: faBolt
+      icon: faBolt,
+      tone: 'charge'
     },
     {
       action: 'Manual Export',
       label: 'Export',
-      icon: faArrowUpFromBracket
+      icon: faArrowUpFromBracket,
+      tone: 'export'
     },
     {
       action: 'Manual Freeze Charge',
       label: 'Freeze Charge',
-      icon: faSnowflake
+      icon: faSnowflake,
+      tone: 'charge'
     },
     {
       action: 'Manual Freeze Export',
       label: 'Freeze Export',
-      icon: faSnowflake
+      icon: faSnowflake,
+      tone: 'export'
     }
   ]
 
@@ -416,6 +429,10 @@ function RateCell({
 
         {open && !isPast && (
           <form className="plan-cell-popover" onSubmit={setRate}>
+            <div className="plan-cell-popover-title">
+              {formatTime(row.time)} {type} rate override
+            </div>
+
             <label>
               <span>{type === 'import' ? 'Import rate' : 'Export rate'}</span>
 
@@ -656,6 +673,10 @@ function TargetCell({
 
         {open && !isPast && (
           <form className="plan-cell-popover" onSubmit={setTarget}>
+            <div className="plan-cell-popover-title">
+              {formatTime(row.time)} target override
+            </div>
+
             <label>
               <span>Target SOC</span>
 
@@ -1046,15 +1067,37 @@ function findCurrentRowIndex(rows: Plan['rows']) {
 type ColumnHeadingProps = {
   label: string
   mobileLabel?: string
+  icon?: IconDefinition
+  mobileTone?: 'blue'
   help: string
 }
 
-function ColumnHeading({ label, mobileLabel, help }: ColumnHeadingProps) {
+function ColumnHeading({ label, mobileLabel, icon, mobileTone, help }: ColumnHeadingProps) {
+  const mobileName = mobileLabel ?? label
+
   return (
     <span className="plan-column-heading">
-      <span>{label}</span>
+      {icon && (
+        <span
+          className={['plan-column-icon', mobileTone ? `is-${mobileTone}` : ''].filter(Boolean).join(' ')}
+          aria-label={mobileName}
+          title={mobileName}
+        >
+          <FontAwesomeIcon icon={icon} aria-hidden="true" />
+        </span>
+      )}
 
-      <span className="plan-column-label-mobile">{mobileLabel ?? label}</span>
+      <span className="plan-column-label">{label}</span>
+
+      {!icon && (
+        <span
+          className={['plan-column-label-mobile', mobileTone ? `is-${mobileTone}` : ''].filter(Boolean).join(' ')}
+          aria-label={mobileName}
+          title={mobileName}
+        >
+          {mobileName}
+        </span>
+      )}
 
       <span className="plan-tooltip-trigger" data-tooltip={help} tabIndex={0} aria-label={help}>
         <FontAwesomeIcon icon={faCircleInfo} />
@@ -1092,6 +1135,40 @@ export default function PlanTable({
   const currentRowIndex = readOnly ? -1 : findCurrentRowIndex(rows)
 
   const [openCellEditor, setOpenCellEditor] = useState<string | null>(null)
+
+  function toggleCellEditor(key: string) {
+    setOpenOverrideTime(null)
+    setOverrideError(null)
+    setOpenCellEditor((current) => (current === key ? null : key))
+  }
+
+  function constrainFloatingElement(element: HTMLElement | null, shiftProperty: string) {
+    if (!element) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      if (!element.isConnected) {
+        return
+      }
+
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth
+      const bounds = element.getBoundingClientRect()
+      const safeInset = 8
+      const maximumLeft = Math.max(safeInset, viewportWidth - bounds.width - safeInset)
+      const constrainedLeft = Math.min(maximumLeft, Math.max(safeInset, bounds.left))
+
+      element.style.setProperty(shiftProperty, `${constrainedLeft - bounds.left}px`)
+    })
+  }
+
+  function constrainActionMenu(menu: HTMLDivElement | null) {
+    constrainFloatingElement(menu, '--plan-action-menu-shift')
+  }
+
+  function constrainActionTooltip(tooltip: HTMLSpanElement | null) {
+    constrainFloatingElement(tooltip, '--plan-action-tooltip-shift')
+  }
 
   const [colourStyle, setColourStyle] = useState<'dots' | 'cells'>(() => {
     try {
@@ -1216,12 +1293,18 @@ export default function PlanTable({
           <thead>
             <tr>
               <th>
-                <ColumnHeading label="Time" help="The start time of this Predbat planning slot." />
+                <ColumnHeading
+                  label="Time"
+                  mobileLabel="Time"
+                  icon={faClock}
+                  help="The start time of this Predbat planning slot."
+                />
               </th>
 
               <th>
                 <ColumnHeading
                   label="Action"
+                  icon={faPlay}
                   help="What Predbat plans to do during this slot. Hover over the action icon for an explanation of why this action was chosen."
                 />
               </th>
@@ -1229,7 +1312,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Import"
-                  mobileLabel="IMP"
+                  mobileLabel="Import"
+                  icon={faArrowDown}
                   help={
                     debugEnabled
                       ? 'The tariff import rate, followed by the effective rate after conversion losses and battery cycling.'
@@ -1241,7 +1325,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Export"
-                  mobileLabel="EXP"
+                  mobileLabel="Export"
+                  icon={faArrowUp}
                   help={
                     debugEnabled
                       ? 'The tariff export rate, followed by the effective rate after conversion losses and battery cycling.'
@@ -1253,6 +1338,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label={debugEnabled ? 'PV (10%)' : 'PV'}
+                  mobileLabel="PV"
+                  icon={faSolarPanel}
                   help={
                     debugEnabled
                       ? 'The main solar forecast, followed by the lower 10% confidence forecast in brackets.'
@@ -1264,6 +1351,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label={debugEnabled ? 'Load (10%)' : 'Load'}
+                  mobileLabel="Load"
+                  icon={faHouse}
                   help={
                     debugEnabled
                       ? 'The main load forecast, followed by the lower 10% confidence forecast in brackets.'
@@ -1294,6 +1383,7 @@ export default function PlanTable({
                 <th>
                   <ColumnHeading
                     label="Car"
+                    icon={faCar}
                     help="Predicted energy used to charge the car during this plan slot."
                   />
                 </th>
@@ -1311,7 +1401,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Target"
-                  mobileLabel="TRGT"
+                  icon={faCrosshairs}
                   help="The battery target Predbat is aiming for during a charge or export action. Charge actions target an upper SOC; export actions target a lower SOC."
                 />
               </th>
@@ -1319,6 +1409,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="SOC"
+                  icon={faBatteryThreeQuarters}
                   help="The predicted battery state of charge at this point in the plan."
                 />
               </th>
@@ -1326,6 +1417,7 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Cost"
+                  mobileLabel={currencyMajor}
                   help="The estimated change in energy cost during this plan slot."
                 />
               </th>
@@ -1333,7 +1425,8 @@ export default function PlanTable({
               <th>
                 <ColumnHeading
                   label="Total"
-                  mobileLabel="TOTL"
+                  mobileLabel={currencyMajor}
+                  mobileTone="blue"
                   help="Predbat's running estimated energy cost at the start of this slot."
                 />
               </th>
@@ -1343,7 +1436,8 @@ export default function PlanTable({
                   <th>
                     <ColumnHeading
                       label="CO₂ intensity"
-                      mobileLabel="CO2"
+                      mobileLabel="CO₂ intensity"
+                      icon={faGaugeSimpleHigh}
                       help="The forecast carbon intensity of grid electricity during this slot, in grams of CO₂ per kWh."
                     />
                   </th>
@@ -1351,7 +1445,9 @@ export default function PlanTable({
                   <th>
                     <ColumnHeading
                       label="CO₂ total"
-                      mobileLabel="CO2 TOTL"
+                      mobileLabel="CO₂ total"
+                      icon={faGaugeSimpleHigh}
+                      mobileTone="blue"
                       help="Predbat's running forecast of net carbon emissions at the start of this slot, in kilograms of CO₂."
                     />
                   </th>
@@ -1429,13 +1525,11 @@ export default function PlanTable({
                           type="button"
                           className={[
                             'plan-action',
-                            'plan-tooltip-trigger',
                             hasMultipleActions ? 'plan-action-multiple' : getActionClass(action),
                             manualOverride ? 'is-manual' : ''
                           ]
                             .filter(Boolean)
                             .join(' ')}
-                          data-tooltip={actionTooltip}
                           aria-expanded={menuOpen}
                           aria-haspopup={!isPast ? 'menu' : undefined}
                           aria-disabled={isPast}
@@ -1449,7 +1543,7 @@ export default function PlanTable({
                             }
 
                             setOverrideError(null)
-
+                            setOpenCellEditor(null)
                             setOpenOverrideTime(menuOpen ? null : row.time)
                           }}
                         >
@@ -1499,11 +1593,19 @@ export default function PlanTable({
                           )}
                         </button>
 
+                        <span ref={constrainActionTooltip} className="plan-action-tooltip" role="tooltip">
+                          {actionTooltip}
+                        </span>
+
                         {menuOpen && (
-                          <div className="plan-action-menu" role="menu">
-                            {reason && <div className="plan-action-menu-reason">{reason}</div>}
+                          <div ref={constrainActionMenu} className="plan-action-menu" role="menu">
+                            <div className="plan-action-menu-reason">{actionTooltip}</div>
 
                             <div className="plan-action-menu-divider" />
+
+                            <div className="plan-action-menu-title">
+                              {new Date(row.time).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} override
+                            </div>
 
                             {OVERRIDE_OPTIONS.map((option) => {
                               const selected = manualOverride === option.action
@@ -1519,7 +1621,10 @@ export default function PlanTable({
                                     void setPlanOverride(row, option.action)
                                   }}
                                 >
-                                  <FontAwesomeIcon icon={option.icon} />
+                                  <FontAwesomeIcon
+                                    icon={option.icon}
+                                    className={option.tone ? `plan-action-menu-icon is-${option.tone}` : 'plan-action-menu-icon'}
+                                  />
 
                                   <span>{option.label}</span>
 
@@ -1579,7 +1684,7 @@ export default function PlanTable({
                       onToggle={() => {
                         const key = `rate:${row.time}:import`
 
-                        setOpenCellEditor((current) => (current === key ? null : key))
+                        toggleCellEditor(key)
                       }}
                       onClose={() => {
                         setOpenCellEditor(null)
@@ -1598,7 +1703,7 @@ export default function PlanTable({
                       onToggle={() => {
                         const key = `rate:${row.time}:export`
 
-                        setOpenCellEditor((current) => (current === key ? null : key))
+                        toggleCellEditor(key)
                       }}
                       onClose={() => {
                         setOpenCellEditor(null)
@@ -1621,7 +1726,7 @@ export default function PlanTable({
                     </td>
 
                     <td
-                      className={['plan-number', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+                      className={['plan-number', 'plan-load', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
                       style={cellColour(row.load_color)}
                     >
                       <span className="plan-value-with-indicator">
@@ -1711,7 +1816,7 @@ export default function PlanTable({
                       onToggle={() => {
                         const key = `target:${row.time}`
 
-                        setOpenCellEditor((current) => (current === key ? null : key))
+                        toggleCellEditor(key)
                       }}
                       onClose={() => {
                         setOpenCellEditor(null)

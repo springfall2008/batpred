@@ -44,6 +44,15 @@ test('timeline uses separate date labels and three-hour time ticks', () => {
   assert.equal(ticks[2].label, '06:00')
 })
 
+test('timeline keeps nearby date labels from overlapping around midnight', () => {
+  const start = new Date(2026, 9, 11, 23, 30).getTime()
+  const ticks = module.exports.buildTimeTicks(start, start + 6 * 60 * 60 * 1000)
+  const dateLabels = ticks.filter((tick) => tick.dateLabel)
+
+  assert.equal(dateLabels.length, 1)
+  assert.match(dateLabels[0].dateLabel, /12 Oct/)
+})
+
 test('SOC hover interpolates the plotted value at the pointer time', () => {
   const points = [{ time: 0, soc: 20 }, { time: 30, soc: 50 }, { time: 60, soc: 40 }]
 
