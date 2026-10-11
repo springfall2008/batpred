@@ -416,12 +416,15 @@ class Output:
     def publish_rates_import(self):
         """
         Publish the import rates
+
+        The low rate sensors come from low_rates_tariff, the tariff's own cheap windows, rather than the
+        plan's charge windows, which a saving session or Axle event can widen to every slot (GH#5050)
         """
         window_str = ""
         # Output rate info
-        if self.low_rates:
+        if self.low_rates_tariff:
             window_n = 0
-            for window in self.low_rates:
+            for window in self.low_rates_tariff:
                 rate_low_start = window["start"]
                 rate_low_end = window["end"]
                 rate_low_average = window["average"]
@@ -527,7 +530,7 @@ class Output:
         self.log("Low import rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.low_rates:
+        if not self.low_rates_tariff:
             self.log("No low rate period found")
             self.dashboard_item(
                 self.prefix + ".low_rate_start",
@@ -566,7 +569,7 @@ class Output:
                 attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
             self.dashboard_item("binary_sensor." + self.prefix + "_low_rate_slot", state="off", attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"})
-        if len(self.low_rates) < 2:
+        if len(self.low_rates_tariff) < 2:
             self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",

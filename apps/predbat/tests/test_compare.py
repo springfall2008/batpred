@@ -64,6 +64,7 @@ def _make_compare():
     cmp.currency_symbols = pb.currency_symbols
     cmp.prefix = pb.prefix
     cmp.comparisons = {}
+    cmp.live_saving_state = None
     return cmp, pb
 
 

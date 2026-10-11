@@ -3397,8 +3397,8 @@ class Octopus:
 
         # Background: '-' where importing is cheap (at or below the planner's own low-rate
         # threshold), '.' where it is not, and '?' where the rate for that block is not known.
-        # Uses the same threshold the planner uses to pick charge windows, so the render agrees
-        # with the decision rather than approximating it.
+        # Uses the planner's tariff low-rate threshold, so the render agrees with the cheap windows it
+        # picks (ahead of a saving session or Axle event the plan may also charge at other tariff rates).
         #
         # The '?' matters: rate_import is rebuilt each cycle and is briefly empty while apps.yaml
         # is re-read, so a missing rate is a real state the render can hit. Drawing those blocks

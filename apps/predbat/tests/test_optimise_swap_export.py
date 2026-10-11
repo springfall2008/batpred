@@ -196,6 +196,29 @@ def run_optimise_swap_export_tests(my_predbat):
     my_predbat.calculate_best_export = True
 
     # ---------------------------------------------------------------------------------------------
+    # Partial combine regression (#5423): moving export time from an earlier window into a later,
+    # trimmed one must shrink the earlier window, never grow it backwards into the slot before it.
+    # Here the slot before is a manual demand override, so growing into it exports through it.
+    # ---------------------------------------------------------------------------------------------
+    now = my_predbat.minutes_now
+    export_window_best = [
+        {"start": now, "end": now + 30, "average": 50.0},
+        {"start": now + 30, "end": now + 60, "average": 50.0},
+        {"start": now + 80, "end": now + 90, "average": 50.0, "start_orig": now + 60},
+    ]
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[100.0, 0.0, 0.0], rate_import=30.0, rate_export=50.0)
+    saved_manual_all_times = my_predbat.manual_all_times
+    my_predbat.manual_all_times = {now}
+    try:
+        my_predbat.optimise_swap_export(0, len(export_window_best))
+    finally:
+        my_predbat.manual_all_times = saved_manual_all_times
+    middle = my_predbat.export_window_best[1]
+    if middle["start"] < now + 30:
+        print("ERROR: partial combine grew window 1 back to {} into the manual slot ending {}, windows {}".format(middle["start"], now + 30, my_predbat.export_window_best))
+        failed = True
+
+    # ---------------------------------------------------------------------------------------------
     # Ordering regression (#4478): the export swap must run after every pass that can enable an
     # export, otherwise the exports the plan pass / optimise_solar add are never
     # considered for deferral and stay pinned at the front of the plan.
