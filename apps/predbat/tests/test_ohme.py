@@ -2560,6 +2560,44 @@ def _test_ohme_run_leaving_intelligent_clears_planned(my_predbat=None):
     assert api.args["octopus_ready_time"] == "select.set_by_hand", f"Expected the hand-set ready time left, got {api.args}"
     assert api.args["octopus_intelligent_slot"] == ["binary_sensor.another_charger"], f"Expected another sensor's wiring left, got {api.args}"
 
+    # Two Intelligent devices on the account, so Octopus has wired a sensor for each car. The whole
+    # list is spent once the tariff has gone, not only the one sensor the completed dispatches came from
+    second_entity = "binary_sensor.predbat_octopus_test2_intelligent_dispatch"
+
+    def start_two_cars(control=False):
+        """An Ohme on Intelligent beside a second Intelligent device, each with a dispatch sensor of Octopus's"""
+        api = _ohme_api_with_octopus(IOG_TARIFF, {"dev1": IOG_DEVICE_OHME, "dev2": IOG_DEVICE_CAR})
+        api.ohme_automatic = True
+        api.ohme_control = control
+        api.args["octopus_intelligent_slot"] = [OCTOPUS_DISPATCH_ENTITY, second_entity]
+        _ohme_run_poll(api, first=True)
+        assert api.slot_source == OCTOPUS_DISPATCH_ENTITY, f"Expected the first Octopus sensor found, got {api.slot_source}"
+        assert api.args["octopus_intelligent_planned_slot"] == [ohme_entity], f"Expected the planned slots from Ohme, got {api.args}"
+        return api
+
+    api = start_two_cars()
+    _ohme_set_tariff(api, "E-1R-COSY-22-12-08-A")
+    assert _ohme_run_poll(api, seconds=120) == [True], "Expected the charger schedule once off Intelligent with two cars wired"
+    assert api.slot_mode == "charger_schedule" and api.charger_slots_blocked is None, f"Expected charger schedule mode, got {api.slot_mode} blocked {api.charger_slots_blocked}"
+    assert api.args["octopus_intelligent_slot"] == ohme_entity, f"Expected the Ohme schedule wired as the plan, got {api.args}"
+    assert api.args["octopus_intelligent_planned_slot"] == [], f"Expected the planned sensor cleared, got {api.args}"
+
+    api = start_two_cars(control=True)
+    _ohme_set_tariff(api, "E-1R-COSY-22-12-08-A")
+    _ohme_run_poll(api, seconds=120)
+    assert api.control_active is True and api.slot_mode is None, f"Expected Predbat-led control with no slot wiring, got {api.control_active} {api.slot_mode}"
+    for arg in ("octopus_intelligent_slot", "octopus_intelligent_planned_slot", "octopus_ready_time", "octopus_charge_limit"):
+        assert api.args[arg] == [], f"Expected {arg} cleared for Predbat-led control with two cars wired, got {api.args[arg]}"
+
+    # A list the completed dispatches were never read from is somebody else's wiring, and is left
+    api = start_two_cars()
+    _ohme_set_tariff(api, "E-1R-COSY-22-12-08-A")
+    other_list = ["binary_sensor.another_charger", "binary_sensor.another_charger_2"]
+    api.args["octopus_intelligent_slot"] = list(other_list)
+    _ohme_run_poll(api, seconds=120)
+    assert api.slot_mode is None, f"Expected the slots left to the other wiring, got {api.slot_mode}"
+    assert api.args["octopus_intelligent_slot"] == other_list, f"Expected another list's wiring left, got {api.args}"
+
     print("PASS: leaving Intelligent cleared the planned slot wiring")
     return 0
 

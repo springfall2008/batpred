@@ -748,8 +748,13 @@ class OhmeAPI(ComponentBase):
         every device is suspended - it is not a plan of anyone's, and left there it would keep the
         car on dispatches that never come. Not so while Octopus drives another device, whose
         dispatches that sensor is about to carry.
+
+        Takes octopus_intelligent_slot as it is set, so a list of several cars as well as one sensor:
+        octopus_dispatch_sensor() reads the first of the list, and the rest are Octopus's dispatch
+        sensors for the same account, spent along with it.
         """
-        return bool(entity_id) and entity_id == self.slot_source_applied and not self.octopus_intelligent and not self.octopus_other_device
+        entities = entity_id if isinstance(entity_id, list) else [entity_id]
+        return bool(self.slot_source_applied) and self.slot_source_applied in entities and not self.octopus_intelligent and not self.octopus_other_device
 
     async def automatic_config_charger_slots(self):
         """
