@@ -858,11 +858,15 @@ class GatewayMQTT(ComponentBase):
         self._debug_dump("RX telemetry", status, raw=data)
 
         if len(status.inverters) == 0:
-            return
-
+            if not (self.gateway_inverter_serial and self._discovery):
+                return
+            # With a serial list the discovered inverters are the site whatever the hub reports,
+            # so a status naming none of them is every one of them unread, not nothing to do
+            # (#5471). It is not fresh data though, so it does not count towards being alive.
+        else:
+            self._last_telemetry_time = time.time()
+            self.update_success_timestamp()
         self._last_status = status
-        self._last_telemetry_time = time.time()
-        self.update_success_timestamp()
 
         self._update_discovery(status)
         self._update_integrated_energy(status)
@@ -1127,10 +1131,12 @@ class GatewayMQTT(ComponentBase):
             "charge": sum(max(inv.battery.power_w, 0) for inv in inverters),
             "discharge": sum(max(-inv.battery.power_w, 0) for inv in inverters),
         }
-        pv_wh = [inv.energy.pv_today_wh for inv in inverters]
+        # By serial and not by slot: auto-config can re-run and change the slots, and a counter
+        # must go on being compared with its own last value
+        pv_wh = {inv.serial: inv.energy.pv_today_wh for inv in inverters}
         # A PV-only inverter's generation is part of the load too. It has no slot, so it is not
         # needed for the site to be complete: one that is away simply adds nothing meanwhile.
-        pv_only_wh = {serial: by_serial[serial].energy.pv_today_wh for serial in self._pv_only_serials if serial in by_serial and by_serial[serial].energy.ByteSize() > 0}
+        pv_wh.update({serial: by_serial[serial].energy.pv_today_wh for serial in self._pv_only_serials if serial in by_serial and by_serial[serial].energy.ByteSize() > 0})
 
         state = self._integrated_energy
         if state is None:
@@ -1151,20 +1157,19 @@ class GatewayMQTT(ComponentBase):
                 today_share = min(max((now - midnight) / (now - previous), 0.0), 1.0)
 
         if previous is None:
-            state["pv"] = [{"base": wh, "high": None, "high_time": 0} for wh in pv_wh]
-            state["pv_only"] = {serial: {"base": wh, "high": None, "high_time": 0} for serial, wh in pv_only_wh.items()}
+            state["pv"] = {serial: {"base": wh, "high": None, "high_time": 0} for serial, wh in pv_wh.items()}
         else:
             elapsed = now - previous
             hours = elapsed / 3600.0
             # Per inverter, so one counter dropping a sample does not hide the others' generation
             pv_rise_limit_wh = GATEWAY_INTEGRATE_MAX_PV_W * hours + GATEWAY_INTEGRATE_PV_STEP_WH
-            pv_rise_wh = sum(self._pv_counter_rise(track, wh, now, pv_rise_limit_wh) for track, wh in zip(state["pv"], pv_wh))
-            pv_only_tracks = state.setdefault("pv_only", {})
-            for serial, wh in pv_only_wh.items():
-                if serial in pv_only_tracks:
-                    pv_rise_wh += self._pv_counter_rise(pv_only_tracks[serial], wh, now, pv_rise_limit_wh)
+            pv_rise_wh = 0.0
+            for serial, wh in pv_wh.items():
+                if serial in state["pv"]:
+                    pv_rise_wh += self._pv_counter_rise(state["pv"][serial], wh, now, pv_rise_limit_wh)
                 else:
-                    pv_only_tracks[serial] = {"base": wh, "high": None, "high_time": 0}
+                    # First seen since the integration began: counted from here on
+                    state["pv"][serial] = {"base": wh, "high": None, "high_time": 0}
             if elapsed <= GATEWAY_INTEGRATE_MAX_GAP_SECONDS:
                 energy = {name: (state["power"][name] + power[name]) / 2.0 * hours * today_share for name in power}
                 for name in energy:
@@ -1796,10 +1801,6 @@ class GatewayMQTT(ComponentBase):
         status = self._last_status
         all_inverters = list(status.inverters)
 
-        if not all_inverters:
-            self.log("Error: GatewayMQTT: no inverters in gateway status")
-            return
-
         # With gateway_inverter_serial set, a listed inverter the hub has reported before is
         # part of the site even when this status leaves it out (#5471). The records are brought
         # up to date here as well as in _process_telemetry(), for a caller that comes straight here.
@@ -1808,6 +1809,10 @@ class GatewayMQTT(ComponentBase):
         reported = set(inv.serial.upper() for inv in all_inverters)
         if serial_set:
             all_inverters += [self._stored_unit(record) for key, record in sorted(self._discovery.items()) if key not in reported]
+
+        if not all_inverters:
+            self.log("Error: GatewayMQTT: no inverters in gateway status")
+            return
 
         # Classify discovered units and route control per GivTCP / GE-Cloud. Neither a
         # GivEnergy Gateway (INVERTER_TYPE_GIVENERGY_GATEWAY) nor a Plant EMS

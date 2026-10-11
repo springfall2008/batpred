@@ -3684,6 +3684,72 @@ class TestGatewayUnitControlBinding:
             assert self._logged(gw, "Error", "CE2225G400", "not being read"), second
             assert gw.non_fatal_error_occurred.call_count == 1, second
 
+    def _empty_status(self):
+        """A status in which the hub names no inverter at all."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_two_ac"
+        status.firmware = "1.0.34"
+        status.schema_version = 1
+        return status
+
+    def test_stored_inverter_is_bound_when_the_hub_reports_no_inverters_at_startup(self):
+        """A single listed inverter with a stored record keeps its slot when the first status names no inverter."""
+        gw = self._listed_gateway(["CE2225G400"], stored=self._STORED_400)
+
+        gw._process_telemetry(self._empty_status().SerializeToString())
+
+        assert gw._auto_configured is True
+        assert gw._args["num_inverters"] == 1
+        assert gw._inverter_slot_serials == ["CE2225G400"]
+        assert gw._states["sensor.predbat_gateway_25g400_soc"] == 0
+        assert gw._states["sensor.predbat_gateway_25g400_battery_capacity"] == 9.5
+        assert self._logged(gw, "Error", "CE2225G400", "not being read")
+        assert gw.non_fatal_error_occurred.call_count == 1
+        # Nothing was read, so the status does not count towards the hub being alive
+        gw.update_success_timestamp.assert_not_called()
+
+    def test_status_with_no_inverters_leaves_configured_inverters_unread(self):
+        """Once configured, a status naming no inverter zeroes the powers, keeps the rest and is an error."""
+        gw = self._listed_gateway(["CE2223G800", "CE2225G400"])
+        healthy = self._two_ac_status("ok")
+        for inv in healthy.inverters:
+            inv.battery.power_w = -3000
+        gw._process_telemetry(healthy.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_23g800_battery_power"] == 3000
+        assert self._errors(gw) == []
+
+        gw._process_telemetry(self._empty_status().SerializeToString())
+
+        assert gw._args["num_inverters"] == 2
+        for suffix in ("23g800", "25g400"):
+            assert gw._states[f"sensor.predbat_gateway_{suffix}_battery_power"] == 0, suffix
+            assert gw._states[f"sensor.predbat_gateway_{suffix}_soc"] == 50, suffix
+        assert self._logged(gw, "Error", "CE2223G800", "CE2225G400", "not being read")
+        assert gw.non_fatal_error_occurred.call_count == 1
+
+        gw._process_telemetry(healthy.SerializeToString())
+        assert gw._states["sensor.predbat_gateway_23g800_battery_power"] == 3000
+        assert self._logged(gw, "Info", "every configured inverter is being read by the hub again")
+
+    def test_status_with_no_inverters_is_ignored_without_a_list_or_a_record(self):
+        """With no serial list, or no inverter discovered yet, a status naming no inverter is ignored as before."""
+        for listed, stored in (([], None), (["CE2225G400"], None)):
+            gw = self._listed_gateway(listed, stored=stored)
+
+            gw._process_telemetry(self._empty_status().SerializeToString())
+
+            assert gw._last_status is None, listed
+            assert gw._auto_configured is False, listed
+            assert gw._args == {}, listed
+
+        # No list: inverters come and go, so one that goes is not held on to
+        gw = self._listed_gateway([])
+        gw._process_telemetry(self._two_ac_status("ok").SerializeToString())
+        healthy = gw._last_status
+        gw._process_telemetry(self._empty_status().SerializeToString())
+        assert gw._last_status is healthy
+        assert self._errors(gw) == []
+
     def test_changed_serial_list_wins_over_stored_discovery(self):
         """A stored record for a serial no longer in the list is not used: the list is the setting."""
         gw = self._listed_gateway(["CE2223G800"], stored=self._STORED_400)
@@ -6926,6 +6992,63 @@ class TestIntegratePower:
 
         self._feed(gw, status(self.BASE_TIME + 1800, 3500))
         assert approx_equal(gw._integrated_energy["load_wh"], 500.0)
+
+    def test_pv_only_inverter_promoted_to_a_slot_keeps_its_generation(self):
+        """Auto-config re-running and changing the slots does not lose or mix up any inverter's generation."""
+        gw = self._make_gateway()
+        # The PV-only inverter sorts first, so once it has a slot every slot index moves
+        gw.gateway_inverter_serial = ["AA0000P001", "CE2223G800"]
+
+        def status(timestamp, pv_only_wh, has_battery=False):
+            built = self._status(timestamp, grid_w=0, battery_w=(0,), pv_today_wh=1000, serials=("CE2223G800",))
+            inv = built.inverters.add()
+            inv.type = pb.INVERTER_TYPE_GIVENERGY
+            inv.serial = "AA0000P001"
+            inv.primary = True
+            inv.connected = True
+            inv.pv.power_w = 1000
+            inv.energy.pv_today_wh = pv_only_wh
+            if has_battery:
+                inv.battery.soc_percent = 40
+                inv.battery.capacity_wh = 5000
+            return built
+
+        self._feed(gw, status(self.BASE_TIME, 3000))
+        self._feed(gw, status(self.BASE_TIME + 600, 3200))
+        assert gw._pv_only_serials == ("AA0000P001",)
+        assert approx_equal(gw._integrated_energy["load_wh"], 200.0)
+
+        # Its battery readings arrive: _process_telemetry integrates, then re-runs auto-config
+        self._feed(gw, status(self.BASE_TIME + 1200, 3300, has_battery=True))
+        gw.automatic_config()
+        assert gw._inverter_slot_serials == ["AA0000P001", "CE2223G800"]
+        assert gw._pv_only_serials == ()
+        assert approx_equal(gw._integrated_energy["load_wh"], 300.0)
+
+        self._feed(gw, status(self.BASE_TIME + 1800, 3500, has_battery=True))
+        assert approx_equal(gw._integrated_energy["load_wh"], 500.0)
+
+    def test_inverter_given_a_slot_later_has_its_generation_counted_from_then(self):
+        """An inverter that joins the slots after the integration began is counted from its first status, not left out."""
+        gw = self._make_gateway()
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=0, battery_w=(0,), pv_today_wh=1000, serials=("CE2225G400",)))
+        self._feed(gw, self._status(self.BASE_TIME + 600, grid_w=0, battery_w=(0,), pv_today_wh=1100, serials=("CE2225G400",)))
+        assert approx_equal(gw._integrated_energy["load_wh"], 100.0)
+
+        def both(timestamp, first_wh, second_wh):
+            built = self._status(timestamp, grid_w=0, battery_w=(0, 0), pv_today_wh=first_wh)
+            built.inverters[1].energy.pv_today_wh = second_wh
+            return built
+
+        # CE2223G800 appears and takes slot 0; its counter already stands at 7000
+        gw._last_status = both(self.BASE_TIME + 1200, 7000, 1200)
+        gw.automatic_config()
+        assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"]
+
+        self._feed(gw, both(self.BASE_TIME + 1200, 7000, 1200))
+        assert approx_equal(gw._integrated_energy["load_wh"], 200.0)
+        self._feed(gw, both(self.BASE_TIME + 1800, 7300, 1250))
+        assert approx_equal(gw._integrated_energy["load_wh"], 550.0)
 
     def test_import_and_load_are_integrated_from_power(self):
         """6 kW of import for 6 minutes is 0.6 kWh; 3 kW of that went into a battery, so load is 0.3 kWh."""
