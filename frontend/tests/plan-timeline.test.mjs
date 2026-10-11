@@ -8,6 +8,7 @@ import ts from 'typescript'
 const require = createRequire(import.meta.url)
 const source = readFileSync(new URL('../src/components/PlanVisual.tsx', import.meta.url), 'utf8')
 const currencySource = readFileSync(new URL('../src/utils/currency.ts', import.meta.url), 'utf8')
+const planSource = readFileSync(new URL('../src/utils/plan.ts', import.meta.url), 'utf8')
 
 function compile(value) {
   return ts.transpileModule(value, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 } }).outputText
@@ -16,6 +17,9 @@ function compile(value) {
 const currencyModule = { exports: {} }
 vm.runInNewContext(compile(currencySource), { module: currencyModule, exports: currencyModule.exports })
 
+const planModule = { exports: {} }
+vm.runInNewContext(compile(planSource), { module: planModule, exports: planModule.exports })
+
 const module = { exports: {} }
 vm.runInNewContext(compile(source.replace('function buildTimelineEvents(', 'export function buildTimelineEvents(')), {
   module,
@@ -23,6 +27,7 @@ vm.runInNewContext(compile(source.replace('function buildTimelineEvents(', 'expo
   require(specifier) {
     if (specifier.endsWith('.css')) return {}
     if (specifier.endsWith('/utils/currency')) return currencyModule.exports
+    if (specifier.endsWith('/utils/plan')) return planModule.exports
     return require(specifier)
   }
 })
@@ -77,4 +82,54 @@ test('timeline splits a continuous charge action around a Power Up session', () 
   assert.equal(events[1].rateEventType, 'octopus_power_up')
   assert.equal(events[1].start.toISOString(), '2026-10-11T10:00:00.000Z')
   assert.equal(events[1].end.toISOString(), '2026-10-11T11:00:00.000Z')
+})
+
+test('timeline identifies a demand row held for a charging car', () => {
+  const row = (time, reasons = []) => ({
+    time,
+    state: 'Demand',
+    state_target: '',
+    soc_percent: 50,
+    import_rate: 20,
+    export_rate: 12,
+    car_charging: 0,
+    carbon_change: 0,
+    reasons
+  })
+
+  const events = module.exports.buildTimelineEvents({
+    rows: [
+      row('2026-10-11T10:30:00+01:00', [{ code: 'hold_for_car', params: {} }]),
+      row('2026-10-11T11:00:00+01:00')
+    ],
+    currency_symbols: ['£', 'p'],
+    reason_templates: {}
+  }, 30 * 60 * 1000, 50)
+
+  assert.equal(events[0].action, 'hold-car')
+})
+
+test('timeline preserves a car hold before an export within one slot', () => {
+  const row = (time, reasons = []) => ({
+    time,
+    state: 'Exp',
+    state_target: '',
+    soc_percent: 50,
+    import_rate: 20,
+    export_rate: 12,
+    car_charging: 0,
+    carbon_change: 0,
+    reasons
+  })
+
+  const events = module.exports.buildTimelineEvents({
+    rows: [
+      row('2026-10-11T10:30:00+01:00', [{ code: 'hold_for_car_before_export', params: { split_time: '10:45' } }]),
+      row('2026-10-11T11:00:00+01:00')
+    ],
+    currency_symbols: ['£', 'p'],
+    reason_templates: {}
+  }, 30 * 60 * 1000, 50)
+
+  assert.equal(events[0].action, 'hold-car-export')
 })

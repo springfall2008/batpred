@@ -54,6 +54,10 @@ function loadPlanTable() {
         return loadTypeScriptModule(currencyUtilityPath)
       }
 
+      if (specifier.endsWith('/utils/plan')) {
+        return loadTypeScriptModule(planUtilityPath)
+      }
+
       if (specifier === './NordPoolIcon') {
         return (props) => React.createElement('svg', { ...props, 'data-icon': 'nord-pool' })
       }
@@ -168,6 +172,38 @@ test('a split charge and export slot displays both planned actions', () => {
   assert.match(html, /plan-action-badge plan-action-charge/)
   assert.match(html, /plan-action-badge plan-action-export/)
   assert.match(html, />Charge<\/span>/)
+  assert.match(html, />Export<\/span>/)
+})
+
+test('a Demand row with a car-hold reason displays Hold for Car', () => {
+  const html = renderPlanTable(false, {
+    ...plan,
+    rows: [{
+      ...row,
+      state: 'Demand',
+      reasons: [{ code: 'hold_for_car', params: {} }]
+    }]
+  })
+
+  assert.match(html, /plan-action-neutral/)
+  assert.match(html, />Hold for Car<\/span>/)
+  assert.doesNotMatch(html, />Demand<\/span>/)
+})
+
+test('a car hold followed by export displays both actions in one slot', () => {
+  const html = renderPlanTable(false, {
+    ...plan,
+    rows: [{
+      ...row,
+      state: 'Exp',
+      state_text: '&#128663;',
+      state2_text: 'Exp&searr;',
+      reasons: [{ code: 'hold_for_car_before_export', params: { split_time: '14:15' } }]
+    }]
+  })
+
+  assert.match(html, /plan-action-multiple/)
+  assert.match(html, />Hold for Car<\/span>/)
   assert.match(html, />Export<\/span>/)
 })
 
@@ -301,7 +337,7 @@ test('carbon columns appear only when carbon planning is enabled', () => {
 })
 
 test('plan view selection maps history and baseline data', () => {
-  const { selectPlanView, shouldShowPlanDebug } = loadTypeScriptModule(planUtilityPath)
+  const { getEffectivePlanState, selectPlanView, shouldShowPlanDebug } = loadTypeScriptModule(planUtilityPath)
   const history = { rows: ['history'] }
   const baseline = { rows: ['baseline'] }
 
@@ -312,4 +348,6 @@ test('plan view selection maps history and baseline data', () => {
   assert.equal(shouldShowPlanDebug('plan', { ...plan, plan_debug: true }, false), true)
   assert.equal(shouldShowPlanDebug('plan', plan, true), true)
   assert.equal(shouldShowPlanDebug('yesterday', { ...plan, plan_debug: true }, true), false)
+  assert.equal(getEffectivePlanState({ state: 'Demand', reasons: [{ code: 'hold_for_car', params: {} }] }), 'Hold for car')
+  assert.equal(getEffectivePlanState({ state: 'Demand', reasons: [] }), 'Demand')
 })

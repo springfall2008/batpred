@@ -6,11 +6,24 @@ import { test } from 'node:test'
 import ts from 'typescript'
 
 const source = fs.readFileSync(new URL('../src/utils/overview.ts', import.meta.url), 'utf8')
+const planSource = fs.readFileSync(new URL('../src/utils/plan.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 }
 }).outputText
+const compiledPlan = ts.transpileModule(planSource, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 }
+}).outputText
+const planModule = { exports: {} }
+vm.runInNewContext(compiledPlan, { module: planModule, exports: planModule.exports })
 const module = { exports: {} }
-vm.runInNewContext(compiled, { module, exports: module.exports })
+vm.runInNewContext(compiled, {
+  module,
+  exports: module.exports,
+  require(specifier) {
+    if (specifier === './plan') return planModule.exports
+    throw new Error(`Unexpected module: ${specifier}`)
+  }
+})
 
 const { formatCarStatus, formatOverviewAction, formatWeatherStatus, getOverviewActions, getOverviewCarbonValues, getOverviewPowerTone, getOverviewSceneKey, getOverviewWeatherEffect, mapOverviewImagePoint } = module.exports
 
@@ -74,6 +87,28 @@ test('current charging action includes its final charge target', () => {
   const actions = getOverviewActions(rows, new Date('2026-10-03T09:10:00Z'))
   assert.equal(actions.current.label, 'Charge')
   assert.equal(actions.current.limit, 17)
+})
+
+test('car-hold reasons take precedence over a raw Demand state', () => {
+  const rows = [
+    { time: '2026-10-03T09:00:00Z', state: 'Demand', state_target: '', reasons: [{ code: 'hold_for_car', params: {} }] },
+    { time: '2026-10-03T09:30:00Z', state: 'Demand', state_target: '', reasons: [] }
+  ]
+  const actions = getOverviewActions(rows, new Date('2026-10-03T09:10:00Z'))
+
+  assert.equal(actions.current.label, 'Hold for Car')
+  assert.equal(actions.next.label, 'Demand')
+})
+
+test('a car hold before export remains visible in overview actions', () => {
+  const rows = [
+    { time: '2026-10-03T09:00:00Z', state: 'Exp', state_target: '', reasons: [{ code: 'hold_for_car_before_export', params: {} }] },
+    { time: '2026-10-03T09:30:00Z', state: 'Demand', state_target: '', reasons: [] }
+  ]
+  const actions = getOverviewActions(rows, new Date('2026-10-03T09:10:00Z'))
+
+  assert.equal(actions.current.label, 'Hold for Car → Export')
+  assert.equal(actions.next.label, 'Demand')
 })
 
 test('zero-watt overview headlines use the muted tone', () => {

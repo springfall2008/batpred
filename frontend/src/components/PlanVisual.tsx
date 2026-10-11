@@ -19,6 +19,7 @@ import {
 
 import type { Plan } from '../types/plan'
 import { resolveCurrencySymbols } from '../utils/currency'
+import { getEffectivePlanState, hasCarHoldBeforeExport } from '../utils/plan'
 
 import './PlanVisual.css'
 
@@ -36,6 +37,7 @@ type TimelineAction =
   | 'hold-export'
   | 'freeze-export'
   | 'hold-car'
+  | 'hold-car-export'
   | 'hold-iboost'
   | 'no-charge'
   | 'demand'
@@ -159,6 +161,9 @@ function getTimelineBlockLabel(action: TimelineAction, width: number): string | 
     case 'hold-car':
       return 'Car'
 
+    case 'hold-car-export':
+      return 'Car → Export'
+
     case 'hold-iboost':
       return 'iBoost'
 
@@ -219,6 +224,12 @@ function getTimelineAction(state: string): TimelineAction {
   }
 }
 
+function getTimelineActionForRow(row: PlanRow): TimelineAction {
+  return hasCarHoldBeforeExport(row)
+    ? 'hold-car-export'
+    : getTimelineAction(getEffectivePlanState(row))
+}
+
 function getActionLabel(action: TimelineAction) {
   switch (action) {
     case 'charge':
@@ -241,6 +252,9 @@ function getActionLabel(action: TimelineAction) {
 
     case 'hold-car':
       return 'Hold for Car'
+
+    case 'hold-car-export':
+      return 'Hold for Car → Export'
 
     case 'hold-iboost':
       return 'Hold for iBoost'
@@ -296,6 +310,7 @@ function getActionIcon(action?: TimelineAction) {
       return <FontAwesomeIcon icon={faSnowflake} />
 
     case 'hold-car':
+    case 'hold-car-export':
       return <FontAwesomeIcon icon={faCar} />
 
     case 'hold-iboost':
@@ -427,7 +442,7 @@ function buildTimelineEvents(
 
   let startIndex = 0
 
-  let currentAction = getTimelineAction(rows[0].state)
+  let currentAction = getTimelineActionForRow(rows[0])
 
   let currentRateEventType = getRateEventType(rows[0])
 
@@ -562,7 +577,7 @@ function buildTimelineEvents(
   }
 
   for (let index = 1; index < rows.length; index += 1) {
-    const action = getTimelineAction(rows[index].state)
+    const action = getTimelineActionForRow(rows[index])
 
     const rateEventType = getRateEventType(rows[index])
 
@@ -595,6 +610,9 @@ function getEventTitle(event: TimelineEvent) {
 
     case 'hold-export':
       return event.target !== null ? `Hold Export at ${event.target}%` : 'Hold Export'
+
+    case 'hold-car-export':
+      return 'Hold for Car, then Export'
 
     case 'freeze-charge':
       return event.target !== null ? `Freeze Charge ${event.target}%` : 'Freeze Charge'
@@ -643,6 +661,7 @@ function getRelevantRate(event: TimelineEvent, currencyMinor: string) {
     case 'export':
     case 'hold-export':
     case 'freeze-export':
+    case 'hold-car-export':
       return formatRateRange(event.exportRateMin, event.exportRateMax, currencyMinor)
 
     default:
