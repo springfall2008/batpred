@@ -3455,7 +3455,9 @@ class Fetch:
 
         The window in progress is left out: a cloud-polled load sensor can be many minutes behind the charger's, so it
         reads short there. A window with no load at all is skipped - a house always draws something, so a flat stretch
-        is the load sensor missing data (the history is padded, so missing minutes read as no increment), not evidence.
+        is missing data (before the history starts, or where minute_data() padded over a reset), not evidence. A gap
+        inside the history is not flat: minute_data() interpolates across it, so a load-sensor outage of some hours over
+        a charge spreads that charge thinly across the gap and can still count.
         """
         window = CAR_ENERGY_LOAD_CHECK_WINDOW
         lag = CAR_ENERGY_LOAD_CHECK_LAG
@@ -3482,7 +3484,8 @@ class Fetch:
         from #5317). Warned once, and not again until no window shows it: the windows move with now, so a borderline count
         can dip below the threshold and back from one cycle to the next.
 
-        With the switch On, Predbat subtracts car_charging_energy from the load history and, for an Octopus Intelligent car
+        With the switch On, Predbat subtracts car_charging_energy from the load history (when car_charging_hold is also On,
+        the default) and, for an Octopus Intelligent car
         without a car_charging_now sensor, reads low house load as the car not charging. Against a load sensor that excludes
         the charger, the first empties the load history and the second cancels dispatches that are really charging.
         """

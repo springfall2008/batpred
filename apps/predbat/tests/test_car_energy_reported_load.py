@@ -47,6 +47,9 @@ def _setup(my_predbat, load_includes_car, lag=0, sessions=((60, 180),), car_kw=C
     my_predbat.car_charging_energy = _incrementing(lambda minute: car_kw / 60 if _charging(minute, sessions) else 0.0, history)
 
     def load(minute):
+        """
+        The house load the load sensor saw in the minute that many minutes ago, with the car in it when it includes the charger.
+        """
         if load_gap and load_gap[0] <= minute < load_gap[1]:
             return 0.0
         car = car_kw if (load_includes_car and _charging(minute + lag, sessions)) else 0.0
