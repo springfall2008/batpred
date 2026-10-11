@@ -2368,7 +2368,19 @@ class OctopusAPI(ComponentBase):
                     # Only 403 is treated this way: Kraken reports genuine auth problems as HTTP
                     # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
                     # body comes from the edge rather than the API.
-                    if response.status == 403 and is_edge_block_body(await response.text()):
+                    # Log the response in full first: the WAF return and the retry below both leave before the
+                    # response logger further down. A second-attempt 401/403 is not logged here: its body is logged
+                    # by async_read_response_retry below
+                    error_text = await response.text()
+                    self.log_gate.log(
+                        self.log,
+                        ("response", request_context),
+                        "{} {}".format(response.status, error_text),
+                        ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, error_text)],
+                        None,
+                        always_full=True,
+                    )
+                    if response.status == 403 and is_edge_block_body(error_text):
                         self.consecutive_edge_blocks += 1
                         if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
                             record_api_call("octopus", False, "rate_limit")
