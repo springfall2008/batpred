@@ -10,6 +10,7 @@
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import copy
+import time
 import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -665,6 +666,8 @@ def test_sungrow_failed_device_read_falls_back_instead_of_freezing():
         failed = True
     plant = copy.deepcopy(PLANT_REALTIME)
     plant["device_point_list"][0]["p83252"] = "50"
+    # Long enough since the last good read that this is a dead endpoint, not a blip.
+    client._device_read_time[uuid] = time.time() - 16 * 60
     for _ in range(2):
         with _mock_post([_envelope(plant), _envelope(None, code="E00000")]):
             run_async_local(client.refresh_power())
@@ -685,12 +688,37 @@ def test_sungrow_failed_device_read_falls_back_instead_of_freezing():
     # Answering again clears the episode, so the next failure is reported afresh.
     with _mock_post([_envelope(plant), _envelope(DEVICE_REALTIME)]):
         run_async_local(client.refresh_power())
+    if abs(time.time() - client._device_read_time.get(uuid, 0)) > 1:
+        print(f"ERROR: a good device read stamped {client._device_read_time.get(uuid)}, expected now")
+        failed = True
+    client._device_read_time[uuid] = time.time() - 16 * 60
     with _mock_post([_envelope(plant), _envelope(None, code="E00000")]):
         run_async_local(client.refresh_power())
     if len([message for message in client.log_messages if "own telemetry could not be read" in message]) != 2:
         print("ERROR: a second episode of failed device reads was not logged")
         failed = True
     assert not failed, "test_sungrow_failed_device_read_falls_back_instead_of_freezing"
+
+
+def test_sungrow_one_failed_device_read_keeps_the_same_source():
+    """A single failed read must not flip the daily counters to the plant's figures and back."""
+    failed = False
+    client = _polled_client()
+    uuid = client.device_list[0]
+    if abs(time.time() - client._device_read_time.get(uuid, 0)) > 1:
+        print(f"ERROR: the fixture's own poll stamped {client._device_read_time.get(uuid)}, expected now")
+        failed = True
+    before = {leaf: client.energy(uuid, leaf) for leaf in ("load_today", "import_today", "export_today", "pv_today")}
+    with _mock_post([_envelope(PLANT_REALTIME), _envelope(None, code="E00000")]):
+        run_async_local(client.refresh_power())
+    after = {leaf: client.energy(uuid, leaf) for leaf in before}
+    if after != before:
+        print(f"ERROR: one failed device read changed the counters from {before} to {after}")
+        failed = True
+    if uuid not in client.device_values:
+        print("ERROR: the last good device read was discarded after a single failure")
+        failed = True
+    assert not failed, "test_sungrow_one_failed_device_read_keeps_the_same_source"
 
 
 def test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours():
@@ -1455,6 +1483,7 @@ def run_sungrow_api_tests(my_predbat):
         ("telemetry_prefers_device", test_sungrow_telemetry_prefers_the_device_read_over_the_plant_read),
         ("telemetry_falls_back", test_sungrow_telemetry_falls_back_when_the_device_read_fails),
         ("device_read_failure_not_frozen", test_sungrow_failed_device_read_falls_back_instead_of_freezing),
+        ("device_read_blip_keeps_source", test_sungrow_one_failed_device_read_keeps_the_same_source),
         ("energy_units", test_sungrow_energy_counters_convert_watt_hours_to_kilowatt_hours),
         ("battery_capacity", test_sungrow_battery_capacity_sums_the_two_halves),
         ("battery_rate_max", test_sungrow_battery_rate_max_prefers_the_override),

@@ -9,6 +9,7 @@
 """Tests for the Sungrow control decision and the dispatch-then-poll write path."""
 
 import json
+import time
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from unittest.mock import patch
 from sungrow_const import (
@@ -998,6 +999,34 @@ def test_forced_charge_window_is_cleared_on_release_and_tracked_for_change():
     assert not failed, "test_forced_charge_window_is_cleared_on_release_and_tracked_for_change"
 
 
+def test_reconcile_stamps_the_decision_only_when_it_decides():
+    """The heartbeat only holds a command decided recently, so each real decision is stamped.
+
+    A reconcile stopped at its gate decided nothing, and must not make a command look supervised.
+    """
+    failed = False
+    client = _controlled_client()
+    client.set_mock_clock(3 * 60)
+    _capture_dispatch(client)
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, export={"power": 5000})
+    client.local_schedule[UUID] = schedule
+    run_async_local(client.publish_schedule_settings_ha(UUID))
+    run_async_local(client.get_schedule_settings_ha(UUID))
+    client.control_active.add(UUID)
+    run_async_local(client._reconcile_control(UUID))
+    stamp = client._decision_time.get(UUID)
+    if stamp is None or abs(time.time() - stamp) > 1:
+        print(f"ERROR: the reconcile stamped the decision as {stamp}, expected now")
+        failed = True
+    client.state["switch.predbat_set_read_only"] = "on"
+    client._decision_time.pop(UUID, None)
+    run_async_local(client._reconcile_control(UUID))
+    if UUID in client._decision_time:
+        print("ERROR: a reconcile stopped by read-only was stamped as a decision")
+        failed = True
+    assert not failed, "test_reconcile_stamps_the_decision_only_when_it_decides"
+
+
 def run_sungrow_control_tests(my_predbat):
     """Run all Sungrow control-logic tests."""
     failed = False
@@ -1048,6 +1077,7 @@ def run_sungrow_control_tests(my_predbat):
         ("read_only_button", test_the_write_button_sends_nothing_in_read_only),
         ("read_only_release", test_read_only_releases_a_held_inverter_but_changes_nothing_else),
         ("forced_window_cleared", test_forced_charge_window_is_cleared_on_release_and_tracked_for_change),
+        ("decision_stamped", test_reconcile_stamps_the_decision_only_when_it_decides),
     ]:
         try:
             if fn():

@@ -206,6 +206,7 @@ def test_heartbeat_loop_beats_for_every_held_device_then_exits():
     failed = False
     client = _controlled_client()
     client.control_held.add(UUID)
+    client._decision_time[UUID] = time.time()
     beats = []
 
     async def record_beat(uuid):
@@ -447,30 +448,37 @@ def test_heartbeat_loop_survives_a_beat_that_raises():
     """One unexpected exception must not end the task that keeps control of the other batteries.
 
     The raising beat is an unconfirmed one, so that inverter's control is dropped; what must not
-    happen is the exception unwinding the loop before the next inverter has had its beat.
+    happen is the exception unwinding the loop before the next inverter has had its beat, or
+    before a later pass has beaten for the inverter that is still held.
     """
     failed = False
     client = _controlled_client()
     other = "111222"
     client.control_held.update([UUID, other])
+    client._decision_time[UUID] = time.time()
+    client._decision_time[other] = time.time()
     calls = []
 
     async def flaky_beat(uuid):
-        """Raise on the first beat, then succeed and stop the loop."""
+        """Raise on the first beat, then succeed, stopping the loop on the third call."""
         calls.append(uuid)
         if len(calls) == 1:
             raise ValueError("response was not JSON")
-        client._heartbeat_stop = True
+        if len(calls) >= 3:
+            client._heartbeat_stop = True
         return True
 
     client.send_heartbeat = flaky_beat
     with patch("asyncio.sleep", new=_no_sleep()):
         run_async_local(client._heartbeat_loop())
-    if len(calls) != 2:
-        print(f"ERROR: the loop made {len(calls)} beat(s); an exception ended it")
+    if len(calls) != 3:
+        print(f"ERROR: the loop made {len(calls)} beat(s), expected 3; an exception ended it or the next pass did not beat")
         failed = True
     elif calls[0] in client.control_held or calls[1] not in client.control_held:
         print(f"ERROR: after {calls[0]} raised and {calls[1]} landed, held={client.control_held}")
+        failed = True
+    elif calls[2] != calls[1] or calls[2] == calls[0]:
+        print(f"ERROR: the pass after the exception beat for {calls[2]}, expected the surviving inverter {calls[1]}")
         failed = True
     if not any("heartbeat loop stopped" in message for message in client.log_messages):
         print("ERROR: the loop did not reach its own exit")
@@ -483,6 +491,7 @@ def test_missed_beats_drop_control_so_it_is_re_established():
     failed = False
     client = _controlled_client()
     client.control_held.add(UUID)
+    client._decision_time[UUID] = time.time()
     client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
     # The pacing clock goes with control: the re-establishing write must not wait it out.
     client.last_write_time[UUID] = time.time()
@@ -516,6 +525,7 @@ def test_one_missed_beat_then_success_cannot_leave_control_half_held():
     failed = False
     client = _controlled_client()
     client.control_held.add(UUID)
+    client._decision_time[UUID] = time.time()
     client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
     beats = []
 
@@ -560,6 +570,66 @@ def test_a_read_only_pause_releases_explicitly():
     assert not failed, "test_a_read_only_pause_releases_explicitly"
 
 
+def test_heartbeat_hands_back_a_command_nobody_is_deciding():
+    """A command that run() has stopped re-deciding must be released, not kept alive."""
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    client.applied_command[UUID] = {"command": SUNGROW_CMD_CHARGE}
+    client._decision_time[UUID] = time.time() - 400
+    tasks = []
+    beats = []
+
+    async def fake_dispatch(uuid, param_list, set_type=0, task_name="Predbat"):
+        """Record the task name and report it as landed."""
+        tasks.append(task_name)
+        return param_list
+
+    async def record_beat(uuid):
+        """Record any beat sent for a command nobody is deciding."""
+        beats.append(uuid)
+        client._heartbeat_stop = True
+        return True
+
+    client.dispatch_params = fake_dispatch
+    client.send_heartbeat = record_beat
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if beats:
+        print("ERROR: a heartbeat was sent for a command that had not been decided for 400s")
+        failed = True
+    if tasks != ["Predbat release"] or UUID in client.control_held:
+        print(f"ERROR: the stale command was not handed back: tasks={tasks} held={client.control_held}")
+        failed = True
+    if client.applied_command.get(UUID, {}).get("command") == SUNGROW_CMD_CHARGE:
+        print("ERROR: the charge command is still cached as applied")
+        failed = True
+    assert not failed, "test_heartbeat_hands_back_a_command_nobody_is_deciding"
+
+
+def test_heartbeat_beats_for_a_recently_decided_command():
+    """In normal running the decision is seconds old and the beat goes out."""
+    failed = False
+    client = _controlled_client()
+    client.control_held.add(UUID)
+    client._decision_time[UUID] = time.time()
+    beats = []
+
+    async def record_beat(uuid):
+        """Record the beat and stop the loop."""
+        beats.append(uuid)
+        client._heartbeat_stop = True
+        return True
+
+    client.send_heartbeat = record_beat
+    with patch("asyncio.sleep", new=_no_sleep()):
+        run_async_local(client._heartbeat_loop())
+    if beats != [UUID]:
+        print(f"ERROR: beats {beats}, expected one for the freshly decided command")
+        failed = True
+    assert not failed, "test_heartbeat_beats_for_a_recently_decided_command"
+
+
 def run_sungrow_heartbeat_tests(my_predbat):
     """Run all Sungrow EMS heartbeat tests."""
     failed = False
@@ -583,6 +653,8 @@ def run_sungrow_heartbeat_tests(my_predbat):
         ("missed_beats_drop_control", test_missed_beats_drop_control_so_it_is_re_established),
         ("one_miss_then_success", test_one_missed_beat_then_success_cannot_leave_control_half_held),
         ("read_only_releases", test_a_read_only_pause_releases_explicitly),
+        ("stale_decision_releases", test_heartbeat_hands_back_a_command_nobody_is_deciding),
+        ("fresh_decision_beats", test_heartbeat_beats_for_a_recently_decided_command),
     ]:
         try:
             if fn():

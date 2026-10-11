@@ -141,6 +141,7 @@ from sungrow_const import (
     SUNGROW_FORCED_EVERYDAY,
     SUNGROW_HEARTBEAT_DEFAULT_SECONDS,
     SUNGROW_HEARTBEAT_MAX_MISSES,
+    SUNGROW_DECISION_STALE_SECONDS,
     SUNGROW_ESS_POINTS,
     SUNGROW_ESS_ENERGY,
     SUNGROW_ERROR_CODES,
@@ -296,6 +297,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # Inverters whose own realtime read is currently failing, so the fallback to plant
         # figures is logged once per episode rather than once a minute.
         self._device_read_failing = set()
+        # When each inverter's own telemetry was last read successfully.
+        self._device_read_time = {}
         # What was read back of each inverter's own feed-in limitation (10012-10014).
         self.device_limits = {}
         self.local_schedule = {}
@@ -316,6 +319,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         self._heartbeat_task = None
         self._heartbeat_stop = False
         self._beat_failures = {}
+        # When each inverter's command was last decided; the heartbeat will not hold one open past it.
+        self._decision_time = {}
         # Per-device "does this device accept parameter configuration" verdict from
         # paramSettingCheck. Cached because it is a property of the hardware and the account
         # tier, not a transient error, and re-probing it every cycle spends a call to be told
@@ -716,7 +721,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         """Refresh the telemetry tier. True when at least one plant answered.
 
         The device read is optional - not every account and model serves it - so its failure
-        does not fail the tier. It does discard that inverter's previous device values.
+        does not fail the tier. That inverter's previous device values are kept through a brief
+        failure and discarded once the last good read is SUNGROW_TELEMETRY_STALE_MINUTES old.
         """
         any_ok = False
         for ps_id in list(self.plant_list):
@@ -726,18 +732,28 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 await asyncio.sleep(self.api_delay)
         for uuid in list(self.device_list):
             if await self.fetch_device_realtime(uuid):
+                self._device_read_time[uuid] = time.time()
                 self._device_read_failing.discard(uuid)
             else:
-                # Drop what the last good read left behind. telemetry() and energy() prefer
-                # the device read, and the plant read above still marks this tier fresh, so
-                # keeping it would freeze SoC at its last value with the component reporting
-                # healthy. Without it they fall back to the plant read - which, for a plant
-                # with more than one inverter, deliberately gives None for power and energy.
-                self.device_values.pop(uuid, None)
-                self.device_energy.pop(uuid, None)
-                if uuid not in self._device_read_failing:
-                    self._device_read_failing.add(uuid)
-                    self.log("Info: Sungrow {} own telemetry could not be read; plant-level figures are being used until it answers again".format(self._serial(uuid)))
+                # A brief failure KEEPS what the last good read left behind. telemetry() and
+                # energy() prefer the device read, so dropping it for one poll publishes the
+                # plant's daily counters and the next poll publishes the device's again. The
+                # two sources never agree exactly, and Predbat's history cleaner counts every
+                # rise in an incrementing sensor as energy and ignores every fall - so each
+                # flip there and back adds the difference to load, import, export and PV.
+                #
+                # A long failure DISCARDS it. The plant read above still marks this tier fresh,
+                # so keeping the values for ever would freeze SoC at its last value with the
+                # component reporting healthy. Without them telemetry() and energy() fall back
+                # to the plant read - which, for a plant with more than one inverter,
+                # deliberately gives None for power and energy.
+                last = self._device_read_time.get(uuid)
+                if last is None or (time.time() - last) > SUNGROW_TELEMETRY_STALE_MINUTES * 60:
+                    self.device_values.pop(uuid, None)
+                    self.device_energy.pop(uuid, None)
+                    if uuid not in self._device_read_failing:
+                        self._device_read_failing.add(uuid)
+                        self.log("Info: Sungrow {} own telemetry could not be read; plant-level figures are being used until it answers again".format(self._serial(uuid)))
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
         if any_ok:
@@ -1543,6 +1559,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # Control is only marked as HELD once the task has actually completed. Starting the
         # heartbeat for a task that never landed would beat for a mode the inverter is not in.
         self.control_held.add(uuid)
+        # Control has just been taken on a fresh decision, whoever called.
+        self._decision_time[uuid] = time.time()
         # A fresh hold starts with a clean count; a miss from an earlier hold is not this one's.
         self._beat_failures.pop(uuid, None)
         self._ensure_heartbeat()
@@ -1577,6 +1595,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         written, paced by sungrow_min_write_interval like any other change of plan.
         """
         self._beat_failures.pop(uuid, None)
+        self._decision_time.pop(uuid, None)
         was_held = uuid in self.control_held
         self.control_held.discard(uuid)
         release = {"command": SUNGROW_CMD_RELEASE, "soc_lower": int(clamp_range(SUNGROW_PARAM_SOC_LOWER, as_float(reserve, 0.0)))}
@@ -1634,6 +1653,9 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         """
         if uuid not in self.control_active or self._is_read_only() or not self.control_enable:
             return
+        # Stamped past the gate only: a reconcile stopped there decided nothing. This is what
+        # the heartbeat reads to tell a command that is still supervised from one that is not.
+        self._decision_time[uuid] = time.time()
         try:
             await self.apply_schedule(uuid)
         except Exception as error:
@@ -1654,6 +1676,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             self.control_held.discard(uuid)
             self.applied_command.pop(uuid, None)
             self._beat_failures.pop(uuid, None)
+            self._decision_time.pop(uuid, None)
             # The inverter's state is now unknown, so the write that re-establishes control
             # must not wait out sungrow_min_write_interval. This cannot become a retry storm:
             # a re-establishing write that fails stamps the clock again in _write_params.
@@ -1691,6 +1714,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         Control is dropped there and then, and the next run() cycle writes the full command
         again. Nothing else is escalated: the inverter's own response to missing beats is a
         revert to self-consumption, which is the safe state.
+
+        A beat only goes out for a command that has been decided recently. run() is the only
+        place a command is decided, and it is not always running once a minute: in
+        ComponentBase's start-up backoff it is called at gaps of up to two hours. If no decision
+        has been made for an inverter within SUNGROW_DECISION_STALE_SECONDS, nobody is checking
+        that its command is still wanted, so it is handed back here instead of being kept alive
+        past the end of its window.
         """
         interval = heartbeat_send_interval(self.heartbeat_interval)
         self.log("Info: Sungrow heartbeat loop started, beating every {:.0f}s for a declared interval of {}s".format(interval, self.heartbeat_interval))
@@ -1713,6 +1743,17 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 self._drop_control(list(self.control_held), "heartbeat paused")
                 break
             for uuid in list(self.control_held):
+                decided = self._decision_time.get(uuid)
+                if decided is None or (time.time() - decided) > SUNGROW_DECISION_STALE_SECONDS:
+                    # Nobody has decided this command recently, so nobody is checking that it
+                    # is still wanted. Hand the inverter back rather than hold it open.
+                    self.log("Warn: Sungrow {} command has not been re-decided for over {}s (the component cycle is not running); handing the inverter back to self-consumption".format(self._serial(uuid), SUNGROW_DECISION_STALE_SECONDS))
+                    try:
+                        await self.release_control(uuid, int(as_float(self.local_schedule.get(uuid, {}).get("reserve"), 0)))
+                    except Exception as error:
+                        self.log("Warn: Sungrow could not release {}: {}; it will revert when the heartbeat lapses".format(self._serial(uuid), error))
+                    self._drop_control([uuid] if uuid in self.control_held else [], "its command was no longer being decided")
+                    continue
                 try:
                     confirmed = await self.send_heartbeat(uuid)
                 except asyncio.CancelledError:
@@ -1739,7 +1780,7 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         """
         results = await self.dispatch_params(uuid, [param_entry(SUNGROW_PARAM_HEARTBEAT, scale_for_write(SUNGROW_PARAM_HEARTBEAT, heartbeat_declared_interval(self.heartbeat_interval)))], task_name="Predbat heartbeat")
         if results is None:
-            self.log("Warn: Sungrow heartbeat for {} was not confirmed; if the beats keep failing the inverter will revert to self-consumption".format(self._serial(uuid)))
+            self.log("Warn: Sungrow heartbeat for {} was not confirmed; the inverter may revert to self-consumption, so control will be re-established on the next cycle".format(self._serial(uuid)))
             return False
         return True
 

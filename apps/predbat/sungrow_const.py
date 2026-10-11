@@ -442,6 +442,11 @@ SUNGROW_HEARTBEAT_MIN_SEND_SECONDS = 30
 # success resets the count while the inverter has already reverted, and the command is never
 # sent again.
 SUNGROW_HEARTBEAT_MAX_MISSES = 1
+# How long a held command stays valid without being decided again. run() re-decides every
+# minute in normal running, so five minutes without a decision means run() is not being
+# called - the start-up backoff, or a stalled component - and the heartbeat must stop holding
+# a command nobody is supervising. Deliberately longer than any single run() cycle can take.
+SUNGROW_DECISION_STALE_SECONDS = 300
 
 # -----------------------------------------------------------------------------
 # Measuring points
