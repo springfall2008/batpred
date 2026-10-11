@@ -2110,8 +2110,8 @@ Add the following automations to `automations.yaml` (or configure via the UI):
     from: "off"
     to: "on"
   conditions:
-  # Don't write a 0kW limit just because the input number is briefly unavailable. A real 0 W rate
-  # (Predbat holding the battery) is re-applied like any other
+  # Skip quietly, rather than fail with a template error, while the input number is briefly
+  # unavailable. A real 0 W rate (Predbat holding the battery) is re-applied like any other
   - condition: template
     value_template: "{{ states('input_number.charge_rate') | is_number }}"
   actions:
@@ -2124,7 +2124,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       entity_id: number.sigen_plant_ess_max_charging_limit
     data:
       # The plant-level rated power caps the request; if that sensor is briefly unavailable the
-      # 99 fallback means no cap rather than a 0kW limit
+      # 99 fallback means no cap, rather than a template error and no write at all
       value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
         states(''sensor.sigen_plant_ess_rated_charging_power'') | float(99)] | min}}'
   # restart, so a rate change that arrives during the wait replaces the one waiting
@@ -2200,8 +2200,10 @@ Note that it will also undo a deliberate switch-off - disable the watchdog first
     - condition: state
       entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
       state: "off"
-    # If you take part in Axle VPP events, uncomment this so the watchdog doesn't take control back
-    # from Axle in the middle of an event:
+    # If you take part in Axle VPP events through Predbat's Axle integration, uncomment this so the
+    # watchdog doesn't take control back from Axle in the middle of an event. The entity exists only
+    # when that integration is enabled (change "predbat" if you use a different prefix); with it
+    # missing, the condition never passes and the watchdog never runs:
     # - condition: state
     #   entity_id: binary_sensor.predbat_axle_event
     #   state: "off"
