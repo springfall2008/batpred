@@ -97,6 +97,9 @@ def test_run_all_restores_state(my_predbat):
     switched plans whatever metric_min_improvement_plan said (seen live on 9 Oct 2026: 300.97p against 30.71p).
     """
     names = COMPARE_RESTORED_STATE + COMPARE_RESTORED_COPIES
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
+    # A valid plan with no re-plan pending, so plan_valid must come back True whatever earlier tests left behind
+    my_predbat.plan_valid, my_predbat.update_pending = True, False
     original = {name: getattr(my_predbat, name) for name in names}
     saved_compare_list = my_predbat.args.get("compare_list")
     my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A"}, {"id": "tariff_b", "name": "Tariff B"}]
@@ -134,6 +137,7 @@ def test_run_all_restores_state(my_predbat):
     finally:
         for name, value in original.items():
             setattr(my_predbat, name, value)
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
         if saved_compare_list is None:
             my_predbat.args.pop("compare_list", None)
         else:
@@ -210,6 +214,7 @@ def test_run_all_restores_when_config_restore_raises(my_predbat):
     item = my_predbat.config_index.get("metric_battery_cycle")
     saved_compare_list = my_predbat.args.get("compare_list")
     saved_preclip, saved_value = my_predbat.plan_preclip, item["value"]
+    saved_plan_valid, saved_pending = my_predbat.plan_valid, my_predbat.update_pending
     plan_in_force = ([18.08], [{"start": 0, "end": 90, "average": 7.62}], [], [])
     my_predbat.plan_preclip = plan_in_force
     my_predbat.args["compare_list"] = [{"id": "tariff_a", "name": "Tariff A", "config": {"metric_battery_cycle": 9.0}}]
@@ -245,6 +250,7 @@ def test_run_all_restores_when_config_restore_raises(my_predbat):
     finally:
         del my_predbat.fetch_config_options
         my_predbat.plan_preclip = saved_preclip
+        my_predbat.plan_valid, my_predbat.update_pending = saved_plan_valid, saved_pending
         item["value"] = saved_value
         if saved_compare_list is None:
             my_predbat.args.pop("compare_list", None)
