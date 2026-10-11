@@ -3687,13 +3687,11 @@ def _test_ohme_run_release_retried_after_failure(my_predbat=None):
     api.control_max_charge_started = True
     api.charger_control_state = {api.charger_control_chargers()[0][0]: False}
 
-    # Onto Intelligent, and the hand-back fails half way: control has stood down, the charger is not released
+    # Onto Intelligent, and the hand-back fails half way: control has stood down, the charger is not
+    # released - and the refusal is a warning, not a failed poll, so the rest of the poll still runs
     _ohme_set_tariff(api, "E-1R-INTELLI-VAR-22-10-14-A")
-    try:
-        _ohme_run_poll(api, seconds=120)
-        assert False, "Expected the failed hand-back to raise"
-    except ApiException:
-        pass
+    assert _ohme_run_poll(api, seconds=120) == [False], "Expected the poll to publish despite the refused hand-back"
+    assert any("Handing the charger back failed" in msg for msg in api.log_messages), f"Expected a warning, got {api.log_messages}"
     assert api.charger_control_active is False, "Expected control to have stood down"
     assert list(api.charger_control_state.values()) == [False], "Expected the charger still recorded as held"
 

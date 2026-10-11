@@ -550,14 +550,19 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # poll rather than only on the change, as charger_control_release() forgets the charger last -
         # a hand-back that failed part way is tried again until the charger really is released
         if not self.charger_control_active and self.charger_control_state:
-            if octopus_intelligent:
-                # Octopus drives this charger: hand it over without starting a charge outside a dispatch
-                self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, handing the charger to Octopus")
-                await self.charger_control_hand_over_all()
-            else:
-                # Octopus drives the car: nobody drives the charger, so a stop is undone
-                self.log("Info: Ohme API: Predbat no longer drives the charger, releasing it")
-                await self.charger_control_release()
+            try:
+                if octopus_intelligent:
+                    # Octopus drives this charger: hand it over without starting a charge outside a dispatch
+                    self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, handing the charger to Octopus")
+                    await self.charger_control_hand_over_all()
+                else:
+                    # Octopus drives the car: nobody drives the charger, so a stop is undone
+                    self.log("Info: Ohme API: Predbat no longer drives the charger, releasing it")
+                    await self.charger_control_release()
+            except ApiException as exc:
+                # As in run()'s control tick: a refused command must not cost the rest of the poll, and
+                # the charger is still held, so the next poll tries again
+                self.log("Warn: Ohme API: Handing the charger back failed: {}".format(exc))
 
         if octopus_intelligent:
             slot_mode = SLOT_MODE_INTELLIGENT
