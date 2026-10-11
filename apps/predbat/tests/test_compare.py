@@ -19,9 +19,11 @@ Covers:
 """
 
 import inspect
+import os
+import tempfile
 from unittest.mock import MagicMock, patch
 
-from compare import Compare
+from compare import Compare, valid_compare_list
 from const import MINUTE_WATT
 
 
@@ -719,30 +721,41 @@ def test_compare(my_predbat):
         print("PASS T26: only a tariff reusing the live import rates keeps the live dispatch markers")
 
     # ------------------------------------------------------------------
-    # T27: get_tariff_id() returns None (with a warning) for a compare_list
-    #      entry with no id, and the real id string otherwise (#5472 - run_all()
-    #      used to index tariff["id"] directly, raising KeyError every cycle; a
-    #      crash there also left compare_active stuck on, re-triggering the
-    #      comparison - and the crash - every 5-minute cycle)
+    # T27: valid_compare_list() keeps only the entries run_all() can compare -
+    #      skipping, with a warning naming the entry's position, one that isn't a
+    #      dict, has no id, repeats an earlier id or has no name - and turns a
+    #      numeric id into a string (#5472 - run_all() used to index tariff["id"]
+    #      directly, raising KeyError every cycle, and a numeric id still crashed
+    #      publish_data() building the sensor name)
     # ------------------------------------------------------------------
-    cmp, pb = _make_compare()
     logged = []
-    cmp.log = lambda msg: logged.append(msg)
+    entries = [
+        "not_a_dict",
+        {"name": "No Id Tariff"},
+        {"id": "  ", "name": "Blank Id Tariff"},
+        {"id": "agile", "name": "Agile"},
+        {"id": "agile", "name": "Agile Again"},
+        {"id": "no_name"},
+        {"id": 2024, "name": "Numeric Id Tariff"},
+    ]
+    kept = valid_compare_list(entries, log=logged.append)
+    kept_ids = [entry["id"] for entry in kept]
+    skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
 
-    no_id_result = cmp.get_tariff_id({"name": "No Id Tariff"})
-    has_id_result = cmp.get_tariff_id({"id": "has_id", "name": "Has Id Tariff"})
-
-    if no_id_result is not None:
-        print("ERROR T27: get_tariff_id() should return None for an entry with no id, got {}".format(no_id_result))
+    if kept_ids != ["agile", "2024"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile' and '2024' (as a string), got {}".format(kept_ids))
         failed += 1
-    elif not any("No Id Tariff" in msg for msg in logged):
-        print("ERROR T27: get_tariff_id() should log a warning naming the id-less entry, got {}".format(logged))
+    elif skipped_positions != [1, 2, 3, 5, 6]:
+        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5 and 6, got {}".format(logged))
         failed += 1
-    elif has_id_result != "has_id":
-        print("ERROR T27: get_tariff_id() should return the real id for an entry that has one, got {}".format(has_id_result))
+    elif kept[0] is entries[3] or entries[6]["id"] != 2024:
+        print("ERROR T27: valid_compare_list() must return copies, not rewrite the user's compare_list in place")
+        failed += 1
+    elif valid_compare_list(None) != [] or valid_compare_list([{"id": 0, "name": "Zero"}]) != [{"id": "0", "name": "Zero"}]:
+        print("ERROR T27: valid_compare_list() should accept a missing list and an id of 0")
         failed += 1
     else:
-        print("PASS T27: get_tariff_id() returns None and warns for an id-less entry, the real id otherwise")
+        print("PASS T27: valid_compare_list() skips malformed entries with a positioned warning and normalises ids to strings")
 
     # ------------------------------------------------------------------
     # T28: run_all() skips an id-less compare_list entry and still compares the
@@ -760,7 +773,7 @@ def test_compare(my_predbat):
     cmp.select_best = lambda compare_list, results: None
     cmp.save_yaml = lambda: saved_comparisons.append(dict(cmp.comparisons))
     cmp.publish_data = lambda: None
-    compare_list = [{"name": "No Id Tariff"}, {"id": "valid", "name": "Valid Tariff"}]
+    compare_list = [{"name": "No Id Tariff"}, "not_a_dict", {"id": "valid", "name": "Valid Tariff"}, {"id": "valid", "name": "Duplicate Tariff"}, {"id": 2024, "name": "Numeric Id Tariff"}]
     real_get_arg = my_predbat.get_arg
 
     def fake_get_arg(key, default=None, *args, **kwargs):
@@ -777,16 +790,16 @@ def test_compare(my_predbat):
         run_all_error = exc
 
     if run_all_error is not None:
-        print("ERROR T28: run_all() raised {!r} on a compare_list with an id-less entry".format(run_all_error))
+        print("ERROR T28: run_all() raised {!r} on a compare_list with malformed entries".format(run_all_error))
         failed += 1
-    elif run_single_ids != ["valid"]:
-        print("ERROR T28: only the valid tariff should reach run_single(), got {}".format(run_single_ids))
+    elif run_single_ids != ["valid", "2024"]:
+        print("ERROR T28: only the valid tariffs should reach run_single(), ids as strings, got {}".format(run_single_ids))
         failed += 1
-    elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid"}:
-        print("ERROR T28: only the valid tariff's result should be persisted, got {}".format(saved_comparisons))
+    elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid", "2024"}:
+        print("ERROR T28: only the valid tariffs' results should be persisted, keyed by string id, got {}".format(saved_comparisons))
         failed += 1
     else:
-        print("PASS T28: run_all() skips an id-less entry and compares and persists the valid one")
+        print("PASS T28: run_all() skips malformed entries and compares and persists the valid ones by string id")
 
     # ------------------------------------------------------------------
     # T29: run_comparison() clears compare_active even when run_all() raises -
@@ -802,6 +815,7 @@ def test_compare(my_predbat):
             exposed.append(value)
         return real_expose_config(name, value, *args, **kwargs)
 
+    prior_compare_active = my_predbat.get_arg("compare_active", False)
     raising_comparison = MagicMock()
     raising_comparison.run_all.side_effect = KeyError("id")
     raised = False
@@ -810,6 +824,9 @@ def test_compare(my_predbat):
             my_predbat.run_comparison()
         except KeyError:
             raised = True
+    compare_active_after = my_predbat.get_arg("compare_active", False)
+    # Shared fixture: put the flag back as the suite had it, so test order can't matter (#5079)
+    my_predbat.expose_config("compare_active", prior_compare_active)
 
     if not raised:
         print("ERROR T29: run_comparison() should let run_all()'s exception propagate")
@@ -817,11 +834,42 @@ def test_compare(my_predbat):
     elif exposed != [True, False]:
         print("ERROR T29: compare_active should be set then cleared despite the exception, got {}".format(exposed))
         failed += 1
-    elif my_predbat.get_arg("compare_active", False):
+    elif compare_active_after:
         print("ERROR T29: compare_active is still on after run_all() raised")
         failed += 1
     else:
         print("PASS T29: run_comparison() clears compare_active even when run_all() raises")
+
+    # ------------------------------------------------------------------
+    # T30: load_yaml() turns a numeric result key saved before ids were
+    #      normalised back into a string, so publish_data() can build the
+    #      sensor name and the result still matches its compare_list entry (#5472)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    published = []
+    pb.get_arg = lambda key, default=None: [{"id": 2024, "name": "Numeric Id Tariff"}] if key == "compare_list" else default
+    cmp.dashboard_item = lambda entity_id, **kwargs: published.append(entity_id)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with open(os.path.join(temp_dir, "comparisons.yaml"), "w") as f:
+            f.write("comparisons:\n  2024:\n    name: Numeric Id Tariff\n    cost: 1.0\n    metric: 1.0\n")
+        cmp.config_root = temp_dir
+        try:
+            cmp.load_yaml()
+            load_error = None
+        except Exception as exc:
+            load_error = exc
+
+    if load_error is not None:
+        print("ERROR T30: load_yaml() raised {!r} on a numeric result key".format(load_error))
+        failed += 1
+    elif list(cmp.comparisons.keys()) != ["2024"] or not cmp.comparisons["2024"].get("best"):
+        print("ERROR T30: the numeric key should load as '2024' and be matched as the best tariff, got {}".format(cmp.comparisons))
+        failed += 1
+    elif published != ["predbat.compare_tariff_2024"]:
+        print("ERROR T30: expected sensor predbat.compare_tariff_2024 to be published, got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T30: load_yaml() normalises a numeric result key to a string and publishes it")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))

@@ -27,6 +27,39 @@ import copy
 # 3. Consider Octopus API key to access current tariff info and switch links
 
 
+def compare_entry_problem(entry, seen_ids):
+    """Return why a compare_list entry can't be compared, or None if it can (#5472)."""
+    if not isinstance(entry, dict):
+        return "must be a dictionary with an id and a name"
+    raw_id = entry.get("id")
+    entry_id = "" if raw_id is None else str(raw_id)
+    if not entry_id.strip():
+        return "requires a non-empty 'id'"
+    if entry_id in seen_ids:
+        return "has a duplicate id '{}'".format(entry_id)
+    if not entry.get("name"):
+        return "('{}') requires a non-empty 'name'".format(entry_id)
+    return None
+
+
+def valid_compare_list(compare_list, log=None):
+    """Return the compare_list entries that can be compared, with ids as strings, logging each one skipped (#5472)."""
+    valid = []
+    seen_ids = set()
+    for index, entry in enumerate(compare_list or []):
+        problem = compare_entry_problem(entry, seen_ids)
+        if problem:
+            if log:
+                log("Warn: Compare, compare_list entry {} {}, skipping it".format(index + 1, problem))
+            continue
+        # Results, sensor names and the web page are all keyed by the id as a string, so an
+        # unquoted numeric id in apps.yaml must not reach them as an int
+        entry_id = str(entry["id"])
+        seen_ids.add(entry_id)
+        valid.append(dict(entry, id=entry_id))
+    return valid
+
+
 class Compare:
     """Tariff comparison engine.
 
@@ -483,12 +516,14 @@ class Compare:
                 try:
                     data = yaml.safe_load(f)
                     if data:
-                        self.comparisons = data.get("comparisons", {})
+                        # str() keys: a numeric id saved before ids were normalised (#5472) would
+                        # otherwise break publish_data() and never match its compare_list entry again
+                        self.comparisons = {str(tariff_id): result for tariff_id, result in (data.get("comparisons") or {}).items()}
                 except yaml.YAMLError as exc:
                     self.log("Error loading comparisons: {}".format(exc))
 
         if self.comparisons:
-            compare_list = self.pb.get_arg("compare_list", [])
+            compare_list = valid_compare_list(self.pb.get_arg("compare_list", []))
             self.select_best(compare_list, self.comparisons)
             self.publish_data()
 
@@ -539,7 +574,7 @@ class Compare:
         """
         Update HA sensors only
         """
-        compare_list = self.pb.get_arg("compare_list", [])
+        compare_list = valid_compare_list(self.pb.get_arg("compare_list", []))
         if not compare_list:
             return
 
@@ -592,20 +627,12 @@ class Compare:
             if my_predbat.car_charging_planned[car_n] and my_predbat.car_charging_exclusive[car_n]:
                 break
 
-    def get_tariff_id(self, tariff):
-        """Return a compare_list entry's id, or None and a warning if it has none (#5472)."""
-        tariff_id = tariff.get("id")
-        if not tariff_id:
-            self.log("Warn: Compare tariff {} has no id, skipping - add an 'id:' line to this compare_list entry".format(tariff.get("name", "")))
-            return None
-        return tariff_id
-
     def run_all(self, debug=False, fetch_sensor=True):
         """
         Compare a comparison in prices across multiple energy tariffs and report results
         take care not to destroy the state of the system for the primary settings
         """
-        compare_list = self.pb.get_arg("compare_list", [])
+        compare_list = valid_compare_list(self.pb.get_arg("compare_list", []), log=self.log)
         if not compare_list:
             return
 
@@ -680,9 +707,7 @@ class Compare:
 
         try:
             for tariff in compare_list:
-                tariff_id = self.get_tariff_id(tariff)
-                if not tariff_id:
-                    continue
+                tariff_id = tariff["id"]
                 prior = results.get(tariff_id, {})
                 if prior:
                     prior_date = prior.get("date", "")[:10]
