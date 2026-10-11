@@ -2404,7 +2404,7 @@ class OctopusAPI(ComponentBase):
                     ("response", request_context),
                     "{} {}".format(response.status, body_text),
                     ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, body_text)],
-                    lambda when: "OctopusAPI: GraphQL response for {} (status {}) unchanged since logged in full at {}, {} characters".format(request_context, response.status, when, len(body_text)),
+                    lambda when: "OctopusAPI: GraphQL response for {} (status {}) same as logged in full at {}, {} characters".format(request_context, response.status, when, len(body_text)),
                     always_full=failed,
                 )
 
@@ -3951,7 +3951,7 @@ class Octopus:
 
         # The slot list is re-derived every plan but rarely changes, so log it only when it does, and at least hourly
         if slot_lines:
-            self.io_slot_log_gate.log(self.log, ("slots", car_n), "\n".join(slot_lines), slot_lines, lambda when: "Octopus: Intelligent slots for car {} unchanged since logged in full at {}, {} half-hour slot lines".format(car_n, when, len(slot_lines)))
+            self.io_slot_log_gate.log(self.log, ("slots", car_n), "\n".join(slot_lines), slot_lines, lambda when: "Octopus: Intelligent slots for car {} same as logged in full at {}, {} half-hour slot lines".format(car_n, when, len(slot_lines)))
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):

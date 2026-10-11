@@ -655,7 +655,7 @@ def run_rate_add_io_slots_log_test(my_predbat, midnight_utc, time_format):
             print("ERROR: the first slot list should be logged in full, got {}".format(first))
             failed = True
         repeat = run(slots)
-        if len(repeat) != 1 or "unchanged since logged in full at" not in repeat[0] or "1 half-hour slot lines" not in repeat[0]:
+        if len(repeat) != 1 or "same as logged in full at" not in repeat[0] or "1 half-hour slot lines" not in repeat[0]:
             print("ERROR: an unchanged slot list should be one line, got {}".format(repeat))
             failed = True
         changed = [dict(slots[0], charge_in_kwh=3.0)]

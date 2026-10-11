@@ -89,7 +89,7 @@ async def test_octopus_logging(my_predbat):
     await api.async_graphql_query("query { account }", "test-logging", returns_data=True)
     repeat = "\n".join(log_lines)
     brief_request = "Making GraphQL request test-logging to " in repeat and "(query as logged in full at" in repeat
-    brief_response = "GraphQL response for test-logging (status 200) unchanged since logged in full" in repeat
+    brief_response = "GraphQL response for test-logging (status 200) same as logged in full" in repeat
     if "A-LOG-12345" in repeat or "query { account }" in repeat or not brief_request or not brief_response:
         print("ERROR: a repeated query and response should be logged briefly, got {}".format(log_lines))
         failed = True
@@ -121,7 +121,7 @@ async def test_octopus_logging(my_predbat):
     await api.async_graphql_query("query { device(id: 2) }", "test-device", returns_data=True)
     log_lines.clear()
     await api.async_graphql_query("query { device(id: 1) }", "test-device", returns_data=True)
-    if not any("(query as logged in full at" in line for line in log_lines) or not any("unchanged since logged in full" in line for line in log_lines):
+    if not any("(query as logged in full at" in line for line in log_lines) or not any("same as logged in full" in line for line in log_lines):
         print("ERROR: a repeated query should be logged briefly even when another query shares its context, got {}".format(log_lines))
         failed = True
 
