@@ -52,13 +52,17 @@ HA_RESTARTING_STATUSES = (502, 503, 504)
 HA_RETRY_SECONDS = 5
 HA_RETRY_MAX_SECONDS = 30
 
-# requests errors that mean ha_url or ha_key is malformed rather than Home Assistant being down
-HA_CONFIG_ERRORS = (
+# requests errors that are not Home Assistant being down, so waiting will not fix them: a malformed ha_url or ha_key
+# (e.g. a trailing newline), a redirect loop, or a body we cannot encode (InvalidJSONError; its JSONDecodeError
+# subclass, a reply we cannot decode, is caught before these in api_call())
+HA_NOT_OUTAGE_ERRORS = (
     requests.exceptions.InvalidURL,
     requests.exceptions.MissingSchema,
     requests.exceptions.InvalidSchema,
     requests.exceptions.InvalidHeader,
     requests.exceptions.URLRequired,
+    requests.exceptions.TooManyRedirects,
+    requests.exceptions.InvalidJSONError,
 )
 
 
@@ -1307,8 +1311,8 @@ class HAInterface(ComponentBase):
             if track:
                 self.ha_unavailable("connection error from {}".format(endpoint))
             data = None
-        except HA_CONFIG_ERRORS:
-            # A malformed ha_url or ha_key (e.g. a trailing newline) is not an outage and waiting will not fix it, so let it fail loudly as before
+        except HA_NOT_OUTAGE_ERRORS:
+            # Not an outage and waiting will not fix it, so let it fail loudly as before
             raise
         except requests.exceptions.RequestException as e:
             # Anything else requests raises while Home Assistant is going down, e.g. a connection reset part way through the body

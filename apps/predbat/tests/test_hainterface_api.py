@@ -169,7 +169,7 @@ def test_hainterface_api_call_json_decode_error(my_predbat=None):
 
         # Verify an outage has been recorded
         if ha_interface.outage.since is None:
-            print("ERROR: unavailable_since should be set")
+            print("ERROR: outage.since should be set")
             failed += 1
         else:
             print("✓ outage recorded")
@@ -199,7 +199,7 @@ def test_hainterface_api_call_timeout(my_predbat=None):
 
         # Verify an outage has been recorded
         if ha_interface.outage.since is None:
-            print("ERROR: unavailable_since should be set")
+            print("ERROR: outage.since should be set")
             failed += 1
         else:
             print("✓ outage recorded")
@@ -229,7 +229,7 @@ def test_hainterface_api_call_read_timeout(my_predbat=None):
 
         # Verify an outage has been recorded
         if ha_interface.outage.since is None:
-            print("ERROR: unavailable_since should be set")
+            print("ERROR: outage.since should be set")
             failed += 1
         else:
             print("✓ outage recorded")
@@ -343,7 +343,7 @@ def test_hainterface_api_call_outage_cleared(my_predbat=None):
         mock_get.return_value = create_mock_requests_response(200, {"result": "success"})
         ha_interface.api_call("/api/states")
         if ha_interface.outage.since is not None:
-            print("ERROR: unavailable_since should be cleared by a successful call")
+            print("ERROR: outage.since should be cleared by a successful call")
             failed += 1
         else:
             print("✓ outage cleared on success")
@@ -691,26 +691,31 @@ def test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat=None)
 
 
 def test_hainterface_api_call_config_error_not_outage(my_predbat=None):
-    """Test api_call() lets a malformed ha_url/ha_key error escape rather than recording it as an outage"""
-    print("\n=== Testing HAInterface api_call() configuration error ===")
+    """Test api_call() lets errors that are not Home Assistant being down (bad ha_url/ha_key, redirect loop, unencodable body) escape rather than recording an outage"""
+    print("\n=== Testing HAInterface api_call() errors that are not an outage ===")
     failed = 0
 
-    mock_base = MockBase()
-    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+    cases = [
+        ("get", requests.exceptions.InvalidHeader("Invalid leading whitespace, reserved character(s), or return character(s) in header value")),
+        ("get", requests.exceptions.TooManyRedirects("Exceeded 30 redirects.")),
+        ("post", requests.exceptions.InvalidJSONError("Out of range float values are not JSON compliant")),
+    ]
+    for method, error in cases:
+        mock_base = MockBase()
+        ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+        with patch("ha.requests." + method) as mock_call:
+            mock_call.side_effect = error
+            raised = False
+            try:
+                ha_interface.api_call("/api/states/sensor.test", data_in={"state": 1} if method == "post" else None, post=method == "post")
+            except type(error):
+                raised = True
 
-    with patch("ha.requests.get") as mock_get:
-        mock_get.side_effect = requests.exceptions.InvalidHeader("Invalid leading whitespace, reserved character(s), or return character(s) in header value")
-        raised = False
-        try:
-            ha_interface.api_call("/api/states")
-        except requests.exceptions.InvalidHeader:
-            raised = True
-
-    if not raised or ha_interface.outage.since is not None:
-        print(f"ERROR: expected the error to escape without an outage, got raised={raised} / {ha_interface.outage.since}")
-        failed += 1
-    else:
-        print("✓ configuration error escaped and was not an outage")
+        if not raised or ha_interface.outage.since is not None:
+            print(f"ERROR: expected {type(error).__name__} to escape without an outage, got raised={raised} / {ha_interface.outage.since}")
+            failed += 1
+        else:
+            print(f"✓ {type(error).__name__} escaped and was not an outage")
 
     return failed
 
