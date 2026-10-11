@@ -43,5 +43,6 @@ export type PowerFlowData = {
     power: number | null
     status: string | null
     energy_today: number | null
+    internal_temperature: number | null
   } | null
 }
