@@ -137,6 +137,17 @@ async def test_octopus_logging(my_predbat):
         print("ERROR: the request behind a repeated error should be logged in full beside it, got {}".format(log_lines))
         failed = True
 
+    # A status 200 with no usable body (unreadable JSON, a rate limit) or no data is a failure too: the request and
+    # the response are logged in full beside it, even when they repeat
+    for bad_body, context in [(None, "test-no-body"), ({"other": 1}, "test-no-data")]:
+        api.async_read_response_retry = AsyncMock(return_value=bad_body)
+        await api.async_graphql_query("query { empty }", context, returns_data=True)
+        log_lines.clear()
+        await api.async_graphql_query("query { empty }", context, returns_data=True)
+        if not any("query { empty }" in line for line in log_lines) or not any("GraphQL response for {} (status 200): {}".format(context, bad_body) in line for line in log_lines):
+            print("ERROR: a repeated response with no data should be logged in full with its request, got {}".format(log_lines))
+            failed = True
+
     # The token must not leak through any of the later lines either
     if secret_token in logged_again or secret_token in repeat:
         print("ERROR: JWT token leaked on a repeat or re-log")
