@@ -194,6 +194,31 @@ function formatOverrideTime(value: string) {
   return `${day} ${time}`
 }
 
+/*
+ * Let a mobile bottom sheet paint before opening its keyboard. Focusing an
+ * input during the same render as the sheet can leave the sheet behind the
+ * keyboard in embedded Home Assistant views until the user types.
+ */
+function useDelayedSheetInputFocus(open: boolean) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      inputRef.current?.focus()
+    }, 120)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [open])
+
+  return inputRef
+}
+
 type RateType = 'import' | 'export'
 
 function getManualRateOverride(slotMinute: number, type: RateType, overrides: PlanOverrides) {
@@ -242,6 +267,7 @@ function RateCell({
   const [error, setError] = useState<string | null>(null)
 
   const controlRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useDelayedSheetInputFocus(open)
 
   useEffect(() => {
     if (!open) {
@@ -443,7 +469,7 @@ function RateCell({
                   inputMode="decimal"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
-                  autoFocus
+                  ref={inputRef}
                   disabled={saving}
                 />
 
@@ -506,6 +532,7 @@ function LoadCell({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const controlRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useDelayedSheetInputFocus(open)
 
   useEffect(() => {
     if (!open) {
@@ -629,7 +656,7 @@ function LoadCell({
                   inputMode="decimal"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
-                  autoFocus
+                  ref={inputRef}
                   disabled={saving}
                 />
 
@@ -675,6 +702,7 @@ function TargetCell({
   onOverrideSubmitted
 }: TargetCellProps) {
   const controlRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useDelayedSheetInputFocus(open)
 
   const [value, setValue] = useState('')
 
@@ -862,7 +890,7 @@ function TargetCell({
                   inputMode="numeric"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
-                  autoFocus
+                  ref={inputRef}
                   disabled={saving}
                 />
 
@@ -1332,13 +1360,22 @@ export default function PlanTable({
       document.documentElement.style.setProperty('--plan-mobile-keyboard-offset', `${offset}px`)
     }
 
+    function updateAfterKeyboardAnimation() {
+      updateKeyboardOffset()
+      requestAnimationFrame(updateKeyboardOffset)
+      window.setTimeout(updateKeyboardOffset, 150)
+      window.setTimeout(updateKeyboardOffset, 350)
+    }
+
     updateKeyboardOffset()
     viewport.addEventListener('resize', updateKeyboardOffset)
     viewport.addEventListener('scroll', updateKeyboardOffset)
+    document.addEventListener('focusin', updateAfterKeyboardAnimation)
 
     return () => {
       viewport.removeEventListener('resize', updateKeyboardOffset)
       viewport.removeEventListener('scroll', updateKeyboardOffset)
+      document.removeEventListener('focusin', updateAfterKeyboardAnimation)
       document.documentElement.style.removeProperty('--plan-mobile-keyboard-offset')
     }
   }, [])
