@@ -856,11 +856,11 @@ class Output:
             target_charge = calc_percent_limit(limit, self.soc_max)
             predicted = self.charge_window_best[charge_window_n].get("target", limit)
             predicted_percent = calc_percent_limit(predicted, self.soc_max)
-            # The real instruction sent to the inverter is charge_limit_best - PR #4445 fixed this text
-            # showing the window's predicted-achievable SoC (plan.py's "target") as if it were that
-            # instruction, which misreported a genuine full-rate charge as a lower, partial one. Where the
-            # window genuinely can't reach the limit in time, still surface the achievable SoC alongside it
-            # so that information (the original point of PR #2358) isn't lost outside of plan_debug.
+            # Report the real instruction sent to the inverter (charge_limit_best), not the window's
+            # predicted-achievable SoC (plan.py's "target"), which would show a full-rate charge as a
+            # lower, partial one (issue #4445). Where the window can't reach the limit in time, the
+            # achievable SoC is still shown alongside it, so that information (the point of PR #2358)
+            # isn't confined to plan_debug.
             target_suffix = "" if predicted_percent == target_charge else " (predicted {}%)".format(predicted_percent)
             if limit == self.reserve:
                 text = "freeze charging to {}%{} for the next {}".format(target_charge, target_suffix, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
