@@ -691,7 +691,7 @@ def test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat=None)
 
 
 def test_hainterface_api_call_config_error_not_outage(my_predbat=None):
-    """Test api_call() lets errors that are not Home Assistant being down (bad ha_url/ha_key, redirect loop, unencodable body) escape rather than recording an outage"""
+    """Test errors that are not Home Assistant being down (bad ha_url/ha_key, redirect loop, unencodable body) are never an outage: dropped at runtime, raised for initialize()"""
     print("\n=== Testing HAInterface api_call() errors that are not an outage ===")
     failed = 0
 
@@ -701,21 +701,30 @@ def test_hainterface_api_call_config_error_not_outage(my_predbat=None):
         ("post", requests.exceptions.InvalidJSONError("Out of range float values are not JSON compliant")),
     ]
     for method, error in cases:
-        mock_base = MockBase()
-        ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
-        with patch("ha.requests." + method) as mock_call:
-            mock_call.side_effect = error
-            raised = False
-            try:
-                ha_interface.api_call("/api/states/sensor.test", data_in={"state": 1} if method == "post" else None, post=method == "post")
-            except type(error):
-                raised = True
+        name = type(error).__name__
+        for track_outage in (True, False):
+            mock_base = MockBase()
+            ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+            with patch("ha.requests." + method) as mock_call:
+                mock_call.side_effect = error
+                raised = False
+                result = "not set"
+                try:
+                    result = ha_interface.api_call("/api/states/sensor.test", data_in={"state": 1} if method == "post" else None, post=method == "post", track_outage=track_outage)
+                except type(error):
+                    raised = True
 
-        if not raised or ha_interface.outage.since is not None:
-            print(f"ERROR: expected {type(error).__name__} to escape without an outage, got raised={raised} / {ha_interface.outage.since}")
-            failed += 1
-        else:
-            print(f"✓ {type(error).__name__} escaped and was not an outage")
+            if ha_interface.outage.since is not None:
+                print(f"ERROR: {name} should not be recorded as an outage")
+                failed += 1
+            elif track_outage and (raised or result is not None):
+                print(f"ERROR: at runtime {name} should be logged and dropped, got raised={raised} result={result}")
+                failed += 1
+            elif not track_outage and not raised:
+                print(f"ERROR: an untracked call (initialize) should let {name} escape")
+                failed += 1
+            else:
+                print(f"✓ {name} with track_outage={track_outage} handled and not an outage")
 
     return failed
 

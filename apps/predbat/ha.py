@@ -1311,9 +1311,14 @@ class HAInterface(ComponentBase):
             if track:
                 self.ha_unavailable("connection error from {}".format(endpoint))
             data = None
-        except HA_NOT_OUTAGE_ERRORS:
-            # Not an outage and waiting will not fix it, so let it fail loudly as before
-            raise
+        except HA_NOT_OUTAGE_ERRORS as e:
+            # Not an outage and waiting will not fix it: initialize() lets it fail at once naming the real problem,
+            # while at runtime one bad call is logged and dropped rather than aborting the whole update cycle
+            if not track_outage:
+                raise
+            if not silent:
+                self.log("Warn: Request error from {}: {}".format(url, e))
+            data = None
         except requests.exceptions.RequestException as e:
             # Anything else requests raises while Home Assistant is going down, e.g. a connection reset part way through the body
             if not silent:
