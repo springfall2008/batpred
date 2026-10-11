@@ -241,6 +241,7 @@ class GatewayMQTT(ComponentBase):
     _slots_without_capacity = frozenset()
     _last_ratings = {}  # replaced, never changed in place
     _assumed_ratings = frozenset()
+    _reserve_before_zero = {}  # replaced, never changed in place
     gateway_device_id = None
 
     def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, gateway_shared_ct=True, gateway_integrate_power=False, **kwargs):
@@ -349,6 +350,7 @@ class GatewayMQTT(ComponentBase):
         self._slots_without_capacity = frozenset()  # slots bound with no battery size sensor, re-bound once the hub reports a size
         self._last_ratings = {}  # (entity suffix, rating name) -> the last real value the hub reported
         self._assumed_ratings = frozenset()  # entity suffixes of inverters whose maximum rate has never been reported
+        self._reserve_before_zero = {}  # entity suffix -> the last real reserve, set aside when Predbat wrote a reserve of 0
         self._discovery = {}  # upper-case serial -> what the hub last reported it to be (see _update_discovery)
         self._discovery_dirty = False
         self._discovery_save_retry_at = 0
@@ -881,6 +883,8 @@ class GatewayMQTT(ComponentBase):
                 for inv in status.inverters:
                     if not inv.primary and self._is_published(inv):
                         self._publish_inverter(inv)
+                # The integration above ran on the slots as they were before this status changed them
+                self._update_integrated_energy(status, rebase=True)
                 self._inject_unreported_inverters(status)
                 self._inject_shared_site_metering(status)
         self._check_configured_inverters(status)
@@ -1077,7 +1081,7 @@ class GatewayMQTT(ComponentBase):
         for name, wh in today.items():
             self.dashboard_item(f"sensor.{pfx}_{name}_today", round(wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get(f"{name}_today", {}), app="gateway")
 
-    def _update_integrated_energy(self, status):
+    def _update_integrated_energy(self, status, rebase=False):
         """Integrate grid and battery power into today's import, export and load (gateway_integrate_power).
 
         Some inverters do not keep usable grid energy counters. GivEnergy AC inverters sharing one
@@ -1097,6 +1101,12 @@ class GatewayMQTT(ComponentBase):
         Each interval uses the mean of the readings at its two ends. The figures return to zero at
         local midnight. They are kept in memory only, so they also restart from zero when Predbat
         restarts, which Predbat reads the same way as the midnight reset.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+            rebase: True when auto-config has just run on a status that was already integrated.
+                Nothing is added: its readings become the baseline for the inverters now in the
+                slots, so one that has just joined is counted from this status and not the next.
         """
         if not self.gateway_integrate_power:
             return
@@ -1143,7 +1153,7 @@ class GatewayMQTT(ComponentBase):
             state = {"day": day, "time": None, **zeroed}
             self._integrated_energy = state
         previous = state["time"]
-        if previous is not None and now <= previous:
+        if previous is not None and now <= previous and not rebase:
             # The same status again (a re-inject), or the hub's clock stepping back
             return
 
@@ -1158,6 +1168,9 @@ class GatewayMQTT(ComponentBase):
 
         if previous is None:
             state["pv"] = {serial: {"base": wh, "high": None, "high_time": 0} for serial, wh in pv_wh.items()}
+        elif rebase:
+            for serial, wh in pv_wh.items():
+                state["pv"].setdefault(serial, {"base": wh, "high": None, "high_time": 0})
         else:
             elapsed = now - previous
             hours = elapsed / 3600.0
@@ -2676,11 +2689,16 @@ class GatewayMQTT(ComponentBase):
         elif "_charge_rate" in entity_id:
             await self._send_control(entity_id, "set_charge_rate", power_w=val, serial=serial)
         elif "_reserve" in entity_id:
+            await self._send_control(entity_id, "set_reserve", target_soc=val, serial=serial)
             if val == 0:
                 # A reserve of 0% asked for here is real, so the next 0 from the hub is not a gap
-                # to fill with the last value (see _last_rating)
-                self._last_ratings = {key: kept for key, kept in self._last_ratings.items() if key != (_serial_suffix(serial), "reserve")}
-            await self._send_control(entity_id, "set_reserve", target_soc=val, serial=serial)
+                # to fill with the last value (see _last_rating). Only once the write has gone
+                # out, and the value is set aside in case the hub refuses it (see _process_ack).
+                key = (_serial_suffix(serial), "reserve")
+                self._reserve_before_zero = {suffix: kept for suffix, kept in self._reserve_before_zero.items() if suffix != key[0]}
+                if key in self._last_ratings:
+                    self._reserve_before_zero = {**self._reserve_before_zero, key[0]: self._last_ratings[key]}
+                    self._last_ratings = {kept_key: kept for kept_key, kept in self._last_ratings.items() if kept_key != key}
         elif "_target_soc" in entity_id:
             await self._send_control(entity_id, "set_target_soc", target_soc=val, serial=serial)
 
@@ -2880,6 +2898,7 @@ class GatewayMQTT(ComponentBase):
                 apply_cache = ok and entry["cached"] is None
             command = entry["command"]
             serial = entry["kwargs"].get("serial")
+            zero_reserve = entry["kwargs"].get("target_soc") == 0
 
         if ok:
             self.log(f"Info: GatewayMQTT: {command} for {serial} acknowledged by hub ({command_id}) applied={ack.get('applied')}")
@@ -2893,6 +2912,13 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: replay ({command_id} already used), {action}")
         else:
             self.log(f"Warn: GatewayMQTT: {command} for {serial} refused by hub: {error}")
+            if command == "set_reserve" and zero_reserve and serial:
+                # The reserve of 0 was not applied, so a 0 from the hub is a gap again and the
+                # reserve it had before is still the last real one
+                key = (_serial_suffix(serial), "reserve")
+                if key[0] in self._reserve_before_zero and key not in self._last_ratings:
+                    self._last_ratings = {**self._last_ratings, key: self._reserve_before_zero[key[0]]}
+                    restore_status = True
             if restore_status and self._last_status is not None:
                 self._inject_entities(self._last_status)
 

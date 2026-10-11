@@ -4275,6 +4275,78 @@ class TestGatewayUnitControlBinding:
         # The other inverter's reserve is its own
         assert gw._states["number.predbat_gateway_23g800_reserve_soc"] == 4
 
+    def test_reserve_is_kept_when_the_write_of_zero_fails(self):
+        """A reserve of 0% that never went out is not real: the hub's 0 is still a gap filled with the last value."""
+        gw = self._writable(self._listed_gateway([]))
+        gw._process_telemetry(self._rated_status().SerializeToString())
+
+        async def failing_send(entity_id, command, **kwargs):
+            raise RuntimeError("publish failed")
+
+        gw._send_control = failing_send
+        try:
+            asyncio.run(gw.number_event("number.predbat_gateway_25g400_reserve_soc", 0))
+            raise AssertionError("the failed publish should have been raised")
+        except RuntimeError:
+            pass
+
+        blank = self._rated_status()
+        blank.inverters[1].control.reserve_soc = 0
+        gw._process_telemetry(blank.SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 4
+
+    def test_reserve_is_put_back_when_the_hub_refuses_the_write_of_zero(self):
+        """A refused reserve of 0% was not applied, so the reserve the inverter had is published again."""
+        import threading
+
+        gw = self._writable(self._listed_gateway([]))
+        gw._ack_subscribed = True
+        gw._acks_seen = True
+        gw._command_id = 0
+        gw._pending_commands = {}
+        gw._command_lock = threading.Lock()
+        gw._process_telemetry(self._rated_status().SerializeToString())
+        blank = self._rated_status()
+        blank.inverters[1].control.reserve_soc = 0
+
+        asyncio.run(gw.number_event("number.predbat_gateway_25g400_reserve_soc", 0))
+        command, sent = gw._published[-1]
+        assert command == "set_reserve" and sent["target_soc"] == 0
+        gw._process_telemetry(blank.SerializeToString())
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 0
+
+        gw._process_ack(json.dumps({"command_id": f"PBAT{sent['command_id']}", "command": "set_reserve", "ok": False, "error": "modbus_write_failed"}).encode("utf-8"))
+        assert gw._states["number.predbat_gateway_25g400_reserve_soc"] == 4
+        # The other inverter is untouched, and an accepted 0 stays 0
+        assert gw._states["number.predbat_gateway_23g800_reserve_soc"] == 4
+
+        asyncio.run(gw.number_event("number.predbat_gateway_23g800_reserve_soc", 0))
+        command, sent = gw._published[-1]
+        blank.inverters[0].control.reserve_soc = 0
+        gw._process_telemetry(blank.SerializeToString())
+        gw._process_ack(json.dumps({"command_id": f"PBAT{sent['command_id']}", "command": "set_reserve", "ok": True}).encode("utf-8"))
+        gw._process_telemetry(blank.SerializeToString())
+        assert gw._states["number.predbat_gateway_23g800_reserve_soc"] == 0
+
+    def test_inverter_that_becomes_usable_is_the_integration_baseline_on_that_status(self):
+        """_process_telemetry re-baselines the integration after auto-config changes the slots."""
+        import time
+
+        gw = self._make_handler_gateway()
+        gw.gateway_integrate_power = True
+        gw.gateway_shared_ct = True
+        gw._integrated_energy = None
+
+        gw._process_telemetry(self._two_ac_status("no_battery").SerializeToString())
+        assert sorted(gw._integrated_energy["pv"]) == ["CE2223G800"]
+
+        joining = self._two_ac_status("ok")
+        joining.timestamp = int(time.time()) + 60
+        joining.inverters[1].energy.pv_today_wh = 7000
+        gw._process_telemetry(joining.SerializeToString())
+        assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"]
+        assert gw._integrated_energy["pv"]["CE2225G400"]["base"] == 7000
+
     def test_reserve_never_reported_is_published_as_zero(self):
         """An inverter that has never reported a reserve still publishes 0, as before."""
         gw = self._listed_gateway([])
@@ -7028,6 +7100,23 @@ class TestIntegratePower:
         self._feed(gw, status(self.BASE_TIME + 1800, 3500, has_battery=True))
         assert approx_equal(gw._integrated_energy["load_wh"], 500.0)
 
+    def test_rebase_takes_the_new_fleet_power_and_adds_nothing(self):
+        """A rebase on a status already integrated adds no energy and starts the next interval from the new slots' power."""
+        gw = self._make_gateway(shared_ct=False)
+        self._feed(gw, self._status(self.BASE_TIME, grid_w=-1000, battery_w=(0,), serials=("CE2225G400",)))
+        joining = self._status(self.BASE_TIME + 600, grid_w=-1000, battery_w=(0, 0))
+        gw._last_status = joining
+        gw._update_integrated_energy(joining)
+        before = dict((name, gw._integrated_energy[name]) for name in ("import_wh", "export_wh", "load_wh"))
+        assert gw._integrated_energy["power"]["import"] == 1000
+
+        gw.automatic_config()
+        gw._update_integrated_energy(joining, rebase=True)
+
+        assert dict((name, gw._integrated_energy[name]) for name in before) == before
+        assert gw._integrated_energy["power"]["import"] == 2000
+        assert gw._integrated_energy["time"] == self.BASE_TIME + 600
+
     def test_inverter_given_a_slot_later_has_its_generation_counted_from_then(self):
         """An inverter that joins the slots after the integration began is counted from its first status, not left out."""
         gw = self._make_gateway()
@@ -7040,13 +7129,19 @@ class TestIntegratePower:
             built.inverters[1].energy.pv_today_wh = second_wh
             return built
 
-        # CE2223G800 appears and takes slot 0; its counter already stands at 7000
-        gw._last_status = both(self.BASE_TIME + 1200, 7000, 1200)
+        # CE2223G800 appears and takes slot 0; its counter already stands at 7000. As in
+        # _process_telemetry, the status is integrated on the old slots, auto-config re-runs,
+        # and the status then becomes the baseline for the new ones
+        joining = both(self.BASE_TIME + 1200, 7000, 1200)
+        gw._last_status = joining
+        gw._update_integrated_energy(joining)
         gw.automatic_config()
         assert gw._inverter_slot_serials == ["CE2223G800", "CE2225G400"]
-
-        self._feed(gw, both(self.BASE_TIME + 1200, 7000, 1200))
+        gw._update_integrated_energy(joining, rebase=True)
         assert approx_equal(gw._integrated_energy["load_wh"], 200.0)
+        assert gw._integrated_energy["pv"]["CE2223G800"]["base"] == 7000
+
+        # Its generation since the status it joined on is counted, not only from the one after
         self._feed(gw, both(self.BASE_TIME + 1800, 7300, 1250))
         assert approx_equal(gw._integrated_energy["load_wh"], 550.0)
 
