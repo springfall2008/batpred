@@ -54,16 +54,17 @@ def check_compare_list(compare_list):
                 problem = "has a duplicate id '{}'".format(entry_id)
             elif not entry_name:
                 problem = "('{}') requires a non-empty 'name'".format(entry_id)
-            elif entry.get("config") is not None and not isinstance(entry["config"], dict):
-                # fetch_config() looks each override up by key, outside run_all()'s per-tariff try
+            elif entry.get("config") and not isinstance(entry["config"], dict):
+                # run_all() snapshots each override by key before any tariff runs, outside every try,
+                # so a list of overrides there crashed the whole comparison
                 problem = "('{}') has a 'config' that isn't a set of 'setting: value' overrides".format(entry_id)
         if problem:
             problems.append("compare_list entry {} {}".format(index + 1, problem))
             continue
         seen_ids.add(entry_id)
         checked = dict(entry, id=entry_id, name=entry_name)
-        if checked.get("config") is None:
-            # An empty 'config:' line loads as None and means no overrides
+        if not checked.get("config"):
+            # An empty 'config:' line (None, [] or "") means no overrides, as it always has
             checked.pop("config", None)
         valid.append(checked)
     return valid, problems

@@ -742,19 +742,23 @@ def test_compare(my_predbat):
         {"id": "blank_name", "name": "   "},
         {"id": "bad_config", "name": "Bad Config", "config": ["metric_battery_cycle"]},
         {"id": "empty_config", "name": "Empty Config", "config": None},
+        {"id": "empty_list_config", "name": "  Empty List Config  ", "config": []},
     ]
     kept = valid_compare_list(entries, log=logged.append)
     kept_ids = [entry["id"] for entry in kept]
     skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
 
-    if kept_ids != ["agile", "2024", "numeric_name", "empty_config"]:
-        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name' and 'empty_config' (ids as strings), got {}".format(kept_ids))
+    if kept_ids != ["agile", "2024", "numeric_name", "empty_config", "empty_list_config"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name', 'empty_config' and 'empty_list_config' (ids as strings), got {}".format(kept_ids))
         failed += 1
     elif skipped_positions != [1, 2, 3, 5, 6, 8, 10, 11]:
         print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6, 8 (padded duplicate id), 10 (blank name) and 11 (non-mapping config), got {}".format(logged))
         failed += 1
-    elif "config" in kept[3]:
-        print("ERROR T27: an empty 'config:' (None) should be dropped as no overrides, got {}".format(kept[3]))
+    elif "config" in kept[3] or "config" in kept[4]:
+        print("ERROR T27: an empty 'config:' (None or []) should be dropped as no overrides, got {} / {}".format(kept[3], kept[4]))
+        failed += 1
+    elif kept[4]["name"] != "Empty List Config":
+        print("ERROR T27: a kept entry's name should be stripped, got {!r}".format(kept[4]["name"]))
         failed += 1
     elif kept[2]["name"] != "1234":
         print("ERROR T27: a numeric name should become a string, or publish_data() can't build the friendly name, got {!r}".format(kept[2]["name"]))
@@ -788,7 +792,8 @@ def test_compare(my_predbat):
     cmp.select_best = lambda compare_list, results: None
     cmp.save_yaml = lambda: saved_comparisons.append(dict(cmp.comparisons))
     cmp.publish_data = lambda: None
-    compare_list = [{"name": "No Id Tariff"}, "not_a_dict", {"id": "valid", "name": "Valid Tariff"}, {"id": "valid", "name": "Duplicate Tariff"}, {"id": 2024, "name": "Numeric Id Tariff"}]
+    # The config: entries go through run_all()'s own override snapshot, which runs before any try
+    compare_list = [{"name": "No Id Tariff"}, "not_a_dict", {"id": "valid", "name": "Valid Tariff", "config": None}, {"id": "valid", "name": "Duplicate Tariff"}, {"id": 2024, "name": "Numeric Id Tariff"}, {"id": "list_config", "name": "List Config", "config": [{"metric_battery_cycle": 1}]}]
     real_get_arg = my_predbat.get_arg
 
     def fake_get_arg(key, default=None, *args, **kwargs):
@@ -813,8 +818,8 @@ def test_compare(my_predbat):
     elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid", "2024"}:
         print("ERROR T28: only the valid tariffs' results should be persisted, keyed by string id, got {}".format(saved_comparisons))
         failed += 1
-    elif sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in run_all_logged if "skipping it" in msg) != [1, 2, 4]:
-        print("ERROR T28: run_all() should log a warning for each skipped entry (1, 2 and 4), got {}".format(run_all_logged))
+    elif sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in run_all_logged if "skipping it" in msg) != [1, 2, 4, 6]:
+        print("ERROR T28: run_all() should log a warning for each skipped entry (1, 2, 4 and 6), got {}".format(run_all_logged))
         failed += 1
     else:
         print("PASS T28: run_all() skips malformed entries and compares and persists the valid ones by string id")
