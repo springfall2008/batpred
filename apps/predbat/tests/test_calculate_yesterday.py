@@ -27,6 +27,7 @@ import copy
 from datetime import datetime, timedelta
 
 import pytz
+from zoneinfo import ZoneInfo
 
 from const import PREDICT_STEP, EXPORT_MODE_FREEZE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import export_mode_of
@@ -342,6 +343,27 @@ def _test_history_slot(my_predbat, failed):
             failed = True
         if my_predbat.history_slot(datetime(2024, 10, 5, 0, 0, 0, tzinfo=UTC)) != my_predbat.history_slot(datetime(2024, 10, 4, 23, 50, 0, tzinfo=UTC)):
             print("ERROR: the midnight run should still count towards the last slot of the day before")
+            failed = True
+        # When the clocks go back, 01:00-01:59 happens twice: the first and second 01:35 are an hour apart and
+        # must be separate slots, or with an hourly re-plan the second is skipped and the history goes two hours
+        # without a rebuild. Both ways a local time can be built: pytz (as update_time does) and zoneinfo (fold).
+        london = pytz.timezone("Europe/London")
+        first = datetime(2024, 10, 27, 0, 35, 0, tzinfo=UTC).astimezone(london)
+        second = datetime(2024, 10, 27, 1, 35, 0, tzinfo=UTC).astimezone(london)
+        if first.strftime("%H:%M") != "01:35" or second.strftime("%H:%M") != "01:35":
+            print("ERROR: test setup - expected both instants to read 01:35 local, got {} and {}".format(first, second))
+            failed = True
+        if my_predbat.history_slot(first) == my_predbat.history_slot(second):
+            print("ERROR: the first and second 01:35 on the autumn clock change should be different history slots (pytz)")
+            failed = True
+        london_zi = ZoneInfo("Europe/London")
+        if my_predbat.history_slot(first.astimezone(london_zi)) == my_predbat.history_slot(second.astimezone(london_zi)):
+            print("ERROR: the first and second 01:35 on the autumn clock change should be different history slots (zoneinfo)")
+            failed = True
+        # The run that crosses back to 01:00 GMT waits one run as normal: 01:02 GMT counts towards the slot before it
+        # (00:30 UTC onwards, the BST 01:30 slot), not a slot of its own
+        if my_predbat.history_slot(datetime(2024, 10, 27, 1, 2, 0, tzinfo=UTC).astimezone(london)) != my_predbat.history_slot(datetime(2024, 10, 27, 0, 57, 0, tzinfo=UTC).astimezone(london)):
+            print("ERROR: 01:02 GMT should still count towards the slot that ended at the clock change")
             failed = True
         # A 15-minute slot, the 5-minute run it waits and a 10-minute re-plan interval
         if my_predbat.history_refresh_minutes() != 30:

@@ -19,7 +19,7 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta
+from datetime import timedelta, timezone
 from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, RUN_EVERY, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
@@ -3187,16 +3187,19 @@ class Output:
         return held * 2 >= minute_end - minute_start
 
     def history_slot(self, when):
-        """Which plan slot the plan history rebuild at when counts towards, as (date, slot number from midnight).
+        """Which plan slot the plan history rebuild at when counts towards, as (date, slot number from midnight, UTC offset).
 
         Slots are plan_interval_minutes long, shifted one run (RUN_EVERY) later: the run at a slot boundary
         writes predbat.cost_today seconds before calculate_yesterday() reads its history back from Home
         Assistant, so the slot just finished is rebuilt on the next run, once that value is recorded. This only
         helps when that next run re-plans; with calculate_plan_every at or above the slot length, re-plans can
         fall on boundaries and the rebuild then happens there.
+
+        The UTC offset keeps the hour repeated when the clocks go back as separate slots, and the run is
+        stepped back in UTC so the step itself lands on the right side of the change.
         """
-        when = when - timedelta(minutes=RUN_EVERY)
-        return when.date(), (when.hour * 60 + when.minute) // self.plan_interval_minutes
+        when = (when.astimezone(timezone.utc) - timedelta(minutes=RUN_EVERY)).astimezone(when.tzinfo)
+        return when.date(), (when.hour * 60 + when.minute) // self.plan_interval_minutes, when.utcoffset()
 
     def history_refresh_minutes(self):
         """The longest the plan history should go between rebuilds: a slot, the run it waits, and up to one re-plan interval."""
