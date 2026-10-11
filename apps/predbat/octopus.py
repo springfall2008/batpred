@@ -1230,6 +1230,9 @@ class OctopusAPI(ComponentBase):
         """
         Turn Octopus Smart Control on (UNSUSPEND) or off (SUSPEND) for an intelligent device, and show it on the switch
         once Octopus accepts it. If Octopus rejects it the switch is left as it was.
+
+        It is sent even when the device already shows the asked-for state: that state can be up to a poll old, so
+        skipping it could drop a change the user really asked for.
         """
         device = self.intelligent_devices.get(device_id)
         if not device:
@@ -1653,9 +1656,9 @@ class OctopusAPI(ComponentBase):
 
         One `cars` record per ACTIVE (non-suspended) intelligent device: get_active_intelligent_device_ids()
         is the exact filter automatic_config() itself applies when wiring the car slots into
-        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its three
-        entities (octopus_intelligent_slot, octopus_ready_time, octopus_charge_limit - see
-        OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
+        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its four
+        entities (octopus_intelligent_slot, octopus_intelligent_smart_control, octopus_ready_time,
+        octopus_charge_limit - see OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
         async_intelligent_update_sensor() publishes them per device, never as a fixed set, so the
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger

@@ -175,7 +175,6 @@ async def _run(my_predbat):
 
     print("Test 6: events for other entities, other services and unknown devices are ignored")
     api.commands = []
-    api.smart_control_confirmed = {}
     await api.switch_event("switch.predbat_octopus_acc_1_something_else_1001", "turn_off")
     await api.switch_event(active_switch, "bogus")
     await api.switch_event(api.get_entity_name("switch", "intelligent_smart_charge", index="9999"), "turn_off")
