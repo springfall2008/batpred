@@ -168,6 +168,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.plan-timeline-detail-value-solar strong {
+  color: var(--color-flow-solar);
+}
+
 .plan-timeline-explanation {
   margin: 0.7rem 0 0;
   padding-top: 0.65rem;
