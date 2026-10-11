@@ -1572,7 +1572,7 @@ actions:
         - condition: template
           value_template: |
             {{ trigger.to_state.state.startswith('Charging')
-               or trigger.to_state.state == 'Hold charging' }}
+               or trigger.to_state.state.startswith('Hold charging') }}
       sequence:
         - target:
             entity_id: switch.lux_ac_charge_enable
@@ -1595,7 +1595,7 @@ actions:
         - conditions:
           - condition: template
             value_template: |
-              {{ trigger.to_state.state == 'Hold charging' }}
+              {{ trigger.to_state.state.startswith('Hold charging') }}
             sequence:
               - target:
                   entity_id: number.lux_ac_battery_charge_level
@@ -1670,7 +1670,7 @@ triggers:
           value_template: |
 
             {{ states('predbat.status').startswith('Charging')
-               or states('predbat.status') == 'Hold charging' }}
+               or states('predbat.status').startswith('Hold charging') }}
 
         sequence:
             - if:
@@ -1714,7 +1714,7 @@ triggers:
             - condition: template
           value_template: |
 
-            {{ states('predbat.status') == 'Hold charging' }}
+            {{ states('predbat.status').startswith('Hold charging') }}
 
         sequence:
             - action: number.set_value
