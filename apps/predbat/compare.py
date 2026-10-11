@@ -592,6 +592,14 @@ class Compare:
             if my_predbat.car_charging_planned[car_n] and my_predbat.car_charging_exclusive[car_n]:
                 break
 
+    def get_tariff_id(self, tariff):
+        """Return a compare_list entry's id, or None and a warning if it has none (#5472)."""
+        tariff_id = tariff.get("id")
+        if not tariff_id:
+            self.log("Warn: Compare tariff {} has no id, skipping - add an 'id:' line to this compare_list entry".format(tariff.get("name", "")))
+            return None
+        return tariff_id
+
     def run_all(self, debug=False, fetch_sensor=True):
         """
         Compare a comparison in prices across multiple energy tariffs and report results
@@ -672,7 +680,10 @@ class Compare:
 
         try:
             for tariff in compare_list:
-                prior = results.get(tariff["id"], {})
+                tariff_id = self.get_tariff_id(tariff)
+                if not tariff_id:
+                    continue
+                prior = results.get(tariff_id, {})
                 if prior:
                     prior_date = prior.get("date", "")[:10]
                     if prior_date == today_date:
@@ -684,11 +695,11 @@ class Compare:
                 else:
                     # First ever run for this tariff: start from actual midnight SoC
                     start_soc = soc_midnight_fallback
-                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
+                self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff_id, start_soc))
                 try:
                     result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc, io_adjusted_base=io_adjusted_base)
                     if result_data is not None:
-                        results[tariff["id"]] = result_data
+                        results[tariff_id] = result_data
                 finally:
                     # Restore hardware settings after each tariff so overrides don't bleed into the next tariff;
                     # in a finally so a raised run_single() can't leave compare values applied to the live instance

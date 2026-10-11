@@ -1430,10 +1430,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
-                # Compare tariffs either when triggered or daily at midnight
+                # Compare tariffs either when triggered or daily at midnight; the reset must run even if
+                # run_all() raises, otherwise a crashed comparison re-triggers itself every cycle (#5472)
                 self.expose_config("compare_active", True)
-                self.comparison.run_all()
-                self.expose_config("compare_active", False)
+                try:
+                    self.comparison.run_all()
+                finally:
+                    self.expose_config("compare_active", False)
             else:
                 # Otherwise just update HA sensors to prevent then expiring
                 self.comparison.publish_only()

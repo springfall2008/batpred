@@ -717,6 +717,55 @@ def test_compare(my_predbat):
     else:
         print("PASS T26: only a tariff reusing the live import rates keeps the live dispatch markers")
 
+    # ------------------------------------------------------------------
+    # T27: get_tariff_id() returns None (with a warning) for a compare_list
+    #      entry with no id, and the real id string otherwise (#5472 - run_all()
+    #      used to index tariff["id"] directly, raising KeyError every cycle; a
+    #      crash there also left compare_active stuck on, re-triggering the
+    #      comparison - and the crash - every 5-minute cycle)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    logged = []
+    cmp.log = lambda msg: logged.append(msg)
+
+    no_id_result = cmp.get_tariff_id({"name": "No Id Tariff"})
+    has_id_result = cmp.get_tariff_id({"id": "has_id", "name": "Has Id Tariff"})
+
+    if no_id_result is not None:
+        print("ERROR T27: get_tariff_id() should return None for an entry with no id, got {}".format(no_id_result))
+        failed += 1
+    elif not any("No Id Tariff" in msg for msg in logged):
+        print("ERROR T27: get_tariff_id() should log a warning naming the id-less entry, got {}".format(logged))
+        failed += 1
+    elif has_id_result != "has_id":
+        print("ERROR T27: get_tariff_id() should return the real id for an entry that has one, got {}".format(has_id_result))
+        failed += 1
+    else:
+        print("PASS T27: get_tariff_id() returns None and warns for an id-less entry, the real id otherwise")
+
+    # ------------------------------------------------------------------
+    # T28: run_all() is actually wired to call get_tariff_id() inside its tariff
+    #      loop, rather than T27 only proving the helper works in isolation -
+    #      otherwise run_all() could still index tariff["id"] directly (#5472)
+    # ------------------------------------------------------------------
+    run_all_source = inspect.getsource(Compare.run_all)
+    loop_idx = run_all_source.find("for tariff in compare_list:")
+    guard_idx = run_all_source.find("self.get_tariff_id(tariff)", loop_idx + 1) if loop_idx >= 0 else -1
+    continue_idx = run_all_source.find("continue", guard_idx + 1) if guard_idx >= 0 else -1
+    first_direct_index_idx = run_all_source.find('tariff["id"]', loop_idx + 1) if loop_idx >= 0 else -1
+
+    if loop_idx < 0 or guard_idx < 0 or continue_idx < 0:
+        print("ERROR T28: could not locate a call to get_tariff_id() inside run_all()'s tariff loop - test may need updating")
+        failed += 1
+    elif not (loop_idx < guard_idx < continue_idx):
+        print("ERROR T28: run_all() does not skip an id-less tariff before using its id")
+        failed += 1
+    elif first_direct_index_idx != -1 and first_direct_index_idx < continue_idx:
+        print("ERROR T28: run_all() still indexes tariff[\"id\"] directly before the id guard takes effect")
+        failed += 1
+    else:
+        print("PASS T28: run_all() calls get_tariff_id() inside its tariff loop before using the id")
+
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
     else:
