@@ -315,7 +315,13 @@ class Inverter:
         Create a missing inverter argument which will be assigned to a dummy entity
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
-            self.base.args[arg] = [default, default, default, default]
+            # Padded with None rather than the default, for the same reason as the short-list branch
+            # below: the caller overwrites [self.id] with its dummy entity straight afterwards, so a
+            # bare default left in another inverter's slot reads back as "configured" there too. On a
+            # mixed fleet that turns a plain number into a phantom per-entry entity for a sibling
+            # inverter that never asked for one, which the per-entry rate-rate path then treats as
+            # set (#5359)
+            self.base.args[arg] = [default if i == self.id else None for i in range(4)]
         elif len(self.base.args[arg]) <= self.id:
             # A list that stops short of this inverter is just as missing for it as no list at all,
             # and every caller assigns into [self.id] straight afterwards - so a short one raised
@@ -2115,7 +2121,10 @@ class Inverter:
         Get the current discharge rate in watts
         """
 
-        if "discharge_rate_percent" in self.base.args:
+        # Pick the percent vs watts path from this inverter's own entry, not from whether the key
+        # exists anywhere in args - on a mixed fleet another inverter can set the key while this
+        # one's own slot is empty, which used to fall through to the percent default of 100% (#5359)
+        if self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id):
             current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
         else:
             current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
@@ -2132,7 +2141,8 @@ class Inverter:
         """
         Get the current charge rate in watts
         """
-        if "charge_rate_percent" in self.base.args:
+        # See get_current_discharge_rate() above - same per-entry rule (#5359)
+        if self.base.get_arg("charge_rate_percent", indirect=False, index=self.id):
             current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
         else:
             current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
@@ -2195,17 +2205,22 @@ class Inverter:
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_charge)
         if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            if "charge_rate" in self.base.args:
+            # Write only the register(s) this inverter's own entry actually configures - checking
+            # "key in args" writes both registers on a mixed fleet whenever ANY inverter sets the
+            # other one, which hits an empty entry and logs a spurious "No entity_id" error (#5359)
+            charge_rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W")
+            if charge_rate_entity:
                 self.write_and_poll_value(
                     "charge_rate",
-                    self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"),
+                    charge_rate_entity,
                     new_rate,
                     fuzzy=fuzzy,
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            if "charge_rate_percent" in self.base.args:
-                self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
+            charge_rate_percent_entity = self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%")
+            if charge_rate_percent_entity:
+                self.write_and_poll_value("charge_rate_percent", charge_rate_percent_entity, min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} charge rate changes to {new_rate}W at {self.base.time_now_str()}")
@@ -2244,17 +2259,21 @@ class Inverter:
         fuzzy, fuzzy_below = self.rate_tolerances(self.battery_rate_max_discharge)
         if not within_fuzzy(current_rate, new_rate, fuzzy, fuzzy_below):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
-            if "discharge_rate" in self.base.args:
+            # See adjust_charge_rate() above - write only the register(s) this inverter's own entry
+            # actually configures, not whichever happen to be set anywhere in the fleet (#5359)
+            discharge_rate_entity = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+            if discharge_rate_entity:
                 self.write_and_poll_value(
                     "discharge_rate",
-                    self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                    discharge_rate_entity,
                     new_rate,
                     fuzzy=fuzzy,
                     required_unit="W",
                     fuzzy_below=fuzzy_below,
                 )
-            if "discharge_rate_percent" in self.base.args:
-                self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
+            discharge_rate_percent_entity = self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%")
+            if discharge_rate_percent_entity:
+                self.write_and_poll_value("discharge_rate_percent", discharge_rate_percent_entity, min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify(f"{self.base.prefix.capitalize()}: Inverter {self.id} discharge rate changes to {new_rate}W at {self.base.time_now_str()}")

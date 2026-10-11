@@ -1079,6 +1079,158 @@ def test_rate_write_quantised(test_name, ha, inv, prev_rate, rate, expect_writes
     return failed
 
 
+def test_mixed_fleet_rate_path_from_own_entry(test_name, ha, inv, prev_rate, percent_entry_set, discharge=False):
+    """
+    On a mixed fleet, the percent-vs-watts path is chosen from THIS inverter's own entry, not from
+    whether the key exists anywhere in args (#5359).
+
+    Before the fix, get_current_charge_rate()/get_current_discharge_rate() took the percent branch
+    whenever "charge_rate_percent"/"discharge_rate_percent" was in self.base.args at all - so an
+    inverter whose own slot in that list is None (another inverter in the fleet set the key, this
+    one didn't) still took the percent branch, found nothing for its index, fell back to the 100%
+    default and always read back battery_rate_max_raw regardless of what was last written. With the
+    fix, an unset entry falls back to the watts-based "charge_rate"/"discharge_rate" entity instead.
+    """
+    failed = False
+    print("Test: {} prev_rate {} percent_entry_set {} discharge {}".format(test_name, prev_rate, percent_entry_set, discharge))
+
+    percent_arg = "discharge_rate_percent" if discharge else "charge_rate_percent"
+    watt_entity = "number.discharge_rate" if discharge else "number.charge_rate"
+    percent_entity = "number.discharge_rate_percent" if discharge else "number.charge_rate_percent"
+
+    saved_percent_arg = inv.base.args.get(percent_arg)
+    try:
+        # Simulate a mixed fleet: the percent key exists in args (another inverter set it up) but
+        # this inverter's own index is unset.
+        inv.base.args[percent_arg] = percent_entity if percent_entry_set else None
+        ha.dummy_items[watt_entity] = prev_rate
+        ha.dummy_items[percent_entity] = 100  # Would read back as rate_max if the percent path were wrongly taken
+
+        current_rate = inv.get_current_discharge_rate() if discharge else inv.get_current_charge_rate()
+    finally:
+        if saved_percent_arg is not None:
+            inv.base.args[percent_arg] = saved_percent_arg
+        else:
+            inv.base.args.pop(percent_arg, None)
+
+    if percent_entry_set:
+        # This inverter's own entry IS set - percent path, read against the percent entity's 100%
+        expect_rate = inv.battery_rate_max_raw
+    else:
+        # This inverter's own entry is unset - falls back to the watts entity, which holds prev_rate
+        expect_rate = prev_rate
+
+    if current_rate != expect_rate:
+        print("ERROR: {} expected current rate {} got {}".format(test_name, expect_rate, current_rate))
+        failed = True
+
+    return failed
+
+
+def test_mixed_fleet_rate_write_skips_unset_entry(test_name, ha, inv, discharge=False):
+    """
+    adjust_charge_rate()/adjust_discharge_rate() must not write (or warn about) a register this
+    inverter's own entry does not configure, even when the sibling register's key exists in args
+    because another inverter in the fleet uses it (#5359).
+
+    Before the fix, both adjust functions wrote both "charge_rate"/"discharge_rate" and
+    "charge_rate_percent"/"discharge_rate_percent" whenever either key existed ANYWHERE in args,
+    regardless of this inverter's own entry - so a script-driven inverter sharing a fleet with a
+    percent-controlled one tried to write into its own (unset) percent entry every cycle, which
+    write_and_poll_value()'s check_write_entity() logs as "No entity_id for ..." and also pins
+    had_errors=True onto the status sensor.
+    """
+    failed = False
+    print("Test: {} discharge {}".format(test_name, discharge))
+
+    percent_arg = "discharge_rate_percent" if discharge else "charge_rate_percent"
+    watt_arg = "discharge_rate" if discharge else "charge_rate"
+    watt_entity = "number.discharge_rate" if discharge else "number.charge_rate"
+
+    saved_percent_arg = inv.base.args.get(percent_arg)
+    saved_watt_arg = inv.base.args.get(watt_arg)
+    log_messages = []
+    orig_log = inv.base.log
+
+    try:
+        # This inverter is watts-only: its own charge_rate/discharge_rate entity is configured, but
+        # the percent key exists in args only because a sibling inverter in the fleet set it up -
+        # this inverter's own slot in that list is None.
+        inv.base.args[watt_arg] = watt_entity
+        inv.base.args[percent_arg] = None
+        inv.rest_data = None
+        inv.rest_api = None
+        ha.dummy_items[watt_entity] = 0
+        inv.base.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+
+        if discharge:
+            inv.adjust_discharge_rate(250)
+        else:
+            inv.adjust_charge_rate(250)
+    finally:
+        inv.base.log = orig_log
+        if saved_percent_arg is not None:
+            inv.base.args[percent_arg] = saved_percent_arg
+        else:
+            inv.base.args.pop(percent_arg, None)
+        if saved_watt_arg is not None:
+            inv.base.args[watt_arg] = saved_watt_arg
+        else:
+            inv.base.args.pop(watt_arg, None)
+
+    warning_found = any("No entity_id for" in msg for msg in log_messages)
+    if warning_found:
+        print("ERROR: {} wrote/warned about the unset percent entry: {}".format(test_name, log_messages))
+        failed = True
+    if float(ha.get_state(watt_entity)) != 250:
+        print("ERROR: {} expected watt entity to be written to 250, got {}".format(test_name, ha.get_state(watt_entity)))
+        failed = True
+
+    return failed
+
+
+def test_create_missing_arg_does_not_fill_sibling_entries(test_name, my_predbat):
+    """
+    create_missing_arg() pads every OTHER inverter's slot with None, not the default (#5359 follow-up).
+
+    When the key is entirely missing from args, create_missing_arg() used to fill all four slots
+    with the same default value, and only the caller's own index was then overwritten with its
+    dummy entity. On a mixed fleet where inverter 0 triggers this (e.g. inv_output_charge_control
+    != "power") before inverter 1 is even constructed, inverter 1's slot ended up holding a bare
+    number rather than None - which the per-entry "is this inverter's entry set" check added for
+    #5359 then misreads as a configured entity, since a truthy value is indistinguishable from one.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    try:
+        my_predbat.args["num_inverters"] = 2
+        # GS (Solis) drives charge rate via current rather than power, so constructing inverter 0
+        # takes the create_missing_arg("charge_rate", ...) branch under test
+        my_predbat.args["inverter_type"] = ["GS", "GS"]
+        my_predbat.args.pop("charge_rate", None)
+        my_predbat.args.pop("charge_rate_percent", None)
+
+        inv0 = Inverter(my_predbat, 0, quiet=True)
+        if inv0.inv_output_charge_control == "power":
+            print("ERROR: {} test assumes a non-power charge control to exercise create_missing_arg('charge_rate', ...)".format(test_name))
+            return 1
+
+        charge_rate_list = my_predbat.args.get("charge_rate")
+        if not isinstance(charge_rate_list, list) or len(charge_rate_list) < 2:
+            print("ERROR: {} expected charge_rate to be a per-inverter list covering inverter 1, got {}".format(test_name, charge_rate_list))
+            failed = True
+        elif charge_rate_list[1] is not None:
+            print("ERROR: {} expected inverter 1's charge_rate slot to stay None until inverter 1 is constructed, got {}".format(test_name, charge_rate_list[1]))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return 1 if failed else 0
+
+
 def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     """
     A custom inverter type is built from a copy of the GE row, but must not inherit GivEnergy's rate step (#5324).
@@ -5504,6 +5656,17 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    # #5359: mixed-fleet rate path must be chosen from THIS inverter's own entry, not from
+    # whether the percent key exists anywhere in args
+    failed |= test_mixed_fleet_rate_path_from_own_entry("mixed_fleet_charge_rate_entry_set", ha, inv, 200, percent_entry_set=True)
+    failed |= test_mixed_fleet_rate_path_from_own_entry("mixed_fleet_charge_rate_entry_unset", ha, inv, 200, percent_entry_set=False)
+    failed |= test_mixed_fleet_rate_path_from_own_entry("mixed_fleet_discharge_rate_entry_set", ha, inv, 250, percent_entry_set=True, discharge=True)
+    failed |= test_mixed_fleet_rate_path_from_own_entry("mixed_fleet_discharge_rate_entry_unset", ha, inv, 250, percent_entry_set=False, discharge=True)
+    failed |= test_mixed_fleet_rate_write_skips_unset_entry("mixed_fleet_charge_rate_write_skips_unset_percent", ha, inv)
+    failed |= test_mixed_fleet_rate_write_skips_unset_entry("mixed_fleet_discharge_rate_write_skips_unset_percent", ha, inv, discharge=True)
+    if failed:
+        return failed
+
     # #4415: timed_charge_current/timed_discharge_current must be re-asserted every call, not
     # just when the rate itself changes
     failed |= test_current_reasserted_on_unchanged_rate("current_reassert_charge", ha, inv, 0, 200)
@@ -5985,6 +6148,7 @@ charge_start_service:
     failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
     failed |= test_window_warning_names_components_when_type_unset("window_warning_names_components_when_type_unset", my_predbat, dummy_items)
     failed |= test_short_per_inverter_list_gets_its_dummy_entity("short_per_inverter_list_gets_its_dummy_entity", my_predbat)
+    failed |= test_create_missing_arg_does_not_fill_sibling_entries("create_missing_arg_does_not_fill_sibling_entries", my_predbat)
     if failed:
         return failed
 
