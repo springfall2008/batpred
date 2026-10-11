@@ -2146,12 +2146,15 @@ class Inverter:
         With nothing to read back (rate_without_entity()), falling back to battery_rate_max sent the
         maximum as the start script's {power} however low the planned rate was. Predbat chose the rate
         itself, so it is held on this object instead, which outlives the plan cycle (#5126). It is lost
-        on a restart, which reads battery_rate_max until the next rate is set.
+        on a restart, which reads this direction's maximum until the next rate is set. That is the maximum
+        after inverter_limit_charge/discharge, not the raw battery_rate_max: a limit within the deadband
+        of the raw maximum would otherwise never be taken as a change, and {power} would stay above it.
 
         adjust_charge_rate()/adjust_discharge_rate() move it as they would a register - see rate_changed().
         """
         if self.rate_without_entity(direction):
-            return self.rate_last_set.get(direction, self.battery_rate_max_raw)
+            rate_max = self.battery_rate_max_charge if direction == "charge" else self.battery_rate_max_discharge
+            return self.rate_last_set.get(direction, int(rate_max * MINUTE_WATT))
         return self.base.get_arg(direction + "_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
 
     def rate_tolerances(self, rate_max):

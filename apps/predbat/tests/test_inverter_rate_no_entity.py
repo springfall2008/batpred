@@ -21,7 +21,7 @@ import os
 import yaml
 
 from config import INVERTER_DEF
-from const import POWER_SERVICES
+from const import MINUTE_WATT, POWER_SERVICES
 from utils import services_send_power
 from inverter import Inverter
 from tests.test_inverter import dummy_sleep
@@ -117,6 +117,25 @@ def test_rate_held_like_a_register(test_name, my_predbat):
         failed |= _check(test_name, "charge rate read back after setting {}W".format(rate), inv.get_current_charge_rate(), expect)
     failed |= _check(test_name, "charge_start_service power", _service_power(my_predbat, inv, "charge"), [2000])
     return failed
+
+
+def test_rate_default_respects_inverter_limit(test_name, my_predbat):
+    """Before any rate is set, the rate read back is the limited maximum, so a limit within the deadband of battery_rate_max still reaches {power}."""
+    print("**** Running Test: {} ****".format(test_name))
+    my_predbat.args["inverter_limit_charge"] = RATE_MAX - 200
+    my_predbat.args["inverter_limit_discharge"] = RATE_MAX - 100
+    try:
+        inv = _build_script_inverter(my_predbat)
+        failed = False
+        failed |= _check(test_name, "charge rate before any is set", inv.get_current_charge_rate(), RATE_MAX - 200)
+        failed |= _check(test_name, "discharge rate before any is set", inv.get_current_discharge_rate(), RATE_MAX - 100)
+        # What a restart's first cycle does: reset to the (limited) maximum, then start charging
+        inv.adjust_charge_rate(inv.battery_rate_max_charge * MINUTE_WATT, notify=False)
+        failed |= _check(test_name, "charge_start_service power", _service_power(my_predbat, inv, "charge"), [RATE_MAX - 200])
+        return failed
+    finally:
+        my_predbat.args.pop("inverter_limit_charge", None)
+        my_predbat.args.pop("inverter_limit_discharge", None)
 
 
 def test_rate_survives_refresh(test_name, my_predbat):
@@ -362,6 +381,7 @@ def run_inverter_rate_no_entity_tests(my_predbat):
         failed = False
         failed |= test_rate_reaches_start_service("inverter_rate_no_entity_start_service", my_predbat)
         failed |= test_rate_held_like_a_register("inverter_rate_no_entity_held", my_predbat)
+        failed |= test_rate_default_respects_inverter_limit("inverter_rate_no_entity_default_limit", my_predbat)
         failed |= test_rate_survives_refresh("inverter_rate_no_entity_refresh", my_predbat)
         failed |= test_rate_entity_still_read("inverter_rate_no_entity_entity_read", my_predbat)
         failed |= test_register_small_rate_not_rewritten("inverter_rate_no_entity_register_small_rate", my_predbat)
