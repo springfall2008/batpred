@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, useRef, type CSSProperties } from 'react'
+import { flushSync } from 'react-dom'
 
 import {
   FontAwesomeIcon,
@@ -194,31 +195,6 @@ function formatOverrideTime(value: string) {
   return `${day} ${time}`
 }
 
-/*
- * Let a mobile bottom sheet paint before opening its keyboard. Focusing an
- * input during the same render as the sheet can leave the sheet behind the
- * keyboard in embedded Home Assistant views until the user types.
- */
-function useDelayedSheetInputFocus(open: boolean) {
-  const inputRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    const timeout = window.setTimeout(() => {
-      inputRef.current?.focus()
-    }, 120)
-
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [open])
-
-  return inputRef
-}
-
 type RateType = 'import' | 'export'
 
 function getManualRateOverride(slotMinute: number, type: RateType, overrides: PlanOverrides) {
@@ -267,7 +243,7 @@ function RateCell({
   const [error, setError] = useState<string | null>(null)
 
   const controlRef = useRef<HTMLDivElement | null>(null)
-  const inputRef = useDelayedSheetInputFocus(open)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (!open) {
@@ -308,9 +284,16 @@ function RateCell({
      * would unnecessarily reset its value.
      */
     if (!open) {
-      setValue(String(override?.rate ?? rate))
+      // The input must be focused within this tap gesture for mobile browsers
+      // to show their keyboard. Flush the sheet into the DOM first.
+      flushSync(() => {
+        setValue(String(override?.rate ?? rate))
+        setError(null)
+        onToggle()
+      })
+      inputRef.current?.focus()
 
-      setError(null)
+      return
     }
 
     onToggle()
@@ -532,7 +515,7 @@ function LoadCell({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const controlRef = useRef<HTMLDivElement | null>(null)
-  const inputRef = useDelayedSheetInputFocus(open)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (!open) {
@@ -566,8 +549,14 @@ function LoadCell({
     }
 
     if (!open) {
-      setValue(String(override?.adjustment ?? row.load_forecast))
-      setError(null)
+      flushSync(() => {
+        setValue(String(override?.adjustment ?? row.load_forecast))
+        setError(null)
+        onToggle()
+      })
+      inputRef.current?.focus()
+
+      return
     }
 
     onToggle()
@@ -702,7 +691,7 @@ function TargetCell({
   onOverrideSubmitted
 }: TargetCellProps) {
   const controlRef = useRef<HTMLDivElement | null>(null)
-  const inputRef = useDelayedSheetInputFocus(open)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   const [value, setValue] = useState('')
 
@@ -738,9 +727,14 @@ function TargetCell({
        */
       const initialValue = override?.target ?? plannedTarget ?? row.soc_percent
 
-      setValue(String(initialValue))
+      flushSync(() => {
+        setValue(String(initialValue))
+        setError(null)
+        onToggle()
+      })
+      inputRef.current?.focus()
 
-      setError(null)
+      return
     }
 
     onToggle()
