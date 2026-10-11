@@ -1363,8 +1363,8 @@ class OctopusAPI(ComponentBase):
             # v19.0.1 for the same reason; match that. The reward/code/type maps are populated above
             # first, because a joined Happy Hour takes its event type from this list.
             if event.get("eventType", None) == "WEEKEND_HAPPY_HOUR":
-                # Logged once an hour per event: the event list is re-read every poll
-                self.log_gate.log(self.log, "happy-hour", code, ["OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code)], None)
+                # Logged once an hour per event (by id, so events with no code are told apart): the event list is re-read every poll
+                self.log_gate.log(self.log, "happy-hour", (event_id, code), ["OctopusAPI: Not offering Weekend Happy Hour event code {} as available - it cannot be joined through the API".format(code)], None)
                 continue
             target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
             if target_regions and account_region_id not in target_regions:
