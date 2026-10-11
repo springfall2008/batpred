@@ -396,6 +396,7 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
         mock_get.side_effect = [
             requests.exceptions.ConnectionError("supervisor down"),  # app info
             create_mock_requests_response(502, json_error=True),  # /api/services: HTML 502 page, not JSON
+            create_mock_requests_response(503, {"message": "Service Unavailable"}),  # a gateway's JSON error body is not Home Assistant being ready
             requests.Timeout("still starting"),
             create_mock_requests_response(200, [{"domain": "homeassistant"}]),
         ]
@@ -419,8 +420,8 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
             failed += 1
             return failed
 
-    if sleeps != [HA_RETRY_SECONDS, HA_RETRY_SECONDS * 2]:
-        print(f"ERROR: expected two backed-off pauses, got {sleeps}")
+    if sleeps != [HA_RETRY_SECONDS, HA_RETRY_SECONDS * 2, HA_RETRY_SECONDS * 4]:
+        print(f"ERROR: expected three backed-off pauses, got {sleeps}")
         failed += 1
     else:
         print("✓ retried with backoff")

@@ -1271,10 +1271,12 @@ class HAInterface(ComponentBase):
                     self.log("Error: Too many rejected API calls, stopping")
                     self.fatal_error_occurred()
                 return None
-            if track and response.status_code in HA_RESTARTING_STATUSES:
-                # A gateway in front of Home Assistant answering for it while it restarts, whatever the body says
+            if core and response.status_code in HA_RESTARTING_STATUSES:
+                # A gateway in front of Home Assistant answering for it while it restarts, whatever the body says.
+                # Checked even when not tracking, so initialize() keeps retrying rather than taking a JSON error body as ready.
                 self.log("Warn: HTTP {} from {}".format(response.status_code, url))
-                self.ha_unavailable("HTTP {} from {}".format(response.status_code, endpoint))
+                if track:
+                    self.ha_unavailable("HTTP {} from {}".format(response.status_code, endpoint))
                 return None
             data = response.json()
             if track:
