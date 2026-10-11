@@ -396,6 +396,7 @@
 }
 
 .plan-timeline-event.timeline-action-hold-car,
+.plan-timeline-event.timeline-action-hold-car-export,
 .plan-timeline-event.timeline-action-hold-iboost,
 .plan-timeline-event.timeline-action-no-charge,
 .plan-timeline-event.timeline-action-unknown {

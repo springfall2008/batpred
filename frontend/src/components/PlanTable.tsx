@@ -28,6 +28,7 @@ import NordPoolIcon from './NordPoolIcon'
 
 import type { Plan, PlanOverrides } from '../types/plan'
 import { formatMajorCurrency, resolveCurrencySymbols } from '../utils/currency'
+import { getEffectivePlanState, hasCarHoldBeforeExport } from '../utils/plan'
 
 import './PlanTable.css'
 
@@ -771,15 +772,22 @@ function getActionTypeFromDisplayState(state?: string | null): ActionType | null
 }
 
 function getPlannedActions(row: PlanRow): ActionType[] {
+  const hasCarHold = hasCarHoldBeforeExport(row)
+  const reasonActions: ActionType[] = hasCarHold ? ['hold-car'] : []
   const splitActions = [row.state_text, row.state2_text]
     .map(getActionTypeFromDisplayState)
     .filter((action): action is ActionType => action !== null)
 
-  if (splitActions.length > 1) {
-    return [...new Set(splitActions)]
+  // Keep the final export visible even for an older response that lacks the
+  // legacy display strings but does include the structured split-slot reason.
+  const finalAction = hasCarHold ? [getActionType(row.state)] : []
+  const actions = [...new Set([...reasonActions, ...splitActions, ...finalAction])]
+
+  if (actions.length > 0) {
+    return actions
   }
 
-  return [getActionType(row.state)]
+  return [getActionType(getEffectivePlanState(row))]
 }
 
 /*
