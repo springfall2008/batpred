@@ -137,6 +137,28 @@ async def test_octopus_logging(my_predbat):
         print("ERROR: the request behind a repeated error should be logged in full beside it, got {}".format(log_lines))
         failed = True
 
+    # A request re-logged in full beside a failure is recorded by the gate, so the hourly full re-log counts from
+    # that time rather than the earlier one: a success just after the old hour runs out logs the request briefly
+    api.log_gate = RepeatLogGate(REPEAT_FULL_LOG_SECONDS)
+    api.async_read_response_retry = AsyncMock(return_value=response_body)
+    await api.async_graphql_query("query { relog }", "test-relog", returns_data=True)
+    for entry, (logged_at, wall) in list(api.log_gate.logged.items()):
+        api.log_gate.logged[entry] = (logged_at - REPEAT_FULL_LOG_SECONDS + 5, wall)
+    api.async_read_response_retry = AsyncMock(return_value={"errors": [{"message": "Relog failed", "extensions": {"errorCode": "KT-CT-9999"}}]})
+    log_lines.clear()
+    await api.async_graphql_query("query { relog }", "test-relog", returns_data=True, ignore_errors=True)
+    if not any("query { relog }" in line for line in log_lines):
+        print("ERROR: the request behind a failure should be logged in full, got {}".format(log_lines))
+        failed = True
+    for entry, (logged_at, wall) in list(api.log_gate.logged.items()):
+        api.log_gate.logged[entry] = (logged_at - 10, wall)
+    api.async_read_response_retry = AsyncMock(return_value=response_body)
+    log_lines.clear()
+    await api.async_graphql_query("query { relog }", "test-relog", returns_data=True)
+    if any("query { relog }" in line for line in log_lines) or not any("(query as logged in full at" in line for line in log_lines):
+        print("ERROR: a request re-logged in full beside a failure should restart its hourly interval, got {}".format(log_lines))
+        failed = True
+
     # A status 200 with no usable body (unreadable JSON, a rate limit) or no data is a failure too: the request and
     # the response are logged in full beside it, even when they repeat
     for bad_body, context in [(None, "test-no-body"), ({"other": 1}, "test-no-data"), ({"data": None}, "test-null-data")]:

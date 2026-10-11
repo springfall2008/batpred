@@ -2336,7 +2336,8 @@ class OctopusAPI(ComponentBase):
         def log_request_beside_failure():
             """Log the full request beside a failure when it was only logged briefly ("as logged in full at ...")."""
             if not request_logged[0] and request_logged[1]:
-                self.log(request_logged[1])
+                # Through the gate, so it records this full log: later brief lines name this time, and the hourly re-log counts from it
+                self.log_gate.log(self.log, ("request", request_context), query, [request_logged[1]], None, always_full=True)
                 request_logged[0] = True
 
         try:
