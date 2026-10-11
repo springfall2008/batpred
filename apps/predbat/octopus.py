@@ -2394,9 +2394,9 @@ class OctopusAPI(ComponentBase):
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
                 body_text = str(response_body)
-                # A failure is anything the code below will not return data for: a bad status, an errors key, or a
-                # body that is missing (unreadable JSON, a rate limit) or has no data
-                failed = response.status != 200 or not isinstance(response_body, dict) or "errors" in response_body or "data" not in response_body
+                # Logged in full with its request: a bad status, a body that is missing (unreadable JSON, a rate limit)
+                # or has no data, or any errors key - even a partial error returned with data when ignore_errors is set
+                failed = response.status != 200 or not isinstance(response_body, dict) or "errors" in response_body or response_body.get("data") is None
                 if failed:
                     log_request_beside_failure()
                 self.log_gate.log(

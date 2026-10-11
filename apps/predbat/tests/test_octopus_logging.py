@@ -139,7 +139,7 @@ async def test_octopus_logging(my_predbat):
 
     # A status 200 with no usable body (unreadable JSON, a rate limit) or no data is a failure too: the request and
     # the response are logged in full beside it, even when they repeat
-    for bad_body, context in [(None, "test-no-body"), ({"other": 1}, "test-no-data")]:
+    for bad_body, context in [(None, "test-no-body"), ({"other": 1}, "test-no-data"), ({"data": None}, "test-null-data")]:
         api.async_read_response_retry = AsyncMock(return_value=bad_body)
         await api.async_graphql_query("query { empty }", context, returns_data=True)
         log_lines.clear()
