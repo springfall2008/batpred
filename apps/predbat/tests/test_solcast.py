@@ -1450,7 +1450,7 @@ def test_publish_pv_stats_ignores_stale_shared_midnight(my_predbat):
     calculate_yesterday() (output.py) rewinds the shared self.midnight_utc by one day for the
     duration of the savings calculation, then restores it ~350 lines later. Components run on
     their own OS threads (hass.py's create_task uses threading.Thread), and SolarAPI's publish
-    cycle runs on an independent schedule from calculate_yesterday()'s hourly one - so the two
+    cycle runs on an independent schedule from calculate_yesterday()'s once-per-plan-slot one - so the two
     can genuinely overlap. If that happens while self.midnight_utc is rewound,
     publish_pv_stats()'s day-bucketing (day = (this_point - midnight_today).days) used to bucket
     every entry one day late, emptying "today" and shifting the rest down, until

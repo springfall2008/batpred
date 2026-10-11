@@ -14,7 +14,7 @@ Unit tests for Output.calculate_yesterday().
 Covered scenarios
 -----------------
 1. Early-exit when savings_last_updated is in the current plan slot; a run once a slot
-   has ended (test 1b) or the day has rolled over (test 4) is not skipped.
+   has ended (test 1b) or the day has rolled over (tests 4 and 4b) is not skipped.
 2. Basic run with no car: function runs, key dashboard entities are published
    and all state attributes are correctly restored afterwards.
 3. Car-slot subtraction: when car_charging_slots has a slot covering some
@@ -754,6 +754,37 @@ def _test_early_exit_respects_day_rollover(my_predbat, failed):
 
     _restore_methods(my_predbat, original_run_pred)
     my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_midnight_replan_rebuilds(my_predbat, failed):
+    """Test 4b: The forced midnight re-plan rebuilds, although the one-run wait counts 00:00 towards yesterday's last slot.
+
+    Otherwise, with an hourly re-plan, the *_yesterday sensors would go on showing the day before yesterday until 01:00.
+    """
+    print("calculate_yesterday: Test 4b – the midnight re-plan rebuilds")
+    _setup_base(my_predbat)
+    saved = (my_predbat.now_utc, my_predbat.plan_interval_minutes)
+    # No cost_today history: a run that gets past the early exit records the attempt and stops, so the probe is cheap
+    my_predbat.get_history_wrapper = lambda *args, **kwargs: None
+    try:
+        my_predbat.plan_interval_minutes = 30
+        my_predbat.savings_last_updated = datetime(2024, 10, 4, 23, 40, 0, tzinfo=UTC)
+        # Same slot and same day still waits
+        my_predbat.now_utc = datetime(2024, 10, 4, 23, 55, 0, tzinfo=UTC)
+        my_predbat.calculate_yesterday()
+        if my_predbat.savings_last_updated != datetime(2024, 10, 4, 23, 40, 0, tzinfo=UTC):
+            print("ERROR: 23:55 is in the same history slot as 23:40 and should not rebuild")
+            failed = True
+        my_predbat.now_utc = datetime(2024, 10, 5, 0, 0, 0, tzinfo=UTC)
+        my_predbat.calculate_yesterday()
+        if my_predbat.savings_last_updated != my_predbat.now_utc:
+            print("ERROR: the midnight re-plan should rebuild for the day just ended: savings_last_updated {}".format(my_predbat.savings_last_updated))
+            failed = True
+    finally:
+        my_predbat.now_utc, my_predbat.plan_interval_minutes = saved
+        del my_predbat.get_history_wrapper
+        my_predbat.savings_last_updated = None
     return failed
 
 
@@ -2342,6 +2373,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_car_slot_subtraction(my_predbat, failed)
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
+    failed = _test_midnight_replan_rebuilds(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_reconstruct_car_slots_called_with_widened_end_record(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)

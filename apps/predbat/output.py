@@ -3213,9 +3213,10 @@ class Output:
         # Recompute once per completed plan slot rather than every iteration: the plan history (the web page's
         # History view) shows each slot from what actually happened, so rebuilding as soon as a slot ends keeps the
         # last finished slot on show - the live Plan view starts at the current slot, so an hourly rebuild left the
-        # slots since it in neither view. A day rolling over is a new slot too. Each rebuild takes under a second,
-        # and it waits one run past the boundary (see history_slot) so the boundary run's own writes are recorded.
-        if self.savings_last_updated and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
+        # slots since it in neither view. Each rebuild takes under a second, and it waits one run past the boundary
+        # (see history_slot) so the boundary run's own writes are recorded. A day rolling over rebuilds straight away,
+        # on the midnight re-plan, so the *_yesterday sensors move on to the day just ended without waiting a re-plan.
+        if self.savings_last_updated and self.savings_last_updated.date() == self.now_utc.date() and self.history_slot(self.savings_last_updated) == self.history_slot(self.now_utc):
             return
 
         # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
