@@ -140,8 +140,9 @@ class CarChargerControl:
         # car_n -> why that car's charger is left alone ("octopus", "car", "discovering", "discovery_failed" or "unknown"), so
         # each reason is logged once rather than every cycle, and again only when it changes
         self.charger_control_octopus_cars = {}
-        # When the wait for Octopus or Kraken discovery began, None while not waiting
-        self.charger_control_discovery_since = None
+        # car_n -> when that car began waiting for Octopus or Kraken discovery. Kept per car, so one car whose
+        # driver is known cannot keep restarting the clock of another still waiting
+        self.charger_control_discovery_since = {}
         self.charger_control_switch_prefix = switch_prefix
         # Guest charging: deliberately not persisted, so a restart puts Predbat back in charge
         self.charger_control_guest = False
@@ -223,7 +224,7 @@ class CarChargerControl:
 
         Only a component running its automatic setup ever wires them, so one with
         octopus_automatic off is never "still discovering" - waiting on it would leave the
-        charger alone for good. How long it has been is kept, see charger_control_discovery_overdue().
+        charger alone for good. How long each car has waited is kept, see charger_control_discovery_overdue().
         """
         components = getattr(self.base, "components", None)
         discovering = False
@@ -234,20 +235,20 @@ class CarChargerControl:
             kraken = components.get_component("kraken")
             discovering = (octopus is not None and octopus.automatic and octopus.intelligent_config_devices is None) or (kraken is not None and not kraken.api_started)
         if not discovering:
-            self.charger_control_discovery_since = None
-        elif self.charger_control_discovery_since is None:
-            self.charger_control_discovery_since = datetime.now()
+            self.charger_control_discovery_since = {}
         return discovering
 
-    def charger_control_discovery_overdue(self):
-        """Has the wait for Octopus or Kraken discovery gone on past OCTOPUS_DISCOVERY_WAIT_MINUTES?
+    def charger_control_discovery_overdue(self, car_n):
+        """Has car car_n's wait for Octopus or Kraken discovery gone on past OCTOPUS_DISCOVERY_WAIT_MINUTES?
+
+        The clock starts the first time this is asked for the car during a wait.
 
         Discovery normally finishes in a cycle or two. One that does not - a Kraken login that keeps
         failing, say - still cannot say whether Octopus drives the charger, so it is then treated as
         "cannot tell" rather than waited on for good.
         """
-        since = self.charger_control_discovery_since
-        return since is not None and (datetime.now() - since).total_seconds() >= OCTOPUS_DISCOVERY_WAIT_MINUTES * 60
+        since = self.charger_control_discovery_since.setdefault(car_n, datetime.now())
+        return (datetime.now() - since).total_seconds() >= OCTOPUS_DISCOVERY_WAIT_MINUTES * 60
 
     def charger_control_log_left_alone(self, car_n, why):
         """Say why a car's charger is being left alone.
@@ -578,7 +579,7 @@ class CarChargerControl:
         drives = self.charger_control_octopus_drives_charger(car_n)
         if drives is not None:
             # Known either way, so a later wait for discovery starts its clock afresh
-            self.charger_control_discovery_since = None
+            self.charger_control_discovery_since.pop(car_n, None)
         # Octopus drives the car itself: the charger is left alone too, unless the user has asked
         # Predbat to drive it to the dispatches - or has turned Octopus Intelligent charging off in
         # Predbat, which then plans the car itself and drives the charger to that plan
@@ -591,7 +592,7 @@ class CarChargerControl:
             elif car_driven:
                 why = "car"
             elif self.charger_control_octopus_discovering():
-                why = "discovery_failed" if self.charger_control_discovery_overdue() else "discovering"
+                why = "discovery_failed" if self.charger_control_discovery_overdue(car_n) else "discovering"
             else:
                 why = "unknown"
             if self.charger_control_octopus_cars.get(car_n) != why:

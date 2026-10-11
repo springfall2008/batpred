@@ -653,7 +653,7 @@ def test_octopus_rule_discovery_wait_is_bounded():
     assert not any(line.startswith("Warn") for line in component.logs), component.logs
 
     # It never comes back
-    component.charger_control_discovery_since = datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)
+    component.charger_control_discovery_since = {0: datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)}
     assert component.charger_control_octopus_drives_charger(0) is None, "Still cannot tell, so Predbat does not take it over"
     run_async(component.charger_control_tick(_now()))
     assert component.commands == [("a", "off", 0), ("a", "release", False)], "The stop is undone rather than left: {}".format(component.commands)
@@ -665,15 +665,39 @@ def test_octopus_rule_discovery_wait_is_bounded():
     # Discovery that finishes resets the wait, so a later restart of the component waits afresh
     component.base.components = FakeComponents(None, FakeKraken(started=True))
     component.charger_control_octopus_discovering()
-    assert component.charger_control_discovery_since is None
+    assert component.charger_control_discovery_since == {}
     run_async(component.charger_control_tick(_now()))
     assert component.commands[-1] == ("a", "off", 0), "Predbat drives it again once discovery has wired nothing for it: {}".format(component.commands)
 
     # A wait left over from before a charger's driver became known does not cut the next wait short
     wired = _octopus_component(None, is_charger=False)
-    wired.charger_control_discovery_since = datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)
+    wired.charger_control_discovery_since = {0: datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)}
     run_async(wired.charger_control_tick(_now()))
-    assert wired.charger_control_discovery_since is None, wired.charger_control_discovery_since
+    assert 0 not in wired.charger_control_discovery_since, wired.charger_control_discovery_since
+
+
+def test_octopus_rule_discovery_wait_is_per_car():
+    """One car whose driver is known does not restart the wait of another car still waiting on discovery,
+    so the waiting car still reaches "cannot tell" once its wait is over."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    component.base.components = FakeComponents(None, FakeKraken(started=False))
+    component.base.car_slot_owner = None
+    # Car 0 is wired and Octopus drives the car, which Predbat is asked to follow; car 1 is not wired yet
+    component.args["octopus_intelligent_slot"] = [DISPATCH]
+    component.sensors[DISPATCH] = {"is_charger": False}
+    component.args["octopus_intelligent_charger_follows_car"] = True
+    _plan(component, 0, [])
+    _plan(component, 1, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    assert 1 in component.charger_control_discovery_since and 0 not in component.charger_control_discovery_since, component.charger_control_discovery_since
+    assert not any(line.startswith("Warn") for line in component.logs), component.logs
+
+    # Car 1's wait runs out, while car 0 goes on being driven every cycle
+    component.charger_control_discovery_since[1] = datetime.datetime.now() - datetime.timedelta(minutes=OCTOPUS_DISCOVERY_WAIT_MINUTES + 1)
+    run_async(component.charger_control_tick(_now()))
+    assert sum(line.startswith("Warn") and "has not found its devices" in line and "car 1" in line for line in component.logs) == 1, component.logs
 
 
 def test_octopus_rule_cannot_tell_releases_a_held_charger():
@@ -848,6 +872,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_does_not_wait_without_octopus_automatic()
     test_octopus_rule_waits_for_kraken()
     test_octopus_rule_discovery_wait_is_bounded()
+    test_octopus_rule_discovery_wait_is_per_car()
     test_octopus_rule_cannot_tell_releases_a_held_charger()
     test_octopus_rule_unmatched_regex_is_not_a_sensor()
     test_octopus_rule_other_slot_owner_hands_off()
