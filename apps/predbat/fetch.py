@@ -2407,8 +2407,17 @@ class Fetch:
                         except (ValueError, TypeError):
                             self.log("Warn: octopus_charge_limit is set to a bad value {} for car {} in apps.yaml, must be a number".format(octopus_limit, car_n))
                             octopus_limit = None
+                    # With the charger linked rather than the car, Octopus's target is a percentage to add, not a
+                    # SoC to reach (#3034), so it counts from the SoC the car had when it was plugged in. Planned
+                    # dispatches only say the car is plugged in when they are dropped for an unplugged car
+                    plugged = bool(self.car_charging_planned[car_n] or self.car_charging_now[car_n] or (planned and not self.octopus_intelligent_ignore_unplugged))
+                    base_soc = self.octopus_charge_target_base_soc(car_n, plugged, save)
                     if octopus_limit:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
+                        if self.octopus_charge_target_is_added(entity_id):
+                            if save:
+                                self.log("Car {} Octopus is linked to the charger, so its target adds {}kWh to the {}kWh the car had when plugged in".format(car_n, octopus_limit, base_soc))
+                            octopus_limit = dp3(base_soc + octopus_limit)
                         self.car_charging_limit[car_n] = min(self.car_charging_limit[car_n], octopus_limit)
                     if octopus_ready_time:
                         self.car_charging_plan_time[car_n] = octopus_ready_time
@@ -2470,6 +2479,52 @@ class Fetch:
         # Live plan only, as for car_manual_soc_track() - a compare.py re-run must not publish anything
         if save:
             self.car_manual_soc_mirror()
+
+    def octopus_charge_target_is_added(self, entity_id):
+        """
+        Is the Octopus Intelligent charge target for this dispatch sensor a percentage to add, rather than a SoC to reach?
+
+        Octopus takes a percentage to add when the charger is linked, and a SoC to reach when the car is (#3034).
+        Predbat's own Octopus and Kraken components say which with is_charger, and the HA Octopus Energy
+        integration with device_type. Older versions of the integration say neither, but fill in only the
+        charge point's power for a charger and only the battery size for a car, so that tells them apart.
+        Returns None when nothing does, which keeps the target read as a SoC to reach, as it always was.
+        """
+        is_charger = self.get_state_wrapper(entity_id=entity_id, attribute="is_charger")
+        if isinstance(is_charger, bool):
+            return is_charger
+        device_type = self.get_state_wrapper(entity_id=entity_id, attribute="device_type")
+        if device_type == "ELECTRIC_VEHICLE_CHARGERS":
+            return True
+        if device_type == "ELECTRIC_VEHICLES":
+            return False
+        size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
+        rate = self.get_state_wrapper(entity_id=entity_id, attribute="charge_point_power_in_kw")
+        if rate is not None and size is None:
+            return True
+        if size is not None and rate is None:
+            return False
+        return None
+
+    def octopus_charge_target_base_soc(self, car_n, plugged, save):
+        """
+        The car's SoC (kWh) when it was plugged in, which a charger-linked Octopus target adds to.
+
+        While the car is unplugged this is just its SoC now. Once it is plugged in it is the lowest SoC seen
+        since, which holds it at the plug-in SoC while the car charges. A SoC of 0 is a sensor that could not
+        be read, so it never replaces a plug-in SoC already held. Not saved: after a restart part way through
+        a charge it starts again from the SoC then, which can only put the limit higher, not lower.
+        Only the live fetch records it - compare.py's re-runs (save=False) take the live fetch's as it is,
+        since car_charging_planned there is no longer the plug sensor's reading.
+        """
+        soc = self.car_charging_soc[car_n]
+        base = self.octopus_charge_target_base.get(car_n)
+        if not save:
+            return soc if base is None else base
+        if plugged and base and (soc <= 0 or base < soc):
+            soc = base
+        self.octopus_charge_target_base[car_n] = soc
+        return soc
 
     def fetch_pv_forecast(self):
         """
