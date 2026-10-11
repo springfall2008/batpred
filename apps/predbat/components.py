@@ -512,7 +512,7 @@ COMPONENT_LIST = {
             # export limit from the inverter's own feed-in limitation when that can be trusted.
             "inverter_limit": {"required": False, "config": "sungrow_inverter_limit"},
             "export_limit": {"required": False, "config": "sungrow_export_limit"},
-            "api_delay": {"required": False, "default": 2, "config": "sungrow_api_delay"},
+            "api_delay": {"required": False, "default": 2.0, "config": "sungrow_api_delay"},
             "min_write_interval": {"required": False, "default": 300, "config": "sungrow_min_write_interval"},
             # On by default while the integration is unverified against hardware: a tester's log
             # is the only evidence there is. Credentials and location fields are masked.
