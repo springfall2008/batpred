@@ -955,7 +955,7 @@
     z-index: 110;
     width: auto;
     max-width: none;
-    max-height: calc(100dvh - var(--plan-mobile-keyboard-offset, 0px));
+    max-height: calc(100vh - var(--plan-mobile-keyboard-offset, 0px));
     padding: 0.8rem;
     padding-bottom: max(0.8rem, env(safe-area-inset-bottom));
     border-radius: 1rem 1rem 0 0;

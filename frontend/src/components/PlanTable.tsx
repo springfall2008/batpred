@@ -1317,9 +1317,17 @@ export default function PlanTable({
     }
 
     const viewport = visualViewport as VisualViewport
+    let baselineHeight = viewport.height + viewport.offsetTop
 
     function updateKeyboardOffset() {
-      const offset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+      const visibleHeight = viewport.height + viewport.offsetTop
+
+      // Mobile browsers do not agree on whether innerHeight follows the
+      // keyboard. Comparing the current visual viewport with its unoccluded
+      // height works in both a browser tab and Home Assistant's iframe.
+      baselineHeight = Math.max(baselineHeight, visibleHeight)
+
+      const offset = Math.max(0, baselineHeight - visibleHeight)
 
       document.documentElement.style.setProperty('--plan-mobile-keyboard-offset', `${offset}px`)
     }
