@@ -200,6 +200,13 @@ async def test_octopus_waf_block(my_predbat):
         failed = True
     else:
         print("PASS: first-attempt 401 response body logged once")
+    # The retry's own 401 must not log the full request again: the first attempt has just logged it in full
+    full_requests = [line for line in lines6b if line.startswith("OctopusAPI: Making GraphQL request to ")]
+    if len(full_requests) != 1:
+        print("ERROR: a 401 then a failed retry should log the full request once, got {}".format(full_requests))
+        failed = True
+    else:
+        print("PASS: full request logged once across a failed retry")
 
     if failed:
         print("**** Octopus WAF/CloudFront 403 tests FAILED ****")

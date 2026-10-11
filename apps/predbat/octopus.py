@@ -2334,8 +2334,10 @@ class OctopusAPI(ComponentBase):
         request_logged = [True, None]
 
         def log_request_beside_failure():
-            """Log the full request beside a failure when it was only logged briefly ("as logged in full at ...")."""
-            if not request_logged[0] and request_logged[1]:
+            """Log the full request beside a failure when it was only logged briefly ("as logged in full at ...").
+
+            Not on a retry: only a failure causes one, and that failure has just logged the request in full."""
+            if not request_logged[0] and request_logged[1] and _retry_count == 0:
                 # Through the gate, so it records this full log: later brief lines name this time, and the hourly re-log counts from it
                 self.log_gate.log(self.log, ("request", request_context), query, [request_logged[1]], None, always_full=True)
                 request_logged[0] = True
