@@ -1540,6 +1540,11 @@ export default function PlanTable({
 
       <div className="plan-table-scroll">
         <table className={['plan-table', debugEnabled ? 'is-debug' : '', colourCells ? 'is-cell-colours' : ''].filter(Boolean).join(' ')}>
+          <colgroup>
+            <col className="plan-time-column" />
+            {Array.from({ length: columnCount - 1 }, (_, index) => <col key={index} />)}
+          </colgroup>
+
           <thead>
             <tr>
               <th>
