@@ -504,7 +504,8 @@
  * Mobile navigation
  * ============================================================ */
 
-@media (max-width: 700px) {
+/* Phone landscape has the same limited horizontal room as portrait. */
+@media (max-width: 700px), (max-width: 950px) and (max-height: 500px) and (orientation: landscape) {
   /*
      * Fixed header at the top of the mobile dashboard.
      */
@@ -802,7 +803,7 @@
  * Horizontal desktop navigation
  * ============================================================ */
 
-@media (min-width: 701px) {
+@media (min-width: 951px), (min-width: 701px) and (min-height: 501px) {
   .app-navigation.is-horizontal,
   .app-navigation.is-horizontal.is-collapsed {
     right: 0;
