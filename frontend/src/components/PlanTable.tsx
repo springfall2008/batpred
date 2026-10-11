@@ -1152,11 +1152,19 @@ export default function PlanTable({
         return
       }
 
-      const viewportWidth = window.visualViewport?.width ?? window.innerWidth
+      // Measure from the unshifted position. Otherwise, a later measurement
+      // treats the previous correction as the starting point and can move the
+      // tooltip back outside the viewport.
+      element.style.removeProperty(shiftProperty)
+
+      const viewport = window.visualViewport
+      const viewportLeft = viewport?.offsetLeft ?? 0
+      const viewportWidth = viewport?.width ?? window.innerWidth
       const bounds = element.getBoundingClientRect()
       const safeInset = 8
-      const maximumLeft = Math.max(safeInset, viewportWidth - bounds.width - safeInset)
-      const constrainedLeft = Math.min(maximumLeft, Math.max(safeInset, bounds.left))
+      const minimumLeft = viewportLeft + safeInset
+      const maximumLeft = Math.max(minimumLeft, viewportLeft + viewportWidth - bounds.width - safeInset)
+      const constrainedLeft = Math.min(maximumLeft, Math.max(minimumLeft, bounds.left))
 
       element.style.setProperty(shiftProperty, `${constrainedLeft - bounds.left}px`)
     })
@@ -1168,6 +1176,10 @@ export default function PlanTable({
 
   function constrainActionTooltip(tooltip: HTMLSpanElement | null) {
     constrainFloatingElement(tooltip, '--plan-action-tooltip-shift')
+  }
+
+  function constrainActionTooltipForControl(control: HTMLElement) {
+    constrainActionTooltip(control.querySelector<HTMLSpanElement>('.plan-action-tooltip'))
   }
 
   const [colourStyle, setColourStyle] = useState<'dots' | 'cells'>(() => {
@@ -1517,6 +1529,12 @@ export default function PlanTable({
                         className={['plan-action-control', menuOpen ? 'is-open' : '']
                           .filter(Boolean)
                           .join(' ')}
+                        onPointerEnter={(event) => {
+                          constrainActionTooltipForControl(event.currentTarget)
+                        }}
+                        onFocusCapture={(event) => {
+                          constrainActionTooltipForControl(event.currentTarget)
+                        }}
                         onPointerDown={(event) => {
                           event.stopPropagation()
                         }}
