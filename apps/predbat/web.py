@@ -4083,14 +4083,12 @@ chart.render();
         """
         Check every compare_list profile still has the unique id and non-empty name that
         compare.py indexes results by, raising ValueError if a batch has left one without.
-        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip,
+        and names every problem at once so they can all be fixed in one go.
         """
-        if not compare_list:
-            return
-
         _, problems = check_compare_list(compare_list)
         if problems:
-            raise ValueError(problems[0])
+            raise ValueError("; ".join(problems))
 
     async def html_apps_post(self, request):
         """

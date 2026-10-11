@@ -383,9 +383,9 @@ def run_web_apps_edit_tests(my_predbat):
         # ---------------------------------------------------------------------
         print("Test: a compare profile with a blank id is refused (#5472)")
         web_interface = _reset_fixture(my_predbat)
-        result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", 'name: Blank\nid: "  "\n')})
-        if result.get("success") or "requires a non-empty 'id'" not in result.get("message", ""):
-            print("  ERROR: expected the blank id to be refused for its id, got: {}".format(result))
+        result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", 'name: Blank\nid: "  "\n'), "compare_list[]#2": _add("compare_list[]", "name: Clash\nid: one\n")})
+        if result.get("success") or "entry 4 requires a non-empty 'id'" not in result.get("message", "") or "entry 5 has a duplicate id 'one'" not in result.get("message", ""):
+            print("  ERROR: expected the blank id and the duplicate to be refused, naming both at once, got: {}".format(result))
             failed += 1
 
         # ---------------------------------------------------------------------

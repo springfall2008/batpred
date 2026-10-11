@@ -46,18 +46,26 @@ def check_compare_list(compare_list):
             # Results, sensor names and the web page are all keyed by the id as a string, so an
             # unquoted numeric id in apps.yaml must not reach them as an int
             entry_id = "" if entry.get("id") is None else str(entry["id"]).strip()
+            # A numeric name would likewise break publish_data() building the friendly name
+            entry_name = "" if entry.get("name") is None else str(entry["name"]).strip()
             if not entry_id:
                 problem = "requires a non-empty 'id'"
             elif entry_id in seen_ids:
                 problem = "has a duplicate id '{}'".format(entry_id)
-            elif not entry.get("name"):
+            elif not entry_name:
                 problem = "('{}') requires a non-empty 'name'".format(entry_id)
+            elif entry.get("config") is not None and not isinstance(entry["config"], dict):
+                # fetch_config() looks each override up by key, outside run_all()'s per-tariff try
+                problem = "('{}') has a 'config' that isn't a set of 'setting: value' overrides".format(entry_id)
         if problem:
             problems.append("compare_list entry {} {}".format(index + 1, problem))
             continue
         seen_ids.add(entry_id)
-        # A numeric name would likewise break publish_data() building the friendly name
-        valid.append(dict(entry, id=entry_id, name=str(entry["name"])))
+        checked = dict(entry, id=entry_id, name=entry_name)
+        if checked.get("config") is None:
+            # An empty 'config:' line loads as None and means no overrides
+            checked.pop("config", None)
+        valid.append(checked)
     return valid, problems
 
 
@@ -557,7 +565,8 @@ class Compare:
 
             if result:
                 cost = result.get("cost", 0)
-                name = result.get("name", "")
+                # str(): a numeric name saved before names were normalised (#5472) must not crash startup
+                name = str(result.get("name", ""))
                 attributes = {
                     "friendly_name": "Compare " + name,
                     "state_class": "measurement",

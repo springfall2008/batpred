@@ -739,16 +739,22 @@ def test_compare(my_predbat):
         {"id": 2024, "name": "Numeric Id Tariff"},
         {"id": " agile ", "name": "Padded Agile"},
         {"id": "numeric_name", "name": 1234},
+        {"id": "blank_name", "name": "   "},
+        {"id": "bad_config", "name": "Bad Config", "config": ["metric_battery_cycle"]},
+        {"id": "empty_config", "name": "Empty Config", "config": None},
     ]
     kept = valid_compare_list(entries, log=logged.append)
     kept_ids = [entry["id"] for entry in kept]
     skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
 
-    if kept_ids != ["agile", "2024", "numeric_name"]:
-        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024' and 'numeric_name' (ids as strings), got {}".format(kept_ids))
+    if kept_ids != ["agile", "2024", "numeric_name", "empty_config"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name' and 'empty_config' (ids as strings), got {}".format(kept_ids))
         failed += 1
-    elif skipped_positions != [1, 2, 3, 5, 6, 8]:
-        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6 and 8 (padded duplicate id), got {}".format(logged))
+    elif skipped_positions != [1, 2, 3, 5, 6, 8, 10, 11]:
+        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6, 8 (padded duplicate id), 10 (blank name) and 11 (non-mapping config), got {}".format(logged))
+        failed += 1
+    elif "config" in kept[3]:
+        print("ERROR T27: an empty 'config:' (None) should be dropped as no overrides, got {}".format(kept[3]))
         failed += 1
     elif kept[2]["name"] != "1234":
         print("ERROR T27: a numeric name should become a string, or publish_data() can't build the friendly name, got {!r}".format(kept[2]["name"]))
@@ -807,7 +813,7 @@ def test_compare(my_predbat):
     elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid", "2024"}:
         print("ERROR T28: only the valid tariffs' results should be persisted, keyed by string id, got {}".format(saved_comparisons))
         failed += 1
-    elif sorted(msg.split("compare_list entry ")[1][0] for msg in run_all_logged if "skipping it" in msg) != ["1", "2", "4"]:
+    elif sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in run_all_logged if "skipping it" in msg) != [1, 2, 4]:
         print("ERROR T28: run_all() should log a warning for each skipped entry (1, 2 and 4), got {}".format(run_all_logged))
         failed += 1
     else:
@@ -882,6 +888,30 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T30: load_yaml() normalises a numeric result key to a string and publishes it")
+
+    # ------------------------------------------------------------------
+    # T31: publish_data() copes with a numeric name saved to comparisons.yaml
+    #      before names were normalised - otherwise "Compare " + name raised
+    #      TypeError inside Compare.__init__ and Predbat failed to start (#5472)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    published = {}
+    cmp.dashboard_item = lambda entity_id, **kwargs: published.update({entity_id: kwargs.get("attributes", {})})
+    cmp.comparisons = {"numeric_name": {"name": 2024, "cost": 1.0}}
+    try:
+        cmp.publish_data()
+        publish_error = None
+    except Exception as exc:
+        publish_error = exc
+
+    if publish_error is not None:
+        print("ERROR T31: publish_data() raised {!r} on a saved numeric name".format(publish_error))
+        failed += 1
+    elif published.get("predbat.compare_tariff_numeric_name", {}).get("friendly_name") != "Compare 2024":
+        print("ERROR T31: expected friendly name 'Compare 2024', got {}".format(published))
+        failed += 1
+    else:
+        print("PASS T31: publish_data() publishes a saved numeric name as text")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
