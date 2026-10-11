@@ -2340,6 +2340,17 @@ class OctopusAPI(ComponentBase):
                 self.log_gate.log(self.log, ("request", request_context), query, [request_logged[1]], None, always_full=True)
                 request_logged[0] = True
 
+        def log_response(status, text, always_full):
+            """Log a response in full when new, due again or always_full, else as one line naming when it was last logged in full."""
+            self.log_gate.log(
+                self.log,
+                ("response", request_context),
+                "{} {}".format(status, text),
+                ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, status, text)],
+                lambda when: "OctopusAPI: GraphQL response for {} (status {}) same as logged in full at {}, {} characters".format(request_context, status, when, len(text)),
+                always_full=always_full,
+            )
+
         try:
             self.requests_total += 1
             client = await self.api.async_create_client_session()
@@ -2372,14 +2383,7 @@ class OctopusAPI(ComponentBase):
                     # response logger further down. A second-attempt 401/403 is not logged here: its body is logged
                     # by async_read_response_retry below
                     error_text = await response.text()
-                    self.log_gate.log(
-                        self.log,
-                        ("response", request_context),
-                        "{} {}".format(response.status, error_text),
-                        ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, error_text)],
-                        None,
-                        always_full=True,
-                    )
+                    log_response(response.status, error_text, always_full=True)
                     if response.status == 403 and is_edge_block_body(error_text):
                         self.consecutive_edge_blocks += 1
                         if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
@@ -2412,14 +2416,7 @@ class OctopusAPI(ComponentBase):
                 failed = response.status != 200 or not isinstance(response_body, dict) or "errors" in response_body or response_body.get("data") is None
                 if failed:
                     log_request_beside_failure()
-                self.log_gate.log(
-                    self.log,
-                    ("response", request_context),
-                    "{} {}".format(response.status, body_text),
-                    ["OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, body_text)],
-                    lambda when: "OctopusAPI: GraphQL response for {} (status {}) same as logged in full at {}, {} characters".format(request_context, response.status, when, len(body_text)),
-                    always_full=failed,
-                )
+                log_response(response.status, body_text, always_full=failed)
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
