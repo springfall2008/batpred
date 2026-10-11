@@ -751,6 +751,38 @@ function getActionType(state: string): ActionType {
 }
 
 /*
+ * A charge and export plan can share one half-hour slot. Predbat supplies
+ * the two display states separately for the legacy table; its `state` field
+ * contains only the final action, so use both labels when they are present.
+ */
+function getActionTypeFromDisplayState(state?: string | null): ActionType | null {
+  if (!state) {
+    return null
+  }
+
+  if (state.includes('FrzChrg')) return 'freeze-charge'
+  if (state.includes('HoldChrg')) return 'hold-charge'
+  if (state.includes('Chrg')) return 'charge'
+  if (state.includes('FrzExp')) return 'freeze-export'
+  if (state.includes('HoldExp')) return 'hold-export'
+  if (state.includes('Exp')) return 'export'
+
+  return null
+}
+
+function getPlannedActions(row: PlanRow): ActionType[] {
+  const splitActions = [row.state_text, row.state2_text]
+    .map(getActionTypeFromDisplayState)
+    .filter((action): action is ActionType => action !== null)
+
+  if (splitActions.length > 1) {
+    return [...new Set(splitActions)]
+  }
+
+  return [getActionType(row.state)]
+}
+
+/*
  * Friendly action label.
  */
 function getActionLabel(action: ActionType) {
@@ -1326,7 +1358,11 @@ export default function PlanTable({
 
               const newDay = !previousRow || getDateKey(previousRow.time) !== getDateKey(row.time)
 
-              const action = getActionType(row.state)
+              const actions = getPlannedActions(row)
+
+              const action = actions[0]
+
+              const hasMultipleActions = actions.length > 1
 
               const reason = getReasonText(plan, row)
 
@@ -1386,7 +1422,7 @@ export default function PlanTable({
                           className={[
                             'plan-action',
                             'plan-tooltip-trigger',
-                            getActionClass(action),
+                            hasMultipleActions ? 'plan-action-multiple' : getActionClass(action),
                             manualOverride ? 'is-manual' : ''
                           ]
                             .filter(Boolean)
@@ -1409,9 +1445,26 @@ export default function PlanTable({
                             setOpenOverrideTime(menuOpen ? null : row.time)
                           }}
                         >
-                          {getActionIcon(action)}
+                          {hasMultipleActions ? (
+                            <span className="plan-action-badges">
+                              {actions.map((plannedAction) => (
+                                <span
+                                  key={plannedAction}
+                                  className={['plan-action-badge', getActionClass(plannedAction)].join(' ')}
+                                >
+                                  {getActionIcon(plannedAction)}
 
-                          <span>{getActionLabel(action)}</span>
+                                  <span>{getActionLabel(plannedAction)}</span>
+                                </span>
+                              ))}
+                            </span>
+                          ) : (
+                            <>
+                              {getActionIcon(action)}
+
+                              <span>{getActionLabel(action)}</span>
+                            </>
+                          )}
 
                           {rateEvent && (
                             <span className={`plan-saving-session-badge is-${rateEvent.colour}`}>

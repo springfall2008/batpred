@@ -230,7 +230,8 @@
 /*
  * Detailed action badges.
  */
-.plan-action {
+.plan-action,
+.plan-action-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -240,6 +241,19 @@
   font-weight: 700;
   white-space: nowrap;
   cursor: help;
+}
+
+/* A split Predbat slot remains one editable control, with one badge per action. */
+.plan-action-multiple {
+  gap: 0.25rem;
+  padding: 0.1rem 0;
+  background: transparent;
+}
+
+.plan-action-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
 }
 
 /*
