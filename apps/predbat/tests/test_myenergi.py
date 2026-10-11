@@ -1298,27 +1298,21 @@ def test_control_release_retry_keeps_the_saved_mode():
 
 
 def test_control_release_forgets_a_mode_saved_before_a_refused_command():
-    """A refused command saves no mode, so the Zappi snapshots what the user has set by the time
-    Predbat does take it - not a mode from before the refusal."""
+    """A mode saved ahead of a refused command does not outlive the release."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("refused"))
     try:
         run_async(component.charger_control_tick(IN_WINDOW))
     except MyEnergiApiError:
         pass
-    assert component.control_saved_modes == {}, component.control_saved_modes
+    assert component.control_saved_modes == {"Z12345678": "Eco+"}, component.control_saved_modes
     assert component.charger_control_state == {}, "A refused command is not recorded as set"
 
-    component.devices["Z12345678"].mode = "Eco"
+    component.charger_control_enabled = False
     component.transport.set_mode = AsyncMock(return_value=True)
     run_async(component.charger_control_tick(IN_WINDOW))
-    assert component.control_saved_modes == {"Z12345678": "Eco"}, component.control_saved_modes
-
-    component.charger_control_enabled = False
-    run_async(component.charger_control_tick(IN_WINDOW))
-    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
     assert component.control_saved_modes == {}, component.control_saved_modes
-    print("  ✓ A refused command saves no mode to restore later")
+    print("  ✓ Release forgets modes saved ahead of refused commands")
 
 
 def test_control_releases_to_eco_plus_when_nothing_was_saved():

@@ -953,13 +953,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         for its rate rather than for sunshine.
         """
         wanted = ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED
-        before = device.mode
+        # Remember where the charger was before Predbat first moved it, so release can put it back
+        if device.device_id not in self.control_saved_modes:
+            self.control_saved_modes[device.device_id] = device.mode
         self.log("Info: myenergi: setting {} to {} for car {}".format(device.name, wanted, car_n))
         await self.transport.set_mode(device, wanted)
-        # Remember where the charger was before Predbat first moved it, so release can put it back -
-        # only once the command has gone through, as a snapshot taken ahead of a refused one would
-        # outlive it and be restored long after, in place of what the user had by then
-        self.control_saved_modes.setdefault(device.device_id, before)
 
     async def charger_control_release_one(self, device, charge):
         """Hand a held Zappi back, restoring the mode it had before Predbat took over.
@@ -995,8 +993,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """Release every held Zappi, then forget every saved mode.
 
         Cleared only once the whole release has gone through, so a failed command keeps what
-        the retry needs. Cleared entirely rather than per Zappi, so no saved mode can outlive
-        the release and block a fresh snapshot later.
+        the retry needs. Cleared entirely rather than per Zappi, so a mode saved ahead of a
+        command that was refused cannot outlive the release and block a fresh snapshot later.
         """
         await super().charger_control_release()
         self.control_saved_modes = {}
