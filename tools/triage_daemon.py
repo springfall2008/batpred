@@ -751,7 +751,7 @@ FAILURE_LOG_SIGNATURES = (
 )
 FAILURE_LOG_SECTION_CHARS = 4000
 FAILURE_LOG_READ_BYTES = 262144
-FAILURE_RUN_START = re.compile(r"^==== .* started .* ====$", re.MULTILINE)
+FAILURE_RUN_START = re.compile(r"^==== .* started .* ====\r?$", re.MULTILINE)
 
 
 def failure_log_cause(log_path):
@@ -790,7 +790,7 @@ def failure_cause(exc):
         try:
             name = signal.Signals(-status).name
         except ValueError:
-            name = f"signal {-status}"
+            name = {9: "SIGKILL", 15: "SIGTERM", 2: "SIGINT"}.get(-status, f"signal {-status}")
         return f"`{program}` was killed by {name}, which usually means the bot's host ran out of memory or the process was stopped by hand"
     if program in ("gh", "git"):
         words = [str(word) for word in command[1:] if not str(word).startswith("-")][:2]
