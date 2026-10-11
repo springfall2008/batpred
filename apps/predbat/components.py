@@ -486,7 +486,7 @@ COMPONENT_LIST = {
             "token_expires_at": {"required": False, "config": "sungrow_token_expires_at"},
             "token_hash": {"required": False, "secret": True, "config": "sungrow_token_hash"},
             # sungrow_auth_method: password. The component logs in with these and renews its own
-            # token; a refused login is never retried, so it cannot lock the account.
+            # token; a refused login is not sent again until Predbat restarts (see SungrowAPI.login).
             "user_account": {"required": False, "secret": True, "config": "sungrow_user_account"},
             "user_password": {"required": False, "secret": True, "config": "sungrow_user_password"},
             # The account is tied to one regional gateway, so this cannot be inferred: pointing

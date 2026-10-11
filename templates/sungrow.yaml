@@ -34,10 +34,12 @@ pred_bat:
   # what you see. Every request and response is traced to the log while this beds in.
   # On Predbat.com the access token is supplied and renewed for you. On a self-hosted
   # install, set sungrow_auth_method to 'password' and give your iSolarCloud account and
-  # password: Predbat logs in and renews its own token. A wrong password is NOT retried -
-  # Predbat logs why and waits to be restarted with corrected settings - so it cannot lock
-  # your account. This method is unverified against a live account; please report the
-  # 'token placement' line from the log.
+  # password: Predbat logs in and renews its own token. iSolarCloud locks an account after
+  # too many wrong passwords, so a refused login is never sent again until Predbat is
+  # restarted, and a login that gets no readable answer is tried at most three times, five
+  # minutes apart, then stops until restart. Each Predbat restart spends one attempt, so
+  # correct the settings first. Left as 'xxxx' nothing is sent. This method is unverified
+  # against a live account; please report the 'token placement' line from the log.
   # Better than typing the account and password here: put them in secrets.yaml and write
   #   sungrow_user_account: !secret sungrow_user_account
   #   sungrow_user_password: !secret sungrow_user_password

@@ -272,15 +272,19 @@ Things to know before you rely on it:
 
 ### Verifying with the Sungrow diagnostics CLI
 
-Before turning on control, run the read-only tool from the `apps/predbat` directory. Run it with your iSolarCloud account and password first:
+Before turning on control, run the read-only tool from the `apps/predbat` directory. Run it with your iSolarCloud account first:
 
 ```bash
-python3 sungrow.py --appkey YOUR_APPKEY --access-key YOUR_ACCESS_KEY --user-account YOUR_ISOLARCLOUD_ACCOUNT --user-password YOUR_ISOLARCLOUD_PASSWORD --gateway europe
+python3 sungrow.py --appkey YOUR_APPKEY --access-key YOUR_ACCESS_KEY --user-account YOUR_ISOLARCLOUD_ACCOUNT --gateway europe
 ```
 
-Logging in this way is unverified against a live account, so please report the `Token placement:` line it prints (`body` or `bearer`, and whether it was confirmed) - Sungrow do not document where the login token belongs, and that line settles it. The password is sent once: if the login is refused the tool prints the reason and stops, and it never retries, so it cannot lock your account. Check the account name and password before running it again.
+The tool asks for your iSolarCloud password and does not show it as you type. It asks rather than taking the password on the command line because anything on the command line is kept in your shell history and is visible to other users of the machine while the tool runs. To run it unattended, put the password in the `SUNGROW_USER_PASSWORD` environment variable instead; `--user-password` also exists, but has exactly that drawback.
 
-If you have an access token from Sungrow's authorisation-code flow instead, give `--token YOUR_ACCESS_TOKEN` in place of `--user-account` and `--user-password`.
+Logging in this way is unverified against a live account, so please report the `Token placement:` line it prints (`body` or `bearer`, and whether it was confirmed) - Sungrow do not document where the login token belongs, and that line settles it.
+
+Each run of the tool makes one login attempt and never repeats it: if the login is refused, or gets no answer, the tool prints the reason and stops. iSolarCloud counts wrong passwords and locks the account after too many, and every run is another attempt, so check the account name and password before running it again.
+
+If you have an access token from Sungrow's authorisation-code flow instead, give `--token YOUR_ACCESS_TOKEN` in place of `--user-account`.
 
 Check that `inverter_limit` is your inverter's rating and that `export_limit` is your real grid export limit (99999 means the inverter has no limit set; `None` means Predbat could not establish it). Compare the printed `soc`, `battery_power`, `grid_power`, `pv_power` and `load_power` with the iSolarCloud app. In particular note whether `soc` matches the app or is ten times larger, the sign of `battery_power` while the battery is charging (it should be negative), and the sign of `grid_power` while importing (it should be negative). Add `--read-params` to read back the inverter's current control parameters; this changes nothing. Please report what you find in a GitHub issue.
 

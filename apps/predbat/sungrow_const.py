@@ -151,17 +151,22 @@ SUNGROW_ERROR_CODES = {
 # "1": only login_state says whether the password was accepted. "1" is the only success.
 SUNGROW_LOGIN_OK = "1"
 # Every documented refusal. Wrong passwords are COUNTED by iSolarCloud and lock the account, so
-# none of these is ever retried - see SungrowAPI.login().
+# none of these is ever retried - see SungrowAPI.login(). Any OTHER answered reply that does
+# not let us in is treated the same way.
 SUNGROW_LOGIN_STATES = {
     "-1": "the account does not exist",
     "0": "the password is incorrect",
     "2": "the account has been locked by iSolarCloud after too many wrong passwords",
     "5": "the account has been locked by an administrator",
 }
-# A login that failed before the password was judged (network, HTTP, envelope) may be tried
-# again, but no more often than this. It also bounds how often a login that succeeded but did
+# A login that got no readable answer (network, HTTP, envelope) may be tried again, but no
+# more often than this, and no more than SUNGROW_LOGIN_MAX_UNJUDGED times. It also bounds how often a login that succeeded but did
 # not cure a rejection is repeated.
 SUNGROW_LOGIN_RETRY_SECONDS = 300
+# How many logins in a row may end with no readable answer (timeout, HTTP error, unparseable
+# body, failed envelope) before login is given up on until restart. The server may have judged
+# the password on any of them without our seeing the verdict, so they cannot go on for ever.
+SUNGROW_LOGIN_MAX_UNJUDGED = 3
 # How often run() repeats the reminder that a refused login is not being retried.
 SUNGROW_LOGIN_BLOCKED_WARN_SECONDS = 30 * 60
 # Where the login token goes on later calls is NOT documented. "body" sends it as this field
@@ -677,9 +682,11 @@ SUNGROW_DEBUG_REDACT_KEYS = (
     "user_password",
     "user_id",
     "user_master_org_name",
-    "err_times",
-    "disable_time",
 )
+
+# What templates/sungrow.yaml ships in place of a credential. Treated as "not set": sending it
+# as a password would spend one of the attempts iSolarCloud counts towards a lock-out.
+SUNGROW_PLACEHOLDER = "xxxx"
 
 # Every minute of the day as HH:MM:00, the options the charge/export time selects offer.
 SUNGROW_TIME_OPTIONS = ["{:02d}:{:02d}:00".format(minute // 60, minute % 60) for minute in range(24 * 60)]

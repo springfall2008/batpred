@@ -9,14 +9,16 @@
 """Tests for the Sungrow iSolarCloud OpenAPI component (``sungrow.py``)."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
+import asyncio
 import copy
 import time
+import aiohttp
 import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import sungrow as sungrow_module
 from sungrow import SungrowAPI, SUNGROW_CAPABILITIES
-from sungrow_const import SUNGROW_NO_EXPORT_LIMIT, SUNGROW_TTL_STATIC, SUNGROW_LOGIN_RETRY_SECONDS, SUNGROW_LOGIN_BLOCKED_WARN_SECONDS
+from sungrow_const import SUNGROW_NO_EXPORT_LIMIT, SUNGROW_TTL_STATIC, SUNGROW_LOGIN_RETRY_SECONDS, SUNGROW_LOGIN_BLOCKED_WARN_SECONDS, SUNGROW_LOGIN_MAX_UNJUDGED
 from component_base import ComponentBase
 from coordinator import CAPABILITY_KEYS, validate_report
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -1497,13 +1499,41 @@ def _login_data(state="1", token=TEST_LOGIN_TOKEN):
     return data
 
 
+def _forget_logins():
+    """Forget every login this process has had refused or left unanswered.
+
+    Both records are deliberately process-wide, so without this one test's wrong password or
+    timeout would silently block or count against the next test's login.
+    """
+    sungrow_module.SUNGROW_LOGIN_BLOCKED.clear()
+    sungrow_module.SUNGROW_LOGIN_UNJUDGED.clear()
+
+
+def _json_response(body, wrong_mimetype=False):
+    """Build a 200 response whose json() takes aiohttp's content_type argument.
+
+    With wrong_mimetype the body is only readable when the caller passes content_type=None,
+    which is how aiohttp behaves for a JSON body served as text/html.
+    """
+    response = create_aiohttp_mock_response(json_data=body)
+
+    async def read_json(content_type="application/json", **kwargs):
+        """Return the body, refusing it the way aiohttp does when the mimetype is checked and wrong."""
+        if wrong_mimetype and content_type is not None:
+            raise aiohttp.ContentTypeError(MagicMock(), (), message="Attempt to decode JSON with unexpected mimetype: text/html")
+        return body
+
+    response.json = read_json
+    return response
+
+
 def _password_client(user_password=TEST_PASSWORD, **kwargs):
     """Build a password-mode client, forgetting any login this process has already had refused.
 
     The refusal record is deliberately process-wide, so without clearing it one test's wrong
     password would silently block the next test's login.
     """
-    sungrow_module.SUNGROW_LOGIN_BLOCKED.clear()
+    _forget_logins()
     kwargs.setdefault("key", "")
     return MockSungrow(auth_method="password", user_account=TEST_ACCOUNT, user_password=user_password, **kwargs)
 
@@ -1520,7 +1550,7 @@ def _logged_in_client(confirmed=None):
 
 def _capture_posts(responses):
     """Return (patcher, calls): successive POSTs answer with responses and are recorded in calls."""
-    mocks = [create_aiohttp_mock_response(json_data=body) if isinstance(body, dict) else body for body in responses]
+    mocks = [_json_response(body) if isinstance(body, dict) else body for body in responses]
     session = create_aiohttp_mock_session(mocks)
     original_post = session.post
     calls = []
@@ -1821,7 +1851,7 @@ def test_sungrow_password_each_refusal_blocks_with_its_own_message():
 def test_sungrow_password_login_transport_failure_is_paced_not_blocked():
     """A login that failed before the password was judged may be retried, but not straight away."""
     failed = False
-    for failure in (_envelope(None, code="-1", message="Internal service exception"), create_aiohttp_mock_response(status=503, json_data={}), create_aiohttp_mock_response(status=401, json_data={}), _envelope({"unexpected": True})):
+    for failure in (_envelope(None, code="-1", message="Internal service exception"), create_aiohttp_mock_response(status=503, json_data={}), create_aiohttp_mock_response(status=401, json_data={})):
         client = _password_client()
         patcher, calls = _capture_posts([failure, _envelope(_login_data()), _envelope(_login_data())])
         with patcher:
@@ -1848,17 +1878,23 @@ def test_sungrow_password_login_transport_failure_is_paced_not_blocked():
 def test_sungrow_password_missing_settings_send_nothing():
     """Without both the account and the password no login is sent - an empty password is a wrong one."""
     failed = False
-    for account, password in (("", TEST_PASSWORD), (TEST_ACCOUNT, "")):
-        sungrow_module.SUNGROW_LOGIN_BLOCKED.clear()
+    for account, password in (("", TEST_PASSWORD), (TEST_ACCOUNT, ""), (TEST_ACCOUNT, "xxxx"), ("xxxx", TEST_PASSWORD), ("xxxx", "xxxx")):
+        _forget_logins()
         client = MockSungrow(auth_method="password", key="", user_account=account, user_password=password)
-        patcher, calls = _capture_posts([_envelope(_login_data()), _envelope(_login_data())])
+        patcher, calls = _capture_posts([_envelope(_login_data()), _envelope(_login_data()), _envelope(_login_data())])
         with patcher:
             result = run_async_local(client.run(0, True))
-        if result is not False or calls:
-            print(f"ERROR: run returned {result!r} and sent {len(calls)} request(s) without both settings")
+            logins = [run_async_local(client.login()) for _ in range(2)]
+        if result is not False or any(logins) or calls:
+            print(f"ERROR: run returned {result!r}, login {logins} and {len(calls)} request(s) were sent with account {account!r} and a {'placeholder' if password == 'xxxx' else 'missing' if not password else 'real'} password")
             failed = True
-        if not any("sungrow_user_account" in message and "sungrow_user_password" in message for message in _warns(client)):
-            print(f"ERROR: the missing setting was not named: {_warns(client)}")
+        named = [message for message in _warns(client) if "sungrow_user_account" in message and "sungrow_user_password" in message and "not set" in message]
+        if len(named) != 1:
+            print(f"ERROR: expected one Warn saying the settings are not set, got {_warns(client)}")
+            failed = True
+        # Unset is not refused: nothing was sent, so there is nothing to protect the account from.
+        if client.login_blocked or sungrow_module.SUNGROW_LOGIN_BLOCKED:
+            print(f"ERROR: an unset login was recorded as blocked ({client.login_blocked!r})")
             failed = True
     assert not failed, "test_sungrow_password_missing_settings_send_nothing"
 
@@ -1959,6 +1995,15 @@ def test_sungrow_password_login_is_redacted_in_the_trace():
         if SungrowAPI.redact({key: "x"})[key] != "***":
             print(f"ERROR: {key} is not redacted")
             failed = True
+    # The wrong-password count and the lock-out time are not personal, and are exactly what a
+    # tester's log has to show when an account has been locked.
+    for key in ("err_times", "disable_time", "login_state"):
+        if SungrowAPI.redact({key: "3"})[key] != "3":
+            print(f"ERROR: {key} is masked, which hides the lock-out evidence")
+            failed = True
+    if '"err_times": "0"' not in logged:
+        print("ERROR: err_times does not reach the trace")
+        failed = True
     assert not failed, "test_sungrow_password_login_is_redacted_in_the_trace"
 
 
@@ -2006,6 +2051,245 @@ def test_sungrow_oauth_and_token_modes_never_put_the_token_in_the_body():
             print(f"ERROR: {method} mode has login_blocked {client.login_blocked!r}")
             failed = True
     assert not failed, "test_sungrow_oauth_and_token_modes_never_put_the_token_in_the_body"
+
+
+def _login_posts(session):
+    """Count the POSTs a mock session has been asked to make."""
+    return session.post.call_count
+
+
+def test_sungrow_password_login_is_sent_at_most_once_per_call():
+    """A login that times out or will not parse is NOT re-sent in place: the server may have judged each one."""
+    failed = False
+    for label, error in [("timeout", asyncio.TimeoutError()), ("connection error", aiohttp.ClientConnectionError("reset")), ("non-JSON body", None)]:
+        client = _password_client()
+        if error is not None:
+            session = create_aiohttp_mock_session(exception=error)
+        else:
+            response = create_aiohttp_mock_response(json_data={})
+
+            async def bad_json(*args, **kwargs):
+                """Fail the way aiohttp does on a body that will not parse."""
+                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+            response.json = bad_json
+            session = create_aiohttp_mock_session(response)
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = run_async_local(client.login())
+        if result is not False or _login_posts(session) != 1:
+            print(f"ERROR: a login that hit a {label} returned {result!r} after {_login_posts(session)} POST(s), expected exactly 1")
+            failed = True
+        if client.login_blocked:
+            print(f"ERROR: one {label} blocked the login ({client.login_blocked!r})")
+            failed = True
+    # Every other call keeps its in-place transport retry: only the login carries a password.
+    client = _logged_in_client(confirmed="body")
+    session = create_aiohttp_mock_session(exception=aiohttp.ClientConnectionError("reset"))
+
+    async def no_sleep(seconds):
+        """Skip the pause between transport retries."""
+        return None
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("asyncio.sleep", no_sleep):
+        run_async_local(client._request("plant_list", {"page": 1}))
+    if _login_posts(session) != 3:
+        print(f"ERROR: an ordinary call made {_login_posts(session)} attempt(s) on a transport error, expected the usual 3")
+        failed = True
+    assert not failed, "test_sungrow_password_login_is_sent_at_most_once_per_call"
+
+
+def test_sungrow_password_login_reads_a_judged_reply_with_the_wrong_mimetype():
+    """A refusal served as text/html is still a refusal: it must be read, and must block."""
+    failed = False
+    client = _password_client(user_password="wrong-password")
+    refusal = _json_response(_envelope(_login_data(state="0")), wrong_mimetype=True)
+    patcher, calls = _capture_posts([refusal, _envelope(_login_data()), _envelope(_login_data())])
+    with patcher:
+        results = [run_async_local(client.login()) for _ in range(3)]
+    if any(results) or len(calls) != 1:
+        print(f"ERROR: a refusal with the wrong mimetype gave {results} over {len(calls)} POST(s), expected one POST and a block")
+        failed = True
+    if not client.login_blocked or "password" not in client.login_blocked:
+        print(f"ERROR: login_blocked is {client.login_blocked!r}")
+        failed = True
+    # And a success served the same way is a success.
+    client = _password_client()
+    patcher, calls = _capture_posts([_json_response(_envelope(_login_data()), wrong_mimetype=True)])
+    with patcher:
+        if run_async_local(client.login()) is not True or client.access_token != TEST_LOGIN_TOKEN:
+            print("ERROR: a success with the wrong mimetype was not read")
+            failed = True
+    assert not failed, "test_sungrow_password_login_reads_a_judged_reply_with_the_wrong_mimetype"
+
+
+def test_sungrow_password_answered_but_not_understood_blocks():
+    """The server answered and did not let us in: whatever it meant, the password is not sent again."""
+    failed = False
+    no_state = _login_data()
+    del no_state["login_state"]
+    null_state = dict(_login_data(), login_state=None)
+    no_token = _login_data()
+    del no_token["token"]
+    empty_token = dict(_login_data(), token="")
+    odd = dict(_login_data(state="7"), msg="Something new for owner-account")
+    for label, data, expected in [
+        ("no login_state", no_state, "None"),
+        ("a null login_state", null_state, "None"),
+        ("null result_data", None, "None"),
+        ("success without a token", no_token, "no token"),
+        ("an empty token", empty_token, "no token"),
+        ("an unknown state", odd, "7"),
+    ]:
+        client = _password_client()
+        spare = _envelope(_login_data())
+        patcher, calls = _capture_posts([_envelope(data), spare, spare, spare])
+        with patcher:
+            results = [run_async_local(client.login()) for _ in range(2)]
+            client._login_failed_time -= SUNGROW_LOGIN_RETRY_SECONDS + 1
+            results.append(run_async_local(client.login()))
+        if any(results) or len(calls) != 1:
+            print(f"ERROR: a login answered with {label} gave {results} over {len(calls)} POST(s), expected one POST and a block")
+            failed = True
+        if not client.login_blocked or expected not in client.login_blocked:
+            print(f"ERROR: {label} left login_blocked {client.login_blocked!r}, expected it to mention {expected!r}")
+            failed = True
+        warns = _warns(client)
+        if len(warns) != 1 or "restarted" not in warns[0]:
+            print(f"ERROR: {label} logged {warns}, expected one Warn")
+            failed = True
+        if client.access_token:
+            print(f"ERROR: {label} left a token")
+            failed = True
+        if any(TEST_ACCOUNT in message for message in warns) or TEST_ACCOUNT in str(client.login_blocked):
+            print(f"ERROR: {label} put the account name in the log through the server's msg")
+            failed = True
+    if "Something new" not in str(client.login_blocked):
+        print(f"ERROR: the server's msg is missing from {client.login_blocked!r}")
+        failed = True
+    assert not failed, "test_sungrow_password_answered_but_not_understood_blocks"
+
+
+def test_sungrow_password_integer_login_state_is_success():
+    """login_state is documented as a string; an integer 1 with a token is the same success."""
+    failed = False
+    client = _password_client()
+    patcher, calls = _capture_posts([_envelope(dict(_login_data(), login_state=1))])
+    with patcher:
+        result = run_async_local(client.login())
+    if result is not True or client.access_token != TEST_LOGIN_TOKEN or client.login_blocked or len(calls) != 1:
+        print(f"ERROR: an integer login_state of 1 returned {result!r}, blocked={client.login_blocked!r}")
+        failed = True
+    assert not failed, "test_sungrow_password_integer_login_state_is_success"
+
+
+def test_sungrow_password_unanswered_logins_are_capped():
+    """A login that never gets a readable answer is tried three times in all, then not again."""
+    failed = False
+    if SUNGROW_LOGIN_MAX_UNJUDGED != 3:
+        print(f"ERROR: SUNGROW_LOGIN_MAX_UNJUDGED is {SUNGROW_LOGIN_MAX_UNJUDGED}, expected 3")
+        failed = True
+    client = _password_client()
+    down = _envelope(None, code="-1", message="Internal service exception")
+    patcher, calls = _capture_posts([down, create_aiohttp_mock_response(status=503, json_data={}), down, _envelope(_login_data()), _envelope(_login_data())])
+    with patcher:
+        results = []
+        for _ in range(3):
+            results.append(run_async_local(client.login()))
+            blocked_after = client.login_blocked
+            client._login_failed_time -= SUNGROW_LOGIN_RETRY_SECONDS + 1
+        sent = len(calls)
+        results.append(run_async_local(client.login()))
+        # A rebuilt component shares the count: a restart from the web interface is not three more.
+        again = MockSungrow(auth_method="password", key="", user_account=TEST_ACCOUNT, user_password=TEST_PASSWORD)
+        results.append(run_async_local(again.login()))
+        run_result = run_async_local(client.run(0, True))
+    if any(results) or sent != 3 or len(calls) != 3:
+        print(f"ERROR: unanswered logins gave {results} with {sent} POST(s) after three calls and {len(calls)} in all, expected exactly 3")
+        failed = True
+    if not blocked_after or not client.login_blocked or "3 attempts" not in client.login_blocked:
+        print(f"ERROR: after three unanswered logins login_blocked is {client.login_blocked!r}")
+        failed = True
+    if not again.login_blocked or run_result is not False or client.health_message() != client.login_blocked:
+        print(f"ERROR: the cap did not hold: rebuilt blocked={again.login_blocked!r}, run={run_result!r}")
+        failed = True
+    capped = [message for message in _warns(client) if "3 attempts" in message]
+    if len(capped) != 1 or "stopped trying" not in capped[0] or "restarted" not in capped[0]:
+        print(f"ERROR: expected one Warn saying login was given up after 3 attempts, got {_warns(client)}")
+        failed = True
+
+    # A success in between resets the count: two failures, a success, then two more are not a block.
+    client = _password_client()
+    patcher, calls = _capture_posts([down, down, _envelope(_login_data()), down, down, _envelope(_login_data())])
+    with patcher:
+        for _ in range(5):
+            run_async_local(client.login())
+            client._login_failed_time -= SUNGROW_LOGIN_RETRY_SECONDS + 1
+        final = run_async_local(client.login())
+    if client.login_blocked or len(calls) != 6 or final is not True:
+        print(f"ERROR: a success did not reset the count: blocked={client.login_blocked!r} after {len(calls)} POST(s), final {final!r}")
+        failed = True
+    assert not failed, "test_sungrow_password_unanswered_logins_are_capped"
+
+
+def test_sungrow_password_failed_login_does_not_log_the_servers_text():
+    """A failed login reports the code and its documented meaning, not the server's free text."""
+    failed = False
+    client = _password_client()
+    client.api_debug = False
+    patcher, calls = _capture_posts([_envelope(None, code="E00000", message="no such user owner-account")])
+    with patcher:
+        run_async_local(client.login())
+    logged = "\n".join(client.log_messages)
+    if "no such user" in logged or TEST_ACCOUNT in logged or "no such user" in client.last_api_error:
+        print(f"ERROR: the server's own text for a failed login was logged: {client.log_messages}")
+        failed = True
+    if "E00000" not in logged or "Invalid appkey" not in logged:
+        print(f"ERROR: the failed login lost its code or documented description: {client.log_messages}")
+        failed = True
+    # Every other endpoint still reports the server's message: it is the only diagnostic there is.
+    client = MockSungrow()
+    with _mock_post([_envelope(None, code="E00000", message="appkey invalid")]):
+        run_async_local(client._request("plant_list", {"page": 1}))
+    if "appkey invalid" not in client.last_api_error:
+        print("ERROR: an ordinary failure lost the server's message")
+        failed = True
+    assert not failed, "test_sungrow_password_failed_login_does_not_log_the_servers_text"
+
+
+def test_sungrow_password_request_uses_one_placement_throughout():
+    """A placement flipped by another task mid-request must not split, drop or mis-confirm the token."""
+    failed = False
+    client = _logged_in_client()
+    response = _json_response(_envelope(PLANT_LIST))
+    session = create_aiohttp_mock_session(response)
+    original_post = session.post
+    calls = []
+
+    def flipping_post(url, headers=None, json=None):
+        """Record the request, then flip the placement as a concurrent call would while it is in flight."""
+        calls.append({"url": url, "headers": dict(headers or {}), "json": copy.deepcopy(json)})
+        client.token_placement = "bearer"
+        return original_post(url, headers=headers, json=json)
+
+    session.post = flipping_post
+    original_headers = client._headers
+
+    def flipping_headers(*args, **kwargs):
+        """Flip the placement between the body being built and the headers being built."""
+        client.token_placement = "bearer"
+        return original_headers(*args, **kwargs)
+
+    client._headers = flipping_headers
+    with patch("aiohttp.ClientSession", return_value=session):
+        ok, _ = run_async_local(client._request("plant_list", {"page": 1}))
+    if not ok or len(calls) != 1 or _placement_of(calls[0]) != "body":
+        print(f"ERROR: the request carried its token as {[_placement_of(call) for call in calls]}, expected the body only")
+        failed = True
+    confirmations = [message for message in client.log_messages if "token placement confirmed" in message]
+    if len(confirmations) != 1 or "request body" not in confirmations[0] or client.token_placement != "body" or not client.token_placement_confirmed:
+        print(f"ERROR: the placement that worked was the body, but {confirmations} / {client.token_placement!r} was recorded")
+        failed = True
+    assert not failed, "test_sungrow_password_request_uses_one_placement_throughout"
 
 
 def run_sungrow_api_tests(my_predbat):
@@ -2077,6 +2361,13 @@ def run_sungrow_api_tests(my_predbat):
         ("password_run_blocked", test_sungrow_password_run_logs_in_and_stays_quiet_while_blocked),
         ("password_redaction", test_sungrow_password_login_is_redacted_in_the_trace),
         ("bearer_modes_unchanged", test_sungrow_oauth_and_token_modes_never_put_the_token_in_the_body),
+        ("password_login_sent_once", test_sungrow_password_login_is_sent_at_most_once_per_call),
+        ("password_login_wrong_mimetype", test_sungrow_password_login_reads_a_judged_reply_with_the_wrong_mimetype),
+        ("password_not_understood_blocks", test_sungrow_password_answered_but_not_understood_blocks),
+        ("password_integer_state", test_sungrow_password_integer_login_state_is_success),
+        ("password_unanswered_capped", test_sungrow_password_unanswered_logins_are_capped),
+        ("password_login_no_server_text", test_sungrow_password_failed_login_does_not_log_the_servers_text),
+        ("password_one_placement", test_sungrow_password_request_uses_one_placement_throughout),
     ]:
         try:
             if fn():
