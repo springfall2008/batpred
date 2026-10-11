@@ -352,6 +352,8 @@ def run_multi_car_iog_unplugged_car_test(testname, my_predbat):
         {"start": 1440, "end": 1470, "average": 5.0},
         {"start": 1500, "end": 1530, "average": 5.0},
     ]
+    # With no event in the rates the plan and the tariff windows are the same list, as fetch leaves them
+    my_predbat.low_rates_tariff = my_predbat.low_rates
 
     # Call the real function under test
     my_predbat.fetch_sensor_data_car_planning()
@@ -428,6 +430,8 @@ def run_multi_car_shared_charger_exclusive_test(testname, my_predbat):
         {"start": now + 60, "end": now + 90, "average": 5.0},
         {"start": now + 120, "end": now + 150, "average": 5.0},
     ]
+    # With no event in the rates the plan and the tariff windows are the same list, as fetch leaves them
+    my_predbat.low_rates_tariff = my_predbat.low_rates
 
     my_predbat.fetch_sensor_data_car_planning()
 
@@ -827,6 +831,7 @@ def run_iog_consider_full_predict_test(testname, my_predbat):
         "rate_export",
         "rate_min",
         "rate_max",
+        "rate_import_tariff_max",
         "rate_min_base",
         "rate_max_base",
         "rate_export_min",

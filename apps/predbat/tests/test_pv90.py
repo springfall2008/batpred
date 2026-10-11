@@ -690,6 +690,36 @@ def test_pv90_no_io_penalty_on_identical_series(my_predbat):
     return failed
 
 
+def test_pv10_dispatch_gone_never_cheaper_than_the_slot(my_predbat):
+    """A dispatch assumed gone in pv10 pays the tariff's highest rate, but never less than the slot already costs (#5163).
+
+    rate_max is the tariff's own highest import rate, without event rewards. A slot inside a saving
+    session or Axle event can cost more than that, and losing its dispatch cannot make it cheaper, so with
+    every slot at 200p and rate_max at 25p the pv10 worst case must cost the same as nominal.
+    """
+    from prediction import Prediction
+
+    failed = False
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 200.0, 5.0)
+    n = my_predbat.forecast_minutes + my_predbat.minutes_now
+    flat_pv = {minute: 0.0 for minute in range(0, n, 5)}
+    flat_load = {minute: 0.01 for minute in range(0, n, 5)}
+
+    pred = Prediction(my_predbat, flat_pv, flat_pv, flat_load, flat_load, flat_pv, flat_load, soc_kw=0, soc_max=0)
+    _force_python_engine(pred)
+    pred.io_adjusted = {minute: 1 for minute in range(0, n)}
+    pred.rate_max = 25.0
+
+    nominal = pred.run_prediction([], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes)
+    pv10 = pred.run_prediction([], [], [], [], PV_SCENARIO_PV10, my_predbat.forecast_minutes)
+    if abs(pv10[0] - nominal[0]) > 1e-6:
+        print("ERROR: pv10 cost {} differs from nominal {} with every slot above the tariff max - a gone dispatch was priced below the slot's own rate".format(pv10[0], nominal[0]))
+        failed = True
+    reset_rates(my_predbat, 10.0, 5.0)
+    return failed
+
+
 def test_pv90_no_charge_derate(my_predbat):
     """pv90 must charge at the full rate; the pv10-only charge_scaling10 de-rate must not apply to it.
 
@@ -1419,6 +1449,7 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)
+    failed |= test_pv10_dispatch_gone_never_cheaper_than_the_slot(my_predbat)
     failed |= test_pv90_no_charge_derate(my_predbat)
 
     metric_state = save_metric_state(my_predbat)

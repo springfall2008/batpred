@@ -19,6 +19,7 @@ Assistant entity writes with polling validation.
 
 import math
 import os
+import re
 import time
 import pytz
 from datetime import datetime, timedelta
@@ -328,6 +329,40 @@ class Inverter:
             # key is genuinely unconfigured. A bare value there reads back as an entity id and is
             # then looked up as one.
             self.base.args[arg] = self.base.args[arg] + [None] * (self.id + 1 - len(self.base.args[arg]))
+
+    def user_configured_entity(self, arg):
+        """
+        The entity id the user gave this inverter for arg in apps.yaml, or None.
+
+        "Set in apps.yaml" is judged from args_from_apps_yaml, the snapshot taken before Predbat's
+        own defaulting touches args: apps.yaml must name an entity (or a re: pattern) for this
+        inverter. The entity itself is read from the live args, which by now has any re: pattern
+        resolved, and is never Predbat's own dummy for this slot - so a dummy written on an earlier
+        refresh never counts, even behind a pattern that matched nothing. A bare placeholder such as
+        '00:00:00', an unmatched pattern, or a malformed value gives None.
+        """
+        raw = (getattr(self.base, "args_from_apps_yaml", None) or {}).get(arg)
+        if isinstance(raw, list):
+            # Per inverter: a list naming inverter 0 only says nothing about inverter 1, whose live
+            # slot may by now hold the dummy an earlier refresh wrote there
+            raw = raw[self.id] if self.id < len(raw) else None
+        elif self.id > 0:
+            # A single value is inverter 0's, as create_missing_arg() has always treated it
+            raw = None
+        # Judged on what apps.yaml itself says, not just that it said something: a placeholder such as
+        # Sofar's '00:00:00' is set, but the live slot holds Predbat's own dummy from the first cycle on
+        if not (isinstance(raw, str) and (is_entity_id(raw) or raw.startswith("re:"))):
+            return None
+        value = self.base.args.get(arg)
+        if isinstance(value, list):
+            value = value[self.id] if self.id < len(value) else None
+        if not is_entity_id(value) or value.startswith("re:"):
+            return None
+        # A re: pattern that matched nothing leaves the slot empty, so from the second cycle on it holds
+        # the dummy Predbat wrote there - under whichever inverter type was current at the time
+        if re.fullmatch(r"sensor\.{}_.+_{}_{}".format(re.escape(self.base.prefix), self.id, re.escape(arg)), value):
+            return None
+        return value
 
     def __init__(self, base, id=0, quiet=False):
         """
@@ -771,11 +806,19 @@ class Inverter:
             self.base.args["inverter_mode"][self.id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
+            # Some formats (H M) decompose the write into separate hour/minute entities and never
+            # expect the user to set this directly; others (no time window at all) ship a bare
+            # placeholder string. Either way Predbat needs somewhere to read/write for its own window
+            # bookkeeping. But if the user has genuinely pointed this at a real entity - a custom
+            # inverter definition using a non-HH:MM:SS format together with a real time window, e.g.
+            # #4738 - that's the one to use, not a self-created dummy that silently discards it.
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
                     entity_name = f"{x}_{y}_time"
+                    # Read before create_missing_arg(), which turns a single value into a list of defaults
+                    configured = self.user_configured_entity(entity_name)
                     self.create_missing_arg(entity_name, "23:59:00")
-                    self.base.args[entity_name][self.id] = self.create_entity(entity_name, "23:59:00")
+                    self.base.args[entity_name][self.id] = configured if configured else self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:

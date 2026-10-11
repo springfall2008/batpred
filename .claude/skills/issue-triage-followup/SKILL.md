@@ -50,11 +50,18 @@ Compare your updated understanding against the original triage comment's classif
 - If the classification, priority, or root-cause should change given the new information, update it. You may change or remove a label **you previously applied as the bot** (classification, priority, `waiting_for_user`) — never remove a label a human added.
 - Apply the same duplicate check as `/issue-triage` step 4 if the new information suggests one.
 
+If the bot's most recent prior comment (the one you found in step 1) carries a one-line bug statement (`/issue-triage` step 3), that statement is a standing claim and this review must settle it rather than silently carry it forward or drop it — including when nothing material changed, one of:
+
+- **Still a bug** — restate the one-line statement in this comment, unchanged if the new evidence doesn't bear on it, updated if it sharpens or changes what the fault actually is.
+- **Not a bug after all** — say so plainly, retract the statement, and give the corrected classification. This is the expected outcome when, as happened on #5390, a maintainer's own reply shows the reported behaviour is Predbat doing what the config says.
+
+If this review concludes the issue is a bug and there is no live statement to restate — the bot's most recent prior comment has none, or retracted one — write the one-line statement now, to the same standard as `/issue-triage` step 3. That covers this review changing the classification **to** `bug` (for the first time, or back to `bug` after an earlier follow-up retracted the statement), and this review confirming a `bug` label that an early-exit gate (`/issue-triage` step 1a or 1b) applied without investigating — those gates stop before step 3, so the first full investigation after one is where the statement gets written, even though the label is already there. A statement in an older comment that a later one retracted is not live, so it never stands in for a new one.
+
 ## 5. Post one follow-up comment
 
 Check the comment history first: if the most recent comment is already a bot comment with nothing from a human posted after it, stop — this review already happened and nothing new has arrived since.
 
-Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), and any further information request.
+Post exactly one comment via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated follow-up triage review (a maintainer will review before any action is taken), followed by: what was new since the last review, whether the classification/priority/root-cause changed and why (or confirmation nothing changed), the one-line bug statement from step 4 whenever one is restated, newly written, or retracted there — restated as-is if the new evidence didn't bear on it — and any further information request.
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 
