@@ -52,6 +52,15 @@ HA_RESTARTING_STATUSES = (502, 503, 504)
 HA_RETRY_SECONDS = 5
 HA_RETRY_MAX_SECONDS = 30
 
+# requests errors that mean ha_url or ha_key is malformed rather than Home Assistant being down
+HA_CONFIG_ERRORS = (
+    requests.exceptions.InvalidURL,
+    requests.exceptions.MissingSchema,
+    requests.exceptions.InvalidSchema,
+    requests.exceptions.InvalidHeader,
+    requests.exceptions.URLRequired,
+)
+
 
 class RunThread(threading.Thread):
     def __init__(self, coro):
@@ -1298,6 +1307,9 @@ class HAInterface(ComponentBase):
             if track:
                 self.ha_unavailable("connection error from {}".format(endpoint))
             data = None
+        except HA_CONFIG_ERRORS:
+            # A malformed ha_url or ha_key (e.g. a trailing newline) is not an outage and waiting will not fix it, so let it fail loudly as before
+            raise
         except requests.exceptions.RequestException as e:
             # Anything else requests raises while Home Assistant is going down, e.g. a connection reset part way through the body
             if not silent:

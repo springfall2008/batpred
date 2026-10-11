@@ -690,6 +690,70 @@ def test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat=None)
     return failed
 
 
+def test_hainterface_api_call_config_error_not_outage(my_predbat=None):
+    """Test api_call() lets a malformed ha_url/ha_key error escape rather than recording it as an outage"""
+    print("\n=== Testing HAInterface api_call() configuration error ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", db_enable=False, db_mirror_ha=False, db_primary=False)
+
+    with patch("ha.requests.get") as mock_get:
+        mock_get.side_effect = requests.exceptions.InvalidHeader("Invalid leading whitespace, reserved character(s), or return character(s) in header value")
+        raised = False
+        try:
+            ha_interface.api_call("/api/states")
+        except requests.exceptions.InvalidHeader:
+            raised = True
+
+    if not raised or ha_interface.outage.since is not None:
+        print(f"ERROR: expected the error to escape without an outage, got raised={raised} / {ha_interface.outage.since}")
+        failed += 1
+    else:
+        print("✓ configuration error escaped and was not an outage")
+
+    return failed
+
+
+def test_hainterface_initialize_config_error_fails_fast(my_predbat=None):
+    """Test initialize() fails at once on a malformed ha_url rather than retrying it as an outage for 15 minutes"""
+    print("\n=== Testing HAInterface initialize() configuration error fails fast ===")
+    failed = 0
+
+    mock_base = MockBase()
+    sleeps = []
+
+    with patch("ha.os.environ.get") as mock_env, patch("ha.requests.get") as mock_get, patch("ha.time", make_fake_time([1000.0], sleeps)):
+        mock_env.return_value = None  # no supervisor, so the only call is /api/services
+        mock_get.side_effect = requests.exceptions.MissingSchema("Invalid URL 'test:8123/api/services': No scheme supplied")
+
+        ha_interface = object.__new__(HAInterface)
+        ha_interface.base = mock_base
+        ha_interface.log = mock_base.log
+        ha_interface.api_started = False
+        ha_interface.api_stop = False
+        ha_interface.last_success_timestamp = None
+        ha_interface.local_tz = mock_base.local_tz
+        ha_interface.prefix = mock_base.prefix
+        ha_interface.args = mock_base.args
+        ha_interface.count_errors = 0
+        ha_interface.db_manager = None
+
+        raised = False
+        try:
+            ha_interface.initialize("test:8123", "test_key", False, False, False)
+        except ValueError:
+            raised = True
+
+    if not raised or sleeps:
+        print(f"ERROR: expected an immediate failure, got raised={raised} sleeps={sleeps}")
+        failed += 1
+    else:
+        print("✓ failed immediately")
+
+    return failed
+
+
 def test_hainterface_api_call_gateway_status_is_outage(my_predbat=None):
     """Test a 502/503/504 counts as an outage even when the gateway's body happens to be JSON"""
     print("\n=== Testing HAInterface api_call() gateway status ===")
@@ -952,6 +1016,7 @@ def run_hainterface_api_tests(my_predbat):
     failed += test_hainterface_api_call_outage_cleared(my_predbat)
     failed += test_hainterface_api_call_supervisor_failure_not_outage(my_predbat)
     failed += test_hainterface_api_call_request_exception_is_outage(my_predbat)
+    failed += test_hainterface_api_call_config_error_not_outage(my_predbat)
     failed += test_hainterface_api_call_auth_rejected(my_predbat)
     failed += test_hainterface_api_call_auth_rejected_ends_outage(my_predbat)
     failed += test_hainterface_api_call_auth_rejected_repeatedly_is_fatal(my_predbat)
@@ -962,6 +1027,7 @@ def run_hainterface_api_tests(my_predbat):
     failed += test_hainterface_initialize_retries_until_ready(my_predbat)
     failed += test_hainterface_initialize_gives_up_after_limit(my_predbat)
     failed += test_hainterface_initialize_auth_rejected_fails_fast(my_predbat)
+    failed += test_hainterface_initialize_config_error_fails_fast(my_predbat)
     failed += test_hainterface_get_history_basic(my_predbat)
     failed += test_hainterface_get_history_no_key(my_predbat)
     failed += test_hainterface_get_history_api_error(my_predbat)
