@@ -201,7 +201,9 @@ class Prediction(PredictionBatch):
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
-            self.rate_max = base.rate_max
+            # The tariff's own highest import rate, without event rewards - the floor for a dispatch that goes away
+            tariff_max = getattr(base, "rate_import_tariff_max", None)
+            self.rate_max = tariff_max if tariff_max is not None else base.rate_max
             self.clipping_limit = clipping_limit
             self.clipping_cost_weight = clipping_cost_weight
             self.clipping_buffer_kwh = clipping_buffer_kwh
@@ -753,7 +755,8 @@ class Prediction(PredictionBatch):
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
             if dispatch_gone:
-                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
+                # Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
+                import_rate = max(self.rate_max, import_rate)
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?

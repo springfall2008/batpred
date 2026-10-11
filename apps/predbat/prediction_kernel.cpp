@@ -60,8 +60,10 @@
 // by adding it to the grid balance after the battery has acted; the rest of the import pays rate_max.
 // Parity 16: each car charging in a step adds its own energy to the house load, not the running total
 // across cars, which counted the first car once per car (GH#5313).
-// Parity 17: anti-clipping window splitting in clip_intersecting_charge_windows and discharge clamping in pk_run_one.
-#define PK_PARITY_REVISION 17
+// Parity 17: a dispatch assumed gone pays the greater of rate_max (now the tariff's own highest import
+// rate, without saving session or Axle rewards) and the slot's own rate (#5163).
+// Parity 18: anti-clipping window splitting in clip_intersecting_charge_windows and discharge clamping in pk_run_one.
+#define PK_PARITY_REVISION 18
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -813,7 +815,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const double dispatch_rate = import_rate;
         const bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
         if (dispatch_gone) {
-            import_rate = c->rate_max; // Assume in worst case that slot goes away and max rate applies
+            // Worst case the slot goes away: the tariff's highest rate, or the slot's own if an event makes it dearer
+            import_rate = std::max(c->rate_max, import_rate);
         }
         const double export_rate = c->rate_export[k];
 
