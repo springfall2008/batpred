@@ -196,6 +196,8 @@ The example below shows Predbat import and export rates charted for the last 7 d
 
 The Charts view provides an easy way of viewing a number of pre-created Predbat charts:
 
+All modern Chart.js charts can be explored directly: use the mouse wheel or a pinch gesture to zoom horizontally, drag to pan, and double-click a chart to restore its original range.
+
 - **Battery** - Shows the historic Battery SoC for today and the predicted SoC for the plan duration under the Base/Base10/Best and Best10 scenarios (see [explanation of these terms](what-does-predbat-do.md#basic-terminology).
 The chart also shows where charging is planned under the Base and Best scenarios and forced Export under the Best scenario
 - **Power** - Shows predicted Power for the plan duration. This includes battery charge and discharge, solar generation (PV), house load, iBoost load, car charging load, and grid import/export

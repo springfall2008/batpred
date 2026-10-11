@@ -216,8 +216,8 @@ def run_web_charts_tests(my_predbat):
         forecast_stamp = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
         my_predbat.currency_symbols = ["€", "c"]
         my_predbat.dashboard_values = {
-            my_predbat.prefix + ".rates": {"attributes": {"results": {forecast_stamp: 21.5}}},
-            my_predbat.prefix + ".rates_export": {"attributes": {"results": {forecast_stamp: 12.0}}},
+            my_predbat.prefix + ".rates": {"state": 21.5, "attributes": {"results": {forecast_stamp: 21.5}}},
+            my_predbat.prefix + ".rates_export": {"state": 12.0, "attributes": {"results": {forecast_stamp: 12.0}}},
             my_predbat.prefix + ".rates_gas": {"attributes": {"results": {forecast_stamp: 7.25}}},
         }
         web.get_history_wrapper = lambda *args, **kwargs: [[{"state": 18.5, "last_updated": forecast_stamp}]]
@@ -232,6 +232,9 @@ def run_web_charts_tests(my_predbat):
             failed += 1
         if rates_data["series"]["export"].get(forecast_stamp) != 12.0:
             print(f"  ERROR: export tariff missing from rates chart JSON: {rates_data}")
+            failed += 1
+        if rates_data["series"]["export"].get(my_predbat.now_utc.strftime(TIME_FORMAT)) != 12.0:
+            print(f"  ERROR: current export tariff missing from rates chart JSON: {rates_data}")
             failed += 1
         if rates_data["currency_symbol"] != "€" or rates_data["currency_unit"] != "c":
             print(f"  ERROR: rates chart currency metadata is incorrect: {rates_data}")
@@ -346,8 +349,21 @@ def run_web_charts_tests(my_predbat):
         if 3.01 not in savings_data["series"]["total_predbat"].values() or 4.5 not in savings_data["series"]["total_pv_battery"].values():
             print(f"  ERROR: current cumulative savings are missing when recorder history is empty: {savings_data}")
             failed += 1
+        if savings_data["totals"] != {"predbat": 3.01, "pv_battery": 4.5}:
+            print(f"  ERROR: current savings totals are missing from chart JSON: {savings_data}")
+            failed += 1
         if savings_data["currency_symbol"] != "€":
             print(f"  ERROR: savings chart currency metadata is incorrect: {savings_data}")
+            failed += 1
+
+        # Totals are only updated after Predbat has completed a daily saving.
+        # Until then, the chart should derive a useful running total from the
+        # recorded daily savings rather than presenting a misleading zero.
+        for entity in total_entities:
+            my_predbat.ha_interface.dummy_items[entity] = {"state": 0, "attributes": {}}
+        savings_data = web.get_savings_chart_data()
+        if savings_data["totals"] != {"predbat": 1.25, "pv_battery": 1.25}:
+            print(f"  ERROR: savings chart did not derive totals from daily savings: {savings_data}")
             failed += 1
     finally:
         my_predbat.currency_symbols = original_currency_symbols

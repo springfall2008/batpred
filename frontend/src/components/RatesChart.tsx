@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { RatesChartData, RatesChartSeries } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import type { Plan } from '../types/plan'
 import { useStoredState } from '../hooks/useStoredState'
 import {
@@ -44,11 +45,12 @@ type RateLegendItem = {
   label: string
   colour: string
   description?: string
+  dashed?: boolean
 }
 
 const primaryLegendItems: RateLegendItem[] = [
   { key: 'import', label: 'Import rate', colour: 'var(--color-current)' },
-  { key: 'export', label: 'Export rate', colour: 'var(--color-success)' }
+  { key: 'export', label: 'Export rate', colour: 'var(--color-export)' }
 ]
 
 const comparisonOptions: Array<RateLegendItem & { key: ComparisonKey }> = [
@@ -56,25 +58,28 @@ const comparisonOptions: Array<RateLegendItem & { key: ComparisonKey }> = [
     key: 'gas',
     label: 'Gas rate',
     colour: '#d97706',
+    dashed: true,
     description: 'Forecast gas tariff supplied to Predbat.'
   },
   {
     key: 'actual_hourly',
     label: 'Hourly average cost',
     colour: '#0891b2',
+    dashed: true,
     description: 'Measured average electricity cost per kWh for each recent hour.'
   },
   {
     key: 'actual_today',
     label: 'Daily average cost',
     colour: '#64748b',
+    dashed: true,
     description: 'Running average electricity cost per kWh for today.'
   }
 ]
 
 function RateLegend({ item, square = false }: { item: RateLegendItem; square?: boolean }) {
   return (
-    <span className={`battery-chart-legend-item power-chart-legend-item ${square ? 'is-square' : ''}`}>
+    <span className={`battery-chart-legend-item power-chart-legend-item ${square ? 'is-square' : ''} ${item.dashed ? 'is-hollow' : ''}`}>
       <span
         className="battery-chart-legend-marker"
         style={{ '--battery-chart-legend-colour': item.colour } as React.CSSProperties}
@@ -201,7 +206,7 @@ export default function RatesChart({ data, plan }: RatesChartProps) {
     const textColour = styles.getPropertyValue('--color-text-secondary').trim() || '#4b5563'
     const gridColour = styles.getPropertyValue('--color-border').trim() || '#e5e7eb'
     const importColour = styles.getPropertyValue('--color-current').trim() || '#3b82f6'
-    const exportColour = styles.getPropertyValue('--color-success').trim() || '#16a34a'
+    const exportColour = styles.getPropertyValue('--color-export').trim() || '#7c3aed'
     const nowColour = styles.getPropertyValue('--color-warning').trim() || '#f59e0b'
 
     const datasets: ChartDataset<'line', ChartPoint[]>[] = [
@@ -211,7 +216,7 @@ export default function RatesChart({ data, plan }: RatesChartProps) {
         borderColor: importColour,
         backgroundColor: importColour,
         borderWidth: 3,
-        pointRadius: 0,
+        pointRadius: importPoints.length === 1 ? 3 : 0,
         stepped: true
       },
       {
@@ -220,7 +225,7 @@ export default function RatesChart({ data, plan }: RatesChartProps) {
         borderColor: exportColour,
         backgroundColor: exportColour,
         borderWidth: 3,
-        pointRadius: 0,
+        pointRadius: exportPoints.length === 1 ? 3 : 0,
         stepped: true
       }
     ]
@@ -263,11 +268,11 @@ export default function RatesChart({ data, plan }: RatesChartProps) {
               color: textColour,
               maxTicksLimit: 9,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, {
+                return formatChartTimestamp(value, {
                   weekday: 'short',
                   hour: '2-digit',
                   minute: '2-digit'
-                }).format(Number(value))
+                })
               }
             }
           },

@@ -11,6 +11,7 @@ import {
 } from 'chart.js'
 
 import type { DashboardMetrics } from '../types/metrics'
+import '../utils/chartZoom'
 import { metricEnergyValues, metricPowerValues } from '../utils/metrics'
 
 Chart.register(ArcElement, BarController, BarElement, CategoryScale, DoughnutController, LinearScale, Tooltip)

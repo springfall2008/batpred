@@ -119,6 +119,10 @@ export type SavingsChartData = {
   ready: boolean
   generated_at: string
   currency_symbol: string
+  totals: {
+    predbat: number
+    pv_battery: number
+  }
   series: SavingsChartSeries
 }
 

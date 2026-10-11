@@ -14,6 +14,7 @@ import {
 
 import { useStoredState } from '../hooks/useStoredState'
 import type { LoadMlChartData } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 
 import './BatteryChart.css'
@@ -143,7 +144,7 @@ export default function LoadMlChart({ data }: { data: LoadMlChartData }) {
         animation: false, responsive: true, maintainAspectRatio: false, parsing: false, normalized: true,
         interaction: { intersect: false, mode: 'nearest' },
         scales: {
-          x: { type: 'linear', min: window.start, max: window.end, grid: { color: grid }, ticks: { color: text, maxTicksLimit: 9, callback: (value) => new Intl.DateTimeFormat(undefined, days === 1 ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', day: 'numeric', hour: '2-digit' }).format(Number(value)) } },
+          x: { type: 'linear', min: window.start, max: window.end, grid: { color: grid }, ticks: { color: text, maxTicksLimit: 9, callback: (value) => formatChartTimestamp(value, days === 1 ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', day: 'numeric', hour: '2-digit' }) } },
           y: { beginAtZero: true, grid: { color: grid }, ticks: { color: text, callback: (value) => `${value} ${view === 'energy' ? 'kWh' : 'kW'}` } },
           temperature: { display: view === 'power', position: 'right', grid: { drawOnChartArea: false }, ticks: { color: colours.temperature, callback: (value) => `${value} °C` } }
         },

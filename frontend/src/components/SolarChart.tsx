@@ -14,6 +14,7 @@ import {
 } from 'chart.js'
 
 import type { SolarChartData } from '../types/charts'
+import { formatChartTimestamp } from '../utils/chartZoom'
 import { useStoredState } from '../hooks/useStoredState'
 import { pointsInWindow, toChartPoints, type ChartPoint } from '../utils/batteryChart'
 import { combineSolarForecast, getSolarChartWindow, getSolarPowerWindow, peakSolarPower, solarAccuracy, sumDailyCumulative } from '../utils/solarChart'
@@ -34,6 +35,7 @@ type SolarLegendItem = {
   label: string
   colour: string
   description: string
+  dashed?: boolean
 }
 
 const legendItems: SolarLegendItem[] = [
@@ -53,18 +55,21 @@ const legendItems: SolarLegendItem[] = [
     key: 'raw',
     label: 'Original forecast',
     colour: '#64748b',
+    dashed: true,
     description: 'The solar provider forecast before Predbat applies its local calibration.'
   },
   {
     key: 'low',
     label: 'Lower estimate',
     colour: '#a855f7',
+    dashed: true,
     description: 'Predbat’s conservative solar scenario, derived from recent lower-generation days.'
   },
   {
     key: 'high',
     label: 'Upper estimate',
     colour: '#16a34a',
+    dashed: true,
     description: 'Predbat’s optimistic solar scenario, derived from recent higher-generation days.'
   }
 ]
@@ -86,7 +91,7 @@ const accuracyLegendItems: SolarLegendItem[] = [
 
 function SolarLegend({ item }: { item: SolarLegendItem }) {
   return (
-    <span className="battery-chart-legend-item" tabIndex={0}>
+    <span className={`battery-chart-legend-item ${item.dashed ? 'is-hollow' : ''}`} tabIndex={0}>
       <span
         className="battery-chart-legend-marker"
         style={{ '--battery-chart-legend-colour': item.colour } as React.CSSProperties}
@@ -334,10 +339,9 @@ export default function SolarChart({ data }: SolarChartProps) {
               color: textColour,
               maxTicksLimit: days === 1 ? 9 : 8,
               callback(value) {
-                return new Intl.DateTimeFormat(undefined, days === 1
+                return formatChartTimestamp(value, days === 1
                   ? { hour: '2-digit', minute: '2-digit' }
-                  : { weekday: 'short', day: 'numeric', hour: '2-digit' }
-                ).format(Number(value))
+                  : { weekday: 'short', day: 'numeric', hour: '2-digit' })
               }
             }
           },
