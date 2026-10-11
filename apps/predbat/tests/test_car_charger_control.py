@@ -771,6 +771,26 @@ def test_octopus_rule_per_car():
     assert component.commands == [("b", "off", 1)], component.commands
 
 
+def test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends():
+    """A dispatch starts a car whose plan is not published yet; when the dispatch ends the charger
+    Predbat now holds is stopped, not left running with nobody in control."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    component.base.components = FakeComponents(None)
+    component.base.car_slot_owner = None
+    dispatch_b = "binary_sensor.predbat_octopus_intelligent_dispatch_b"
+    component.args["octopus_intelligent_slot"] = [DISPATCH, dispatch_b]
+    component.sensors = {DISPATCH: {"is_charger": False}, dispatch_b: {"is_charger": False, "state": "on"}}
+    component.args["octopus_intelligent_charger_follows_car"] = True
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("b", "on", 1)], component.commands
+
+    component.sensors[dispatch_b]["state"] = "off"
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands[-1] == ("b", "off", 1), component.commands
+
+
 def _guest_component():
     """A component with a guest switch, holding its charger stopped outside any window."""
     component = FakeComponent([FakeCharger("a")])
@@ -893,6 +913,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_octopus_rule_unmatched_regex_is_not_a_sensor()
     test_octopus_rule_other_slot_owner_hands_off()
     test_octopus_rule_per_car()
+    test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends()
     test_guest_charging_releases_and_resumes()
     test_guest_charging_ends_when_the_car_is_unplugged()
     test_guest_charging_survives_the_owner_unplugging()

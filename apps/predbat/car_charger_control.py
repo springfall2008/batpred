@@ -615,10 +615,12 @@ class CarChargerControl:
             del self.charger_control_octopus_cars[car_n]
         if not self.charger_control_connected(handle):
             return
-        if car_n not in self.charger_control_windows and not self.charger_control_dispatch_active(car_n, now):
+        if car_n not in self.charger_control_windows and key not in self.charger_control_state and not self.charger_control_dispatch_active(car_n, now):
             # This car's plan has not been published yet - one car's slot sensor can appear before
             # another's - and no dispatch says to charge, so Predbat knows nothing to act on: an
-            # absent plan is not an empty one, and stopping the charger would cut off a charge
+            # absent plan is not an empty one, and stopping the charger would cut off a charge.
+            # A charger Predbat already holds is still driven, so one a dispatch started is stopped
+            # when the dispatch ends rather than left running with nobody in control
             return
         charge = self.charger_control_should_charge(car_n, now)
         last = self.charger_control_state.get(key, None)
