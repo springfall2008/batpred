@@ -27,36 +27,46 @@ import copy
 # 3. Consider Octopus API key to access current tariff info and switch links
 
 
-def compare_entry_problem(entry, seen_ids):
-    """Return why a compare_list entry can't be compared, or None if it can (#5472)."""
-    if not isinstance(entry, dict):
-        return "must be a dictionary with an id and a name"
-    raw_id = entry.get("id")
-    entry_id = "" if raw_id is None else str(raw_id)
-    if not entry_id.strip():
-        return "requires a non-empty 'id'"
-    if entry_id in seen_ids:
-        return "has a duplicate id '{}'".format(entry_id)
-    if not entry.get("name"):
-        return "('{}') requires a non-empty 'name'".format(entry_id)
-    return None
+def check_compare_list(compare_list):
+    """Split compare_list into the entries that can be compared (ids and names as strings) and a message per skipped entry (#5472)."""
+    if not compare_list:
+        return [], []
+    if not isinstance(compare_list, list):
+        return [], ["compare_list must be a list of tariffs, each with an id and a name"]
+
+    valid = []
+    problems = []
+    seen_ids = set()
+    for index, entry in enumerate(compare_list):
+        problem = None
+        entry_id = ""
+        if not isinstance(entry, dict):
+            problem = "must be a dictionary with an id and a name"
+        else:
+            # Results, sensor names and the web page are all keyed by the id as a string, so an
+            # unquoted numeric id in apps.yaml must not reach them as an int
+            entry_id = "" if entry.get("id") is None else str(entry["id"]).strip()
+            if not entry_id:
+                problem = "requires a non-empty 'id'"
+            elif entry_id in seen_ids:
+                problem = "has a duplicate id '{}'".format(entry_id)
+            elif not entry.get("name"):
+                problem = "('{}') requires a non-empty 'name'".format(entry_id)
+        if problem:
+            problems.append("compare_list entry {} {}".format(index + 1, problem))
+            continue
+        seen_ids.add(entry_id)
+        # A numeric name would likewise break publish_data() building the friendly name
+        valid.append(dict(entry, id=entry_id, name=str(entry["name"])))
+    return valid, problems
 
 
 def valid_compare_list(compare_list, log=None):
-    """Return the compare_list entries that can be compared, with ids as strings, logging each one skipped (#5472)."""
-    valid = []
-    seen_ids = set()
-    for index, entry in enumerate(compare_list or []):
-        problem = compare_entry_problem(entry, seen_ids)
-        if problem:
-            if log:
-                log("Warn: Compare, compare_list entry {} {}, skipping it".format(index + 1, problem))
-            continue
-        # Results, sensor names and the web page are all keyed by the id as a string, so an
-        # unquoted numeric id in apps.yaml must not reach them as an int
-        entry_id = str(entry["id"])
-        seen_ids.add(entry_id)
-        valid.append(dict(entry, id=entry_id))
+    """Return the compare_list entries that can be compared, logging a warning for each one skipped (#5472)."""
+    valid, problems = check_compare_list(compare_list)
+    if log:
+        for problem in problems:
+            log("Warn: Compare, {}, skipping it".format(problem))
     return valid
 
 

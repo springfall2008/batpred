@@ -23,7 +23,7 @@ import os
 import tempfile
 from unittest.mock import MagicMock, patch
 
-from compare import Compare, valid_compare_list
+from compare import Compare, check_compare_list, valid_compare_list
 from const import MINUTE_WATT
 
 
@@ -737,22 +737,30 @@ def test_compare(my_predbat):
         {"id": "agile", "name": "Agile Again"},
         {"id": "no_name"},
         {"id": 2024, "name": "Numeric Id Tariff"},
+        {"id": " agile ", "name": "Padded Agile"},
+        {"id": "numeric_name", "name": 1234},
     ]
     kept = valid_compare_list(entries, log=logged.append)
     kept_ids = [entry["id"] for entry in kept]
     skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
 
-    if kept_ids != ["agile", "2024"]:
-        print("ERROR T27: valid_compare_list() should keep only 'agile' and '2024' (as a string), got {}".format(kept_ids))
+    if kept_ids != ["agile", "2024", "numeric_name"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024' and 'numeric_name' (ids as strings), got {}".format(kept_ids))
         failed += 1
-    elif skipped_positions != [1, 2, 3, 5, 6]:
-        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5 and 6, got {}".format(logged))
+    elif skipped_positions != [1, 2, 3, 5, 6, 8]:
+        print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6 and 8 (padded duplicate id), got {}".format(logged))
+        failed += 1
+    elif kept[2]["name"] != "1234":
+        print("ERROR T27: a numeric name should become a string, or publish_data() can't build the friendly name, got {!r}".format(kept[2]["name"]))
         failed += 1
     elif kept[0] is entries[3] or entries[6]["id"] != 2024:
         print("ERROR T27: valid_compare_list() must return copies, not rewrite the user's compare_list in place")
         failed += 1
     elif valid_compare_list(None) != [] or valid_compare_list([{"id": 0, "name": "Zero"}]) != [{"id": "0", "name": "Zero"}]:
         print("ERROR T27: valid_compare_list() should accept a missing list and an id of 0")
+        failed += 1
+    elif check_compare_list("agile") != ([], ["compare_list must be a list of tariffs, each with an id and a name"]) or check_compare_list(5)[0] != []:
+        print("ERROR T27: a compare_list that isn't a list should give no entries and one problem, got {} / {}".format(check_compare_list("agile"), check_compare_list(5)))
         failed += 1
     else:
         print("PASS T27: valid_compare_list() skips malformed entries with a positioned warning and normalises ids to strings")
@@ -764,7 +772,8 @@ def test_compare(my_predbat):
     # ------------------------------------------------------------------
     cmp = Compare.__new__(Compare)
     cmp.pb = my_predbat
-    cmp.log = lambda msg: None
+    run_all_logged = []
+    cmp.log = run_all_logged.append
     cmp.comparisons = {}
     cmp.live_saving_state = None
     run_single_ids = []
@@ -797,6 +806,9 @@ def test_compare(my_predbat):
         failed += 1
     elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid", "2024"}:
         print("ERROR T28: only the valid tariffs' results should be persisted, keyed by string id, got {}".format(saved_comparisons))
+        failed += 1
+    elif sorted(msg.split("compare_list entry ")[1][0] for msg in run_all_logged if "skipping it" in msg) != ["1", "2", "4"]:
+        print("ERROR T28: run_all() should log a warning for each skipped entry (1, 2 and 4), got {}".format(run_all_logged))
         failed += 1
     else:
         print("PASS T28: run_all() skips malformed entries and compares and persists the valid ones by string id")
