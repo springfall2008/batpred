@@ -381,6 +381,22 @@ def run_web_apps_edit_tests(my_predbat):
             failed += 1
 
         # ---------------------------------------------------------------------
+        print("Test: a compare profile with a blank id is refused (#5472)")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", 'name: Blank\nid: "  "\n')})
+        if result.get("success"):
+            print("  ERROR: expected the blank id to be refused, got: {}".format(result))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: a numeric compare profile id clashing with the same id quoted is refused, since both publish one sensor (#5472)")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", "name: Numeric\nid: 7\n"), "compare_list[]#2": _add("compare_list[]", 'name: Quoted\nid: "7"\n')})
+        if result.get("success"):
+            print("  ERROR: expected the numeric/quoted id clash to be refused, got: {}".format(result))
+            failed += 1
+
+        # ---------------------------------------------------------------------
         print("Test: deleting a compare profile's id is refused, since results are indexed by it")
         web_interface = _reset_fixture(my_predbat)
         result = _post_changes(web_interface, {"compare_list[0].id": _delete("compare_list[0].id")})

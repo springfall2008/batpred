@@ -96,6 +96,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from compare import compare_entry_problem, valid_compare_list
 import debug_history
 from web_annual import AnnualPage
 from web_chat import WebChat
@@ -4081,23 +4082,18 @@ chart.render();
     def _validate_compare_list(self, compare_list):
         """
         Check every compare_list profile still has the unique id and non-empty name that
-        compare.py indexes results by, raising ValueError if a batch has left one without
+        compare.py indexes results by, raising ValueError if a batch has left one without.
+        Uses compare.py's own rules, so the editor refuses exactly what a comparison would skip.
         """
         if not compare_list:
             return
 
         seen_ids = set()
-        for entry in compare_list:
-            if not isinstance(entry, dict):
-                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
-            entry_id = entry.get("id")
-            if not entry_id:
-                raise ValueError("Each compare_list entry requires a non-empty 'id'")
-            if entry_id in seen_ids:
-                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
-            seen_ids.add(entry_id)
-            if not entry.get("name"):
-                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+        for index, entry in enumerate(compare_list):
+            problem = compare_entry_problem(entry, seen_ids)
+            if problem:
+                raise ValueError("compare_list entry {} {}".format(index + 1, problem))
+            seen_ids.add(str(entry["id"]))
 
     async def html_apps_post(self, request):
         """
@@ -4452,7 +4448,8 @@ chart.render();
         else:
             cost_yesterday_no_car = cost_yesterday_hist
 
-        compare_list = self.get_arg("compare_list", [])
+        # Same entries, with the same string ids, as the comparison itself ran on (#5472)
+        compare_list = valid_compare_list(self.get_arg("compare_list", []))
         compare_hist = {}
         for item in compare_list:
             id = item.get("id", None)
@@ -4464,8 +4461,6 @@ chart.render();
                     compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
                     compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
                     compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
-
-        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
