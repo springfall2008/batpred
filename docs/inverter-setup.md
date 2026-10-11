@@ -1911,7 +1911,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
     - number.sigen_plant_ess_max_charging_limit
     - number.sigen_plant_ess_max_discharging_limit
-    - sensor.sigen_plant_max_active_power
+    - sensor.sigen_plant_available_max_active_power
 
 - Turn on **switch.sigen_plant_remote_ems_controlled_by_home_assistant** ("Remote EMS (Controlled by Home Assistant)"). While it is off the plant ignores **select.sigen_plant_remote_ems_control_mode** entirely and runs its own logic,
 so none of the mode changes made by the automations below take effect. The cut-off and limit numbers are still obeyed without it, which can make a setup look partly working.
@@ -2133,7 +2133,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
 ```
 
 *Note:* The rate automations cap the requested rate at the **plant**-level rated power, **sensor.sigen_plant_ess_rated_charging_power** and **sensor.sigen_plant_ess_rated_discharging_power**,
-which are also what the template's `battery_rate_max` uses and match the plant-level limits being written. Per-inverter versions, where your integration creates them, are named without the "-ing"
+which match the plant-level limits being written (the template's `battery_rate_max` uses the same plant-level discharging sensor). Per-inverter versions, where your integration creates them, are named without the "-ing"
 (e.g. sensor.sigen_inverter_ess_rated_charge_power); earlier versions of this page mixed the two spellings, giving entity names that don't exist.
 Make sure both are enabled: if one is missing or disabled the automation runs without a cap. If you don't have sensor.sigen_plant_daily_load_consumption,
 look for sensor.sigen_plant_daily_consumed_energy (the name earlier versions of this page used) and use that in `apps.yaml` instead.
