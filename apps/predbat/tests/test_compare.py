@@ -723,10 +723,11 @@ def test_compare(my_predbat):
     # ------------------------------------------------------------------
     # T27: valid_compare_list() keeps only the entries run_all() can compare -
     #      skipping, with a warning naming the entry's position, one that isn't a
-    #      dict, has no id, repeats an earlier id or has no name - and turns a
-    #      numeric id into a string (#5472 - run_all() used to index tariff["id"]
-    #      directly, raising KeyError every cycle, and a numeric id still crashed
-    #      publish_data() building the sensor name)
+    #      dict, has no id, repeats an earlier id, has no name or has a config:
+    #      that is neither a mapping nor empty (None, "", [] and {} mean no
+    #      overrides) - and turns a numeric id into a string (#5472 - run_all()
+    #      used to index tariff["id"] directly, raising KeyError every cycle, and a
+    #      numeric id still crashed publish_data() building the sensor name)
     # ------------------------------------------------------------------
     logged = []
     entries = [
@@ -747,16 +748,23 @@ def test_compare(my_predbat):
         {"id": "empty_dict_config", "name": "Empty Dict Config", "config": {}},
         {"id": "false_config", "name": "False Config", "config": False},
         {"id": "string_config", "name": "String Config", "config": "best_soc_min: 2.0"},
+        {"id": "mapping_config", "name": "Mapping Config", "config": {"best_soc_min": 2.0}},
     ]
     kept = valid_compare_list(entries, log=logged.append)
     kept_ids = [entry["id"] for entry in kept]
     skipped_positions = sorted(int(msg.split("compare_list entry ")[1].split(" ")[0]) for msg in logged)
 
-    if kept_ids != ["agile", "2024", "numeric_name", "empty_config", "empty_list_config", "empty_string_config", "empty_dict_config"]:
-        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name' and the four empty-config entries (ids as strings), got {}".format(kept_ids))
+    if kept_ids != ["agile", "2024", "numeric_name", "empty_config", "empty_list_config", "empty_string_config", "empty_dict_config", "mapping_config"]:
+        print("ERROR T27: valid_compare_list() should keep only 'agile', '2024', 'numeric_name', the four empty-config entries and 'mapping_config' (ids as strings), got {}".format(kept_ids))
         failed += 1
     elif skipped_positions != [1, 2, 3, 5, 6, 8, 10, 11, 16, 17]:
         print("ERROR T27: valid_compare_list() should warn for entries 1, 2, 3, 5, 6, 8 (padded duplicate id), 10 (blank name), 11, 16 and 17 (unusable config), got {}".format(logged))
+        failed += 1
+    elif not all("'config'" in msg for msg in logged if msg.split("compare_list entry ")[1].split(" ")[0] in ("11", "16", "17")):
+        print("ERROR T27: entries 11, 16 and 17 should be skipped for their config, got {}".format(logged))
+        failed += 1
+    elif kept[7].get("config") != {"best_soc_min": 2.0}:
+        print("ERROR T27: a mapping config: should be kept as the tariff's overrides, got {}".format(kept[7]))
         failed += 1
     elif any("config" in entry for entry in kept[3:7]):
         print("ERROR T27: an empty 'config:' (None, [], \"\" or {{}}) should be dropped as no overrides, got {}".format(kept[3:7]))
