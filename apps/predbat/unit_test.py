@@ -75,6 +75,7 @@ from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
 from tests.test_export_commitment import run_export_commitment_tests
+from tests.test_import_limit import run_import_limit_tests
 from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -410,6 +411,11 @@ def run_window_cache_tests_isolated(my_predbat):
     inside the test so the replay is deterministic wherever it runs in the suite.
     """
     return run_window_cache_tests(create_predbat())
+
+
+def run_import_limit_tests_isolated(my_predbat):
+    """Keep diagnostic fixtures independent of the shared suite's configuration and clock."""
+    return run_import_limit_tests(create_predbat())
 
 
 def create_predbat():
@@ -766,6 +772,7 @@ def main():
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
+        ("import_limit", run_import_limit_tests_isolated, "Whole-site grid import diagnostics (no enforcement)", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),

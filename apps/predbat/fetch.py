@@ -19,6 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
+from math import isfinite
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
 from const import (
     MINUTE_WATT,
@@ -36,6 +37,7 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    IMPORT_LIMIT_DEFAULT_W,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -81,6 +83,18 @@ class Fetch:
     historical load/PV data, battery temperature, car charging energy,
     and other sensor inputs. Converts all data to per-minute dictionaries.
     """
+
+    def fetch_import_limit(self):
+        """Read one finite, non-negative site threshold in W; never coerce bad input to off.
+
+        This first stage accepts a literal YAML number only. Read the raw argument because
+        get_arg with a numeric default coerces invalid values to that default, hiding errors.
+        The generic float schema does not reject lists, booleans or non-finite values.
+        """
+        value = self.args.get("import_limit", IMPORT_LIMIT_DEFAULT_W)
+        if type(value) not in (int, float) or not isfinite(value) or value < 0:
+            raise ValueError("import_limit must be a finite non-negative scalar number in W (0 disables diagnostics)")
+        return float(value)
 
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
@@ -3735,6 +3749,7 @@ class Fetch:
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
+        self.import_limit = self.fetch_import_limit()
         self.inverter_freeze_export_discharge_rate = max(self.get_arg("inverter_freeze_export_discharge_rate", 0.0), 0.0) / MINUTE_WATT
         self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0
