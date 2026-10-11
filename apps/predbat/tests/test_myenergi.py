@@ -1315,6 +1315,21 @@ def test_control_release_forgets_a_mode_saved_before_a_refused_command():
     print("  ✓ Release forgets modes saved ahead of refused commands")
 
 
+def test_control_never_releases_to_a_saved_stopped():
+    """A Zappi already Stopped when Predbat first moves it - Predbat's own hold, after a restart
+    lost the real snapshot - is released to Eco+, not back to Stopped where the car cannot charge."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.devices["Z12345678"].mode = "Stopped"
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes == {"Z12345678": "Stopped"}, component.control_saved_modes
+
+    component.charger_control_enabled = False
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
+    print("  ✓ A saved Stopped is released to Eco+")
+
+
 def test_control_releases_to_eco_plus_when_nothing_was_saved():
     """With no saved mode - a restart, or a mode that cannot be set - release falls back to Eco+."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
@@ -2694,6 +2709,7 @@ def test_myenergi(my_predbat=None):
     test_control_setting_strings_are_read_as_booleans()
     test_control_hand_to_octopus_never_fast()
     test_control_releases_to_the_saved_mode()
+    test_control_never_releases_to_a_saved_stopped()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_release_retry_keeps_the_saved_mode()
     test_control_release_forgets_the_saved_mode()

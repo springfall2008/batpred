@@ -964,12 +964,13 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
 
         Falls back to Eco+ when nothing was saved - a restart, or a device that reported a
         mode neither API accepts back - so a released Zappi always lands somewhere useful
-        rather than being left Stopped.
+        rather than being left Stopped. A saved Stopped falls back too: it is most likely
+        Predbat's own hold, snapshotted after a restart lost the real one.
         """
         # Read, not popped: if the command fails the release is retried next cycle, and must
         # still know where to put the Zappi back
         mode = self.control_saved_modes.get(device.device_id)
-        if mode not in ZAPPI_MODE_TO_CLOUD:
+        if mode not in ZAPPI_MODE_TO_CLOUD or mode == ZAPPI_MODE_STOPPED:
             mode = ZAPPI_MODE_RELEASE
         self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
         await self.transport.set_mode(device, mode)
@@ -977,13 +978,15 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.control_saved_modes.pop(device.device_id, None)
 
     async def charger_control_hand_to_octopus(self, device, charge):
-        """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast.
+        """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast
+        or Stopped.
 
-        Fast would start a grid charge outside Octopus's dispatches. Eco+ in its place only
+        Fast would start a grid charge outside Octopus's dispatches, and a saved Stopped is most
+        likely Predbat's own hold (see charger_control_release_one()). Eco+ in their place only
         diverts surplus solar, so the Zappi is not left Stopped either.
         """
         mode = self.control_saved_modes.get(device.device_id)
-        if mode not in ZAPPI_MODE_TO_CLOUD or mode == ZAPPI_MODE_CHARGING:
+        if mode not in ZAPPI_MODE_TO_CLOUD or mode in (ZAPPI_MODE_CHARGING, ZAPPI_MODE_STOPPED):
             mode = ZAPPI_MODE_RELEASE
         self.log("Info: myenergi: handing {} to Octopus in {}".format(device.name, mode))
         await self.transport.set_mode(device, mode)
