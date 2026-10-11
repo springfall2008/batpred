@@ -32,14 +32,25 @@ pred_bat:
   # to get an appkey and an x-access-key.
   # EXPERIMENTAL: nobody on the Predbat project has Sungrow hardware, so please report
   # what you see. Every request and response is traced to the log while this beds in.
-  # Authorisation is OAuth 2.0. On Predbat.com the access token is supplied and renewed
-  # for you. On a self-hosted install, supply the token you obtained from Sungrow's
-  # authorisation-code flow as sungrow_key and set sungrow_auth_method to 'token'; Predbat
-  # cannot renew it, so replace it when Sungrow expire it.
+  # On Predbat.com the access token is supplied and renewed for you. On a self-hosted
+  # install, set sungrow_auth_method to 'password' and give your iSolarCloud account and
+  # password: Predbat logs in and renews its own token. A wrong password is NOT retried -
+  # Predbat logs why and waits to be restarted with corrected settings - so it cannot lock
+  # your account. This method is unverified against a live account; please report the
+  # 'token placement' line from the log.
+  # Better than typing the account and password here: put them in secrets.yaml and write
+  #   sungrow_user_account: !secret sungrow_user_account
+  #   sungrow_user_password: !secret sungrow_user_password
   sungrow_appkey: 'xxxx'
   sungrow_access_key: 'xxxx'
-  sungrow_key: 'xxxx'
-  sungrow_auth_method: 'token'
+  sungrow_auth_method: 'password'
+  sungrow_user_account: 'xxxx'
+  sungrow_user_password: 'xxxx'
+
+  # Alternative: supply a token you obtained from Sungrow's authorisation-code flow.
+  # Predbat cannot renew it, so replace it when Sungrow expire it.
+  #sungrow_auth_method: 'token'
+  #sungrow_key: !secret sungrow_key
 
   # Regional gateway. Europe is the default; use gateway.isolarcloud.com (China),
   # gateway.isolarcloud.com.hk (international), augateway.isolarcloud.com (Australia)

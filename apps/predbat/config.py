@@ -2876,6 +2876,8 @@ APPS_SCHEMA = {
     "sungrow_auth_method": {"type": "string", "empty": False},
     "sungrow_token_expires_at": {"type": "string", "empty": False},
     "sungrow_token_hash": {"type": "string", "empty": False},
+    "sungrow_user_account": {"type": "string", "empty": False},
+    "sungrow_user_password": {"type": "string", "empty": False},
     "sungrow_gateway": {"type": "string", "empty": False},
     "sungrow_inverter_sn": {"type": "string|string_list", "empty": False},
     "sungrow_automatic": {"type": "boolean"},

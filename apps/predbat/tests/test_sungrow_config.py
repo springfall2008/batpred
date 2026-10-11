@@ -60,6 +60,8 @@ def test_sungrow_component_registered():
         ("api_debug", "sungrow_api_debug", True),
         ("inverter_limit", "sungrow_inverter_limit", None),
         ("export_limit", "sungrow_export_limit", None),
+        ("user_account", "sungrow_user_account", None),
+        ("user_password", "sungrow_user_password", None),
     ]:
         info = entry["args"].get(arg)
         if not info:
@@ -79,7 +81,7 @@ def test_sungrow_credentials_are_marked_secret():
     """Every credential is flagged secret so it is redacted from dumps and the web UI."""
     failed = False
     args = COMPONENT_LIST["sungrow"]["args"]
-    for arg in ("appkey", "access_key", "key", "token_hash"):
+    for arg in ("appkey", "access_key", "key", "token_hash", "user_account", "user_password"):
         if not args[arg].get("secret"):
             print(f"ERROR: {arg} is not marked secret")
             failed = True
@@ -139,6 +141,8 @@ def test_sungrow_apps_schema_keys():
         ("sungrow_api_debug", "boolean"),
         ("sungrow_inverter_limit", "float"),
         ("sungrow_export_limit", "float"),
+        ("sungrow_user_account", "string"),
+        ("sungrow_user_password", "string"),
     ]:
         entry = APPS_SCHEMA.get(key)
         if entry is None:

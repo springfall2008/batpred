@@ -1067,14 +1067,19 @@ Register an application at [developer-api.isolarcloud.com](https://developer-api
 ```yaml
   sungrow_appkey: !secret sungrow_appkey
   sungrow_access_key: !secret sungrow_access_key
-  sungrow_key: !secret sungrow_key
-  sungrow_auth_method: token
+  sungrow_auth_method: password
+  sungrow_user_account: !secret sungrow_user_account
+  sungrow_user_password: !secret sungrow_user_password
   sungrow_automatic: True
 ```
 
 - **sungrow_appkey** and **sungrow_access_key** - identify your application. Both are required.
-- **sungrow_key** - the access token for the plant owner's account.
-- **sungrow_auth_method** - `oauth` (the default) is for Predbat.com, which supplies and renews the token for you. On a self-hosted install set `token`: Predbat then uses the token exactly as you supplied it. Predbat cannot renew a token in this mode, so when Sungrow expire it you must obtain a new one and update `sungrow_key`.
+- **sungrow_auth_method** - how Predbat obtains the access token for the plant owner's account:
+    - `password` - the recommended method for a self-hosted install. Predbat logs in with your iSolarCloud account and password and renews the token itself, so there is nothing to replace by hand. **A wrong password is not retried:** if iSolarCloud refuses the login, Predbat logs the reason once and does not log in again until it is restarted with corrected settings, so Predbat cannot lock your account. **This method is unverified against a live account** - please report how you get on, including the `token placement` line from the log.
+    - `token` - Predbat uses the token in `sungrow_key` exactly as you supplied it. Predbat cannot renew a token in this mode, so when Sungrow expire it you must obtain a new one and update `sungrow_key`.
+    - `oauth` (the default) - for Predbat.com, which supplies and renews the token for you.
+- **sungrow_user_account** and **sungrow_user_password** - your iSolarCloud account name and password, used only when `sungrow_auth_method` is `password`. Keep them in `secrets.yaml` and refer to them with `!secret`. Predbat never writes either of them, or the token they obtain, to the log or to disk.
+- **sungrow_key** - the access token for the plant owner's account, when `sungrow_auth_method` is `token` or `oauth`. Not used with `password`.
 - **sungrow_token_expires_at** - the OAuth access token's expiry. Set by Predbat.com only; leave unset on a self-hosted install.
 - **sungrow_token_hash** - the OAuth refresh token hash, used to renew `sungrow_key` automatically. Set by Predbat.com only; leave unset on a self-hosted install.
 - **sungrow_gateway** - your account's region: `europe` (default), `australia`, `international`, `china` or `india`, or the full gateway URL from your authorisation instructions. The wrong region signs in successfully and then finds no plants.

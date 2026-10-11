@@ -76,9 +76,17 @@ OAuth dance. It holds an access token plus its expiry and hash, refreshes throug
 predbat.com's oauth-refresh edge function before a call, and retries once on a 401.
 Requests additionally carry the application's appkey in the body and its x-access-key in
 the headers, neither of which is an OAuth credential.
+
+A self-hosted install has two other ways in. sungrow_auth_method: token takes a pasted OAuth
+token that nothing can renew. sungrow_auth_method: password logs in with the iSolarCloud
+account and password and renews its own token - see login(). THAT PATH IS UNVERIFIED: where
+the login token goes on later calls is not documented, so the component tries the request
+body, falls back to a bearer header, and logs which one worked. Whatever the server does, a
+refused password is never sent twice (wrong passwords are counted and lock the account).
 """
 
 import asyncio
+import hashlib
 import json
 import time
 import aiohttp
@@ -153,6 +161,14 @@ from sungrow_const import (
     SUNGROW_MAX_POINTS_PER_REQUEST,
     SUNGROW_AUTH_ERROR_CODES,
     SUNGROW_RATE_LIMIT_CODES,
+    SUNGROW_LOGIN_OK,
+    SUNGROW_LOGIN_STATES,
+    SUNGROW_LOGIN_RETRY_SECONDS,
+    SUNGROW_LOGIN_BLOCKED_WARN_SECONDS,
+    SUNGROW_BODY_TOKEN_FIELD,
+    SUNGROW_TOKEN_IN_BODY,
+    SUNGROW_TOKEN_AS_BEARER,
+    SUNGROW_TOKEN_EMPTY_CODE,
     SUNGROW_PLANT_POINTS,
     SUNGROW_PLANT_TELEMETRY,
     SUNGROW_PLANT_ENERGY,
@@ -213,6 +229,15 @@ SUNGROW_CMD_RELEASE = "release"
 # automatic_config() and _bindable_args(), so what is bound and what is checked cannot drift.
 SUNGROW_POWER_ARGS = (("soc_percent", "soc"), ("battery_power", "battery_power"), ("grid_power", "grid_power"), ("load_power", "load_power"), ("pv_power", "pv_power"))
 
+# Logins iSolarCloud has refused, as {digest of gateway + account + password: reason}. Held at
+# module level, not on the component, because the promise is "never send a refused password
+# again in this process": restarting the component from the web interface, or an apps.yaml
+# reload, builds a NEW SungrowAPI, and a per-instance flag would let each of those spend one
+# more of the attempts iSolarCloud counts towards locking the account. Keyed by the settings
+# themselves, so correcting the account or the password is a different login and gets its one
+# attempt. Only a digest is kept - the password is not held anywhere it was not already.
+SUNGROW_LOGIN_BLOCKED = {}
+
 
 class SungrowAPI(ComponentBase, OAuthMixin):
     """Sungrow iSolarCloud OpenAPI cloud component."""
@@ -244,6 +269,8 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         api_delay=2,
         min_write_interval=300,
         api_debug=True,
+        user_account="",
+        user_password="",
         **kwargs,
     ):
         """Initialise the Sungrow component from its resolved config args.
@@ -278,9 +305,35 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         # it was written for a non-oauth key is an API key sent some other way. Here the key is
         # always the bearer token, whoever obtained it: in "token" mode a self-hosted user has
         # pasted one from Sungrow's own authorisation flow, and nothing can refresh it for them.
-        if self.auth_method != "oauth":
+        if self.auth_method == "password":
+            # The token comes from login(), never from sungrow_key, and lives in memory only:
+            # it is not written to the Storage cache, so a restart simply logs in once.
+            self.access_token = None
+        elif self.auth_method != "oauth":
             self.access_token = key or None
         self.token_hash = token_hash or ""
+
+        # Account-and-password login state. All of it is inert in the other two modes.
+        self.user_account = str(user_account or "")
+        self.user_password = str(user_password or "")
+        # Where the login token is presented: Sungrow do not document it, so it starts in the
+        # body and is switched once on a rejection. Confirmed by the first call that succeeds.
+        self.token_placement = SUNGROW_TOKEN_IN_BODY
+        self.token_placement_confirmed = False
+        # Why login has been given up on for good, or None. Once set, no login is sent again.
+        self.login_blocked = None
+        self._login_blocked_warned = 0.0
+        # When a login last failed WITHOUT the password being judged, and when a login last
+        # succeeded yet cured nothing. Both only pace the next attempt.
+        self._login_failed_time = 0.0
+        self._relogin_futile_time = 0.0
+        self._login_in_progress = False
+        if self.auth_method == "password":
+            self.log("Info: Sungrow is using account-and-password login for account {} (UNVERIFIED against a live account - please report the 'token placement' line from this log)".format(self._masked_account()))
+            self.login_blocked = SUNGROW_LOGIN_BLOCKED.get(self._login_key())
+            if self.login_blocked:
+                self._login_blocked_warned = time.time()
+                self.log("Warn: Sungrow login was already refused with these settings ({}); it will not be tried again until Predbat is restarted with corrected settings".format(self.login_blocked))
 
         self.plant_list = []
         self.plant_detail = {}
@@ -350,19 +403,30 @@ class SungrowAPI(ComponentBase, OAuthMixin):
     # Request layer
     # -------------------------------------------------------------------------
 
-    def _headers(self):
+    def _token_in_body(self):
+        """Return whether the token travels in the request body rather than as a bearer header.
+
+        Only ever True for a login token (password mode) while the placement is "body". OAuth
+        and pasted tokens are a bearer header, always.
+        """
+        return self.auth_method == "password" and self.token_placement == SUNGROW_TOKEN_IN_BODY
+
+    def _headers(self, with_token=True):
         """Return the headers every OpenAPI request carries.
 
         x-access-key identifies the APPLICATION and is issued with the appkey; the bearer
         token identifies the PLANT OWNER who authorised it. Both are required - a request
         with only one of them is rejected, and the two failure messages look alike, which is
         why _note_failure spells out which credential a rejection points at.
+
+        with_token is False for the login request itself, which must not present the token it
+        is about to replace. A login token placed in the body is likewise left out here.
         """
         headers = {
             "Content-Type": "application/json;charset=UTF-8",
             "x-access-key": self.access_key,
         }
-        if self.access_token:
+        if self.access_token and with_token and not self._token_in_body():
             headers["Authorization"] = "Bearer {}".format(self.access_token)
         return headers
 
@@ -431,19 +495,39 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             return
         self.log("Warn: Sungrow {} returned result_code {} {}{}".format(path, code or "(none)", detail, suffix))
 
-    async def _request(self, endpoint_key, body=None, _retry_after_refresh=False):
+    async def _request(self, endpoint_key, body=None, _retry_after_refresh=False, _placement_switched=False, _logged_in_again=False):
         """Perform one authorised API call, returning (ok, result_data).
 
         ok is True only when the envelope itself reported success. A transport failure and
         an API-level rejection are deliberately collapsed into the same False here - unlike
         AlphaESS, Sungrow's envelope carries no code the caller branches on - but they are
         logged differently so the distinction survives where it matters, in the log.
+
+        _retry_after_refresh guards the OAuth retry; _placement_switched and _logged_in_again guard
+        the two password-mode retries the same way (see _retry_password_auth). Each is set on
+        the one recursive call it permits, which is what makes every retry happen at most once.
         """
         path = SUNGROW_ENDPOINTS[endpoint_key]
         url = "{}{}".format(self.base_url, path)
         payload = dict(body or {})
         payload["appkey"] = self.appkey
         payload.setdefault("lang", SUNGROW_LANG)
+
+        # Password mode. The login itself goes out with the appkey and x-access-key like any
+        # other call but with NO token, in either placement. Every other call presents the
+        # login token where token_placement says, and is retried within strict bounds when it
+        # is rejected for authentication reasons.
+        is_login = endpoint_key == "login"
+        password_call = self.auth_method == "password" and not is_login
+        token_used = self.access_token
+        if password_call:
+            if not token_used:
+                # run() logs in before anything else, so this is only reached by a caller that
+                # skipped it. Sending a call with no token would just be rejected.
+                self.log("Warn: Sungrow has no login token, skipping API call to {}".format(path))
+                return False, None
+            if self._token_in_body():
+                payload[SUNGROW_BODY_TOKEN_FIELD] = token_used
 
         # Refresh BEFORE the call, not after a failure: a token that expires mid-plan would
         # otherwise cost a whole cycle. _retry_after_refresh guards the reactive path below
@@ -458,8 +542,16 @@ class SungrowAPI(ComponentBase, OAuthMixin):
             try:
                 timeout = aiohttp.ClientTimeout(total=SUNGROW_TIMEOUT)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, headers=self._headers(), json=payload) as response:
+                    async with session.post(url, headers=self._headers(with_token=not is_login), json=payload) as response:
                         status = response.status
+                        if status == 401 and password_call:
+                            return await self._retry_password_auth(endpoint_key, body, path, "HTTP 401", token_used, _placement_switched, _logged_in_again)
+                        if status == 401 and is_login:
+                            # Not a judgement on the password (that arrives as login_state in a
+                            # 200), and nothing to do with sungrow_key, which the pasted-token
+                            # message below would blame.
+                            self.log("Warn: Sungrow {} returned HTTP 401 - the login request itself was not accepted; check sungrow_appkey and sungrow_access_key".format(path))
+                            return False, None
                         if status == 401 and self.auth_method == "oauth" and not _retry_after_refresh:
                             if await self.handle_oauth_401():
                                 return await self._request(endpoint_key, body=body, _retry_after_refresh=True)
@@ -490,10 +582,162 @@ class SungrowAPI(ComponentBase, OAuthMixin):
                 self.log("Warn: Sungrow {} returned a non-object body".format(path))
                 return False, None
             self.debug_api("response", path, data)
-            if str(data.get("result_code")) == SUNGROW_RESULT_OK:
+            code = str(data.get("result_code"))
+            if code == SUNGROW_RESULT_OK:
+                if password_call and not self.token_placement_confirmed:
+                    self.token_placement_confirmed = True
+                    # The line a tester is asked to report: it settles the undocumented question.
+                    self.log("Info: Sungrow token placement confirmed: the login token is accepted {}".format(self._placement_text(self.token_placement)))
                 return True, data.get("result_data")
+            if password_call and (code in SUNGROW_AUTH_ERROR_CODES or code == SUNGROW_TOKEN_EMPTY_CODE):
+                return await self._retry_password_auth(endpoint_key, body, path, self._describe_failure(data), token_used, _placement_switched, _logged_in_again)
             self._note_failure(path, data)
             return False, None
+        return False, None
+
+    # -------------------------------------------------------------------------
+    # Account-and-password login
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _placement_text(placement):
+        """Describe a token placement in words, for the log."""
+        return "in the request body" if placement == SUNGROW_TOKEN_IN_BODY else "as a bearer header"
+
+    def _masked_account(self):
+        """Return the account name with all but its first two characters masked."""
+        return (self.user_account[:2] if len(self.user_account) > 2 else "") + "***"
+
+    def _login_key(self):
+        """Return the digest that identifies this gateway, account and password in SUNGROW_LOGIN_BLOCKED."""
+        return hashlib.sha256("\n".join((self.base_url, self.user_account, self.user_password)).encode("utf-8")).hexdigest()
+
+    def _block_login(self, reason, advice):
+        """Give up on logging in for good, saying why once.
+
+        Recorded both on this component and process-wide (see SUNGROW_LOGIN_BLOCKED), so that
+        nothing short of a Predbat restart or a changed setting sends these credentials again.
+        """
+        self.login_blocked = reason
+        SUNGROW_LOGIN_BLOCKED[self._login_key()] = reason
+        self._login_blocked_warned = time.time()
+        self.log("Warn: Sungrow cannot log in: {}. {}. Predbat will NOT try to log in again until it is restarted with corrected settings, so that it cannot lock the account".format(reason, advice))
+
+    async def login(self):
+        """Log in with the iSolarCloud account and password, returning True when a token is held.
+
+        THE RULE THAT MATTERS: a login iSolarCloud has answered with anything other than
+        success is never sent again. Wrong passwords are counted and lock the account, and a
+        component that retries on a timer is exactly how an account gets locked overnight. So
+        any login_state other than "1" sets login_blocked and that is the end of it for this
+        process.
+
+        A login that failed before the password was judged - no login_state at all: a network
+        error, an HTTP error, an envelope failure - is a different thing and may be retried,
+        but no more often than once every SUNGROW_LOGIN_RETRY_SECONDS.
+
+        Neither the password nor the token is ever logged: the request and response are traced
+        through debug_api, whose redaction covers both, and nothing here prints either.
+        """
+        if self.auth_method != "password" or self.login_blocked:
+            return False
+        if not self.user_account or not self.user_password:
+            # Not sent at all: an empty password is a wrong password as far as the count goes.
+            self._block_login("sungrow_user_account and sungrow_user_password are not both set", "Set both in apps.yaml")
+            return False
+        if self._login_in_progress:
+            return False
+        if self._login_failed_time and time.time() - self._login_failed_time < SUNGROW_LOGIN_RETRY_SECONDS:
+            return False
+
+        self._login_in_progress = True
+        try:
+            ok, data = await self._request("login", {"user_account": self.user_account, "user_password": self.user_password})
+        finally:
+            self._login_in_progress = False
+
+        state = data.get("login_state") if ok and isinstance(data, dict) else None
+        if state is None:
+            # _request has already logged a transport or envelope failure; a success envelope
+            # with no login_state in it is the one case it has said nothing about.
+            self._login_failed_time = time.time()
+            if ok:
+                self.log("Warn: Sungrow login returned no login_state, so it is not known whether the password was accepted")
+            self.log("Info: Sungrow login did not complete; it was not a refused password and will be tried again, but not for {} seconds".format(SUNGROW_LOGIN_RETRY_SECONDS))
+            return False
+
+        state = str(state)
+        if state == SUNGROW_LOGIN_OK:
+            token = data.get(SUNGROW_BODY_TOKEN_FIELD)
+            if not token:
+                self._login_failed_time = time.time()
+                self.log("Warn: Sungrow login reported success but returned no token; it will be tried again, but not for {} seconds".format(SUNGROW_LOGIN_RETRY_SECONDS))
+                return False
+            self.access_token = str(token)
+            self._login_failed_time = 0.0
+            self.log("Info: Sungrow login succeeded for account {}".format(self._masked_account()))
+            return True
+
+        reason = SUNGROW_LOGIN_STATES.get(state, "the login was refused with an unrecognised login_state of {}".format(state))
+        if state == "2":
+            advice = "It must be unlocked in iSolarCloud; Predbat did not and will not retry a password"
+        elif state == "5":
+            advice = "An administrator must unlock it"
+        else:
+            advice = "Check sungrow_user_account and sungrow_user_password"
+        self._block_login(reason, advice)
+        return False
+
+    @staticmethod
+    def _describe_failure(body):
+        """Return an envelope failure as "code message - description", as _note_failure reports it."""
+        code = str(body.get("result_code", ""))
+        message = body.get("result_msg") or ""
+        described = SUNGROW_ERROR_CODES.get(code)
+        detail = "{} - {}".format(message, described) if described and described != message else (message or described or "")
+        return "{} {}".format(code, detail).strip()
+
+    async def _retry_password_auth(self, endpoint_key, body, path, reason, token_used, placement_switched, logged_in_again):
+        """React to an authentication rejection of a password-mode call, returning (ok, result_data).
+
+        Two things can be wrong and the server does not say which: the token may be in the
+        wrong place (its placement is undocumented), or it may have expired. So, in order:
+
+          1. while the placement is unconfirmed and this request has not yet switched it,
+             switch it and retry;
+          2. otherwise log in again and retry with the new token, in the current placement;
+          3. otherwise give up on this request with one Warn naming what was tried.
+
+        STRICTLY BOUNDED: placement_switched and logged_in_again are this request's own record of
+        what it has already done, so it makes at most one switch and one login - four requests
+        in all - and can never loop. Across requests, a login that succeeded and still cured
+        nothing is not repeated for SUNGROW_LOGIN_RETRY_SECONDS: such a rejection is evidently
+        not about the token (an allow-list, a mismatched appkey), and logging in on every call
+        is its own route to "login too frequently". A refused password ends it permanently,
+        because login() will not send one twice.
+        """
+        if not self.token_placement_confirmed and not placement_switched:
+            tried = self.token_placement
+            self.token_placement = SUNGROW_TOKEN_AS_BEARER if tried == SUNGROW_TOKEN_IN_BODY else SUNGROW_TOKEN_IN_BODY
+            self.log("Info: Sungrow {} rejected the login token sent {} ({}); trying it {}".format(path, self._placement_text(tried), reason, self._placement_text(self.token_placement)))
+            return await self._request(endpoint_key, body=body, _placement_switched=True, _logged_in_again=logged_in_again)
+
+        tried = "sending the login token {}".format("in the request body and as a bearer header" if placement_switched else self._placement_text(self.token_placement))
+        self.last_api_error = reason
+        if logged_in_again:
+            self._relogin_futile_time = time.time()
+            self.log("Warn: Sungrow {} is still rejected ({}) after {} and after logging in again; giving up on this request. Check sungrow_appkey and sungrow_access_key, and that the application is authorised for this account".format(path, reason, tried))
+            return False, None
+        if self.access_token != token_used:
+            # Another call (the heartbeat runs alongside run()) renewed the token while this one
+            # was in flight. Use it rather than logging in a second time.
+            return await self._request(endpoint_key, body=body, _placement_switched=placement_switched, _logged_in_again=True)
+        if self._relogin_futile_time and time.time() - self._relogin_futile_time < SUNGROW_LOGIN_RETRY_SECONDS:
+            self.log("Warn: Sungrow {} was rejected ({}) after {}; not logging in again yet, because a fresh login less than {} seconds ago did not help".format(path, reason, tried, SUNGROW_LOGIN_RETRY_SECONDS))
+            return False, None
+        if await self.login():
+            return await self._request(endpoint_key, body=body, _placement_switched=placement_switched, _logged_in_again=True)
+        self.log("Warn: Sungrow {} was rejected ({}) after {}, and the login could not be renewed; giving up on this request".format(path, reason, tried))
         return False, None
 
     # -------------------------------------------------------------------------
@@ -2134,8 +2378,21 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         if not self.appkey or not self.access_key:
             self.log("Warn: Sungrow needs both sungrow_appkey and sungrow_access_key; register an application at https://developer-api.isolarcloud.com/")
             return False
+        if self.auth_method == "password":
+            if not self.login_blocked and not self.access_token:
+                await self.login()
+            if self.login_blocked:
+                # login() said why when it gave up. Repeated only as an occasional reminder:
+                # this is reached on every backoff attempt and nothing about it will change.
+                if time.time() - self._login_blocked_warned >= SUNGROW_LOGIN_BLOCKED_WARN_SECONDS:
+                    self._login_blocked_warned = time.time()
+                    self.log("Warn: Sungrow is not logging in: {}. Restart Predbat with corrected settings".format(self.login_blocked))
+                return False
         if not self.access_token:
-            self.log("Warn: Sungrow has no access token; reconnect the Sungrow account, or set sungrow_key with sungrow_auth_method: token on a self-hosted install")
+            self.log(
+                "Warn: Sungrow has no access token; reconnect the Sungrow account, or on a self-hosted install set sungrow_user_account and sungrow_user_password with sungrow_auth_method: password "
+                "(the login has not succeeded yet if that is already set), or sungrow_key with sungrow_auth_method: token"
+            )
             return False
 
         if self.tier_expired("static", SUNGROW_TTL_STATIC) or not self.device_list:
@@ -2207,11 +2464,13 @@ class SungrowAPI(ComponentBase, OAuthMixin):
         return True
 
     def is_alive(self):
-        """Return whether the component has started, has an inverter and has current telemetry."""
-        return bool(self.api_started and self.device_list and not self.telemetry_stale())
+        """Return whether the component has started, has an inverter, has current telemetry and can still log in."""
+        return bool(self.api_started and self.device_list and not self.telemetry_stale() and not self.login_blocked)
 
     def health_message(self):
         """Return why the component is unhealthy, for the run status, or None."""
+        if self.login_blocked:
+            return self.login_blocked
         if self.api_started and self.device_list and self.telemetry_stale():
             return "telemetry is {:.0f} minutes old".format(self.tier_age_minutes("power"))
         return None
@@ -2241,6 +2500,7 @@ def _build_sungrow(mock_base, args):  # pragma: no cover
 
     Control is disabled and the token is used as pasted: this tool exists to let a tester
     compare what the API reports against the iSolarCloud app before Predbat is given control.
+    Given an account and password instead of a token, it logs in the way the component does.
     """
     return SungrowAPI(
         mock_base,
@@ -2248,7 +2508,9 @@ def _build_sungrow(mock_base, args):  # pragma: no cover
         access_key=args.access_key,
         key=args.token,
         gateway=args.gateway,
-        auth_method="token",
+        auth_method="password" if args.user_account else "token",
+        user_account=args.user_account,
+        user_password=args.user_password,
         inverter_sn=args.serial,
         automatic=False,
         control_enable=False,
@@ -2261,7 +2523,14 @@ async def test_sungrow_api(args):  # pragma: no cover
     from mock_base import MockBase
 
     client = _build_sungrow(MockBase(), args)
+    password_mode = client.auth_method == "password"
+    if password_mode and not await client.login():
+        print("FAILED at login: {}".format(client.login_blocked or client.last_api_error or "no response - check the gateway region, the appkey and the access key"))
+        return
     await client.refresh_static()
+    if password_mode:
+        # The one line to report: where the login token goes is not documented by Sungrow.
+        print("Token placement: {} ({})".format(client.token_placement, "confirmed - a call succeeded with it" if client.token_placement_confirmed else "NOT confirmed - no call has succeeded yet"))
     if client.discovery_ok is False:
         print("FAILED at plant discovery: {}".format(client.last_api_error or "no response - check the gateway region and the three credentials"))
         return
@@ -2302,12 +2571,19 @@ def main():  # pragma: no cover
     parser = argparse.ArgumentParser(description="Sungrow iSolarCloud OpenAPI diagnostics (read-only)")
     parser.add_argument("--appkey", required=True, help="Application appkey from https://developer-api.isolarcloud.com/")
     parser.add_argument("--access-key", required=True, help="Application x-access-key, issued with the appkey")
-    parser.add_argument("--token", required=True, help="OAuth access token from Sungrow's authorisation-code flow")
+    parser.add_argument("--token", default=None, help="OAuth access token from Sungrow's authorisation-code flow (give this, or --user-account with --user-password)")
+    parser.add_argument("--user-account", default=None, help="iSolarCloud account name, to log in with a password instead of a token")
+    parser.add_argument("--user-password", default=None, help="iSolarCloud password. Sent once: a refused password is never retried")
     parser.add_argument("--gateway", default="europe", help="Region name (europe, australia, international, china, india) or a full gateway URL")
     parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
     parser.add_argument("--api-delay", type=float, default=2, help="Seconds to wait between API calls")
     parser.add_argument("--read-params", action="store_true", help="Also read back the control parameters (10001-10005, 10017); this queues a read task, it changes nothing")
     args = parser.parse_args()
+    with_password = bool(args.user_account or args.user_password)
+    if with_password and not (args.user_account and args.user_password):
+        parser.error("--user-account and --user-password must be given together")
+    if bool(args.token) == with_password:
+        parser.error("give exactly one of --token, or --user-account with --user-password")
     asyncio.run(test_sungrow_api(args))
 
 

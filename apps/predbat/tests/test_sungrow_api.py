@@ -14,8 +14,9 @@ import time
 import pytz
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+import sungrow as sungrow_module
 from sungrow import SungrowAPI, SUNGROW_CAPABILITIES
-from sungrow_const import SUNGROW_NO_EXPORT_LIMIT, SUNGROW_TTL_STATIC
+from sungrow_const import SUNGROW_NO_EXPORT_LIMIT, SUNGROW_TTL_STATIC, SUNGROW_LOGIN_RETRY_SECONDS, SUNGROW_LOGIN_BLOCKED_WARN_SECONDS
 from component_base import ComponentBase
 from coordinator import CAPABILITY_KEYS, validate_report
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -38,6 +39,8 @@ class MockSungrow(SungrowAPI):
         forced_charge_schedule=False,
         inverter_limit=None,
         export_limit=None,
+        user_account="",
+        user_password="",
     ):
         """Set up a minimal SungrowAPI instance for tests, bypassing ComponentBase.__init__."""
         self.prefix = "predbat"
@@ -71,6 +74,8 @@ class MockSungrow(SungrowAPI):
             min_write_interval=min_write_interval,
             inverter_limit=inverter_limit,
             export_limit=export_limit,
+            user_account=user_account,
+            user_password=user_password,
         )
 
     def set_mock_clock(self, minutes_now):
@@ -1458,6 +1463,551 @@ def test_sungrow_run_files_the_discovery_report_once():
     assert not failed, "test_sungrow_run_files_the_discovery_report_once"
 
 
+# -----------------------------------------------------------------------------
+# Account-and-password login
+# -----------------------------------------------------------------------------
+
+TEST_ACCOUNT = "owner-account"
+TEST_PASSWORD = "correct-horse-battery"
+TEST_EMAIL = "owner@example.com"
+TEST_LOGIN_TOKEN = "505120_2a62bd4e737e4e8fabc9caaa97f032c6"
+TEST_LOGIN_TOKEN_2 = "505120_ffffffffffffffffffffffffffffffff"
+LOGIN_PATH = "/openapi/login"
+
+
+def _login_data(state="1", token=TEST_LOGIN_TOKEN):
+    """Build the result_data of a login response, personal fields included.
+
+    A refused login carries no token and STILL arrives in a result_code "1" envelope, which is
+    why every caller wraps this in a plain _envelope().
+    """
+    data = {
+        "login_state": state,
+        "email": TEST_EMAIL,
+        "mobile_tel": "07700900123",
+        "user_account": TEST_ACCOUNT,
+        "user_name": "Owner Name",
+        "user_id": "505120",
+        "user_master_org_name": "Example Org",
+        "err_times": "0",
+        "disable_time": None,
+    }
+    if state == "1":
+        data["token"] = token
+    return data
+
+
+def _password_client(user_password=TEST_PASSWORD, **kwargs):
+    """Build a password-mode client, forgetting any login this process has already had refused.
+
+    The refusal record is deliberately process-wide, so without clearing it one test's wrong
+    password would silently block the next test's login.
+    """
+    sungrow_module.SUNGROW_LOGIN_BLOCKED.clear()
+    kwargs.setdefault("key", "")
+    return MockSungrow(auth_method="password", user_account=TEST_ACCOUNT, user_password=user_password, **kwargs)
+
+
+def _logged_in_client(confirmed=None):
+    """Build a password-mode client that already holds a token, without sending a login."""
+    client = _password_client()
+    client.access_token = TEST_LOGIN_TOKEN
+    if confirmed:
+        client.token_placement = confirmed
+        client.token_placement_confirmed = True
+    return client
+
+
+def _capture_posts(responses):
+    """Return (patcher, calls): successive POSTs answer with responses and are recorded in calls."""
+    mocks = [create_aiohttp_mock_response(json_data=body) if isinstance(body, dict) else body for body in responses]
+    session = create_aiohttp_mock_session(mocks)
+    original_post = session.post
+    calls = []
+
+    def capture_post(url, headers=None, json=None):
+        """Record the outgoing request then defer to the mock session."""
+        calls.append({"url": url, "headers": dict(headers or {}), "json": copy.deepcopy(json)})
+        return original_post(url, headers=headers, json=json)
+
+    session.post = capture_post
+    return patch("aiohttp.ClientSession", return_value=session), calls
+
+
+def _is_login(call):
+    """Return whether a recorded request went to the login endpoint."""
+    return str(call["url"]).endswith(LOGIN_PATH)
+
+
+def _placement_of(call):
+    """Describe where a recorded request carried its token: body, bearer, both or none."""
+    in_body = "token" in (call["json"] or {})
+    in_header = "Authorization" in call["headers"]
+    return "both" if in_body and in_header else ("body" if in_body else ("bearer" if in_header else "none"))
+
+
+def _warns(client):
+    """Return the Warn lines a client has logged."""
+    return [message for message in client.log_messages if message.startswith("Warn:")]
+
+
+def test_sungrow_password_login_success():
+    """The login carries the account, password and appkey with no token, and keeps the token it is given."""
+    failed = False
+    client = _password_client(key="a-pasted-token-that-must-be-ignored")
+    if client.access_token is not None:
+        print(f"ERROR: password mode started with a token ({client.access_token!r}); sungrow_key must be ignored")
+        failed = True
+    if client.token_placement != "body" or client.token_placement_confirmed:
+        print(f"ERROR: placement starts as {client.token_placement!r} confirmed={client.token_placement_confirmed}")
+        failed = True
+    patcher, calls = _capture_posts([_envelope(_login_data()), _envelope(PLANT_LIST)])
+    with patcher:
+        result = run_async_local(client.login())
+    if result is not True:
+        print(f"ERROR: login() returned {result!r}")
+        failed = True
+    if len(calls) != 1 or not _is_login(calls[0]):
+        print(f"ERROR: login made {[call['url'] for call in calls]}")
+        assert False, "test_sungrow_password_login_success"
+    body = calls[0]["json"]
+    if body.get("user_account") != TEST_ACCOUNT or body.get("user_password") != TEST_PASSWORD or body.get("appkey") != "sungrow-test-appkey":
+        print(f"ERROR: login body keys {sorted(body)}")
+        failed = True
+    if "token" in body or "Authorization" in calls[0]["headers"]:
+        print("ERROR: the login request carried a token")
+        failed = True
+    if calls[0]["headers"].get("x-access-key") != "sungrow-access-key":
+        print("ERROR: the login request did not carry x-access-key")
+        failed = True
+    if client.access_token != TEST_LOGIN_TOKEN:
+        print("ERROR: the returned token was not kept")
+        failed = True
+    if client.login_blocked:
+        print(f"ERROR: a successful login left login_blocked {client.login_blocked!r}")
+        failed = True
+    assert not failed, "test_sungrow_password_login_success"
+
+
+def test_sungrow_password_relogin_sends_no_stale_token():
+    """A renewal login must not present the token it is replacing, in either placement."""
+    failed = False
+    for placement in ("body", "bearer"):
+        client = _logged_in_client(confirmed=placement)
+        patcher, calls = _capture_posts([_envelope(_login_data(token=TEST_LOGIN_TOKEN_2))])
+        with patcher:
+            run_async_local(client.login())
+        if len(calls) != 1 or _placement_of(calls[0]) != "none":
+            print(f"ERROR: a renewal login under {placement} placement carried its token as {[_placement_of(call) for call in calls]}")
+            failed = True
+        if client.access_token != TEST_LOGIN_TOKEN_2:
+            print("ERROR: the renewed token was not kept")
+            failed = True
+    assert not failed, "test_sungrow_password_relogin_sends_no_stale_token"
+
+
+def test_sungrow_password_token_goes_in_the_body_by_default():
+    """Until proved otherwise the login token travels in the body, with no Authorization header."""
+    failed = False
+    client = _logged_in_client()
+    patcher, calls = _capture_posts([_envelope(PLANT_LIST)])
+    with patcher:
+        ok, data = run_async_local(client._request("plant_list", {"page": 1}))
+    if not ok or data != PLANT_LIST:
+        print(f"ERROR: the request returned ({ok}, {data})")
+        failed = True
+    if len(calls) != 1 or calls[0]["json"].get("token") != TEST_LOGIN_TOKEN or "Authorization" in calls[0]["headers"]:
+        print(f"ERROR: expected one request with the token in the body only, got {[_placement_of(call) for call in calls]}")
+        failed = True
+    if calls and calls[0]["json"].get("appkey") != "sungrow-test-appkey":
+        print("ERROR: the body lost its appkey")
+        failed = True
+    if client.token_placement != "body" or not client.token_placement_confirmed:
+        print(f"ERROR: after a success placement is {client.token_placement!r} confirmed={client.token_placement_confirmed}")
+        failed = True
+    assert not failed, "test_sungrow_password_token_goes_in_the_body_by_default"
+
+
+def test_sungrow_password_placement_falls_back_to_bearer():
+    """A rejected body token is retried once as a bearer header, with no second login."""
+    failed = False
+    for rejection in (_envelope(None, code="E900", message="Unauthorized access"), _envelope(None, code="002", message="token cannot be empty"), create_aiohttp_mock_response(status=401, json_data={})):
+        client = _logged_in_client()
+        patcher, calls = _capture_posts([rejection, _envelope(PLANT_LIST), _envelope(PLANT_LIST)])
+        with patcher:
+            ok, data = run_async_local(client._request("plant_list", {"page": 1}))
+        if not ok or data != PLANT_LIST:
+            print(f"ERROR: the fallback returned ({ok}, {data})")
+            failed = True
+        if [_placement_of(call) for call in calls] != ["body", "bearer"] or any(_is_login(call) for call in calls):
+            print(f"ERROR: expected exactly body then bearer and no login, got {[(_placement_of(call), call['url']) for call in calls]}")
+            failed = True
+        if len(calls) == 2 and calls[1]["headers"].get("Authorization") != "Bearer " + TEST_LOGIN_TOKEN:
+            print("ERROR: the bearer retry did not carry the token")
+            failed = True
+        if client.token_placement != "bearer" or not client.token_placement_confirmed:
+            print(f"ERROR: placement {client.token_placement!r} confirmed={client.token_placement_confirmed}")
+            failed = True
+        confirmations = [message for message in client.log_messages if message.startswith("Info:") and "token placement confirmed" in message]
+        if len(confirmations) != 1 or "bearer" not in confirmations[0].lower():
+            print(f"ERROR: expected one Info line naming the bearer placement, got {confirmations}")
+            failed = True
+        if _warns(client):
+            print(f"ERROR: a successful fallback logged {_warns(client)}")
+            failed = True
+        # Confirmed means settled: the next call goes straight out as a bearer and says nothing more.
+        patcher, calls = _capture_posts([_envelope(PLANT_LIST)])
+        with patcher:
+            run_async_local(client._request("plant_list", {"page": 1}))
+        if [_placement_of(call) for call in calls] != ["bearer"] or len([message for message in client.log_messages if "token placement confirmed" in message]) != 1:
+            print("ERROR: a confirmed placement was not reused quietly")
+            failed = True
+    assert not failed, "test_sungrow_password_placement_falls_back_to_bearer"
+
+
+def test_sungrow_password_expired_token_logs_in_once():
+    """With the placement settled, a rejected token means one login and one retry - no placement switch."""
+    failed = False
+    for placement in ("body", "bearer"):
+        client = _logged_in_client(confirmed=placement)
+        patcher, calls = _capture_posts([_envelope(None, code="E00003", message="token invalid"), _envelope(_login_data(token=TEST_LOGIN_TOKEN_2)), _envelope(PLANT_LIST), _envelope(PLANT_LIST)])
+        with patcher:
+            ok, data = run_async_local(client._request("plant_list", {"page": 1}))
+        if not ok or data != PLANT_LIST:
+            print(f"ERROR: the retry after login returned ({ok}, {data})")
+            failed = True
+        if len(calls) != 3 or [_is_login(call) for call in calls] != [False, True, False]:
+            print(f"ERROR: expected request, login, retry; got {[call['url'] for call in calls]}")
+            assert False, "test_sungrow_password_expired_token_logs_in_once"
+        if [_placement_of(call) for call in calls] != [placement, "none", placement]:
+            print(f"ERROR: placements {[_placement_of(call) for call in calls]}, expected {placement} kept across the login")
+            failed = True
+        retried_with = calls[2]["json"].get("token") if placement == "body" else calls[2]["headers"].get("Authorization")
+        if retried_with != (TEST_LOGIN_TOKEN_2 if placement == "body" else "Bearer " + TEST_LOGIN_TOKEN_2):
+            print("ERROR: the retry did not use the new token")
+            failed = True
+        if client.token_placement != placement or _warns(client):
+            print(f"ERROR: placement {client.token_placement!r}, warns {_warns(client)}")
+            failed = True
+    assert not failed, "test_sungrow_password_expired_token_logs_in_once"
+
+
+def test_sungrow_password_rejection_is_bounded():
+    """When everything is rejected the request tries each remedy once, in order, and then stops."""
+    failed = False
+    client = _logged_in_client()
+    rejected = _envelope(None, code="E900", message="Unauthorized access")
+    patcher, calls = _capture_posts([rejected, rejected, _envelope(_login_data(token=TEST_LOGIN_TOKEN_2)), rejected, rejected, rejected, rejected, rejected])
+    with patcher:
+        result = run_async_local(client._request("plant_list", {"page": 1}))
+    if result != (False, None):
+        print(f"ERROR: a wholly rejected request returned {result}")
+        failed = True
+    sequence = [("login" if _is_login(call) else _placement_of(call)) for call in calls]
+    if sequence != ["body", "bearer", "login", "bearer"]:
+        print(f"ERROR: request sequence {sequence}, expected original, switched placement, login, retry")
+        failed = True
+    warns = _warns(client)
+    if len(warns) != 1:
+        print(f"ERROR: expected exactly one Warn, got {warns}")
+        failed = True
+    elif "bearer" not in warns[0].lower() or "body" not in warns[0].lower() or "logging in again" not in warns[0]:
+        print(f"ERROR: the Warn does not name both things tried: {warns[0]}")
+        failed = True
+    if client.token_placement_confirmed:
+        print("ERROR: a placement was confirmed without a single success")
+        failed = True
+    if "E900" not in client.last_api_error:
+        print(f"ERROR: last_api_error {client.last_api_error!r} does not carry the rejection")
+        failed = True
+
+    # A fresh login that cured nothing is not repeated by the very next request: the rejection
+    # is evidently not about the token, and a login per request is its own way of being locked out.
+    patcher, calls = _capture_posts([rejected, rejected, rejected, rejected, rejected])
+    with patcher:
+        result = run_async_local(client._request("plant_list", {"page": 1}))
+    if result != (False, None) or any(_is_login(call) for call in calls) or len(calls) != 2:
+        print(f"ERROR: the next rejected request made {[('login' if _is_login(call) else _placement_of(call)) for call in calls]}, expected one placement switch and no login")
+        failed = True
+    # ...but once the pause has passed it may try a login again.
+    client._relogin_futile_time -= SUNGROW_LOGIN_RETRY_SECONDS + 1
+    patcher, calls = _capture_posts([rejected, rejected, _envelope(_login_data()), rejected, rejected, rejected])
+    with patcher:
+        run_async_local(client._request("plant_list", {"page": 1}))
+    if len([call for call in calls if _is_login(call)]) != 1 or len(calls) != 4:
+        print(f"ERROR: after the pause the rejected request made {len(calls)} request(s)")
+        failed = True
+    assert not failed, "test_sungrow_password_rejection_is_bounded"
+
+
+def test_sungrow_password_wrong_password_is_never_retried():
+    """A refused password blocks every further login: wrong passwords are counted and lock the account."""
+    failed = False
+    client = _password_client(user_password="wrong-password")
+    spare = _envelope(_login_data())
+    patcher, calls = _capture_posts([_envelope(_login_data(state="0"), message="password incorrect"), _envelope(None, code="E00003", message="token invalid"), spare, spare, spare, spare, spare])
+    with patcher:
+        first = run_async_local(client.login())
+        later = [run_async_local(client.login()) for _ in range(3)]
+        # Nor does an authenticated request, or a brand new component built from the same
+        # settings (a component restart from the web interface), get to try the password again.
+        client.access_token = "stale"
+        client.token_placement_confirmed = True
+        request = run_async_local(client._request("plant_list", {"page": 1}))
+        again = MockSungrow(auth_method="password", key="", user_account=TEST_ACCOUNT, user_password="wrong-password")
+        again_result = run_async_local(again.login())
+    if first is not False or any(later):
+        print(f"ERROR: login() returned {first!r} then {later}")
+        failed = True
+    if not client.login_blocked or "password" not in client.login_blocked:
+        print(f"ERROR: login_blocked is {client.login_blocked!r}")
+        failed = True
+    logins = [call for call in calls if _is_login(call)]
+    if len(logins) != 1:
+        print(f"ERROR: {len(logins)} login requests were sent after a refused password, expected exactly 1")
+        failed = True
+    if request != (False, None):
+        print(f"ERROR: a request with a refused login returned {request}")
+        failed = True
+    blocked_warns = [message for message in _warns(client) if "sungrow_user_password" in message]
+    if len(blocked_warns) != 1 or "restarted" not in blocked_warns[0]:
+        print(f"ERROR: expected one Warn naming sungrow_user_password and the restart, got {_warns(client)}")
+        failed = True
+    if again_result is not False or not again.login_blocked:
+        print(f"ERROR: a rebuilt component with the same refused password returned {again_result!r}, blocked={again.login_blocked!r}")
+        failed = True
+    if client.access_token and client.access_token != "stale":
+        print("ERROR: a refused login changed the token")
+        failed = True
+    if any("wrong-password" in message for message in client.log_messages + again.log_messages):
+        print("ERROR: the password was logged")
+        failed = True
+
+    # Corrected settings are a different login, and are allowed their one attempt.
+    corrected = MockSungrow(auth_method="password", key="", user_account=TEST_ACCOUNT, user_password=TEST_PASSWORD)
+    patcher, calls = _capture_posts([_envelope(_login_data())])
+    with patcher:
+        if run_async_local(corrected.login()) is not True or len(calls) != 1:
+            print("ERROR: a corrected password was not allowed to log in")
+            failed = True
+    assert not failed, "test_sungrow_password_wrong_password_is_never_retried"
+
+
+def test_sungrow_password_each_refusal_blocks_with_its_own_message():
+    """A locked, unknown or administratively disabled account each stops retrying and says why."""
+    failed = False
+    for state, in_reason, in_warn in [("2", "locked", "unlocked"), ("-1", "does not exist", "sungrow_user_account"), ("5", "administrator", "administrator"), ("9", "9", "restarted")]:
+        client = _password_client()
+        spare = _envelope(_login_data())
+        patcher, calls = _capture_posts([_envelope(_login_data(state=state)), spare, spare])
+        with patcher:
+            results = [run_async_local(client.login()) for _ in range(3)]
+        if any(results) or len(calls) != 1:
+            print(f"ERROR: login_state {state} gave {results} over {len(calls)} request(s)")
+            failed = True
+        if not client.login_blocked or in_reason not in client.login_blocked:
+            print(f"ERROR: login_state {state} left login_blocked {client.login_blocked!r}, expected it to mention {in_reason!r}")
+            failed = True
+        warns = _warns(client)
+        if len(warns) != 1 or in_warn not in warns[0] or "restarted" not in warns[0]:
+            print(f"ERROR: login_state {state} logged {warns}, expected one Warn mentioning {in_warn!r}")
+            failed = True
+        if client.access_token:
+            print(f"ERROR: login_state {state} left a token")
+            failed = True
+    assert not failed, "test_sungrow_password_each_refusal_blocks_with_its_own_message"
+
+
+def test_sungrow_password_login_transport_failure_is_paced_not_blocked():
+    """A login that failed before the password was judged may be retried, but not straight away."""
+    failed = False
+    for failure in (_envelope(None, code="-1", message="Internal service exception"), create_aiohttp_mock_response(status=503, json_data={}), create_aiohttp_mock_response(status=401, json_data={}), _envelope({"unexpected": True})):
+        client = _password_client()
+        patcher, calls = _capture_posts([failure, _envelope(_login_data()), _envelope(_login_data())])
+        with patcher:
+            first = run_async_local(client.login())
+            second = run_async_local(client.login())
+            sent_while_paced = len(calls)
+            client._login_failed_time -= SUNGROW_LOGIN_RETRY_SECONDS + 1
+            third = run_async_local(client.login())
+        if first is not False or client.login_blocked:
+            print(f"ERROR: a login that never reached the password check returned {first!r} with login_blocked {client.login_blocked!r}")
+            failed = True
+        if second is not False or sent_while_paced != 1:
+            print(f"ERROR: an immediate second login returned {second!r} after {sent_while_paced} request(s), expected it to send nothing")
+            failed = True
+        if third is not True or len(calls) != 2 or client.access_token != TEST_LOGIN_TOKEN:
+            print(f"ERROR: after the pause login returned {third!r} over {len(calls)} request(s)")
+            failed = True
+        if any("sungrow_key" in message for message in client.log_messages):
+            print("ERROR: a failed login was blamed on sungrow_key, which password mode does not use")
+            failed = True
+    assert not failed, "test_sungrow_password_login_transport_failure_is_paced_not_blocked"
+
+
+def test_sungrow_password_missing_settings_send_nothing():
+    """Without both the account and the password no login is sent - an empty password is a wrong one."""
+    failed = False
+    for account, password in (("", TEST_PASSWORD), (TEST_ACCOUNT, "")):
+        sungrow_module.SUNGROW_LOGIN_BLOCKED.clear()
+        client = MockSungrow(auth_method="password", key="", user_account=account, user_password=password)
+        patcher, calls = _capture_posts([_envelope(_login_data()), _envelope(_login_data())])
+        with patcher:
+            result = run_async_local(client.run(0, True))
+        if result is not False or calls:
+            print(f"ERROR: run returned {result!r} and sent {len(calls)} request(s) without both settings")
+            failed = True
+        if not any("sungrow_user_account" in message and "sungrow_user_password" in message for message in _warns(client)):
+            print(f"ERROR: the missing setting was not named: {_warns(client)}")
+            failed = True
+    assert not failed, "test_sungrow_password_missing_settings_send_nothing"
+
+
+def test_sungrow_password_run_logs_in_and_stays_quiet_while_blocked():
+    """run() logs in when it has no token; once refused it sends nothing and reports why."""
+    failed = False
+    client = _password_client()
+
+    async def no_limits():
+        """Skip the feed-in limitation read-back; it is exercised on its own."""
+        return None
+
+    client.refresh_limits = no_limits
+    patcher, calls = _capture_posts([_envelope(_login_data()), _envelope(PLANT_LIST), _envelope(DEVICE_LIST), _envelope(PLANT_REALTIME), _envelope(DEVICE_REALTIME)])
+    with patcher:
+        result = run_async_local(client.run(0, True))
+    if result is not True or not calls or not _is_login(calls[0]) or len([call for call in calls if _is_login(call)]) != 1:
+        print(f"ERROR: run returned {result!r} after {[call['url'] for call in calls]}")
+        failed = True
+    if any(_placement_of(call) != "body" for call in calls[1:]):
+        print(f"ERROR: placements after login {[_placement_of(call) for call in calls[1:]]}")
+        failed = True
+    client.api_started = True
+    if client.health_message() is not None:
+        print(f"ERROR: a healthy password client reports {client.health_message()!r}")
+        failed = True
+
+    client = _password_client(user_password="wrong-password")
+    spare = _envelope(_login_data())
+    patcher, calls = _capture_posts([_envelope(_login_data(state="0")), spare, spare, spare])
+    with patcher:
+        first = run_async_local(client.run(0, True))
+        warns_after_first = len(_warns(client))
+        repeats = [run_async_local(client.run(0, True)) for _ in range(3)]
+        warns_after_repeats = len(_warns(client))
+        client._login_blocked_warned -= SUNGROW_LOGIN_BLOCKED_WARN_SECONDS + 1
+        run_async_local(client.run(0, True))
+        run_async_local(client.run(0, True))
+    if first is not False or any(repeats):
+        print(f"ERROR: run returned {first!r} then {repeats} with a refused login")
+        failed = True
+    if len(calls) != 1:
+        print(f"ERROR: run sent {len(calls)} request(s) across six cycles with a refused login, expected the one login")
+        failed = True
+    if warns_after_first != 1 or warns_after_repeats != 1:
+        print(f"ERROR: {warns_after_first} Warn(s) after the refusal and {warns_after_repeats} after three more cycles, expected 1 and 1")
+        failed = True
+    if len(_warns(client)) != 2:
+        print(f"ERROR: expected one reminder after 30 minutes, got {_warns(client)}")
+        failed = True
+    if client.health_message() != client.login_blocked or not client.login_blocked:
+        print(f"ERROR: health_message {client.health_message()!r} is not the reason {client.login_blocked!r}")
+        failed = True
+    client.api_started = True
+    client.device_list = ["987654"]
+    if client.is_alive():
+        print("ERROR: a component whose login was refused reports itself alive")
+        failed = True
+    assert not failed, "test_sungrow_password_run_logs_in_and_stays_quiet_while_blocked"
+
+
+def test_sungrow_password_login_is_redacted_in_the_trace():
+    """With api_debug on, neither the password, the token nor anything personal reaches the log."""
+    failed = False
+    client = _password_client()
+    client.api_debug = True
+    patcher, calls = _capture_posts([_envelope(_login_data()), _envelope(None, code="E900"), _envelope(PLANT_LIST), _envelope(None, code="E00003"), _envelope(_login_data(token=TEST_LOGIN_TOKEN_2)), _envelope(PLANT_LIST)])
+    with patcher:
+        run_async_local(client.login())
+        run_async_local(client._request("plant_list", {"page": 1}))
+        run_async_local(client._request("plant_list", {"page": 1}))
+    if len(calls) != 6:
+        print(f"ERROR: the traced exchange made {len(calls)} request(s), expected 6")
+        failed = True
+    logged = "\n".join(client.log_messages)
+    if LOGIN_PATH not in logged or "login_state" not in logged:
+        print("ERROR: the login request and response were not traced at all")
+        failed = True
+    for label, secret in [
+        ("password", TEST_PASSWORD),
+        ("token", TEST_LOGIN_TOKEN),
+        ("renewed token", TEST_LOGIN_TOKEN_2),
+        ("email", TEST_EMAIL),
+        ("account name", TEST_ACCOUNT),
+        ("phone number", "07700900123"),
+        ("user name", "Owner Name"),
+        ("organisation", "Example Org"),
+        ("token's hex half", "2a62bd4e737e4e8fabc9caaa97f032c6"),
+    ]:
+        if secret in logged:
+            print(f"ERROR: the {label} appears in the log")
+            failed = True
+    if not any("ow***" in message for message in client.log_messages):
+        print("ERROR: the start-up line does not show the masked account")
+        failed = True
+    for key in ("user_password", "user_id", "user_master_org_name", "user_account", "token", "email", "mobile_tel", "user_name"):
+        if SungrowAPI.redact({key: "x"})[key] != "***":
+            print(f"ERROR: {key} is not redacted")
+            failed = True
+    assert not failed, "test_sungrow_password_login_is_redacted_in_the_trace"
+
+
+def test_sungrow_oauth_and_token_modes_never_put_the_token_in_the_body():
+    """Only password mode has a placement to discover: the other two are a bearer header, always."""
+    failed = False
+    for method in ("oauth", "token"):
+        client = MockSungrow(auth_method=method, key="held-token")
+        client.api_started = True
+
+        async def fresh():
+            """Report the OAuth token as current, so no refresh is attempted."""
+            return True
+
+        client.check_and_refresh_oauth_token = fresh
+        logins = []
+
+        async def no_login():
+            """Record any attempt to log in."""
+            logins.append(1)
+            return False
+
+        patcher, calls = _capture_posts([_envelope(PLANT_LIST), _envelope(None, code="E00003", message="token invalid"), _envelope(PLANT_LIST)])
+        with patcher:
+            ok, _ = run_async_local(client._request("plant_list", {"page": 1}))
+            real_login = run_async_local(client.login())
+            client.login = no_login
+            rejected = run_async_local(client._request("plant_list", {"page": 1}))
+        if not ok or len(calls) != 2 or any(_placement_of(call) != "bearer" for call in calls):
+            print(f"ERROR: {method} mode sent {[_placement_of(call) for call in calls]}, expected one bearer request per call and no retry")
+            failed = True
+        if calls and calls[0]["headers"].get("Authorization") != "Bearer held-token":
+            print(f"ERROR: {method} mode Authorization header is wrong")
+            failed = True
+        if rejected != (False, None) or logins or real_login is not False:
+            print(f"ERROR: {method} mode reacted to a rejected token with {rejected}, {len(logins)} login(s), login() -> {real_login!r}")
+            failed = True
+        if not any("sungrow_appkey" in message for message in _warns(client)):
+            print(f"ERROR: {method} mode no longer reports a rejected credential the way it did")
+            failed = True
+        if client.token_placement_confirmed or any("token placement" in message for message in client.log_messages):
+            print(f"ERROR: {method} mode reported a token placement")
+            failed = True
+        if client.health_message() is not None or client.login_blocked:
+            print(f"ERROR: {method} mode has login_blocked {client.login_blocked!r}")
+            failed = True
+    assert not failed, "test_sungrow_oauth_and_token_modes_never_put_the_token_in_the_body"
+
+
 def run_sungrow_api_tests(my_predbat):
     """Run all Sungrow API tests."""
     failed = False
@@ -1514,6 +2064,19 @@ def run_sungrow_api_tests(my_predbat):
         ("discovery_ratings_stable", test_sungrow_discovery_ratings_do_not_follow_drift),
         ("discovery_solar_from_device", test_sungrow_discovery_takes_solar_from_either_read_and_keeps_it),
         ("discovery_filed_from_run", test_sungrow_run_files_the_discovery_report_once),
+        ("password_login", test_sungrow_password_login_success),
+        ("password_relogin_no_stale_token", test_sungrow_password_relogin_sends_no_stale_token),
+        ("password_body_default", test_sungrow_password_token_goes_in_the_body_by_default),
+        ("password_placement_fallback", test_sungrow_password_placement_falls_back_to_bearer),
+        ("password_expired_token", test_sungrow_password_expired_token_logs_in_once),
+        ("password_bounded", test_sungrow_password_rejection_is_bounded),
+        ("password_wrong_never_retried", test_sungrow_password_wrong_password_is_never_retried),
+        ("password_refusals", test_sungrow_password_each_refusal_blocks_with_its_own_message),
+        ("password_login_paced", test_sungrow_password_login_transport_failure_is_paced_not_blocked),
+        ("password_missing_settings", test_sungrow_password_missing_settings_send_nothing),
+        ("password_run_blocked", test_sungrow_password_run_logs_in_and_stays_quiet_while_blocked),
+        ("password_redaction", test_sungrow_password_login_is_redacted_in_the_trace),
+        ("bearer_modes_unchanged", test_sungrow_oauth_and_token_modes_never_put_the_token_in_the_body),
     ]:
         try:
             if fn():

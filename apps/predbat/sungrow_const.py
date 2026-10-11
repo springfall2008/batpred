@@ -55,6 +55,9 @@ SUNGROW_ENDPOINTS = {
     # competing refresh path by accident.
     "token": "/openapi/apiManage/token",
     "refresh_token": "/openapi/apiManage/refreshToken",
+    # Account-and-password login (sungrow_auth_method: password). Unlike the two above, Predbat
+    # DOES call this one: it is how a self-hosted install obtains and renews its own token.
+    "login": "/openapi/login",
     "plant_list": "/openapi/platform/queryPowerStationList",
     "plant_detail": "/openapi/platform/getPowerStationDetail",
     "device_list": "/openapi/platform/getDeviceListByPsId",
@@ -139,6 +142,36 @@ SUNGROW_ERROR_CODES = {
     "E998": "Monthly API call limit reached",
     "E999": "Hourly API call limit reached",
 }
+
+# -----------------------------------------------------------------------------
+# Account-and-password login
+# -----------------------------------------------------------------------------
+
+# result_data.login_state is a STRING, and a refused login still comes back with result_code
+# "1": only login_state says whether the password was accepted. "1" is the only success.
+SUNGROW_LOGIN_OK = "1"
+# Every documented refusal. Wrong passwords are COUNTED by iSolarCloud and lock the account, so
+# none of these is ever retried - see SungrowAPI.login().
+SUNGROW_LOGIN_STATES = {
+    "-1": "the account does not exist",
+    "0": "the password is incorrect",
+    "2": "the account has been locked by iSolarCloud after too many wrong passwords",
+    "5": "the account has been locked by an administrator",
+}
+# A login that failed before the password was judged (network, HTTP, envelope) may be tried
+# again, but no more often than this. It also bounds how often a login that succeeded but did
+# not cure a rejection is repeated.
+SUNGROW_LOGIN_RETRY_SECONDS = 300
+# How often run() repeats the reminder that a refused login is not being retried.
+SUNGROW_LOGIN_BLOCKED_WARN_SECONDS = 30 * 60
+# Where the login token goes on later calls is NOT documented. "body" sends it as this field
+# beside appkey; "bearer" sends it as an Authorization header like the OAuth token. The
+# component tries body first and falls back - see SungrowAPI._retry_password_auth().
+SUNGROW_BODY_TOKEN_FIELD = "token"
+SUNGROW_TOKEN_IN_BODY = "body"
+SUNGROW_TOKEN_AS_BEARER = "bearer"
+# Envelope code "002" is "token cannot be empty": what a wrongly placed token would produce.
+SUNGROW_TOKEN_EMPTY_CODE = "002"
 
 # Auth codes mean the credentials or the token are the problem, not the request. Called out
 # separately because "appkey invalid" and "token expired" otherwise read as an ordinary API
@@ -625,7 +658,28 @@ SUNGROW_TELEMETRY_STALE_MINUTES = 15
 # Credentials, plus the personal fields plant and device listings are known or likely to carry.
 # The names beyond the credentials are a best-effort list taken from the documented response
 # fields: a tester's first log should be read for anything personal this misses.
-SUNGROW_DEBUG_REDACT_KEYS = ("appkey", "access_key", "x-access-key", "token", "access_token", "refresh_token", "Authorization", "ps_location", "latitude", "longitude", "email", "user_account", "user_name", "mobile_tel", "ps_holder")
+SUNGROW_DEBUG_REDACT_KEYS = (
+    "appkey",
+    "access_key",
+    "x-access-key",
+    "token",
+    "access_token",
+    "refresh_token",
+    "Authorization",
+    "ps_location",
+    "latitude",
+    "longitude",
+    "email",
+    "user_account",
+    "user_name",
+    "mobile_tel",
+    "ps_holder",
+    "user_password",
+    "user_id",
+    "user_master_org_name",
+    "err_times",
+    "disable_time",
+)
 
 # Every minute of the day as HH:MM:00, the options the charge/export time selects offer.
 SUNGROW_TIME_OPTIONS = ["{:02d}:{:02d}:00".format(minute // 60, minute % 60) for minute in range(24 * 60)]
