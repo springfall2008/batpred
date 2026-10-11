@@ -252,6 +252,8 @@ recorder:
       - sensor.predbat_pv_d3
       - sensor.predbat_temperature
   include:
+    entity_globs: #The history of these entities is used by Predbat's Compare tab
+      - predbat.compare_tariff_*
     entities: #The history of these entities is used by Predbat
       - predbat.car_charging_power
       - predbat.carbon_today
@@ -289,7 +291,8 @@ Two things to be careful of if you adapt the example above:
 
 - Don't drop entries from the `include` list without checking what reads them. Predbat needs the recorded history of
 every entity listed there and quietly loses a feature for each one it can no longer read - `predbat.cost_today`, for
-instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from.
+instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from. Likewise the `predbat.compare_tariff_*`
+sensors are what the [Compare tab](compare.md) builds its day-by-day history from; without them it only ever shows the latest run.
 - Don't add further Predbat sensors to the `exclude` list for the same reason. `sensor.predbat_pv_forecast_h0`,
 `sensor.predbat_pv_forecast_h0_uncalibrated` and `sensor.predbat_pv_today` are deliberately left out of it because PV
 calibration, the PV chart and the PV accuracy chart compare against their history. Adding a `sensor.*` entity to
