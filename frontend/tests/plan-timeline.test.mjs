@@ -93,6 +93,32 @@ test('timeline splits a continuous charge action around a Power Up session', () 
   assert.equal(events[1].end.toISOString(), '2026-10-11T11:00:00.000Z')
 })
 
+test('timeline events total solar generation across their plan slots', () => {
+  const row = (time, pv_forecast) => ({
+    time,
+    state: 'Demand',
+    state_target: '',
+    soc_percent: 50,
+    import_rate: 20,
+    export_rate: 12,
+    pv_forecast,
+    car_charging: 0,
+    carbon_change: 0,
+    reasons: []
+  })
+
+  const events = module.exports.buildTimelineEvents({
+    rows: [
+      row('2026-10-11T10:30:00+01:00', 0.35),
+      row('2026-10-11T11:00:00+01:00', 0.45)
+    ],
+    currency_symbols: ['£', 'p'],
+    reason_templates: {}
+  }, 30 * 60 * 1000, 50)
+
+  assert.equal(events[0].solarGeneration, 0.8)
+})
+
 test('timeline identifies a demand row held for a charging car', () => {
   const row = (time, reasons = []) => ({
     time,

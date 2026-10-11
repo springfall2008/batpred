@@ -480,6 +480,179 @@ function RateCell({
   )
 }
 
+type LoadCellProps = {
+  row: PlanRow
+  overrides: PlanOverrides
+  isPast: boolean
+  debugEnabled: boolean
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onOverrideSubmitted: () => void
+}
+
+function LoadCell({
+  row,
+  overrides,
+  isPast,
+  debugEnabled,
+  open,
+  onToggle,
+  onClose,
+  onOverrideSubmitted
+}: LoadCellProps) {
+  const override = (overrides.manual_load_adjust ?? []).find((item) => item.minutes === row.slot_minute) ?? null
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const controlRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (controlRef.current && !controlRef.current.contains(event.target as Node)) {
+        onClose()
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open, onClose])
+
+  function openEditor() {
+    if (isPast) {
+      return
+    }
+
+    if (!open) {
+      setValue(String(override?.adjustment ?? row.load_forecast))
+      setError(null)
+    }
+
+    onToggle()
+  }
+
+  async function sendOverride(action: 'Set Load' | 'Clear Load', adjustment: number) {
+    setSaving(true)
+    setError(null)
+
+    const formData = new FormData()
+    formData.append('time', formatOverrideTime(row.time))
+    formData.append('action', action)
+    formData.append('rate', String(adjustment))
+
+    try {
+      const response = await fetch('./rate_override', {
+        method: 'POST',
+        body: formData
+      })
+      const result = (await response.json()) as { success?: boolean; message?: string }
+
+      if (!response.ok || result.success === false) {
+        throw new Error(result.message || `HTTP ${response.status}`)
+      }
+
+      onClose()
+      onOverrideSubmitted()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setError(`Unable to update load forecast: ${message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function setLoad(event: React.FormEvent) {
+    event.preventDefault()
+    const adjustment = Number(value)
+
+    if (!Number.isFinite(adjustment)) {
+      setError('Enter a valid load forecast.')
+      return
+    }
+
+    await sendOverride('Set Load', adjustment)
+  }
+
+  return (
+    <td
+      className={['plan-number', 'plan-load', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
+      style={cellColour(row.load_color)}
+    >
+      <div ref={controlRef} className="plan-load-control">
+        <button
+          type="button"
+          className={['plan-load-button', override ? 'is-manual' : ''].filter(Boolean).join(' ')}
+          onClick={openEditor}
+          aria-disabled={isPast}
+          aria-label={override ? `Load forecast ${row.load_forecast.toFixed(2)} kWh, manually overridden` : `Load forecast ${row.load_forecast.toFixed(2)} kWh`}
+        >
+          <span className="plan-value-with-indicator">
+            {row.load_forecast > 0 && row.load_color && (
+              <span className="plan-value-indicator" style={{ backgroundColor: row.load_color }} aria-hidden="true" />
+            )}
+            <span>{row.load_forecast.toFixed(2)}</span>
+          </span>
+
+          {override && <span className="plan-rate-manual-dot" title="Manual load override" aria-hidden="true" />}
+        </button>
+
+        {debugEnabled && (row.load_forecast10 ?? 0) > 0 && (
+          <small className="plan-debug-value">({row.load_forecast10?.toFixed(2)})</small>
+        )}
+
+        {open && !isPast && (
+          <form className="plan-cell-popover" onSubmit={setLoad}>
+            <div className="plan-cell-popover-title">{formatTime(row.time)} load override</div>
+
+            <label>
+              <span>Load forecast</span>
+
+              <div className="plan-rate-input">
+                <input
+                  type="number"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                  autoFocus
+                  disabled={saving}
+                />
+
+                <span>kWh</span>
+              </div>
+            </label>
+
+            <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Set override'}</button>
+
+            {override && (
+              <button type="button" className="plan-rate-clear" disabled={saving} onClick={() => void sendOverride('Clear Load', override.adjustment)}>
+                Use Predbat forecast
+              </button>
+            )}
+
+            {error && <div className="plan-rate-error" role="alert">{error}</div>}
+          </form>
+        )}
+      </div>
+    </td>
+  )
+}
+
 type TargetCellProps = {
   row: PlanRow
   overrides: PlanOverrides
@@ -1136,6 +1309,32 @@ export default function PlanTable({
 
   const [openCellEditor, setOpenCellEditor] = useState<string | null>(null)
 
+  useEffect(() => {
+    const visualViewport = window.visualViewport
+
+    if (!visualViewport) {
+      return
+    }
+
+    const viewport = visualViewport as VisualViewport
+
+    function updateKeyboardOffset() {
+      const offset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+
+      document.documentElement.style.setProperty('--plan-mobile-keyboard-offset', `${offset}px`)
+    }
+
+    updateKeyboardOffset()
+    viewport.addEventListener('resize', updateKeyboardOffset)
+    viewport.addEventListener('scroll', updateKeyboardOffset)
+
+    return () => {
+      viewport.removeEventListener('resize', updateKeyboardOffset)
+      viewport.removeEventListener('scroll', updateKeyboardOffset)
+      document.documentElement.style.removeProperty('--plan-mobile-keyboard-offset')
+    }
+  }, [])
+
   function toggleCellEditor(key: string) {
     setOpenOverrideTime(null)
     setOverrideError(null)
@@ -1152,11 +1351,19 @@ export default function PlanTable({
         return
       }
 
-      const viewportWidth = window.visualViewport?.width ?? window.innerWidth
+      // Measure from the unshifted position. Otherwise, a later measurement
+      // treats the previous correction as the starting point and can move the
+      // tooltip back outside the viewport.
+      element.style.removeProperty(shiftProperty)
+
+      const viewport = window.visualViewport
+      const viewportLeft = viewport?.offsetLeft ?? 0
+      const viewportWidth = viewport?.width ?? window.innerWidth
       const bounds = element.getBoundingClientRect()
       const safeInset = 8
-      const maximumLeft = Math.max(safeInset, viewportWidth - bounds.width - safeInset)
-      const constrainedLeft = Math.min(maximumLeft, Math.max(safeInset, bounds.left))
+      const minimumLeft = viewportLeft + safeInset
+      const maximumLeft = Math.max(minimumLeft, viewportLeft + viewportWidth - bounds.width - safeInset)
+      const constrainedLeft = Math.min(maximumLeft, Math.max(minimumLeft, bounds.left))
 
       element.style.setProperty(shiftProperty, `${constrainedLeft - bounds.left}px`)
     })
@@ -1168,6 +1375,10 @@ export default function PlanTable({
 
   function constrainActionTooltip(tooltip: HTMLSpanElement | null) {
     constrainFloatingElement(tooltip, '--plan-action-tooltip-shift')
+  }
+
+  function constrainActionTooltipForControl(control: HTMLElement) {
+    constrainActionTooltip(control.querySelector<HTMLSpanElement>('.plan-action-tooltip'))
   }
 
   const [colourStyle, setColourStyle] = useState<'dots' | 'cells'>(() => {
@@ -1517,6 +1728,12 @@ export default function PlanTable({
                         className={['plan-action-control', menuOpen ? 'is-open' : '']
                           .filter(Boolean)
                           .join(' ')}
+                        onPointerEnter={(event) => {
+                          constrainActionTooltipForControl(event.currentTarget)
+                        }}
+                        onFocusCapture={(event) => {
+                          constrainActionTooltipForControl(event.currentTarget)
+                        }}
                         onPointerDown={(event) => {
                           event.stopPropagation()
                         }}
@@ -1725,26 +1942,20 @@ export default function PlanTable({
                       )}
                     </td>
 
-                    <td
-                      className={['plan-number', 'plan-load', row.load_color ? 'has-plan-cell-colour' : ''].filter(Boolean).join(' ')}
-                      style={cellColour(row.load_color)}
-                    >
-                      <span className="plan-value-with-indicator">
-                        {row.load_forecast > 0 && row.load_color && (
-                          <span
-                            className="plan-value-indicator"
-                            style={{ backgroundColor: row.load_color }}
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span>{row.load_forecast.toFixed(2)}</span>
-                      </span>
-                      {debugEnabled && (row.load_forecast10 ?? 0) > 0 && (
-                        <small className="plan-debug-value">
-                          ({row.load_forecast10?.toFixed(2)})
-                        </small>
-                      )}
-                    </td>
+                    <LoadCell
+                      row={row}
+                      overrides={overrides}
+                      isPast={isPast}
+                      debugEnabled={debugEnabled}
+                      onOverrideSubmitted={onOverrideSubmitted}
+                      open={openCellEditor === `load:${row.time}`}
+                      onToggle={() => {
+                        toggleCellEditor(`load:${row.time}`)
+                      }}
+                      onClose={() => {
+                        setOpenCellEditor(null)
+                      }}
+                    />
 
                     {debugEnabled && (
                       <td className="plan-number plan-debug-column">

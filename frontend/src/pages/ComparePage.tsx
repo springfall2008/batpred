@@ -63,7 +63,7 @@ const colours = ['#2563eb', '#f59e0b', '#059669', '#dc2626', '#7c3aed', '#0891b2
 const emptyOverrides: PlanOverrides = {
   manual_charge_times: [], manual_export_times: [], manual_freeze_charge_times: [],
   manual_freeze_export_times: [], manual_demand_times: [], manual_import_rates: [],
-  manual_export_rates: [], manual_soc: []
+  manual_export_rates: [], manual_load_adjust: [], manual_soc: []
 }
 
 function value(value: number | null, suffix = '') {

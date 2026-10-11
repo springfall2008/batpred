@@ -59,6 +59,8 @@ type TimelineEvent = {
 
   carCharging: number
 
+  solarGeneration: number
+
   target: number | null
   targetSocStart: number | null
   targetSocEnd: number | null
@@ -496,6 +498,11 @@ function buildTimelineEvents(
 
     const carCharging = eventRows.reduce((total, row) => total + (row.car_charging ?? 0), 0)
 
+    // Each timeline event can cover several plan slots. pv_forecast is the
+    // energy forecast for one slot, so summing it gives the useful total for
+    // the selected action window.
+    const solarGeneration = eventRows.reduce((total, row) => total + (row.pv_forecast ?? 0), 0)
+
     /*
      * Use the first reason as the event explanation.
      *
@@ -569,6 +576,8 @@ function buildTimelineEvents(
       carbonChange,
 
       carCharging,
+
+      solarGeneration,
 
       explanation,
 
@@ -1153,6 +1162,14 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
 
               <strong>{formatDuration(activeEvent.start, activeEvent.end)}</strong>
             </div>
+
+            {activeEvent.solarGeneration > 0 && (
+              <div className="plan-timeline-detail-value-solar">
+                <span>Solar generation</span>
+
+                <strong>{activeEvent.solarGeneration.toFixed(2)} kWh</strong>
+              </div>
+            )}
 
             {plan.carbon_enable && activeEvent.carbonIntensityMin !== null && (
               <div>

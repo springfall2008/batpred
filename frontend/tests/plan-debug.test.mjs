@@ -123,6 +123,7 @@ const overrides = {
   manual_demand_times: [],
   manual_import_rates: [],
   manual_export_rates: [],
+  manual_load_adjust: [],
   manual_soc: []
 }
 

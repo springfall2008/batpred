@@ -724,12 +724,14 @@
   position: relative;
 }
 
-.plan-rate-control {
+.plan-rate-control,
+.plan-load-control {
   position: relative;
   display: inline-block;
 }
 
-.plan-rate-button {
+.plan-rate-button,
+.plan-load-button {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -744,11 +746,14 @@
 }
 
 .plan-rate-button:hover,
-.plan-rate-button:focus-visible {
+.plan-rate-button:focus-visible,
+.plan-load-button:hover,
+.plan-load-button:focus-visible {
   background: color-mix(in srgb, var(--color-text) 6%, transparent);
 }
 
-.plan-rate-button.is-manual {
+.plan-rate-button.is-manual,
+.plan-load-button.is-manual {
   border-color: color-mix(in srgb, var(--color-text-muted) 35%, transparent);
 }
 
@@ -946,10 +951,11 @@
 
   .plan-cell-popover {
     position: fixed;
-    inset: auto 0 0;
+    inset: auto 0 var(--plan-mobile-keyboard-offset, 0px);
     z-index: 110;
     width: auto;
     max-width: none;
+    max-height: calc(100dvh - var(--plan-mobile-keyboard-offset, 0px));
     padding: 0.8rem;
     padding-bottom: max(0.8rem, env(safe-area-inset-bottom));
     border-radius: 1rem 1rem 0 0;

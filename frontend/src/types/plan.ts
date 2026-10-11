@@ -104,6 +104,11 @@ export type ManualRateOverride = {
   rate: number
 }
 
+export type ManualLoadOverride = {
+  minutes: number
+  adjustment: number
+}
+
 export type ManualSocOverride = {
   minutes: number
   target: number
@@ -118,6 +123,7 @@ export type PlanOverrides = {
 
   manual_import_rates: ManualRateOverride[]
   manual_export_rates: ManualRateOverride[]
+  manual_load_adjust: ManualLoadOverride[]
 
   manual_soc: ManualSocOverride[]
 }
