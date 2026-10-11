@@ -2246,6 +2246,7 @@ def _test_split_status_warning(my_predbat, failed):
         ("Freeze exporting, Hold for car, Error: Inverter 0 unable to read Export window", "Freeze exporting, Hold for car"),
         ("Warn - Unable to fetch data from sensor.outdoor_temperature", ""),
         ("Exporting, Warn - Unable to fetch data from sensor.outdoor_temperature", "Exporting"),
+        ("Charging, Error: Exception raised in fetch, Warn: retrying", "Charging"),
     ]
     for status, expected in cases:
         result = split_status_warning(status)[0]
@@ -2259,6 +2260,10 @@ def _test_split_status_warning(my_predbat, failed):
         ("Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
         ("Exporting, Warn - Unable to fetch data from sensor.outdoor_temperature", "Warn - Unable to fetch data from sensor.outdoor_temperature"),
         ("Exporting, Warn: Return bad float value unavailable from car_charging_soc", "Warn: Return bad float value unavailable from car_charging_soc"),
+        # The split is at the first marker, whichever kind it is, so a warning that mentions another
+        # marker later on is kept whole rather than cut at that later marker
+        ("Charging, Error: Exception raised in fetch, Warn: retrying", "Error: Exception raised in fetch, Warn: retrying"),
+        ("Charging, Warn - Unable to fetch data, Error: timeout", "Warn - Unable to fetch data, Error: timeout"),
     ]
     for status, expected in warning_cases:
         result = split_status_warning(status)[1]

@@ -105,10 +105,11 @@ def split_status_warning(status):
     # recognised, bare and behind a state alike.
     if lowered.startswith("warn:") or lowered.startswith("warn -") or lowered.startswith("error:"):
         return "", status
-    for marker in (", warn:", ", warn -", ", error:"):
-        index = lowered.find(marker)
-        if index >= 0:
-            return status[:index].strip(), status[index + 2 :].strip()
+    # Split at the earliest marker, whichever kind: the warning text may itself mention another one.
+    indices = [index for index in (lowered.find(marker) for marker in (", warn:", ", warn -", ", error:")) if index >= 0]
+    if indices:
+        index = min(indices)
+        return status[:index].strip(), status[index + 2 :].strip()
     return status, ""
 
 
