@@ -2098,9 +2098,11 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.charge_rate
+    id: rate
   # Re-apply the limit after a Home Assistant restart, and when Remote EMS is switched back on, as for
-  # the mode automation above: a limit write lost to a restart or an integration outage is otherwise
-  # never retried, because Predbat sees the input number already at the value it wants
+  # the mode automation above. Otherwise a write lost to a restart, or a limit another service changed
+  # while Remote EMS was off, is never corrected, because Predbat sees the input number already at
+  # the value it wants
   - trigger: homeassistant
     event: start
   - trigger: state
@@ -2108,9 +2110,13 @@ Add the following automations to `automations.yaml` (or configure via the UI):
     from: "off"
     to: "on"
   conditions:
-  # Don't write a 0kW limit just because the input number is briefly unavailable
+  # Don't write a 0kW limit just because the input number is briefly unavailable. The re-apply
+  # triggers also skip a 0 W rate, so a new install whose input number is still at its 0 W default
+  # doesn't block the battery on its first restart
   - condition: template
-    value_template: "{{ states('input_number.charge_rate') | is_number }}"
+    value_template: >-
+      {{ states('input_number.charge_rate') | is_number
+         and (trigger.id == 'rate' or states('input_number.charge_rate') | float > 0) }}
   actions:
   # After a restart, give the Sigenergy integration time to load; give up rather than write to an unavailable entity
   - wait_template: "{{ states('number.sigen_plant_ess_max_charging_limit') not in ['unknown', 'unavailable'] }}"
@@ -2133,6 +2139,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.discharge_rate
+    id: rate
   - trigger: homeassistant
     event: start
   - trigger: state
@@ -2141,7 +2148,9 @@ Add the following automations to `automations.yaml` (or configure via the UI):
     to: "on"
   conditions:
   - condition: template
-    value_template: "{{ states('input_number.discharge_rate') | is_number }}"
+    value_template: >-
+      {{ states('input_number.discharge_rate') | is_number
+         and (trigger.id == 'rate' or states('input_number.discharge_rate') | float > 0) }}
   actions:
   - wait_template: "{{ states('number.sigen_plant_ess_max_discharging_limit') not in ['unknown', 'unavailable'] }}"
     timeout: "00:05:00"
