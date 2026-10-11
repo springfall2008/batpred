@@ -605,6 +605,7 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
               mainTone={powerFlow.ashp.power === null ? '' : getOverviewPowerTone(powerFlow.ashp.power, powerFlow.ashp.power >= 10 ? 'is-home' : '')}
             >
               {powerFlow.ashp.status !== null && <Detail label="Status" value={formatOverviewStatus(powerFlow.ashp.status)} />}
+              {powerFlow.ashp.internal_temperature !== null && <Detail label="Indoor temperature" value={formatTemperature(powerFlow.ashp.internal_temperature, 'C')} />}
               {powerFlow.ashp.energy_today !== null && <Detail label="Energy today" value={formatEnergy(powerFlow.ashp.energy_today)} />}
             </OverviewCard>
           )}

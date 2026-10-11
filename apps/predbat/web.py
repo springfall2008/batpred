@@ -3170,12 +3170,14 @@ chart.render();
             if ashp_enabled:
                 ashp_power_entity = self.get_arg("ashp_power", default=None, indirect=False)
                 ashp_status_entity = self.get_arg("ashp_status", default=None, indirect=False)
+                internal_temperature_entity = self.get_arg("internal_temperature", default=None, indirect=False)
                 ashp_energy_entity = self.get_arg("heat_energy", default=None, indirect=False)
                 if not ashp_energy_entity:
                     ashp_energy_entity = self.get_arg("ashp_energy_today", default=None, indirect=False)
                 ashp_power = None
                 ashp_status = None
                 ashp_energy = None
+                internal_temperature = None
 
                 if ashp_power_entity:
                     ashp_power = _optional_float(self.get_state_wrapper(entity_id=ashp_power_entity, default=None, required_unit="W"))
@@ -3188,7 +3190,15 @@ chart.render();
                 elif predheat_is_pump:
                     ashp_energy = _optional_float(getattr(getattr(self.base, "predheat", None), "heat_energy_today", None))
 
-                ashp = {"power": ashp_power, "status": ashp_status, "energy_today": ashp_energy}
+                if predheat_is_pump:
+                    predheat_internal_temperature = getattr(getattr(self.base, "predheat", None), "internal_temperature", None)
+                    if isinstance(predheat_internal_temperature, dict):
+                        internal_temperature = _optional_float(predheat_internal_temperature.get(0))
+
+                if internal_temperature is None and internal_temperature_entity:
+                    internal_temperature = _optional_float(self.get_state_wrapper(entity_id=internal_temperature_entity, default=None))
+
+                ashp = {"power": ashp_power, "status": ashp_status, "energy_today": ashp_energy, "internal_temperature": internal_temperature}
 
             # Match the existing diagram's direction thresholds/sign conventions.
             grid_importing = grid_power <= -10

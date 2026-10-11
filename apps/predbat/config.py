@@ -2953,6 +2953,12 @@ APPS_SCHEMA = {
         "transient_ok": True,
         "description": "Home Assistant entity reporting the heat pump state, such as off, heating or hot_water.",
     },
+    "internal_temperature": {
+        "type": "sensor",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Home Assistant indoor-temperature entity shown on the Overview ASHP card when PredHeat is not configured.",
+    },
     "heat_energy": {
         "type": "sensor",
         "sensor_type": "float",
