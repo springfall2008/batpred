@@ -434,6 +434,22 @@ def run_test_plan_why_reason(my_predbat):
     elif "Charging up to 80" not in _render(row, templates):
         print("ERROR: #4445 Chrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
+
+    # The reported #4445 symptom itself: with the SoC already above the predicted target but still
+    # below the real limit, classifying against the target showed HoldChrg -> 60% for a window that is
+    # really charging towards 80%
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 7.0)  # 70%, between the 60% target and the 80% limit
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: #4445 SoC between target and limit should show Chrg, not HoldChrg: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"].get("target_percent") != 80:
+        print("ERROR: #4445 SoC between target and limit should report the real limit (80): {}".format(row["reasons"][0]["params"]))
+        failed = True
+    elif row["state"] != "Chrg" or row["state_target"] != "80":
+        print("ERROR: #4445 SoC between target and limit state unexpected: {} -> {}".format(row["state"], row["state_target"]))
+        failed = True
     del my_predbat.charge_window_best[0]["target"]
 
     # --- Test 2c: get_charge_export_text has the same #4445 fix, and keeps surfacing the
