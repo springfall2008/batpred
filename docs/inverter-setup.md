@@ -1919,6 +1919,7 @@ so none of the mode changes made by the automations below take effect. The cut-o
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface.
 They deliberately have no `initial:` value, so Home Assistant restores their last state on a restart. With `initial:` they are reset on every restart without a state change,
 so the automations below don't fire and the plant can be left in a mode, or at a rate limit, that no longer matches what Predbat sees.
+Without `initial:`, a new **input_number.charge_rate** / **input_number.discharge_rate** starts at 0 W, which Predbat reads as the battery being held: on a new install, set each once to your plant's rated charging / discharging power in W.
 
 ```yaml
 input_select:
@@ -2097,11 +2098,24 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.charge_rate
+  # Re-apply the limit after a Home Assistant restart, and when Remote EMS is switched back on, as for
+  # the mode automation above: a limit write lost to a restart or an integration outage is otherwise
+  # never retried, because Predbat sees the input number already at the value it wants
+  - trigger: homeassistant
+    event: start
+  - trigger: state
+    entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+    from: "off"
+    to: "on"
   conditions:
   # Don't write a 0kW limit just because the input number is briefly unavailable
   - condition: template
-    value_template: "{{ trigger.to_state.state | is_number }}"
+    value_template: "{{ states('input_number.charge_rate') | is_number }}"
   actions:
+  # After a restart, give the Sigenergy integration time to load; give up rather than write to an unavailable entity
+  - wait_template: "{{ states('number.sigen_plant_ess_max_charging_limit') not in ['unknown', 'unavailable'] }}"
+    timeout: "00:05:00"
+    continue_on_timeout: false
   - action: number.set_value
     target:
       entity_id: number.sigen_plant_ess_max_charging_limit
@@ -2110,7 +2124,8 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       # 99 fallback means no cap rather than a 0kW limit
       value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
         states(''sensor.sigen_plant_ess_rated_charging_power'') | float(99)] | min}}'
-  mode: single
+  # restart, so a rate change that arrives during the wait replaces the one waiting
+  mode: restart
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
   alias: Predbat max discharging limit action
@@ -2118,18 +2133,26 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   triggers:
   - trigger: state
     entity_id: input_number.discharge_rate
+  - trigger: homeassistant
+    event: start
+  - trigger: state
+    entity_id: switch.sigen_plant_remote_ems_controlled_by_home_assistant
+    from: "off"
+    to: "on"
   conditions:
-  # Don't write a 0kW limit just because the input number is briefly unavailable
   - condition: template
-    value_template: "{{ trigger.to_state.state | is_number }}"
+    value_template: "{{ states('input_number.discharge_rate') | is_number }}"
   actions:
+  - wait_template: "{{ states('number.sigen_plant_ess_max_discharging_limit') not in ['unknown', 'unavailable'] }}"
+    timeout: "00:05:00"
+    continue_on_timeout: false
   - action: number.set_value
     target:
       entity_id: number.sigen_plant_ess_max_discharging_limit
     data:
       value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
         states(''sensor.sigen_plant_ess_rated_discharging_power'') | float(99)] | min}}'
-  mode: single
+  mode: restart
 ```
 
 *Note:* The rate automations cap the requested rate at the **plant**-level rated power, **sensor.sigen_plant_ess_rated_charging_power** and **sensor.sigen_plant_ess_rated_discharging_power**,
@@ -2159,7 +2182,7 @@ See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and th
 
 *Optional:* other services that control the plant can turn **switch.sigen_plant_remote_ems_controlled_by_home_assistant** off and not turn it back on. On one user's system this happened after an Axle VPP event,
 and again after connecting a cloud service to the Sigenergy account, with nothing in Home Assistant recording why. While it is off the plant ignores Predbat's mode changes (on that occasion for 7 hours,
-running the battery empty overnight). This watchdog notifies you and turns it back on, and the mode automation above then re-applies Predbat's current mode.
+running the battery empty overnight). This watchdog notifies you and turns it back on, and the mode and rate automations above then re-apply Predbat's current mode and limits.
 Note that it will also undo a deliberate switch-off - disable the watchdog first if you want Remote EMS off for a while.
 
 ```yaml
