@@ -4,8 +4,10 @@
 
 import ast
 import re
+from datetime import timedelta
 
 SAVED = (
+    "midnight_utc",
     "pv_light_dark",
     "iboost_today",
     "load_forecast_only",
@@ -230,6 +232,33 @@ def test_rates_logged_on_change(my_predbat):
     return 0
 
 
+def test_unchanged_inputs_logged_each_new_day(my_predbat):
+    """Inputs keyed from midnight are logged again on a new day even when they match yesterday's, as a fixed tariff does.
+
+    Without it the replay, which moves the last logged rates back a day at midnight, would see them end a day early.
+    """
+    my_predbat.minutes_now = 9 * 60
+    my_predbat.replay_rates_signature = None
+    my_predbat.rate_import = {minute: 7.5 if 30 <= minute % (24 * 60) < 330 else 30.0 for minute in range(0, 48 * 60)}
+    my_predbat.rate_export = {minute: 15.0 for minute in range(0, 48 * 60)}
+    my_predbat.rate_import_base = dict(my_predbat.rate_import)
+    my_predbat.rate_export_base = {}
+    if len(capture(my_predbat, my_predbat.log_replay_rates)) != 1:
+        print("ERROR: the first rates should be logged")
+        return 1
+    if capture(my_predbat, my_predbat.log_replay_rates):
+        print("ERROR: the same rates on the same day should not be logged again")
+        return 1
+    my_predbat.midnight_utc = my_predbat.midnight_utc + timedelta(days=1)
+    if len(capture(my_predbat, my_predbat.log_replay_rates)) != 1:
+        print("ERROR: the same rates should be logged again on a new day")
+        return 1
+    if capture(my_predbat, my_predbat.log_replay_rates):
+        print("ERROR: the same rates should be logged only once on the new day")
+        return 1
+    return 0
+
+
 def test_state_logged(my_predbat):
     """The plan's starting state is logged so each value reads back as exactly the same float."""
     my_predbat.soc_kw = 4.104
@@ -425,6 +454,7 @@ def run_log_replay_inputs_tests(my_predbat):
         failed += test_load_forecast_exact(my_predbat)
         failed += test_load_forecast_compact(my_predbat)
         failed += test_rates_logged_on_change(my_predbat)
+        failed += test_unchanged_inputs_logged_each_new_day(my_predbat)
         failed += test_state_logged(my_predbat)
         failed += test_cars_logged_on_change(my_predbat)
         failed += test_inverter_logged_on_change(my_predbat)

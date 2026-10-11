@@ -1054,7 +1054,9 @@ class Fetch:
         Never raises - these run every cycle on the main loop, and a logging fault must not stop the plan.
         """
         try:
-            signature = signature_of()
+            # The values are keyed in minutes from midnight, so a day that repeats yesterday's (a fixed tariff) would
+            # match its signature while the replay, moving the old values back a day, runs a day short: log once a day
+            signature = (self.midnight_utc, signature_of())
             if signature == getattr(self, attribute, None):
                 return
             setattr(self, attribute, signature)
