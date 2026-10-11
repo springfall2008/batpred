@@ -174,6 +174,21 @@ def test_each_charger_follows_its_own_car():
     assert component.commands == [("a", "off", 0), ("b", "on", 1)], component.commands
 
 
+def test_car_whose_plan_is_not_published_yet_is_left_alone():
+    """Car 1's plan not being published yet is unknown, not empty - its charger must not be
+    stopped just because car 0's plan has appeared first."""
+    component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
+    component.base.num_cars = 2
+    _plan(component, 0, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0)], component.commands
+    assert "b" not in component.charger_control_state, component.charger_control_state
+
+    _plan(component, 1, [])
+    run_async(component.charger_control_tick(_now()))
+    assert component.commands == [("a", "off", 0), ("b", "off", 1)], component.commands
+
+
 def test_charger_without_a_car_is_left_alone():
     """A charger beyond num_cars has no plan of its own and must not be stopped."""
     component = FakeComponent([FakeCharger("a"), FakeCharger("b")])
@@ -843,6 +858,7 @@ def run_car_charger_control_tests(my_predbat=None):
     test_on_inside_window_off_outside()
     test_empty_plan_stops()
     test_each_charger_follows_its_own_car()
+    test_car_whose_plan_is_not_published_yet_is_left_alone()
     test_charger_without_a_car_is_left_alone()
     test_charger_whose_car_goes_is_released()
     test_disconnected_charger_is_left_alone()

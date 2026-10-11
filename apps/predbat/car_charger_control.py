@@ -413,7 +413,8 @@ class CarChargerControl:
 
         Returns True once at least one car's plan has been read, False while no slot sensor
         has ever been published - which is what stops a restart stopping a charge before
-        Predbat has decided anything.
+        Predbat has decided anything. A car whose own plan has not been published yet is left
+        out of charger_control_windows, so it reads as unknown rather than as an empty plan.
         """
         windows = {}
         found = False
@@ -613,6 +614,11 @@ class CarChargerControl:
             self.log("Info: {}: car {} is no longer left to Octopus, Predbat drives the {}".format(self.charger_control_log_name, car_n, self.charger_control_noun))
             del self.charger_control_octopus_cars[car_n]
         if not self.charger_control_connected(handle):
+            return
+        if car_n not in self.charger_control_windows and not self.charger_control_dispatch_active(car_n, now):
+            # This car's plan has not been published yet - one car's slot sensor can appear before
+            # another's - and no dispatch says to charge, so Predbat knows nothing to act on: an
+            # absent plan is not an empty one, and stopping the charger would cut off a charge
             return
         charge = self.charger_control_should_charge(car_n, now)
         last = self.charger_control_state.get(key, None)
