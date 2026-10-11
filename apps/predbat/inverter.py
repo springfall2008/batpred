@@ -319,7 +319,7 @@ class Inverter:
             # below: the caller overwrites [self.id] with its dummy entity straight afterwards, so a
             # bare default left in another inverter's slot reads back as "configured" there too. On a
             # mixed fleet that turns a plain number into a phantom per-entry entity for a sibling
-            # inverter that never asked for one, which the per-entry rate-rate path then treats as
+            # inverter that never asked for one, which the per-entry rate path then treats as
             # set (#5359)
             self.base.args[arg] = [default if i == self.id else None for i in range(4)]
         elif len(self.base.args[arg]) <= self.id:

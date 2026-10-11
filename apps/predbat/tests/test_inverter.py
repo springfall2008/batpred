@@ -1100,9 +1100,12 @@ def test_mixed_fleet_rate_path_from_own_entry(test_name, ha, inv, prev_rate, per
 
     saved_percent_arg = inv.base.args.get(percent_arg)
     try:
-        # Simulate a mixed fleet: the percent key exists in args (another inverter set it up) but
-        # this inverter's own index is unset.
-        inv.base.args[percent_arg] = percent_entity if percent_entry_set else None
+        # A mixed fleet as apps.yaml writes it: a per-inverter list in which a sibling inverter's
+        # slot names a percent entity, and this inverter's own slot is set or not per the case
+        fleet = [None] * (inv.id + 2)
+        fleet[inv.id] = percent_entity if percent_entry_set else None
+        fleet[inv.id + 1] = "number.sibling_" + percent_arg
+        inv.base.args[percent_arg] = fleet
         ha.dummy_items[watt_entity] = prev_rate
         ha.dummy_items[percent_entity] = 100  # Would read back as rate_max if the percent path were wrongly taken
 
@@ -1157,7 +1160,9 @@ def test_mixed_fleet_rate_write_skips_unset_entry(test_name, ha, inv, discharge=
         # the percent key exists in args only because a sibling inverter in the fleet set it up -
         # this inverter's own slot in that list is None.
         inv.base.args[watt_arg] = watt_entity
-        inv.base.args[percent_arg] = None
+        fleet = [None] * (inv.id + 2)
+        fleet[inv.id + 1] = "number.sibling_" + percent_arg
+        inv.base.args[percent_arg] = fleet
         inv.rest_data = None
         inv.rest_api = None
         ha.dummy_items[watt_entity] = 0
@@ -1199,6 +1204,9 @@ def test_create_missing_arg_does_not_fill_sibling_entries(test_name, my_predbat)
     != "power") before inverter 1 is even constructed, inverter 1's slot ended up holding a bare
     number rather than None - which the per-entry "is this inverter's entry set" check added for
     #5359 then misreads as a configured entity, since a truthy value is indistinguishable from one.
+
+    The padding applies to every arg create_missing_arg() builds, not just the rates, so every arg
+    that constructing inverter 0 turned into a list is checked.
     """
     failed = False
     print(f"**** Running Test: {test_name} ****")
@@ -1206,24 +1214,27 @@ def test_create_missing_arg_does_not_fill_sibling_entries(test_name, my_predbat)
     saved_args = copy.deepcopy(my_predbat.args)
     try:
         my_predbat.args["num_inverters"] = 2
-        # GS (Solis) drives charge rate via current rather than power, so constructing inverter 0
-        # takes the create_missing_arg("charge_rate", ...) branch under test
+        # GS (Solis) drives charge rate via current rather than power and has no target SoC, so
+        # constructing inverter 0 takes several create_missing_arg() branches, charge_rate among them
         my_predbat.args["inverter_type"] = ["GS", "GS"]
         my_predbat.args.pop("charge_rate", None)
         my_predbat.args.pop("charge_rate_percent", None)
+        before = {key: value for key, value in my_predbat.args.items() if isinstance(value, list)}
 
         inv0 = Inverter(my_predbat, 0, quiet=True)
         if inv0.inv_output_charge_control == "power":
             print("ERROR: {} test assumes a non-power charge control to exercise create_missing_arg('charge_rate', ...)".format(test_name))
             return 1
 
-        charge_rate_list = my_predbat.args.get("charge_rate")
-        if not isinstance(charge_rate_list, list) or len(charge_rate_list) < 2:
-            print("ERROR: {} expected charge_rate to be a per-inverter list covering inverter 1, got {}".format(test_name, charge_rate_list))
+        created = sorted(key for key, value in my_predbat.args.items() if isinstance(value, list) and key not in before)
+        if "charge_rate" not in created:
+            print("ERROR: {} expected charge_rate to be created as a per-inverter list, created {}".format(test_name, created))
             failed = True
-        elif charge_rate_list[1] is not None:
-            print("ERROR: {} expected inverter 1's charge_rate slot to stay None until inverter 1 is constructed, got {}".format(test_name, charge_rate_list[1]))
-            failed = True
+        for key in created:
+            siblings = my_predbat.args[key][1:]
+            if any(slot is not None for slot in siblings):
+                print("ERROR: {} expected {}'s sibling slots to stay None until those inverters are constructed, got {}".format(test_name, key, siblings))
+                failed = True
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
