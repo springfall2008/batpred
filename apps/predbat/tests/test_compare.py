@@ -19,6 +19,7 @@ Covers:
 """
 
 import inspect
+from unittest.mock import MagicMock, patch
 
 from compare import Compare
 from const import MINUTE_WATT
@@ -744,27 +745,83 @@ def test_compare(my_predbat):
         print("PASS T27: get_tariff_id() returns None and warns for an id-less entry, the real id otherwise")
 
     # ------------------------------------------------------------------
-    # T28: run_all() is actually wired to call get_tariff_id() inside its tariff
-    #      loop, rather than T27 only proving the helper works in isolation -
-    #      otherwise run_all() could still index tariff["id"] directly (#5472)
+    # T28: run_all() skips an id-less compare_list entry and still compares the
+    #      valid one after it - run against the real fixture with the expensive
+    #      collaborators stubbed, so only the loop's own handling is exercised (#5472)
     # ------------------------------------------------------------------
-    run_all_source = inspect.getsource(Compare.run_all)
-    loop_idx = run_all_source.find("for tariff in compare_list:")
-    guard_idx = run_all_source.find("self.get_tariff_id(tariff)", loop_idx + 1) if loop_idx >= 0 else -1
-    continue_idx = run_all_source.find("continue", guard_idx + 1) if guard_idx >= 0 else -1
-    first_direct_index_idx = run_all_source.find('tariff["id"]', loop_idx + 1) if loop_idx >= 0 else -1
+    cmp = Compare.__new__(Compare)
+    cmp.pb = my_predbat
+    cmp.log = lambda msg: None
+    cmp.comparisons = {}
+    cmp.live_saving_state = None
+    run_single_ids = []
+    saved_comparisons = []
+    cmp.run_single = lambda tariff, *args, **kwargs: run_single_ids.append(tariff.get("id")) or {"date": "2026-10-11", "soc": 1.0, "soc_start": 1.0}
+    cmp.select_best = lambda compare_list, results: None
+    cmp.save_yaml = lambda: saved_comparisons.append(dict(cmp.comparisons))
+    cmp.publish_data = lambda: None
+    compare_list = [{"name": "No Id Tariff"}, {"id": "valid", "name": "Valid Tariff"}]
+    real_get_arg = my_predbat.get_arg
 
-    if loop_idx < 0 or guard_idx < 0 or continue_idx < 0:
-        print("ERROR T28: could not locate a call to get_tariff_id() inside run_all()'s tariff loop - test may need updating")
+    def fake_get_arg(key, default=None, *args, **kwargs):
+        """Return the test compare_list, deferring every other key to the real get_arg."""
+        if key == "compare_list":
+            return compare_list
+        return real_get_arg(key, default, *args, **kwargs)
+
+    try:
+        with patch.object(my_predbat, "get_arg", side_effect=fake_get_arg):
+            cmp.run_all(fetch_sensor=False)
+        run_all_error = None
+    except Exception as exc:
+        run_all_error = exc
+
+    if run_all_error is not None:
+        print("ERROR T28: run_all() raised {!r} on a compare_list with an id-less entry".format(run_all_error))
         failed += 1
-    elif not (loop_idx < guard_idx < continue_idx):
-        print("ERROR T28: run_all() does not skip an id-less tariff before using its id")
+    elif run_single_ids != ["valid"]:
+        print("ERROR T28: only the valid tariff should reach run_single(), got {}".format(run_single_ids))
         failed += 1
-    elif first_direct_index_idx != -1 and first_direct_index_idx < continue_idx:
-        print("ERROR T28: run_all() still indexes tariff[\"id\"] directly before the id guard takes effect")
+    elif not saved_comparisons or set(saved_comparisons[-1].keys()) != {"valid"}:
+        print("ERROR T28: only the valid tariff's result should be persisted, got {}".format(saved_comparisons))
         failed += 1
     else:
-        print("PASS T28: run_all() calls get_tariff_id() inside its tariff loop before using the id")
+        print("PASS T28: run_all() skips an id-less entry and compares and persists the valid one")
+
+    # ------------------------------------------------------------------
+    # T29: run_comparison() clears compare_active even when run_all() raises -
+    #      otherwise the flag stays on and the crashed comparison re-triggers
+    #      itself every 5-minute cycle (#5472)
+    # ------------------------------------------------------------------
+    exposed = []
+    real_expose_config = my_predbat.expose_config
+
+    def record_expose_config(name, value, *args, **kwargs):
+        """Record compare_active writes, then apply them for real."""
+        if name == "compare_active":
+            exposed.append(value)
+        return real_expose_config(name, value, *args, **kwargs)
+
+    raising_comparison = MagicMock()
+    raising_comparison.run_all.side_effect = KeyError("id")
+    raised = False
+    with patch.object(my_predbat, "comparison", raising_comparison), patch.object(my_predbat, "expose_config", side_effect=record_expose_config):
+        try:
+            my_predbat.run_comparison()
+        except KeyError:
+            raised = True
+
+    if not raised:
+        print("ERROR T29: run_comparison() should let run_all()'s exception propagate")
+        failed += 1
+    elif exposed != [True, False]:
+        print("ERROR T29: compare_active should be set then cleared despite the exception, got {}".format(exposed))
+        failed += 1
+    elif my_predbat.get_arg("compare_active", False):
+        print("ERROR T29: compare_active is still on after run_all() raised")
+        failed += 1
+    else:
+        print("PASS T29: run_comparison() clears compare_active even when run_all() raises")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
