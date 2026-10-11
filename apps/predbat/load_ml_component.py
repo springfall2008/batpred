@@ -40,7 +40,7 @@ DATABASE_VERSION = 1
 
 class LoadMLComponent(ComponentBase):
     """
-    ML Load Forecaster component that predicts household load for the next 48 hours.
+    ML Load Forecaster component that predicts household load for the configured forecast hours.
 
     This component:
     - Fetches load history from configured sensor
@@ -418,6 +418,12 @@ class LoadMLComponent(ComponentBase):
                     step_energy = pv_forecast_minute.get(minute, 0.0)
                     pv_data[-(minute - self.minutes_now)] = dp4(step_energy)
 
+            # Future input coverage is independent of the available training history.
+            # minute_data bounds both directions, so retain the whole forecast even
+            # when the load or PV sensor only has a few days of history.
+            forecast_hours = max(int(self.get_arg("forecast_hours", 48)), 24)
+            future_input_days = max(days_to_fetch, (forecast_hours + 23) // 24)
+
             # Temperature predictions
             temp_entity = "sensor." + self.prefix + "_temperature"
             temperature_info = self.get_state_wrapper(temp_entity, attribute="results")
@@ -431,7 +437,7 @@ class LoadMLComponent(ComponentBase):
                 # We also get the last N days in the past to help the model learn the daily pattern
                 temperature_data, _ = minute_data(
                     data_array,
-                    days_to_fetch,
+                    future_input_days,
                     self.now_utc,
                     "state",
                     "last_updated",
@@ -454,7 +460,7 @@ class LoadMLComponent(ComponentBase):
                     data_array.append({"state": value, "last_updated": key})
                 import_rates_data, _ = minute_data(
                     data_array,
-                    days_to_fetch,
+                    future_input_days,
                     self.now_utc,
                     "state",
                     "last_updated",
@@ -472,7 +478,7 @@ class LoadMLComponent(ComponentBase):
                     data_array.append({"state": value, "last_updated": key})
                 export_rates_data, _ = minute_data(
                     data_array,
-                    days_to_fetch,
+                    future_input_days,
                     self.now_utc,
                     "state",
                     "last_updated",
@@ -688,11 +694,13 @@ class LoadMLComponent(ComponentBase):
                 import_rates=self.import_rates_data,
                 export_rates=self.export_rates_data,
                 exog_features=exog_features,
+                forecast_hours=self.get_arg("forecast_hours", 48),
             )
 
             if predictions:
                 self.current_predictions = predictions
-                self.log("ML Component: Generated {} predictions (total {:.2f} kWh over 48h)".format(len(predictions), max(predictions.values()) if predictions else 0))
+                prediction_hours = len(predictions) * PREDICT_STEP / 60.0
+                self.log("ML Component: Generated {} predictions (total {:.2f} kWh over {:g}h)".format(len(predictions), max(predictions.values()), prediction_hours))
             else:
                 self.log("ML Component: Predictor returned no predictions, returning previous dict")
 
@@ -1033,7 +1041,7 @@ class LoadMLComponent(ComponentBase):
 
                 # Save model (fast - no lock needed)
                 if self.model_filepath:
-                    self.predictor.save(self.model_filepath)
+                    self.predictor.save(self.model_filepath, forecast_hours=self.get_arg("forecast_hours", 48))
             else:
                 self.log("Warn: ML Component: Training failed")
 

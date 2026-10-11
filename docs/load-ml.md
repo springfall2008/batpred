@@ -1,6 +1,6 @@
 # ML Load Prediction
 
-Predbat includes a neural network-based machine learning component that can predict your household energy consumption for the next 48 hours.
+Predbat includes a neural network-based machine learning component that can predict your household energy consumption for the duration set by `forecast_hours` in `apps.yaml` (48 hours by default, with the same 24-hour minimum as the planner).
 This prediction is based on historical load patterns, time-of-day patterns, day-of-week patterns, and optionally PV generation history and temperature forecasts.
 
 ## Table of Contents
@@ -22,7 +22,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 
 **Key Features:**
 
-- Predicts 48 hours of load data in 5-minute intervals
+- Predicts load data in 5-minute intervals for the configured `forecast_hours`
 - Learns daily and weekly patterns automatically
 - Supports historical PV generation data as an input feature
 - Supports temperature forecast data for improved accuracy
@@ -96,17 +96,17 @@ The model uses an autoregressive approach:
 2. Predicts the next 5-minute step
 3. Adds that prediction to the history window
 4. Shifts the window forward and repeats
-5. Continues for 576 steps to cover 48 hours
+5. Continues for the configured `forecast_hours` duration (576 steps for the default 48 hours)
 
 To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns. The blending uses **day-of-week-aware patterns**: separate average profiles are maintained for each of the 7 days of the week (Monday–Sunday), so the weekend fallback differs from weekday. If a particular day of the week has insufficient data (fewer than 2 complete observations per slot), the global all-days average is used instead.
 
-The model leads at the start of the rollout and its weight decays linearly to 50% at the 48-hour horizon. Whether that hand-over is fast enough for your data is reported rather than adjusted automatically - see [Rollout Accuracy](#rollout-accuracy).
+The model leads at the start of the rollout and its weight decays linearly to 50% at 48 hours, then remains at 50% for any additional forecast hours. Whether that hand-over is fast enough for your data is reported rather than adjusted automatically - see [Rollout Accuracy](#rollout-accuracy).
 
 ### Forward Rate and Temperature Data
 
 Rates and temperature make up 3 of the 5 input channels (864 of the 1446 features). Normally both are supplied across the whole rollout: rates are extended by `rate_replicate()` and published out past the forecast horizon, and the temperature forecast comes from the Temperature component. Where a forward value is missing anyway - before the first plan cycle has published the rates entity, or after a failed rate fetch - the last known value is carried forward, keeping those inputs in the range the model was trained on. Filling them with zero would feed 0 p/kWh and 0 °C into the network and badly distort the forecast. PV is the exception and is left at zero past the end of the solar forecast, since there is no generation to assume.
 
-If you see `Forward temperature/rate forecast ran out for N of 576 rollout steps` in the log, that is this fallback engaging. A small N at the tail is unremarkable; a large N means your rate or temperature data is not reaching the model, which is worth investigating in its own right.
+If you see `Forward temperature/rate forecast ran out for N of M rollout steps` in the log, that is this fallback engaging; M reflects the configured forecast duration. This combined warning counts steps where temperature and both rate inputs are missing together. Missing individual inputs are still carried forward even when they do not contribute to that count. A small N at the tail is unremarkable; a large N is worth investigating.
 
 ### Training Process
 
@@ -187,6 +187,18 @@ This allows the model to adapt quickly to recent changes (via time weighting) wi
 - Model is considered stale after 48 hours and requires retraining
 
 ## Configuration
+
+LoadML uses the existing `forecast_hours` setting; no separate ML horizon setting is required.
+For example, `forecast_hours: 96` generates 96 hours of load predictions and displays the temperature forecast over the same period in the LoadMLPower chart.
+The existing whole-hour configuration behaviour is retained; decimal YAML values remain invalid. Arbitrary whole-hour durations are supported: `forecast_hours: 31` generates 372 five-minute predictions.
+This is separate from the Plan forecast hours setting, which controls the optimisation horizon.
+
+For Open-Meteo temperature URLs on `/v1/forecast`, Predbat automatically extends the request beyond the default seven days when needed, allowing an extra calendar day because forecasts begin at midnight. Requests are capped at Open-Meteo's maximum of 16 calendar days. Forecasts longer than the available temperature data use the last-known-value fallback; this is not additional weather forecast data. URLs for other providers or with explicit date ranges are left unchanged.
+
+The original blend is retained through the first 48 hours, after which predictions remain 50% model and 50% historical daily pattern.
+Available future temperature and rate inputs are retained across the configured horizon even when load or PV history is shorter. Historical fetching and training windows remain unchanged.
+Longer forecasts require longer temperature and rate input coverage; if an input runs out, the predictor carries forward its last known value. The combined warning described above reports steps where all three inputs are missing.
+Changing the horizon does not require model retraining.
 
 ### Basic Setup
 
@@ -340,7 +352,7 @@ The **AR rollout** line shows how the model performs when predictions feed back 
 
 Once trained, the component publishes predictions to:
 
-- `sensor.predbat_load_ml_forecast` - Contains 48-hour prediction in `results` attribute
+- `sensor.predbat_load_ml_forecast` - Contains predictions for the configured `forecast_hours` duration in the `results` attribute (48 hours by default)
 
 You can visualize these predictions in the [Chart view](web-interface.md#charts-view) of the Predbat web interface, or by creating [Apex charts](creating-charts.md) in Home Assistant.
 
