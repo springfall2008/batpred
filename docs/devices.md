@@ -322,8 +322,8 @@ Can be used both for the Car Charging Hold feature (to filter out previous car c
 ```
 
 The plug status reads `Charging` while the car draws power, which the default **car_charging_now_response** accepts. (Predbat's own myenergi integration uses the Zappi's charging power instead, where 200W or more counts as charging.)
-The template `apps.yaml`'s **car_charging_planned_response** list covers the plug status values for a connected car, apart from `ev ready to charge` (plugged in but paused) - add that one.
-A `re:` expression resolves to a single matching entity, and which one is not predictable, so with more than one Zappi give each car the full entity name of its own Zappi's sensor instead.
+Make sure your **car_charging_planned_response** list includes `ev ready to charge` (plugged in but paused): most inverter templates list it, but the default `apps.yaml` does not.
+A `re:` expression resolves to a single matching entity, and which one is not predictable, so with more than one Zappi give each car the full entity name of its own Zappi's sensor instead, and list every Zappi's session sensor under **car_charging_energy** (their energy is added together).
 If you use Predbat's own [myenergi integration](components.md#myenergi-myenergi) with `myenergi_automatic` on (the default), it sets these for you, so remove these lines - a **car_charging_now** you leave set is used in place of the integration's own power sensor.
 
 _TIP:_ The Zappi must be set to Eco+ mode for IOG to control it.
