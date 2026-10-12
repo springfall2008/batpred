@@ -650,6 +650,13 @@ class GatewayMQTT(ComponentBase):
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
+            if self.gateway_display_only:
+                # The selected inverter provider must not wait for an optional
+                # display's broker connection or first telemetry. Component
+                # startup and actual display availability are separate states.
+                self.api_started = True
+                self._update_display_health()
+                return True
             # Wait for the first connection attempt and then for the first telemetry →
             # auto-config, so the inverter args are wired up before startup continues.
             # Both waits share the single _STARTUP_WAIT_TICKS budget so an offline gateway
@@ -657,12 +664,6 @@ class GatewayMQTT(ComponentBase):
             ticks = await self._startup_wait(0, lambda: self._first_connection_attempted)
             if not self._first_connection_attempted and not self.api_stop:
                 self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
-            if self.gateway_display_only:
-                await self._startup_wait(ticks, lambda: self.api_started)
-                if not self.api_started and not self.api_stop:
-                    self.log("Warn: GatewayMQTT: No display telemetry received, continuing startup")
-                self._update_display_health()
-                return True
             # The auto-config wait runs even when the first attempt failed: the MQTT loop
             # retries with backoff in the background, so a transient broker failure at
             # startup usually still yields telemetry inside the window. Returning early
