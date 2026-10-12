@@ -88,6 +88,23 @@ CALCULATE_PLAN_REBUILT = (
     "metric_cloud_coverage",
     "metric_load_divergence",
     "plan_last_duration_seconds",
+    "pv_forecast_peak_step",
+    "clipping_amplification",
+    "clipping_auto_amp",
+    "clipping_auto_end_offset",
+    "clipping_auto_start_offset",
+    "clipping_buffer_end",
+    "clipping_buffer_end_offset",
+    "clipping_buffer_forecast_kwh",
+    "clipping_buffer_kwh",
+    "clipping_buffer_start",
+    "clipping_buffer_start_offset",
+    "clipping_last_tune_day",
+    "clipping_limit_effective",
+    "clipping_limit_mode",
+    "clipping_mode",
+    "clipping_remaining_today",
+    "clipping_tomorrow",
 )
 
 
